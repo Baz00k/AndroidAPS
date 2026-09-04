@@ -42,4 +42,14 @@ object YpsoFraming {
     /** Total frame count encoded in the low nibble of the first frame's header byte (min 1). */
     fun getTotalFrames(firstByte: Byte): Int =
         (firstByte.toInt() and 0x0F).let { if (it == 0) 1 else it }
+
+    /** Return the declared frame count only when [frame] is the expected next frame in this message. */
+    fun validateFrame(frame: ByteArray, expectedFrame: Int, expectedTotal: Int = 0): Int? {
+        if (frame.isEmpty()) return null
+        val header = frame[0].toInt() and 0xFF
+        val frameNumber = header ushr 4
+        val total = getTotalFrames(frame[0])
+        if (frameNumber != expectedFrame || (expectedTotal != 0 && total != expectedTotal)) return null
+        return total
+    }
 }

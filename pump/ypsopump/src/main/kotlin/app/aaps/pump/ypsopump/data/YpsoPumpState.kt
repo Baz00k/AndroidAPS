@@ -54,8 +54,7 @@ class YpsoPumpState @Inject constructor() {
     val isInitialized: Boolean
         get() = serialNumber.isNotEmpty() && firmwareVersion.isNotEmpty()
 
-    fun reset() {
-        connectionState = ConnectionState.DISCONNECTED
+    fun invalidateStatus() {
         batteryPercent = 0
         reservoirUnits = 0.0
         isSuspended = false
@@ -65,6 +64,13 @@ class YpsoPumpState @Inject constructor() {
         activeTbrPercent = 100
         activeTbrRemainingMinutes = 0
         activeBolusRemaining = 0.0
+        lastConnectionTime = 0L
+        lastStatusTime = 0L
+    }
+
+    fun reset() {
+        connectionState = ConnectionState.DISCONNECTED
+        invalidateStatus()
         lastErrorCode = 0
         lastErrorMessage = ""
     }

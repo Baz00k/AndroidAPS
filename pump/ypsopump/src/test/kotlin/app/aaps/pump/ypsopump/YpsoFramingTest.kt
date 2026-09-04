@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump
 import app.aaps.pump.ypsopump.comm.YpsoFraming
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 class YpsoFramingTest {
@@ -43,5 +44,18 @@ class YpsoFramingTest {
         assertEquals(0x23, frames[1][0].toInt() and 0xFF) // (2 shl 4) or 3
         assertEquals(0x33, frames[2][0].toInt() and 0xFF) // (3 shl 4) or 3
         assertArrayEquals(data, YpsoFraming.parseMultiFrameRead(frames))
+    }
+
+    @Test
+    fun `rejects a duplicate callback frame in the next frame slot`() {
+        val first = byteArrayOf(0x13, 0x01)
+
+        assertEquals(3, YpsoFraming.validateFrame(first, expectedFrame = 1))
+        assertNull(YpsoFraming.validateFrame(first, expectedFrame = 2, expectedTotal = 3))
+    }
+
+    @Test
+    fun `rejects a frame whose declared total changes mid-message`() {
+        assertNull(YpsoFraming.validateFrame(byteArrayOf(0x24, 0x01), expectedFrame = 2, expectedTotal = 3))
     }
 }

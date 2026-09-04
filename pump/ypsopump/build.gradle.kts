@@ -56,11 +56,17 @@ val verifyYpsoBleWriteSites by tasks.registering {
     inputs.file(sourceFile)
     doLast {
         val source = sourceFile.asFile.readText()
-        check(Regex("""\bg\.writeCharacteristic\(""").findAll(source).count() == 2) {
+        check(Regex("""\.writeCharacteristic\(""").findAll(source).count() == 2) {
             "YpsoPump raw characteristic-write sites changed; update and review YpsoWritePolicy coverage"
         }
-        check(Regex("""\bg\.writeDescriptor\(""").findAll(source).count() == 1) {
+        check(Regex("""\.writeDescriptor\(""").findAll(source).count() == 2) {
             "YpsoPump raw descriptor-write sites changed; update and review YpsoWritePolicy coverage"
+        }
+        check(Regex("""\bwriteCharacteristic\(""").findAll(source).count() == 5) {
+            "YpsoPump characteristic-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
+        }
+        check(Regex("""\bwriteDescriptor\(""").findAll(source).count() == 4) {
+            "YpsoPump descriptor-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
         }
     }
 }
