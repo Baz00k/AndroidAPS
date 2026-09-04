@@ -87,9 +87,9 @@ class YpsoPumpPlugin @Inject constructor(
 
     // ---- state (read-only) ----
     override fun isInitialized(): Boolean = pumpState.lastConnectionTime > 0L
-    // An empty cartridge is a suspended pump as far as the loop is concerned — this is what puts AAPS
-    // into SUSPENDED_BY_PUMP (LoopPlugin) instead of letting it keep issuing doses into an empty pump.
-    override fun isSuspended(): Boolean = pumpState.isSuspended || reservoirEmpty()
+    // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
+    // mode byte. Write-enabled builds treat an empty cartridge as suspended to stop further dose requests.
+    override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
     override fun isBusy(): Boolean = false
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
@@ -194,10 +194,10 @@ class YpsoPumpPlugin @Inject constructor(
     override val lastDataTime: Long get() = pumpState.lastConnectionTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    // Pump basal profile mirrors the AAPS profile (setNewBasalProfile is a no-op accept), and our status
-    // read does not decode the active basal rate — so derive base basal from the active AAPS profile.
-    // Must be > 0 or LoopPlugin.invoke() silently returns (if (pump.baseBasalRate < 0.01) return).
-    override val baseBasalRate: Double get() = profileFunction.getProfile()?.getBasal() ?: 0.0
+    // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump. A
+    // write-enabled build derives basal from the AAPS profile because the status payload does not expose it.
+    override val baseBasalRate: Double get() =
+        if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.reservoirUnits
     override val batteryLevel: Int? get() = pumpState.batteryPercent
 
