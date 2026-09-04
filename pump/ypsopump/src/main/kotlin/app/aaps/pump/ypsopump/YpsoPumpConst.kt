@@ -68,6 +68,10 @@ object YpsoPumpConst {
     const val CAPTURED_WRITE_COUNTER = -1L   // <0 = writes disabled (read-only)
     const val CAPTURED_REBOOT_COUNTER = 8
 
+    // Setup safety gate. Keep true until read-only status/reconnect testing is complete and pump writes
+    // are explicitly approved; unlike the diagnostic flags below, this also blocks production dosing paths.
+    const val READ_ONLY_MODE = true
+
     // -- Test flag: run the ZERO-THERAPY write-transport validation (history index write + entry read)
     // once after connect, instead of a status read. Set false for normal status reads. Never dosing.
     const val RUN_WRITE_VALIDATION = false

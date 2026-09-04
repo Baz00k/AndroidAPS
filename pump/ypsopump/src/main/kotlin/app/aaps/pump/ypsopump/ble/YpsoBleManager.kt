@@ -47,6 +47,7 @@ class YpsoBleManager @Inject constructor(
     companion object {
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
+        private const val READ_ONLY_BLOCKED_STATUS = -3
         private val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
         private val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
         private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
@@ -290,10 +291,16 @@ class YpsoBleManager @Inject constructor(
 
     // ---- write transport (proven on real hardware via the history-index write) ----
     @SuppressLint("MissingPermission")
-    private fun writeOp(uuid: UUID, value: ByteArray, onResult: (ByteArray?, Int) -> Unit) =
+    private fun writeOp(uuid: UUID, value: ByteArray, onResult: (ByteArray?, Int) -> Unit) {
+        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked characteristic write to $uuid")
+            onResult(null, READ_ONLY_BLOCKED_STATUS)
+            return
+        }
         enqueue(Op({ g ->
             findChar(g, uuid)?.let { g.writeCharacteristic(it, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) } ?: complete(null, -1)
         }, onResult))
+    }
 
     /** Write every frame of [payload]; report the LAST frame's status (0 = ok, 138 = counter mismatch). */
     private fun writeFrames(uuid: UUID, payload: ByteArray, onComplete: (Int) -> Unit) {
@@ -313,6 +320,11 @@ class YpsoBleManager @Inject constructor(
      * first (e.g. via [establishCounter]). [onResult] true on accept, false on reject.
      */
     private fun writeEncrypted(uuid: UUID, command: ByteArray, onResult: (Boolean) -> Unit) {
+        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked encrypted write to $uuid")
+            onResult(false)
+            return
+        }
         if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump writeEncrypted: not connected"); onResult(false); return }
         val frame = runCatching { sessionCrypto.encrypt(command) }
             .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onResult(false); return }
@@ -554,6 +566,11 @@ class YpsoBleManager @Inject constructor(
 
     /** One encrypted write at EXACTLY [counter] (no auto-sync). onStatus gets the raw GATT status. */
     private fun writeOnceAt(uuid: UUID, command: ByteArray, counter: Long, onStatus: (Int) -> Unit) {
+        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked counter write to $uuid")
+            onStatus(READ_ONLY_BLOCKED_STATUS)
+            return
+        }
         sessionCrypto.writeCounter = counter - 1               // cryptor pre-increments to [counter]
         val frame = runCatching { sessionCrypto.encrypt(command) }
             .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onStatus(-99); return }
@@ -766,6 +783,10 @@ class YpsoBleManager @Inject constructor(
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) { fail("service discovery failed ($status)"); return }
             val auth = findChar(g, CHAR_AUTH) ?: run { fail("AUTH characteristic not found"); return }
+            if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
+                fail("authentication write blocked by safety policy")
+                return
+            }
             pumpState.connectionState = ConnectionState.DISCOVERING
             aapsLogger.info(LTag.PUMP, "YpsoPump connected; writing MD5 auth")
             g.writeCharacteristic(auth, authPassword(pumpState.pumpAddress), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
@@ -775,11 +796,16 @@ class YpsoBleManager @Inject constructor(
             if (ch.uuid == CHAR_AUTH) {
                 aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                 if (status != BluetoothGatt.GATT_SUCCESS) { fail("auth write failed ($status)"); return }
-                // Authenticated. Before reporting CONNECTED, subscribe to the control-notification char:
-                // the pump GATES control writes on this subscription (see CHAR_CTRL_NOTIFY). CONNECTED is
-                // set once the CCCD write completes (onDescriptorWrite).
-                aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; enabling control notifications")
-                enableCtrlNotify(g)
+                // The MD5 auth characteristic is the sole remote write permitted in read-only mode; it is
+                // required before encrypted status reads. The control-notification CCCD is write-only setup
+                // for pump commands, so do not modify it during status-only validation.
+                if (YpsoPumpConst.READ_ONLY_MODE) {
+                    aapsLogger.info(LTag.PUMP, "YpsoPump authenticated in read-only mode; control notifications disabled")
+                    markConnected(controlNotificationsEnabled = false)
+                } else {
+                    aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; enabling control notifications")
+                    enableCtrlNotify(g)
+                }
             } else complete(null, status)
         }
 
@@ -789,7 +815,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY CCCD write failed ($status) — proceeding, writes may be rejected")
                 else
                     aapsLogger.info(LTag.PUMP, "YpsoPump CTRL_NOTIFY subscription active")
-                markConnected()
+                markConnected(controlNotificationsEnabled = true)
             }
         }
 
@@ -808,11 +834,16 @@ class YpsoBleManager @Inject constructor(
      */
     @SuppressLint("MissingPermission")
     private fun enableCtrlNotify(g: BluetoothGatt) {
+        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR)) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked control-notification descriptor write")
+            markConnected(controlNotificationsEnabled = false)
+            return
+        }
         val ch = findChar(g, CHAR_CTRL_NOTIFY)
         val cccd = ch?.getDescriptor(YpsoPumpConst.CCCD_UUID)
         if (ch == null || cccd == null) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY char/CCCD not found — proceeding without it (writes may be rejected)")
-            markConnected(); return
+            markConnected(controlNotificationsEnabled = false); return
         }
         g.setCharacteristicNotification(ch, true)
         val rc = g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
@@ -820,9 +851,9 @@ class YpsoBleManager @Inject constructor(
         // CONNECTED is set in onDescriptorWrite once the write completes.
     }
 
-    private fun markConnected() {
+    private fun markConnected(controlNotificationsEnabled: Boolean) {
         pumpState.connectionState = ConnectionState.CONNECTED
-        aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled)")
+        aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled=$controlNotificationsEnabled)")
     }
 }
 

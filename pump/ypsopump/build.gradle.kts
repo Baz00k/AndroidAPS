@@ -51,6 +51,21 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
 }
 
+val verifyYpsoBleWriteSites by tasks.registering {
+    val sourceFile = layout.projectDirectory.file("src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBleManager.kt")
+    inputs.file(sourceFile)
+    doLast {
+        val source = sourceFile.asFile.readText()
+        check(Regex("""\bg\.writeCharacteristic\(""").findAll(source).count() == 2) {
+            "YpsoPump raw characteristic-write sites changed; update and review YpsoWritePolicy coverage"
+        }
+        check(Regex("""\bg\.writeDescriptor\(""").findAll(source).count() == 1) {
+            "YpsoPump raw descriptor-write sites changed; update and review YpsoWritePolicy coverage"
+        }
+    }
+}
+
 tasks.withType<Test>().configureEach {
+    dependsOn(verifyYpsoBleWriteSites)
     failOnNoDiscoveredTests = true
 }

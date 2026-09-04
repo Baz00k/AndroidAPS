@@ -71,7 +71,16 @@ class YpsoPumpPlugin @Inject constructor(
     aapsLogger, rh, preferences, commandQueue
 ), Pump {
 
-    override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP)
+    override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
+        if (YpsoPumpConst.READ_ONLY_MODE) {
+            isBolusCapable = false
+            isExtendedBolusCapable = false
+            isTempBasalCapable = false
+            isSetBasalProfileCapable = false
+            supportsTDDs = false
+            needsManualTDDLoad = false
+        }
+    }
 
     private fun notImplemented(): PumpEnactResult =
         pumpEnactResultProvider.get().success(false).enacted(false).comment("YpsoPump: not implemented yet")
@@ -128,6 +137,7 @@ class YpsoPumpPlugin @Inject constructor(
         // finished and disconnects (5s idle) mid-write. The GATT callbacks run on the BLE binder
         // thread, so blocking here is safe. Real dosing (deliverTreatment) must block the same way.
         when {
+            YpsoPumpConst.READ_ONLY_MODE                    -> bleManager.readStatus { onStatusRead() }
             // SAFETY-CRITICAL: deliver one real bolus via the canary-gated safe path (no scan, no
             // auto-sync; aborts before the bolus char if the seeded write counter is wrong).
             YpsoPumpConst.RUN_TEST_BOLUS && !testBolusDone -> {
@@ -210,10 +220,14 @@ class YpsoPumpPlugin @Inject constructor(
         pumpEnactResultProvider.get().success(false).enacted(false).comment("YpsoPump: $msg")
 
     override fun setNewBasalProfile(profile: Profile): PumpEnactResult =
+        if (YpsoPumpConst.READ_ONLY_MODE) {
+            pumpEnactResultProvider.get().success(true).enacted(false).comment("YpsoPump: read-only setup mode; profile not sent to pump")
+        } else {
         // The YpsoPump's basal profile is programmed ON THE PUMP (mylife / pump UI); this driver does not
         // write it. The loop steers with percent TBRs relative to the pump's basal, so the pump's programmed
         // basal MUST match this AAPS profile — the user keeps them in sync. Report success accordingly.
-        pumpEnactResultProvider.get().success(true).enacted(true).comment("YpsoPump: basal profile is programmed on the pump")
+            pumpEnactResultProvider.get().success(true).enacted(true).comment("YpsoPump: basal profile is programmed on the pump")
+        }
 
     override fun isThisProfileSet(profile: Profile): Boolean = true
 
@@ -228,6 +242,7 @@ class YpsoPumpPlugin @Inject constructor(
     @Volatile private var bolusCancelRequested = false
 
     override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail("read-only setup mode: bolus blocked")
         val requested = detailedBolusInfo.insulin
         if (requested <= 0.0) return fail("bolus <= 0")
         if (!ensureConnected()) return fail("not connected")
@@ -410,7 +425,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     /** Everything that must happen after a status read lands: mirror a pump-side stop, then check supplies. */
     private fun onStatusRead() {
-        reconcileSuspendTbr()
+        if (!YpsoPumpConst.READ_ONLY_MODE) reconcileSuspendTbr()
         checkReservoir()
     }
 
@@ -521,6 +536,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail("read-only setup mode: temporary basal blocked")
         val dur = round15(durationInMinutes)
         if (!ensureConnected()) return fail("not connected")
         // A stopped or empty pump delivers nothing, and recording a TBR against it would overwrite the
@@ -555,6 +571,10 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) {
+            return pumpEnactResultProvider.get().success(true).enacted(false)
+                .comment("YpsoPump: read-only setup mode; temporary basal cancellation not sent")
+        }
         // No dedicated stop-TBR command RE'd yet; setting 100% for a 15-min step overrides any active
         // override back to the normal (pump-programmed) basal.
         if (!ensureConnected()) return fail("not connected")
