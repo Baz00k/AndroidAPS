@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.ksp)
@@ -32,6 +34,7 @@ dependencies {
     // XChaCha20-Poly1305 + Curve25519 (native libsodium bundled in the aar)
     implementation("com.goterl:lazysodium-android:5.1.0@aar")
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
 
     testImplementation(project(":shared:tests"))
 
@@ -46,4 +49,8 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
+}
+
+tasks.withType<Test>().configureEach {
+    failOnNoDiscoveredTests = true
 }
