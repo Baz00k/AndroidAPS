@@ -450,8 +450,7 @@ class YpsoPumpPlugin @Inject constructor(
      * first read and after [YpsoPumpState.reset], and alarming on "not read yet" would train the alarm out.
      */
     private fun checkReservoir() {
-        if (pumpState.lastStatusTime <= 0L) return
-        val units = pumpState.reservoirUnits
+        val units = pumpState.reservoirUnitsIfFresh() ?: return
         // Thresholds come from the app's OWN reservoir preferences (Overview → status lights), which
         // already exist, are already translated and are already on a settings screen. They were left
         // unread when the redesign dropped the status-lights row; this puts them back to work rather
@@ -495,7 +494,7 @@ class YpsoPumpPlugin @Inject constructor(
     private var lastReservoirLevel = ReservoirLevel.OK
 
     /** True only on a fresh read — see [checkReservoir] for why "0.0" alone is not enough. */
-    private fun reservoirEmpty(): Boolean = pumpState.lastStatusTime > 0L && pumpState.reservoirUnits <= RESERVOIR_EMPTY_UNITS
+    private fun reservoirEmpty(): Boolean = pumpState.reservoirUnitsIfFresh()?.let { it <= RESERVOIR_EMPTY_UNITS } == true
 
     /** One blocking status read, so a pre-flight check tests the pump's state now, not minutes ago. */
     private fun readStatusBlocking(timeoutMs: Long = 30_000): Boolean {

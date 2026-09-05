@@ -54,7 +54,30 @@ class YpsoPumpState @Inject constructor() {
     val isInitialized: Boolean
         get() = serialNumber.isNotEmpty() && firmwareVersion.isNotEmpty()
 
+    @Synchronized
+    fun publishStatus(
+        reservoirUnits: Double,
+        batteryPercent: Int,
+        isSuspended: Boolean,
+        activeTbrPercent: Int,
+        timestamp: Long
+    ) {
+        this.reservoirUnits = reservoirUnits
+        this.batteryPercent = batteryPercent
+        this.isSuspended = isSuspended
+        this.activeTbrPercent = activeTbrPercent
+        lastStatusTime = timestamp
+        lastConnectionTime = timestamp
+    }
+
+    @Synchronized
+    fun reservoirUnitsIfFresh(): Double? = reservoirUnits.takeIf { lastStatusTime > 0L }
+
+    @Synchronized
     fun invalidateStatus() {
+        // Freshness is cleared first; coherent consumers also read these fields under this monitor.
+        lastStatusTime = 0L
+        lastConnectionTime = 0L
         batteryPercent = 0
         reservoirUnits = 0.0
         isSuspended = false
@@ -64,8 +87,6 @@ class YpsoPumpState @Inject constructor() {
         activeTbrPercent = 100
         activeTbrRemainingMinutes = 0
         activeBolusRemaining = 0.0
-        lastConnectionTime = 0L
-        lastStatusTime = 0L
     }
 
     fun reset() {

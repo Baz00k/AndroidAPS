@@ -312,6 +312,8 @@ class YpsoBleManager @Inject constructor(
     }
 
     private fun completeCurrent(gatt: BluetoothGatt, uuid: UUID, value: ByteArray?, status: Int) {
+        // Android callbacks expose no operation ID. Same-UUID read chains are additionally protected by
+        // frame sequence validation; same-UUID command write chains are blocked in the status-only build.
         val op = synchronized(opLock) {
             if (bluetoothGatt !== gatt || currentGatt !== gatt || current?.uuid != uuid) return
             current
@@ -473,12 +475,13 @@ class YpsoBleManager @Inject constructor(
                 if (!completionClaimed || decoded == null) return@synchronized false
                 val (status, payload) = decoded
                 runCatching {
-                    pumpState.reservoirUnits = status.reservoirUnits
-                    pumpState.batteryPercent = status.batteryPercent
-                    pumpState.isSuspended = status.isSuspended
-                    pumpState.activeTbrPercent = status.activeTbrPercent
-                    pumpState.lastStatusTime = System.currentTimeMillis()
-                    pumpState.lastConnectionTime = System.currentTimeMillis()
+                    pumpState.publishStatus(
+                        reservoirUnits = status.reservoirUnits,
+                        batteryPercent = status.batteryPercent,
+                        isSuspended = status.isSuspended,
+                        activeTbrPercent = status.activeTbrPercent,
+                        timestamp = System.currentTimeMillis()
+                    )
                     // DIAG: log the decoded delivery mode + isSuspended + raw payload so a pump-side Stop can be
                     // seen (validate DeliveryMode.STOPPED/PAUSED against real firmware; raw shows which byte moves).
                     aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U battery=${status.batteryPercent}% deliveryMode=${status.deliveryMode}(${status.deliveryModeName}) suspended=${status.isSuspended} raw=${payload.joinToString("") { "%02x".format(it) }}")
@@ -890,11 +893,18 @@ class YpsoBleManager @Inject constructor(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
-                BluetoothProfile.STATE_CONNECTED    -> synchronized(opLock) {
-                    if (!ownsGattLocked(g)) return
-                    if (pumpState.connectionState != ConnectionState.CONNECTING) return
-                    pumpState.connectionState = ConnectionState.DISCOVERING
-                    g.discoverServices()
+                BluetoothProfile.STATE_CONNECTED    -> {
+                    val failure = synchronized(opLock) {
+                        if (!ownsGattLocked(g)) return
+                        if (pumpState.connectionState != ConnectionState.CONNECTING) return
+                        pumpState.connectionState = ConnectionState.DISCOVERING
+                        runCatching { g.discoverServices() }
+                            .fold(
+                                onSuccess = { dispatched -> if (dispatched) null else "service discovery could not be started" },
+                                onFailure = { "service discovery dispatch failed: ${it.message}" }
+                            )
+                    }
+                    failure?.let { fail(g, it) }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     val failed = synchronized(opLock) {
@@ -986,12 +996,6 @@ class YpsoBleManager @Inject constructor(
 
     private fun ownsGattLocked(g: BluetoothGatt): Boolean {
         if (g === bluetoothGatt) return true
-        // Android normally posts callbacks after connectGatt() returns. Adopt the callback's GATT if
-        // it arrives synchronously while this is the sole in-progress connection.
-        if (bluetoothGatt == null && pumpState.connectionState == ConnectionState.CONNECTING) {
-            bluetoothGatt = g
-            return true
-        }
         aapsLogger.warn(LTag.PUMP, "YpsoPump ignored callback from stale GATT instance")
         return false
     }
