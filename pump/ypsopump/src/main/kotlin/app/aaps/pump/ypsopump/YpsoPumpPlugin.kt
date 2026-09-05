@@ -117,7 +117,6 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun connect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "connect: $reason")
-        pumpState.invalidateStatus()
         if (!configured()) {
             aapsLogger.info(LTag.PUMP, "YpsoPump: session key and/or pump MAC not set (prefs ypso_shared_key / ypso_pump_mac or build consts) — skipping connect")
             return
@@ -125,7 +124,10 @@ class YpsoPumpPlugin @Inject constructor(
         seedAndConnect()
     }
 
-    override fun disconnect(reason: String) { aapsLogger.debug(LTag.PUMP, "disconnect: $reason"); bleManager.disconnect() }
+    override fun disconnect(reason: String) {
+        aapsLogger.debug(LTag.PUMP, "disconnect: $reason")
+        bleManager.disconnect(preserveStatus = reason == "Queue empty")
+    }
     override fun stopConnecting() { bleManager.disconnect() }
 
     override fun getPumpStatus(reason: String) {
@@ -238,7 +240,9 @@ class YpsoPumpPlugin @Inject constructor(
             pumpEnactResultProvider.get().success(true).enacted(true).comment("YpsoPump: basal profile is programmed on the pump")
         }
 
-    override fun isThisProfileSet(profile: Profile): Boolean = !YpsoPumpConst.READ_ONLY_MODE
+    // This driver does not verify the profile programmed directly on the pump. Treat it as satisfied so
+    // KeepAlive does not repeatedly queue a no-op or, in status-only mode, a blocked profile write.
+    override fun isThisProfileSet(profile: Profile): Boolean = true
 
     // Bolus delivery is CONFIRM-BY-READ: we never trust the write-accept callback alone (a dropped BLE ack
     // can mean the pump ALREADY delivered — the 2026-07-05 IOB-desync incident). After the START write we

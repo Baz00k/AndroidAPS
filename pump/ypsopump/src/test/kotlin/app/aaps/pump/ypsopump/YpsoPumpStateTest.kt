@@ -1,8 +1,11 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoPumpStateTest {
@@ -26,5 +29,23 @@ class YpsoPumpStateTest {
         state.invalidateStatus()
 
         assertNull(state.reservoirUnitsIfFresh())
+    }
+
+    @Test
+    fun `successful status remains healthy while queue is idle`() {
+        val state = YpsoPumpState()
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        state.connectionState = ConnectionState.DISCONNECTED
+
+        assertTrue(state.hasVerifiedStatus)
+        assertTrue(state.connectionHealthy)
+    }
+
+    @Test
+    fun `disconnected before first status is not healthy`() {
+        val state = YpsoPumpState()
+
+        assertFalse(state.hasVerifiedStatus)
+        assertFalse(state.connectionHealthy)
     }
 }

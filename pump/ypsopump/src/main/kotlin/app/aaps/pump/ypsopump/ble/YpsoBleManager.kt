@@ -184,11 +184,18 @@ class YpsoBleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String) {
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        if (adapter == null || !adapter.isEnabled) { aapsLogger.error(LTag.PUMP, "YpsoPump: Bluetooth off"); return }
-        val device = adapter.getRemoteDevice(macAddress)
+        if (adapter == null || !adapter.isEnabled) {
+            pumpState.invalidateStatus()
+            aapsLogger.error(LTag.PUMP, "YpsoPump: Bluetooth off")
+            return
+        }
+        val device = runCatching { adapter.getRemoteDevice(macAddress) }.getOrElse {
+            pumpState.invalidateStatus()
+            aapsLogger.error(LTag.PUMP, "YpsoPump invalid pump address: ${it.message}")
+            return
+        }
         synchronized(opLock) {
             if (pumpState.connectionState != ConnectionState.DISCONNECTED) return
-            pumpState.invalidateStatus()
             pumpState.connectionState = ConnectionState.CONNECTING
             queue.clear()
             current = null
@@ -199,11 +206,13 @@ class YpsoBleManager @Inject constructor(
             val openedGatt = runCatching { device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE) }
                 .getOrElse {
                     pumpState.connectionState = ConnectionState.DISCONNECTED
+                    pumpState.invalidateStatus()
                     aapsLogger.error(LTag.PUMP, "YpsoPump connect failed: ${it.message}")
                     null
                 }
             if (openedGatt == null) {
                 pumpState.connectionState = ConnectionState.DISCONNECTED
+                pumpState.invalidateStatus()
             } else if (pumpState.connectionState != ConnectionState.DISCONNECTED) {
                 bluetoothGatt = openedGatt
             } else {
@@ -235,12 +244,12 @@ class YpsoBleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    fun disconnect() {
+    fun disconnect(preserveStatus: Boolean = false) {
         val (gatt, failed) = synchronized(opLock) {
             val ownedGatt = bluetoothGatt
             bluetoothGatt = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
-            pumpState.invalidateStatus()
+            if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
         }
         failOperations(failed)

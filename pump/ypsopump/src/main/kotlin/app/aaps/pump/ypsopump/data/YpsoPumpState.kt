@@ -51,6 +51,12 @@ class YpsoPumpState @Inject constructor() {
     val isConnected: Boolean
         get() = connectionState == ConnectionState.CONNECTED
 
+    val hasVerifiedStatus: Boolean
+        get() = lastStatusTime > 0L
+
+    val connectionHealthy: Boolean
+        get() = isConnected || connectionState == ConnectionState.DISCONNECTED && hasVerifiedStatus
+
     val isInitialized: Boolean
         get() = serialNumber.isNotEmpty() && firmwareVersion.isNotEmpty()
 
