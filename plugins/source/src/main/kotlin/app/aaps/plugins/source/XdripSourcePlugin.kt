@@ -44,6 +44,7 @@ class XdripSourcePlugin @Inject constructor(
         .preferencesId(PluginDescription.PREFERENCE_SCREEN)
         .pluginName(R.string.source_xdrip)
         .preferencesVisibleInSimpleMode(false)
+        .setDefault()
         .description(R.string.description_source_xdrip),
     aapsLogger, rh
 ), BgSource, XDripSource {
