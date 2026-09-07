@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
@@ -242,6 +243,72 @@ class YpsoBleManagerTest {
         manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
 
         assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
+    }
+
+    @Test
+    fun `connected callback with GATT error fails before discovery`() {
+        val gatt: BluetoothGatt = mock()
+        ownGatt(gatt, ConnectionState.CONNECTING)
+        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
+
+        manager.gattCallback.onConnectionStateChange(gatt, 133, BluetoothProfile.STATE_CONNECTED)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        assertFalse(pumpState.hasVerifiedStatus)
+        verify(gatt, never()).discoverServices()
+        verify(gatt).disconnect()
+        verify(gatt).close()
+    }
+
+    @Test
+    fun `rejected service discovery dispatch fails handshake`() {
+        val gatt: BluetoothGatt = mock()
+        whenever(gatt.discoverServices()).thenReturn(false)
+        ownGatt(gatt, ConnectionState.CONNECTING)
+        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
+
+        manager.gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        assertFalse(pumpState.hasVerifiedStatus)
+        verify(gatt).disconnect()
+        verify(gatt).close()
+    }
+
+    @Test
+    fun `throwing service discovery dispatch fails handshake`() {
+        val gatt: BluetoothGatt = mock()
+        whenever(gatt.discoverServices()).thenThrow(IllegalStateException("dispatch failed"))
+        ownGatt(gatt, ConnectionState.CONNECTING)
+        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
+
+        manager.gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        assertFalse(pumpState.hasVerifiedStatus)
+        verify(gatt).disconnect()
+        verify(gatt).close()
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `rejected authentication dispatch fails handshake`() {
+        val gatt: BluetoothGatt = mock()
+        val service: BluetoothGattService = mock()
+        val auth: BluetoothGattCharacteristic = mock()
+        whenever(auth.uuid).thenReturn(CHAR_AUTH)
+        whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
+        whenever(gatt.services).thenReturn(listOf(service))
+        whenever(gatt.writeCharacteristic(auth)).thenReturn(false)
+        ownGatt(gatt, ConnectionState.DISCOVERING)
+        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
+
+        manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        assertFalse(pumpState.hasVerifiedStatus)
+        verify(gatt).disconnect()
+        verify(gatt).close()
     }
 
     @Suppress("DEPRECATION")

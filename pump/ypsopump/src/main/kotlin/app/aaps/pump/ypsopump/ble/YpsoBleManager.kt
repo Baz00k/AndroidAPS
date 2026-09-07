@@ -914,6 +914,7 @@ class YpsoBleManager @Inject constructor(
                     val failure = synchronized(opLock) {
                         if (!ownsGattLocked(g)) return
                         if (pumpState.connectionState != ConnectionState.CONNECTING) return
+                        if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "connection failed ($status)"
                         pumpState.connectionState = ConnectionState.DISCOVERING
                         runCatching { g.discoverServices() }
                             .fold(
