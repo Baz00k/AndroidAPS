@@ -103,12 +103,51 @@ Not a port of anyone's binary.
 
 | Feature | What it does |
 |---|---|
-| Adaptive TDD | Walks the operating basal day to day from enacted basal + glucose outcomes |
+| Adaptive TDD | Scales the profile basal curve by a gain learned from total daily dose (see below) |
 | IMM Kalman bank | Parallel submodels identifying the current carb-absorption regime |
 | SMB microbolus | Part of the short-horizon correction as a bolus, behind five independent gates |
 | Meal detection | Bayesian inference of unannounced carbs from the innovation sequence |
 | Re-identification | Daily re-fit of insulin sensitivity / EGP / absorption from your own logs |
 | Time-of-day carb absorption | Scales absorption by meal time. **Built, then rejected when fitted against real data — left in place, off, and not recommended** |
+
+### Adaptive TDD — rebuilt after it was measured
+
+Worth describing in detail, because it is the clearest example of what this fork tries to do: build the
+mechanism, then hold it against the user's own recorded history rather than against a simulator.
+
+The first implementation followed the decoded CamAPS shape only loosely, and a 60-day replay of real
+history found four deviations that compounded into one failure — the operating point walked from 97% of
+the titrated profile to 54% over three weeks, which removed **63% of the dawn basal** and made the 30-min
+forecast measurably worse. What went wrong, in descending order of damage:
+
+- **A binary daily hypo flag applied as a fixed ×0.90.** On this user's data `tbrFrac > 0.01 || min < 3.5`
+  fires on 42 of 58 days. A fixed multiplicative cut three days in four is a ratchet, not a safety
+  response — and it sat first in the branch, so a day averaging 9.1 mmol/L with one compression low was
+  cut 10% and the "persistently high" arm never ran. The response is now **continuous** in time-below-range
+  with a deadband at the consensus <4% target, and the two arms **add** instead of one vetoing the other.
+- **It learned from basal alone.** Basal is 30% of this user's insulin and correlates **−0.01** with their
+  daily total, so the layer was learning from the loop's own output — a feedback loop with no external
+  reference. The ledger is now total delivered insulin, basal *and* boluses, which is what "TDD" means.
+- **It replaced the profile instead of scaling it,** deleting the circadian basal shape for all 24 hours.
+  It now applies a dimensionless **gain to `profile.getBasal(now)`**, so the titrated shape survives.
+- **It compared a block against daily means**, which reads low by construction, and cached on a UTC day
+  index, so the "daily" value rolled over at local noon — the number governing a dawn rise had been
+  computed at midday the day before.
+
+Two findings from the rebuild are worth carrying to any similar layer. The window length was tuned on real
+data rather than assumed: the *performance* term, not the dose window, was the dominant source of churn,
+and reading glucose from a single day rather than the window costs an 11× increase in it. And because the
+per-update clamp is asymmetric (−20% down against +12% up), **estimator noise does not average out — it
+ratchets down**; reducing noise removed a systematic 6% bias, not just variance.
+
+An EGP/disturbance state in the Kalman filter was also built and A/B'd as a candidate fix for the same
+symptom, and **rejected**: it improved the dawn dose barely, degraded forecast error, and spent most of
+its time pinned against its own bound. The harness for that negative result is kept so it is not
+re-proposed.
+
+`TddAdapterV2` carries the full derivation in its KDoc, and `TddAdapterV2Test` pins each property as a
+contract — written against realistic days from the recorded history, because the defect was invisible to
+round numbers.
 
 ### Safety machinery
 

@@ -12,7 +12,7 @@ import kotlin.math.sqrt
  * WHY (beyond 2a personalise + 2d adaptive-TDD):
  *   - [HovorkaParams.personalize] fits insulin sensitivity / EGP / carb bioavailability ONCE, from the
  *     titrated ISF/IC in the AAPS profile. It never revisits them.
- *   - [TddAdapter] walks the operating BASAL point day-to-day, but that is a single scalar gain on the whole
+ *   - [TddAdapterV2] walks the operating point day-to-day, but that is a single scalar gain on the whole
  *     insulin need — it cannot fix a *shape* error (e.g. corrections landing right while meals overshoot, or a
  *     seasonal insulin-sensitivity drift that the profile ISF no longer reflects).
  * This identifier closes that gap: it re-fits the model itself, slowly and safely, from what actually happened.
