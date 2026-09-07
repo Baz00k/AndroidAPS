@@ -30,7 +30,7 @@ import javax.inject.Singleton
 /**
  * BLE manager for the YpsoPump status-only flow: connect over the existing OS bond -> MD5 access
  * authentication -> encrypted multi-frame status read -> update [YpsoPumpState]. The target-firmware
- * protocol contract is not yet qualified; see https://github.com/Baz00k/AndroidAPS/issues/6.
+ * protocol contract is not yet qualified.
  *
  * Set the captured session key with [setSharedKey] before connecting. No write/dosing path here yet.
  */
@@ -58,13 +58,11 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
         private val CHAR_EVENT_INDEX: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecc3b7bc5")
         private val CHAR_EVENT_VALUE: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
-        // Provisional control UUIDs. Therapy remains blocked; target validation belongs to the owning
-        // roadmap tickets: https://github.com/Baz00k/AndroidAPS/issues/2
+        // Provisional control UUIDs. Therapy remains blocked pending independent target validation.
         private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
         private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
-        // Provisional control-notification UUID. Non-auth write transport is unsupported in the current
-        // artifact; investigation and bench evidence belong to https://github.com/Baz00k/AndroidAPS/issues/12.
+        // Provisional control-notification UUID. Non-auth write transport is unsupported in this artifact.
         private val CHAR_CTRL_NOTIFY: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
         private val AUTH_SALT = byteArrayOf(
             0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
@@ -550,9 +548,9 @@ class YpsoBleManager @Inject constructor(
                 return@readMultiframe
             }
             // Unsupported diagnostic path retained behind compile-time gates. Counter behavior and safe
-            // ownership are not established here; see https://github.com/Baz00k/AndroidAPS/issues/8.
+            // ownership are not established here.
             val base = sessionCrypto.writeCounter
-            // Selector encoding/transport validation belongs to https://github.com/Baz00k/AndroidAPS/issues/12.
+            // Selector encoding and transport are not qualified for use.
             val payload = glbEncode(count - 1)
             aapsLogger.info(LTag.PUMP, "YpsoPump write-validate: single index write at writeCounter=${base + 1} (readCounter=${sessionCrypto.readCounter} is NOT used for writes)")
             writeOnceAt(CHAR_EVENT_INDEX, payload, base + 1) { st ->

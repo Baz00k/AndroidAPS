@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 class StatusCommandTest {
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    /** Exercises the provisional decoder layout tracked for validation in issue #6. */
+    /** Exercises the provisional decoder layout; this is not target-firmware validation. */
     @Test
     fun `decodes 18-byte status (insulin@1, battery@6, tbr@10)`() {
         // mode=1 (Basal), insulin=0x0226=550 -> 5.50U, battery=0x55=85, tbr=0x64=100

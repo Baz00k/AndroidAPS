@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
 class YpsoCrcTest {
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    /** Pins the provisional CRC implementation to a synthetic vector; issue #6 owns validation. */
+    /** Pins the provisional CRC implementation to a synthetic vector; this is not target validation. */
     @Test
     fun `crc16 matches a known vector`() {
         val payload = hex("000102030405060708090a0b0c0d0e0f10")

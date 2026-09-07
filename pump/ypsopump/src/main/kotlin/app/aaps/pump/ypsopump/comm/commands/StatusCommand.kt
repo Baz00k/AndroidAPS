@@ -8,15 +8,14 @@ import app.aaps.pump.ypsopump.comm.YpsoCommandCodes
  * GET_SYSTEM_STATUS (index 30) — reads delivery state, reservoir level and battery.
  *
  * The current decoder provisionally accepts an 18-byte body (CRC trailer already stripped by the
- * caller). The observations below are not a qualified firmware schema; validation and independent
- * fixtures are owned by https://github.com/Baz00k/AndroidAPS/issues/6.
+ * caller). The observations below are not a qualified firmware schema and require target-firmware
+ * captures plus independent fixtures before being treated as supported.
  *   @1  u32 LE  insulin remaining (centi-units)          [observed]
  *   @6  u8      battery percent                          [observed]
  *   @10 u32 LE  active TBR / basal percent (100 = normal)
  *   @5  u8      delivery mode (best guess — @0 is the alternative; not yet confirmed)
  *
- * Source references disagree about layout and mode semantics. Do not broaden support from this decoder;
- * issue #6 owns the evidence and selected schema.
+ * Source references disagree about layout and mode semantics. Do not broaden support from this decoder.
  */
 class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
 

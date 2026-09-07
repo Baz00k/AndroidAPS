@@ -10,7 +10,6 @@ package app.aaps.pump.ypsopump.comm
  * CRC-checked (and the 2 trailing bytes stripped) before parsing.
  *
  * This is the currently implemented interpretation, not a qualified target-firmware contract.
- * Integrity validation is owned by https://github.com/Baz00k/AndroidAPS/issues/6.
  */
 object YpsoCrc {
 

@@ -114,7 +114,7 @@ class SessionCryptoTest {
      *   command = AA BB CC ;  rebootCounter = 8 (4B LE) ;  readCounter = 2743 (8B LE)
      *
      * If anyone reverts decrypt() to BIG-endian, rebootCounter would decode as 134217728 and
-     * readCounter as ~1.32e19 — so this test fails. Issue #6 owns independent target validation.
+     * readCounter as ~1.32e19 — so this test fails. This synthetic vector is not target validation.
      */
     @Test
     fun `decrypt parses counters little-endian synthetic vector`() {

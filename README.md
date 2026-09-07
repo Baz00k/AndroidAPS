@@ -23,9 +23,8 @@ The non-Ypso work remains experimental and may deliver insulin when used with an
 
 ## YpsoPump status viewer
 
-The accepted baseline is merge commit
-[`71bb79d0f3`](https://github.com/Baz00k/AndroidAPS/commit/71bb79d0f36a90901f68ac2b12a3fbd2266f563e).
-It connects to an already bonded Ypsomed mylife YpsoPump and attempts encrypted status reads.
+The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. It connects to an already
+bonded Ypsomed mylife YpsoPump and attempts encrypted status reads.
 
 **Current release boundary:**
 
@@ -45,9 +44,8 @@ Setup currently requires three separate layers:
 A BLE connection or successful MD5 authentication is **not** a verified status read. There is no in-app
 provisioning screen in this artifact, and the imported session key must never be committed or shared.
 
-Read the concise [YpsoPump setup and limitations](pump/ypsopump/README.md). Readiness and future work live
-only in the [ordered hardening roadmap](https://github.com/Baz00k/AndroidAPS/issues/2); implementation detail
-belongs to its linked tickets.
+Read the concise [YpsoPump setup and limitations](pump/ypsopump/README.md). Unsupported capabilities remain
+blocked until their protocol, lifecycle and hardware behavior are independently validated.
 
 ## Other fork changes
 
@@ -72,8 +70,6 @@ belongs to its linked tickets.
 Both variants currently use the debug signing key, allowing `adb install -r` to preserve app data.
 If KSP reports stale generated types after a large refactor, run `./gradlew :app:clean` and rebuild.
 
-## Issues and licence
-
-Do not report fork-specific behavior to upstream AndroidAPS. Use this repository's issue tracker.
+## Licence
 
 Licensed under AGPL-3.0; see [LICENSE.txt](LICENSE.txt). No warranty is provided.
