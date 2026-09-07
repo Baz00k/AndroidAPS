@@ -18,7 +18,7 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Six workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Seven workstreams:
 
 | # | Area | What it is | Status |
 |---|------|-----------|--------|
@@ -28,6 +28,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Six workstreams:
 | 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface, plus [skins](#skins) loadable from a file | Running |
 | 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | Running |
 | 6 | **[Delivery the pump cannot make](#6-delivery-the-pump-cannot-make)** | Stopped pump, empty cartridge: say so, refuse the dose, and never book insulin that did not go in | Running |
+| 7 | **[Native Libre 3 / 3+ CGM](#7-native-libre-3--3-cgm)** | Talks to the sensor directly over BLE — no Juggluco, no xDrip in the glucose path | Live on hardware |
 
 Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
 the redesign had dropped, and pump-driver reliability fixes.
@@ -423,6 +424,36 @@ So:
 
 ---
 
+## 7. Native Libre 3 / 3+ CGM
+
+**`libre3/` — [full README: architecture, protocol notes, credits](libre3/README.md)**
+
+xDrip cannot **start** a Libre 3 sensor, so the usual setup runs **Juggluco** to activate and stream,
+then bridges into AAPS. That bridge decimates the data — ~1 reading per 5 minutes reaches AAPS out of
+the sensor's 1-per-minute — and loses the sensor's own gap backfill. This module removes the middle
+apps: AAPS performs the sensor authorization handshake and talks to the patch directly over BLE.
+
+- Sensor authorization handshake, then the full **1-minute** glucose stream — the rate HovorkaMPC's
+  minute-stepping EKF is built for, feeding it raw readings instead of 1-of-5
+- **Gap backfill** from the sensor's own retained history when the phone was out of range
+- Sensor lifecycle (warm-up / active / expiring / failed) surfaced in the UI, not inferred from silence
+- **Dense-aware bucketing** in core AAPS: 1-minute samples are averaged into 5-minute buckets for the
+  legacy consumers, so the extra data is a benefit rather than a jagged chart; the loop still reads raw
+- A `Libre3` glucose source plugin with range/rate gating and `lifeCount` de-duplication
+
+**This stands on [Juggluco](https://github.com/j-kaltes/Juggluco) by Jaap Korthals Altes (`j-kaltes`),
+GPL-3.0.** The sensor-authorization / challenge-cipher native core is Juggluco's C, vendored verbatim
+with its GPL headers intact; every wire-format decoder transcribes formats Juggluco worked out first.
+Full provenance is in the [module README](libre3/README.md) and
+[`libre3/src/main/cpp/VENDOR.md`](libre3/src/main/cpp/VENDOR.md).
+
+**Not yet:** starting a fresh sensor from AAPS over NFC. The activation command is written, but the NFC
+response parser is not, so a new sensor is still activated with Juggluco and its per-sensor credentials
+imported. This is a **private single-device build** — per-sensor credentials never leave the device, and
+no APK built from it should be distributed.
+
+---
+
 ## Smaller changes
 
 Things that do not warrant a section but are still differences from upstream.
@@ -476,6 +507,11 @@ and none of it has had their review. Upstream bugs belong at
 ## Licence
 
 AGPL-3.0, same as upstream AndroidAPS. See [LICENSE.txt](LICENSE.txt).
+
+The [`libre3/`](libre3/) module vendors native code from **[Juggluco](https://github.com/j-kaltes/Juggluco)**
+(Jaap Korthals Altes), which is **GPL-3.0-or-later**. GPL-3.0 combines upward into AGPL-3.0; the vendored
+files keep their original GPL headers, and provenance is recorded in
+[`libre3/src/main/cpp/VENDOR.md`](libre3/src/main/cpp/VENDOR.md).
 
 ---
 
