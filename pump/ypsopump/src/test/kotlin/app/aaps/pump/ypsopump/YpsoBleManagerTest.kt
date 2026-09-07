@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothProfile
 import android.content.Context
@@ -354,6 +355,12 @@ class YpsoBleManagerTest {
             val auth: BluetoothGattCharacteristic = mock()
             val service: BluetoothGattService = mock()
             val writes = mutableListOf<Pair<UUID, List<Byte>>>()
+            val descriptor: BluetoothGattDescriptor = mock()
+            whenever(descriptor.uuid).thenReturn(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+            whenever(gatt.writeDescriptor(any())).thenAnswer { writes.add(descriptor.uuid to listOf(1.toByte(), 0.toByte())); true }
+            whenever(gatt.writeDescriptor(any(), any())).thenAnswer {
+                writes.add(descriptor.uuid to it.getArgument<ByteArray>(1).toList()); 0
+            }
             var legacyValue = byteArrayOf()
             whenever(auth.uuid).thenReturn(CHAR_AUTH)
             whenever(auth.setValue(any<ByteArray>())).thenAnswer { legacyValue = it.getArgument<ByteArray>(0).copyOf(); true }
@@ -388,6 +395,9 @@ class YpsoBleManagerTest {
             manager.cancelBolus(731, false) { sent, _ -> outcomes.add(!sent) }
             manager.testTbrCanary(150, 30, 731) { sent, _ -> outcomes.add(!sent) }
             manager.readLastFastBolusEvent { outcomes.add(it == null) }
+            for (category in YpsoRemoteWrite.entries) {
+                assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
+            }
             assertEquals(List(7) { true }, outcomes)
             assertEquals(731L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")

@@ -1152,13 +1152,15 @@ class YpsoBleManager @Inject constructor(
 
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission", "NewApi") // Same runtime SDK guard as characteristic dispatch.
-    private fun writeDescriptor(
+    internal fun writeDescriptor(
         g: BluetoothGatt,
         descriptor: BluetoothGattDescriptor,
         value: ByteArray,
         remoteWrite: YpsoRemoteWrite
     ): Boolean {
-        if (!YpsoWritePolicy.allows(remoteWrite)) {
+        // AUTH is a characteristic, never a descriptor. No descriptor destination is authorized
+        // in this artifact, including a caller deliberately labelling its payload AUTHENTICATION.
+        if (YpsoPumpConst.READ_ONLY_MODE || remoteWrite != YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR) {
             aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked $remoteWrite descriptor write")
             return false
         }
