@@ -60,6 +60,10 @@ object YpsoCrc {
         return crc16(data).contentEquals(crc)
     }
 
+    /** Return the payload without its CRC, or null when the response is corrupt or incomplete. */
+    fun validatedPayload(payload: ByteArray): ByteArray? =
+        if (isValid(payload)) payload.copyOfRange(0, payload.size - 2) else null
+
     /** [payload] with its CRC16 appended. */
     fun appendCrc(payload: ByteArray): ByteArray = payload + crc16(payload)
 }

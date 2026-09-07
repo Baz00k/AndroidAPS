@@ -1,12 +1,12 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
-import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 
 /**
  * Unit tests for SessionCrypto (XChaCha20-Poly1305).
@@ -15,10 +15,9 @@ import org.junit.Test
  * Run on Android device/emulator or with JNA configured for desktop.
  */
 class SessionCryptoTest {
-
     private lateinit var crypto: SessionCrypto
 
-    @Before
+    @BeforeEach
     fun setUp() {
         crypto = SessionCrypto()
         // 32-byte test key (DO NOT use in production)
@@ -58,7 +57,7 @@ class SessionCryptoTest {
         val nonce1 = encrypted1.sliceArray(encrypted1.size - 24 until encrypted1.size)
         val nonce2 = encrypted2.sliceArray(encrypted2.size - 24 until encrypted2.size)
 
-        assertTrue("Nonces should be different", !nonce1.contentEquals(nonce2))
+        assertTrue(!nonce1.contentEquals(nonce2), "Nonces should be different")
     }
 
     @Test
@@ -121,16 +120,16 @@ class SessionCryptoTest {
      */
     @Test
     fun `decrypt parses counters little-endian (hardware-validated golden vector)`() {
-        val frame = hexToBytes(
-            "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
-            "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
-        )
+        val frame =
+            hexToBytes(
+                "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
+                    "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+            )
         val command = crypto.decrypt(frame)
         assertArrayEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte()), command)
         assertEquals(8, crypto.rebootCounter)
         assertEquals(2743L, crypto.readCounter)
     }
 
-    private fun hexToBytes(hex: String): ByteArray =
-        hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private fun hexToBytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

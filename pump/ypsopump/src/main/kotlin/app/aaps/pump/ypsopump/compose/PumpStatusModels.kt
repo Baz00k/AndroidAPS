@@ -12,7 +12,7 @@ data class QueueItem(val text: String, val running: Boolean)
 data class PumpStatusState(
     val title: String = "YpsoPump",
     val connection: String = "",
-    val connected: Boolean = false,
+    val connectionHealthy: Boolean = false,
     val reservoir: Double = 0.0,
     val reservoirMax: Double = 200.0,
     val battery: Int = 0,

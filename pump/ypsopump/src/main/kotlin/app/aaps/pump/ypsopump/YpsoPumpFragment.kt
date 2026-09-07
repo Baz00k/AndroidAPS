@@ -13,6 +13,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.compose.PumpStatusRow
 import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
@@ -65,7 +66,7 @@ class YpsoPumpFragment : DaggerFragment() {
             else add(PumpStatusRow("Basal", String.format(java.util.Locale.getDefault(), "%.2f U/h", pumpState.activeBasalRate)))
             if (pumpState.isBolusingInProgress) add(PumpStatusRow("Bolus", String.format(java.util.Locale.getDefault(), "%.2f U left", pumpState.activeBolusRemaining)))
             if (pumpState.isSuspended) add(PumpStatusRow("State", "Suspended"))
-            if (pumpState.lastConnectionTime > 0) add(PumpStatusRow("Last sync", dateUtil.minAgoShort(pumpState.lastConnectionTime)))
+            if (pumpState.lastConnectionTime > 0) add(PumpStatusRow("Last sync", dateUtil.minOrSecAgo(rh, pumpState.lastConnectionTime)))
             if (pumpState.lastErrorCode != 0) add(PumpStatusRow("Last error", "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
         }
         val queue = buildList {
@@ -76,8 +77,12 @@ class YpsoPumpFragment : DaggerFragment() {
         }
         state.value = PumpStatusState(
             title = "YpsoPump",
-            connection = pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() },
-            connected = pumpState.isConnected,
+            connection = if (pumpState.connectionState == ConnectionState.DISCONNECTED && pumpState.hasVerifiedStatus) {
+                rh.gs(R.string.ypsopump_idle)
+            } else {
+                pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
+            },
+            connectionHealthy = pumpState.connectionHealthy,
             reservoir = pumpState.reservoirUnits,
             battery = pumpState.batteryPercent,
             rows = rows,

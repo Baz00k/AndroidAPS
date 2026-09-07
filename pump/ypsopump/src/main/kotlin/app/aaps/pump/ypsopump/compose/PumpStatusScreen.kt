@@ -42,8 +42,8 @@ fun PumpStatusScreen(state: PumpStatusState) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
-                label = if (state.connected) "Connected" else state.connection.ifBlank { "Disconnected" },
-                dotColor = if (state.connected) colors.inRange else colors.low
+                label = state.connection.ifBlank { "Disconnected" },
+                dotColor = if (state.connectionHealthy) colors.inRange else colors.low
             )
         }
 

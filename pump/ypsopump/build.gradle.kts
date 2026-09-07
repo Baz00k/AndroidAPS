@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.ksp)
@@ -32,6 +34,7 @@ dependencies {
     // XChaCha20-Poly1305 + Curve25519 (native libsodium bundled in the aar)
     implementation("com.goterl:lazysodium-android:5.1.0@aar")
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
 
     testImplementation(project(":shared:tests"))
 
@@ -46,4 +49,29 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
+}
+
+val verifyYpsoBleWriteSites by tasks.registering {
+    val sourceFile = layout.projectDirectory.file("src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBleManager.kt")
+    inputs.file(sourceFile)
+    doLast {
+        val source = sourceFile.asFile.readText()
+        check(Regex("""\.writeCharacteristic\(""").findAll(source).count() == 2) {
+            "YpsoPump raw characteristic-write sites changed; update and review YpsoWritePolicy coverage"
+        }
+        check(Regex("""\.writeDescriptor\(""").findAll(source).count() == 2) {
+            "YpsoPump raw descriptor-write sites changed; update and review YpsoWritePolicy coverage"
+        }
+        check(Regex("""\bwriteCharacteristic\(""").findAll(source).count() == 5) {
+            "YpsoPump characteristic-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
+        }
+        check(Regex("""\bwriteDescriptor\(""").findAll(source).count() == 4) {
+            "YpsoPump descriptor-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
+        }
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(verifyYpsoBleWriteSites)
+    failOnNoDiscoveredTests = true
 }
