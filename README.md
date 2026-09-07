@@ -1,25 +1,25 @@
 # AndroidAPS experimental fork
 
-> **Not clinically validated.** This fork contains experimental insulin-dosing code that is not part of
-> upstream AndroidAPS and has not completed the AAPS review process. It is not affiliated with or endorsed
-> by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab. For supported AndroidAPS, use
-> [the upstream project](https://github.com/nightscout/AndroidAPS).
+> ## 🛑 READ THIS FIRST
+>
+> This fork contains highly experimental insulin-dosing code that is not part of upstream
+> AndroidAPS, has not completed the AAPS review process and is **not clinically validated**.
+> It is not affiliated with or endorsed by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab.
+> For supported AndroidAPS, use [the upstream project](https://github.com/nightscout/AndroidAPS).
 
 Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains the active fork;
 `master` is the unchanged upstream mirror at the fork point.
 
-## What this fork explores
+## What this fork adds
 
-| Area | Summary |
-|---|---|
-| [YpsoPump](#ypsopump-status-viewer) | Authenticated status viewer; therapy disabled |
-| HovorkaMPC | Experimental nonlinear model-predictive controller |
-| Infusion-site handling | Fresh-cannula state, wizard guidance and back-dated recording |
-| Compose UI | Material 3 screens and file-based skins |
-| Slim build | Reduced modules/locales/ABIs and an AOT-eligible build |
-| Delivery safeguards | Stopped/empty-pump checks and insulin-record repair tools |
-
-The non-Ypso work remains experimental and may deliver insulin when used with another supported pump.
+| Area                                | Summary                                                            |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| [YpsoPump](#ypsopump-status-viewer) | Authenticated status viewer; therapy disabled                      |
+| Delivery safeguards                 | Stopped/empty-pump checks and insulin-record repair tools          |
+| Infusion-site handling              | Fresh-cannula state, wizard guidance and back-dated recording      |
+| Compose UI                          | Material 3 screens and file-based skins                            |
+| HovorkaMPC                          | Experimental nonlinear model-predictive controller                 |
+| Slim build                          | Reduced modules/locales/ABIs and an AOT compilation eligible build |
 
 ## YpsoPump status viewer
 
@@ -41,8 +41,8 @@ Setup currently requires three separate layers:
 2. MD5 access authentication performed during connection;
 3. an externally provisioned pump MAC and imported AEAD session key.
 
-A BLE connection or successful MD5 authentication is **not** a verified status read. There is no in-app
-provisioning screen in this artifact, and the imported session key must never be committed or shared.
+A BLE connection or successful MD5 authentication is **not** a verified status read.
+There is no in-app provisioning screen, the user must extract and provide all required credentials.
 
 Read the concise [YpsoPump setup and limitations](pump/ypsopump/README.md). Unsupported capabilities remain
 blocked until their protocol, lifecycle and hardware behavior are independently validated.
