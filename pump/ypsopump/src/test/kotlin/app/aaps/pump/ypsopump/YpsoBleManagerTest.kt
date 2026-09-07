@@ -1,12 +1,16 @@
 package app.aaps.pump.ypsopump
 
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -126,7 +130,7 @@ class YpsoBleManagerTest {
         assertTrue(attempt.cancel())
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
 
-        assertTrue(results.isEmpty())
+        assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
     }
 
@@ -340,6 +344,217 @@ class YpsoBleManagerTest {
         whenever(gatt.readCharacteristic(extRead)).thenReturn(readDispatched)
         ownGatt(gatt, ConnectionState.CONNECTED)
         return GattFixture(gatt, status, extRead)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `authentication recorder captures the same destination and bytes on both Android adapters`() {
+        for (sdk in listOf(31, 32, 33, 36)) {
+            val gatt: BluetoothGatt = mock()
+            val auth: BluetoothGattCharacteristic = mock()
+            val service: BluetoothGattService = mock()
+            val writes = mutableListOf<Pair<UUID, List<Byte>>>()
+            var legacyValue = byteArrayOf()
+            whenever(auth.uuid).thenReturn(CHAR_AUTH)
+            whenever(auth.setValue(any<ByteArray>())).thenAnswer { legacyValue = it.getArgument<ByteArray>(0).copyOf(); true }
+            whenever(gatt.writeCharacteristic(auth)).thenAnswer { writes.add(CHAR_AUTH to legacyValue.toList()); true }
+            whenever(gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
+                writes.add(it.getArgument<BluetoothGattCharacteristic>(0).uuid to it.getArgument<ByteArray>(1).toList())
+                0
+            }
+            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
+            whenever(gatt.services).thenReturn(listOf(service))
+            manager.sdkInt = sdk
+            pumpState.pumpAddress = "12:34:56:78:9A:BC"
+            ownGatt(gatt, ConnectionState.DISCOVERING)
+
+            manager.gattCallback.onServicesDiscovered(gatt, 0)
+            manager.gattCallback.onServicesDiscovered(gatt, 0)
+            manager.gattCallback.onCharacteristicWrite(gatt, auth, 0)
+
+            // Independent Python hashlib MD5(mac bytes + documented access salt), public synthetic MAC.
+            val expected = "04319d09e5ba61be2acf95ebebffe38a".chunked(2).map { it.toInt(16).toByte() }
+            assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk")
+            assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
+
+            var counter = 731L
+            whenever(sessionCrypto.writeCounter).thenAnswer { counter }
+            org.mockito.kotlin.doAnswer { counter = it.getArgument(0); null }.whenever(sessionCrypto).writeCounter = any()
+            val outcomes = mutableListOf<Boolean>()
+            manager.validateWriteTransport { outcomes.add(true) }
+            manager.deliverBolus(1.25, 0, 1.25) { outcomes.add(true) }
+            manager.startBolus(1.25, 731) { outcome, _ -> outcomes.add(outcome == YpsoBleManager.BolusStart.NOT_SENT) }
+            manager.testBolusCanary(1.25, 731) { sent, _ -> outcomes.add(!sent) }
+            manager.cancelBolus(731, false) { sent, _ -> outcomes.add(!sent) }
+            manager.testTbrCanary(150, 30, 731) { sent, _ -> outcomes.add(!sent) }
+            manager.readLastFastBolusEvent { outcomes.add(it == null) }
+            assertEquals(List(7) { true }, outcomes)
+            assertEquals(731L, manager.writeCounter)
+            assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
+        }
+    }
+
+    @Test
+    fun `authentication label cannot authorize a command destination or a changed password`() {
+        val fixture = connectedGatt()
+        val password = "04319d09e5ba61be2acf95ebebffe38a".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        pumpState.pumpAddress = "12:34:56:78:9A:BC"
+        pumpState.connectionState = ConnectionState.READY
+        val auth: BluetoothGattCharacteristic = mock()
+        whenever(auth.uuid).thenReturn(CHAR_AUTH)
+        assertEquals(false, manager.writeCharacteristic(fixture.gatt, fixture.status, password, YpsoRemoteWrite.AUTHENTICATION))
+        assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password.copyOf().apply { this[0] = 0 }, YpsoRemoteWrite.AUTHENTICATION))
+        pumpState.connectionState = ConnectionState.CONNECTED
+        assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password, YpsoRemoteWrite.AUTHENTICATION))
+    }
+
+    @Test
+    fun `missing discovery and authentication callbacks close their owned handshake`() {
+        for (phase in listOf(ConnectionState.CONNECTING, ConnectionState.DISCOVERING)) {
+            val gatt: BluetoothGatt = mock()
+            val service: BluetoothGattService = mock()
+            val auth: BluetoothGattCharacteristic = mock()
+            whenever(auth.uuid).thenReturn(CHAR_AUTH)
+            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
+            whenever(gatt.services).thenReturn(listOf(service))
+            whenever(gatt.discoverServices()).thenReturn(true)
+            manager.sdkInt = 33
+            whenever(gatt.writeCharacteristic(any(), any(), any())).thenReturn(0)
+            var timeout: Runnable? = null
+            manager.scheduleOpTimeout = { action, delay -> assertEquals(8000L, delay); timeout = action }
+            ownGatt(gatt, phase)
+            if (phase == ConnectionState.CONNECTING) manager.gattCallback.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTED)
+            else manager.gattCallback.onServicesDiscovered(gatt, 0)
+            timeout!!.run()
+            manager.gattCallback.onServicesDiscovered(gatt, 0)
+            manager.gattCallback.onCharacteristicWrite(gatt, auth, 0)
+            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+            verify(gatt).close()
+        }
+    }
+
+    @Test
+    fun `diagnostic failure completes caller and releases cursor for the next session`() {
+        val first = connectedGatt()
+        val results = mutableListOf<Int?>()
+        manager.readEventCount(results::add) // Missing characteristic is an immediate dispatch refusal.
+        assertEquals(listOf<Int?>(null), results)
+        verify(first.gatt).close()
+        val next = connectedGatt()
+        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        val statusResults = mutableListOf<Boolean>()
+        manager.readStatus(statusResults::add)
+        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
+        assertEquals(listOf(true), statusResults)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `legacy multi frame bytes are owned until reassembly`() {
+        val fixture = connectedGatt()
+        val first = byteArrayOf(0x12, 0x41)
+        whenever(fixture.status.value).thenReturn(first)
+        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        val results = mutableListOf<Boolean>()
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, 0)
+        first[1] = 0x7f
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
+        assertEquals(listOf(true), results)
+        verify(sessionCrypto).decrypt(byteArrayOf(0x41, 0x42))
+    }
+
+    @Test
+    fun `callback and close exceptions still allow the next session to read`() {
+        val first = connectedGatt()
+        whenever(first.gatt.disconnect()).thenThrow(SecurityException("permission revoked"))
+        whenever(first.gatt.close()).thenThrow(IllegalStateException("close failed"))
+        var completions = 0
+        manager.readStatus { completions++; throw IllegalStateException("consumer failed") }
+        manager.disconnect()
+        assertEquals(1, completions)
+        val next = connectedGatt()
+        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        val results = mutableListOf<Boolean>()
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
+        assertEquals(listOf(true), results)
+        verify(first.gatt).close()
+    }
+
+    @Test
+    fun `overlapping diagnostic completes refusal while original EXTREAD transaction completes`() {
+        val fixture = connectedGatt()
+        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        val statuses = mutableListOf<Boolean>()
+        val diagnostics = mutableListOf<Int?>()
+        manager.readStatus(statuses::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12, 0x41), 0)
+        manager.readEventCount(diagnostics::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
+        assertEquals(listOf<Int?>(null), diagnostics)
+        assertEquals(listOf(true), statuses)
+        verify(sessionCrypto).decrypt(byteArrayOf(0x41, 0x42))
+    }
+
+    @Test
+    fun `cancelled owner cannot invalidate a later session sample`() {
+        connectedGatt()
+        val firstResults = mutableListOf<Boolean>()
+        val attempt = manager.readStatus(firstResults::add)
+        manager.disconnect()
+        val next = connectedGatt()
+        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        val nextResults = mutableListOf<Boolean>()
+        manager.readStatus(nextResults::add)
+        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
+        assertFalse(attempt.cancel())
+        assertEquals(listOf(false), firstResults)
+        assertEquals(listOf(true), nextResults)
+        assertEquals(5.5, pumpState.statusSnapshot?.reservoirUnits)
+    }
+
+    @Test
+    fun `connect deadline releases GATT and allows a subsequent connect`() {
+        val bluetooth: BluetoothManager = mock()
+        val adapter: BluetoothAdapter = mock()
+        val device: BluetoothDevice = mock()
+        val gatt: BluetoothGatt = mock()
+        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
+        whenever(bluetooth.adapter).thenReturn(adapter)
+        whenever(adapter.isEnabled).thenReturn(true)
+        whenever(adapter.getRemoteDevice("12:34:56:78:9A:BC")).thenReturn(device)
+        whenever(device.bondState).thenReturn(BluetoothDevice.BOND_BONDED)
+        whenever(device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
+        var deadline: Runnable? = null
+        manager.scheduleOpTimeout = { action, delay -> assertEquals(8000L, delay); deadline = action }
+        manager.connect("12:34:56:78:9A:BC")
+        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
+        deadline!!.run()
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        verify(gatt).close()
+        manager.connect("12:34:56:78:9A:BC")
+        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
+        verify(device, times(2)).connectGatt(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `missing bond Bluetooth and permission refuse connection and invalidate measurements`() {
+        val bluetooth: BluetoothManager = mock()
+        val adapter: BluetoothAdapter = mock()
+        val device: BluetoothDevice = mock()
+        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
+        whenever(bluetooth.adapter).thenReturn(adapter)
+        whenever(adapter.getRemoteDevice("12:34:56:78:9A:BC")).thenReturn(device)
+        for (fault in 0..2) {
+            whenever(adapter.isEnabled).thenReturn(fault != 0)
+            if (fault == 2) whenever(device.bondState).thenThrow(SecurityException("permission missing"))
+            else whenever(device.bondState).thenReturn(BluetoothDevice.BOND_NONE)
+            pumpState.publishStatus(41.0, 80, false, 100, 5000)
+            manager.connect("12:34:56:78:9A:BC")
+            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+            assertEquals(null, pumpState.statusSnapshot)
+        }
     }
 
     private fun ownGatt(

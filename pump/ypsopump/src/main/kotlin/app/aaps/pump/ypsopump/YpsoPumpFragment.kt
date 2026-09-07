@@ -59,11 +59,12 @@ class YpsoPumpFragment : DaggerFragment() {
     }
 
     private fun build() {
+        val snapshot = pumpState.statusSnapshot
         val rows = buildList {
             if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
             if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
-            if (pumpState.lastConnectionTime > 0) {
-                add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, pumpState.lastConnectionTime)))
+            if (snapshot != null) {
+                add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
             }
             if (pumpState.lastErrorCode != 0) {
                 add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
@@ -78,17 +79,17 @@ class YpsoPumpFragment : DaggerFragment() {
         state.value = PumpStatusState(
             title = "YpsoPump",
             connection = when {
-                pumpState.connectionState == ConnectionState.CONNECTED && !pumpState.hasVerifiedStatus   -> rh.gs(R.string.ypsopump_authenticated_no_status)
+                pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null   -> rh.gs(R.string.ypsopump_authenticated_no_status)
                 else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
             },
-            connectionHealthy = pumpState.isConnected && pumpState.hasVerifiedStatus,
-            reservoir = pumpState.reservoirUnits.takeIf { pumpState.hasVerifiedStatus },
-            battery = pumpState.batteryPercent.takeIf { pumpState.hasVerifiedStatus },
+            connectionHealthy = pumpState.isConnected && snapshot != null,
+            reservoir = snapshot?.reservoirUnits,
+            battery = snapshot?.batteryPercent,
             unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
             rows = rows,
             queue = queue,
             note = buildList {
-                if (pumpState.hasVerifiedStatus) add(rh.gs(R.string.ypsopump_provisional_status_note))
+                if (snapshot != null) add(rh.gs(R.string.ypsopump_provisional_status_note))
                 if (YpsoPumpConst.READ_ONLY_MODE) add(rh.gs(R.string.ypsopump_status_only_note))
             }.joinToString(" ")
         )

@@ -14,7 +14,7 @@ Connection state is also shown. Firmware qualification and the status schema are
 - delivery mode is not shown because its interpretation is not validated;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
-- status age handling is incomplete; an earlier successful read is not proof of current contact.
+- measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
@@ -43,6 +43,19 @@ These are separate security layers:
 
 A successful BLE connection or MD5 authentication ACK is **not a verified status read**. Only a completed,
 accepted encrypted status response provides displayed measurements.
+
+## Status lifecycle
+
+Connect, service discovery and access authentication each have an eight-second deadline. A failed read
+or abandoned attempt invalidates the current measurements. A normal queue-idle disconnect preserves the
+original sample time, but cannot extend its five-minute monotonic freshness budget. Reconnecting and
+changing the phone's wall clock do not refresh a sample. The driver tab refreshes its display every five
+seconds; Pump API consumers evaluate freshness when reading it.
+
+KeepAlive can request status reads. The profile-check API returns satisfied to avoid repeatedly queuing
+a blocked profile write; it does **not** verify equivalence with the pump's programmed profile. The
+status-only pump advertises no dosing capabilities and exposes zero base basal to prevent loop/SMB
+actuation. Authentication and a fresh status sample do not establish therapy readiness.
 
 ## Current limitations
 

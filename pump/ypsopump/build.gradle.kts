@@ -37,6 +37,7 @@ dependencies {
     testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
 
     testImplementation(project(":shared:tests"))
+    testImplementation(project(":implementation"))
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)
@@ -52,10 +53,16 @@ dependencies {
 }
 
 val verifyYpsoBleWriteSites by tasks.registering {
-    val sourceFile = layout.projectDirectory.file("src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBleManager.kt")
-    inputs.file(sourceFile)
+    val sources = fileTree("src/main") { include("**/*.kt", "**/*.java") }
+    inputs.files(sources)
     doLast {
-        val source = sourceFile.asFile.readText()
+        val owner = file("src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBleManager.kt")
+        sources.filter { it != owner }.forEach { source ->
+            check(!Regex("""\bwrite(?:Characteristic|Descriptor)\s*\(""").containsMatchIn(source.readText())) {
+                "Raw GATT writes must be owned by YpsoBleManager: $source"
+            }
+        }
+        val source = owner.readText()
         check(Regex("""\.writeCharacteristic\(""").findAll(source).count() == 2) {
             "YpsoPump raw characteristic-write sites changed; update and review YpsoWritePolicy coverage"
         }
@@ -70,6 +77,8 @@ val verifyYpsoBleWriteSites by tasks.registering {
         }
     }
 }
+
+tasks.named("preBuild") { dependsOn(verifyYpsoBleWriteSites) }
 
 tasks.withType<Test>().configureEach {
     dependsOn(verifyYpsoBleWriteSites)
