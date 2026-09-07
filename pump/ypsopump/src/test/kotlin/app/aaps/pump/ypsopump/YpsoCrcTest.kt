@@ -2,13 +2,12 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import org.junit.jupiter.api.Assertions.assertArrayEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoCrcTest {
-
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     /**

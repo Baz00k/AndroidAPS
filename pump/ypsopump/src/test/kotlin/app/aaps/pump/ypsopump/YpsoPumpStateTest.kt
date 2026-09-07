@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoPumpStateTest {
-
     @Test
     fun `reservoir is exposed only with a fresh published status`() {
         val state = YpsoPumpState()
@@ -21,7 +20,7 @@ class YpsoPumpStateTest {
             batteryPercent = 75,
             isSuspended = false,
             activeTbrPercent = 100,
-            timestamp = 1234L
+            timestamp = 1234L,
         )
 
         assertEquals(42.5, state.reservoirUnitsIfFresh())

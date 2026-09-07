@@ -273,7 +273,15 @@ class YpsoBleManager @Inject constructor(
     private var currentTimeout: Runnable? = null
     // A dropped callback used to leave the active operation and multi-frame transaction latched forever.
     // Time each operation out so its result path tears down the transaction and connection cleanly.
-    private val opHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val opHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    // Injectable scheduling seams keep timeout/callback races deterministic in local unit tests without
+    // exposing the BLE queue itself. Production retains Android's main-looper scheduling.
+    internal var scheduleOpTimeout: (Runnable, Long) -> Unit = { timeout, delay ->
+        opHandler.postDelayed(timeout, delay)
+    }
+    internal var cancelOpTimeout: (Runnable) -> Unit = { timeout -> opHandler.removeCallbacks(timeout) }
+
     private fun enqueue(op: Op) { synchronized(opLock) { queue.addLast(op) }; pumpOps() }
     private fun pumpOps() {
         val start = synchronized(opLock) {
@@ -299,7 +307,7 @@ class YpsoBleManager @Inject constructor(
         }
         synchronized(opLock) {
             if (current !== op || currentGatt !== gatt || bluetoothGatt !== gatt) return@synchronized
-            opHandler.postDelayed(timeout, OP_TIMEOUT_MS)
+            scheduleOpTimeout(timeout, OP_TIMEOUT_MS)
             runCatching { op.action(gatt, op) }
                 .onFailure {
                     aapsLogger.error(LTag.PUMP, "YpsoPump operation dispatch threw: ${it.message}")
@@ -314,7 +322,7 @@ class YpsoBleManager @Inject constructor(
             currentGatt = null
             currentTimeout.also { currentTimeout = null }
         }
-        timeout?.let(opHandler::removeCallbacks)
+        timeout?.let(cancelOpTimeout)
         runCatching { op.onResult(gatt, value, status) }
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump operation callback threw: ${it.message}") }
         pumpOps()
@@ -899,7 +907,7 @@ class YpsoBleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    private val gattCallback = object : BluetoothGattCallback() {
+    internal val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED    -> {
@@ -1031,7 +1039,7 @@ class YpsoBleManager @Inject constructor(
         }
         current = null
         currentGatt = null
-        currentTimeout?.let(opHandler::removeCallbacks)
+        currentTimeout?.let(cancelOpTimeout)
         currentTimeout = null
         queue.clear()
         multiframeOwner = null

@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test
  * Run on Android device/emulator or with JNA configured for desktop.
  */
 class SessionCryptoTest {
-
     private lateinit var crypto: SessionCrypto
 
     @BeforeEach
@@ -121,16 +120,16 @@ class SessionCryptoTest {
      */
     @Test
     fun `decrypt parses counters little-endian (hardware-validated golden vector)`() {
-        val frame = hexToBytes(
-            "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
-            "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
-        )
+        val frame =
+            hexToBytes(
+                "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
+                    "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+            )
         val command = crypto.decrypt(frame)
         assertArrayEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte()), command)
         assertEquals(8, crypto.rebootCounter)
         assertEquals(2743L, crypto.readCounter)
     }
 
-    private fun hexToBytes(hex: String): ByteArray =
-        hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private fun hexToBytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

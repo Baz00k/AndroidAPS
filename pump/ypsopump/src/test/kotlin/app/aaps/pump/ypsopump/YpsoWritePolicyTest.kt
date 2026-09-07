@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoWritePolicyTest {
-
     @Test
     fun `status viewer build remains read only`() {
         assertTrue(YpsoPumpConst.READ_ONLY_MODE)

@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class StatusCommandTest {
-
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     /**
