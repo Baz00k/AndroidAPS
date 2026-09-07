@@ -641,7 +641,11 @@ class YpsoPumpPlugin @Inject constructor(
     override fun canHandleDST(): Boolean = false
     override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}
     override fun pumpSpecificShortStatus(veryShort: Boolean): String =
-        rh.gs(R.string.ypsopump_short_status, pumpState.reservoirUnits, pumpState.batteryPercent)
+        if (pumpState.hasVerifiedStatus) {
+            rh.gs(R.string.ypsopump_short_status, pumpState.reservoirUnits, pumpState.batteryPercent)
+        } else {
+            rh.gs(R.string.ypsopump_status_unavailable)
+        }
 
     companion object {
 

@@ -110,16 +110,14 @@ class SessionCryptoTest {
     /**
      * Golden-vector regression test pinning the counter endianness to LITTLE.
      *
-     * The frame below was produced by an independent, hardware-validated reference implementation
-     * using THIS synthetic test key (bytes 00..1f, set in setUp). Its plaintext is:
+     * The frame below uses a synthetic test key (bytes 00..1f, set in setUp). Its plaintext is:
      *   command = AA BB CC ;  rebootCounter = 8 (4B LE) ;  readCounter = 2743 (8B LE)
      *
      * If anyone reverts decrypt() to BIG-endian, rebootCounter would decode as 134217728 and
-     * readCounter as ~1.32e19 — so this test fails. (Endianness verified against real YpsoPump
-     * BLE traffic: rebootCounter=8 and a monotonic readCounter only make sense in little-endian.)
+     * readCounter as ~1.32e19 — so this test fails. This synthetic vector is not target validation.
      */
     @Test
-    fun `decrypt parses counters little-endian (hardware-validated golden vector)`() {
+    fun `decrypt parses counters little-endian synthetic vector`() {
         val frame =
             hexToBytes(
                 "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +

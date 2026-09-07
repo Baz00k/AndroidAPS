@@ -9,11 +9,7 @@ import org.junit.jupiter.api.Test
 class StatusCommandTest {
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    /**
-     * Parses the 18-byte SYSTEM_STATUS body (CRC already stripped). Layout verified against a real
-     * pump; this vector is synthetic (offsets aren't sensitive):
-     *   @0=00 | @1..4 insulin u32 LE | @5 mode | @6 battery | @7..9 0 | @10..13 tbr% u32 LE | @14..17 0
-     */
+    /** Exercises the provisional decoder layout; this is not target-firmware validation. */
     @Test
     fun `decodes 18-byte status (insulin@1, battery@6, tbr@10)`() {
         // mode=1 (Basal), insulin=0x0226=550 -> 5.50U, battery=0x55=85, tbr=0x64=100
@@ -44,5 +40,15 @@ class StatusCommandTest {
     fun `short body is an error`() {
         val cmd = StatusCommand().apply { decode(byteArrayOf(0x88.toByte())) }
         assertFalse(cmd.success)
+    }
+
+    @Test
+    fun `unknown delivery mode is explicitly unvalidated`() {
+        val cmd = StatusCommand()
+        val data = ByteArray(18).apply { this[5] = 99 }
+
+        cmd.decode(data)
+
+        assertEquals("Unknown (not validated)", cmd.deliveryModeName)
     }
 }

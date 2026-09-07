@@ -60,14 +60,14 @@ class YpsoPumpFragment : DaggerFragment() {
 
     private fun build() {
         val rows = buildList {
-            if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow("Serial", pumpState.serialNumber))
-            if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow("Firmware", pumpState.firmwareVersion))
-            if (pumpState.isTbrActive) add(PumpStatusRow("Temp basal", "${pumpState.activeTbrPercent}% · ${pumpState.activeTbrRemainingMinutes}m"))
-            else add(PumpStatusRow("Basal", String.format(java.util.Locale.getDefault(), "%.2f U/h", pumpState.activeBasalRate)))
-            if (pumpState.isBolusingInProgress) add(PumpStatusRow("Bolus", String.format(java.util.Locale.getDefault(), "%.2f U left", pumpState.activeBolusRemaining)))
-            if (pumpState.isSuspended) add(PumpStatusRow("State", "Suspended"))
-            if (pumpState.lastConnectionTime > 0) add(PumpStatusRow("Last sync", dateUtil.minOrSecAgo(rh, pumpState.lastConnectionTime)))
-            if (pumpState.lastErrorCode != 0) add(PumpStatusRow("Last error", "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
+            if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
+            if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
+            if (pumpState.lastConnectionTime > 0) {
+                add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, pumpState.lastConnectionTime)))
+            }
+            if (pumpState.lastErrorCode != 0) {
+                add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
+            }
         }
         val queue = buildList {
             val running = commandQueue.performing()
@@ -77,17 +77,20 @@ class YpsoPumpFragment : DaggerFragment() {
         }
         state.value = PumpStatusState(
             title = "YpsoPump",
-            connection = if (pumpState.connectionState == ConnectionState.DISCONNECTED && pumpState.hasVerifiedStatus) {
-                rh.gs(R.string.ypsopump_idle)
-            } else {
-                pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
+            connection = when {
+                pumpState.connectionState == ConnectionState.CONNECTED && !pumpState.hasVerifiedStatus   -> rh.gs(R.string.ypsopump_authenticated_no_status)
+                else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
             },
-            connectionHealthy = pumpState.connectionHealthy,
-            reservoir = pumpState.reservoirUnits,
-            battery = pumpState.batteryPercent,
+            connectionHealthy = pumpState.isConnected && pumpState.hasVerifiedStatus,
+            reservoir = pumpState.reservoirUnits.takeIf { pumpState.hasVerifiedStatus },
+            battery = pumpState.batteryPercent.takeIf { pumpState.hasVerifiedStatus },
+            unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
             rows = rows,
             queue = queue,
-            note = if (pumpState.serialNumber.isEmpty()) "Experimental driver · this fork" else ""
+            note = buildList {
+                if (pumpState.hasVerifiedStatus) add(rh.gs(R.string.ypsopump_provisional_status_note))
+                if (YpsoPumpConst.READ_ONLY_MODE) add(rh.gs(R.string.ypsopump_status_only_note))
+            }.joinToString(" ")
         )
     }
 }

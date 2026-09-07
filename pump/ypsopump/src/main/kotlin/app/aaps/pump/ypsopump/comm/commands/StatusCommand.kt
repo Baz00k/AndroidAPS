@@ -7,17 +7,15 @@ import app.aaps.pump.ypsopump.comm.YpsoCommandCodes
 /**
  * GET_SYSTEM_STATUS (index 30) — reads delivery state, reservoir level and battery.
  *
- * Decrypted body is 18 bytes (CRC trailer already stripped by the caller). VERIFIED against a
- * real pump: the battery value matched the device's indicator and the reservoir tracked live as the
- * pump delivered. Offsets:
- *   @1  u32 LE  insulin remaining (centi-units)          [confirmed]
- *   @6  u8      battery percent                          [confirmed]
+ * The current decoder provisionally accepts an 18-byte body (CRC trailer already stripped by the
+ * caller). The observations below are not a qualified firmware schema and require target-firmware
+ * captures plus independent fixtures before being treated as supported.
+ *   @1  u32 LE  insulin remaining (centi-units)          [observed]
+ *   @6  u8      battery percent                          [observed]
  *   @10 u32 LE  active TBR / basal percent (100 = normal)
  *   @5  u8      delivery mode (best guess — @0 is the alternative; not yet confirmed)
  *
- * Note: a previous revision used a 6-byte layout with battery@5 (from vicktor/ypsomed-pump's SDK).
- * Reading a real pump showed the body is 18 bytes and battery is @6 (byte 5 was a constant 0x02),
- * so that layout was wrong. Example body: 0a 1f010000 02 1e000000 64000000 000000.
+ * Source references disagree about layout and mode semantics. Do not broaden support from this decoder.
  */
 class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
 
