@@ -37,6 +37,6 @@
     <string name="ypsopump_value_unavailable">Unavailable</string>
     <string name="ypsopump_value_unknown">Unknown</string>
     <string name="ypsopump_mode_unknown">Unknown (not validated)</string>
-    <string name="ypsopump_status_only_note">This app can read pump information but cannot control insulin delivery.</string>
-    <string name="ypsopump_provisional_status_note">Readings are from the last update and may have changed. Check the pump to confirm. This app cannot control insulin delivery.</string>
+    <string name="ypsopump_status_only_note">Insulin delivery control is disabled in status-only mode.</string>
+    <string name="ypsopump_provisional_status_note">Readings are from the last update and may have changed. Check the pump to confirm.</string>
 </resources>

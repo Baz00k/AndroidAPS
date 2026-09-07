@@ -87,11 +87,10 @@ class YpsoPumpFragment : DaggerFragment() {
             unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
             rows = rows,
             queue = queue,
-            note = if (pumpState.hasVerifiedStatus) {
-                rh.gs(R.string.ypsopump_provisional_status_note)
-            } else {
-                rh.gs(R.string.ypsopump_status_only_note)
-            }
+            note = buildList {
+                if (pumpState.hasVerifiedStatus) add(rh.gs(R.string.ypsopump_provisional_status_note))
+                if (YpsoPumpConst.READ_ONLY_MODE) add(rh.gs(R.string.ypsopump_status_only_note))
+            }.joinToString(" ")
         )
     }
 }
