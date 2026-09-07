@@ -200,6 +200,8 @@
     <string name="statuslights_iage_critical">Threshold critical insulin age [h]</string>
     <string name="statuslights_sage_warning">Threshold warning sensor age [h]</string>
     <string name="statuslights_sage_critical">Threshold critical sensor age [h]</string>
+    <string name="sensor_life_days">Sensor wear life [days]</string>
+    <string name="sensor_warmup_minutes">Sensor warm-up [min] (0 = don\'t show)</string>
     <string name="statuslights_sbat_warning">Threshold warning sensor battery level [%]</string>
     <string name="statuslights_sbat_critical">Threshold critical sensor battery level [%]</string>
     <string name="statuslights_bage_warning">Threshold warning pump battery age [h]</string>

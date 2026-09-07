@@ -3,6 +3,7 @@ package app.aaps.plugins.source.di
 import app.aaps.core.interfaces.source.NSClientSource
 import app.aaps.core.interfaces.source.XDripSource
 import app.aaps.plugins.source.BGSourceFragment
+import app.aaps.plugins.source.Libre3SensorFragment
 import app.aaps.plugins.source.NSClientSourcePlugin
 import app.aaps.plugins.source.XdripSourcePlugin
 import dagger.Binds
@@ -19,6 +20,8 @@ import dagger.android.ContributesAndroidInjector
 abstract class SourceModule {
 
     @ContributesAndroidInjector abstract fun contributesBGSourceFragment(): BGSourceFragment
+
+    @ContributesAndroidInjector abstract fun contributesLibre3SensorFragment(): Libre3SensorFragment
 
     @ContributesAndroidInjector abstract fun contributesXdripWorker(): XdripSourcePlugin.XdripSourceWorker
 

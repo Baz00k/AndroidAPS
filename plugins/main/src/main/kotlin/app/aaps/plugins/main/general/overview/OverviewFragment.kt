@@ -549,26 +549,47 @@ class OverviewFragment : DaggerFragment() {
             ageDays(TE.Type.CANNULA_CHANGE)?.let {
                 add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsTone.InRange))
             }
-            // Sensor: show a depleting countdown to EXPIRY (not just elapsed age). Life assumed 10 d
-            // (Dexcom G6); expiry = last SENSOR_CHANGE + life. Ring fraction = life remaining.
+            // Sensor: a depleting countdown to EXPIRY (not elapsed age), with the warm-up window drawn
+            // as a FILLING ring instead. Expiry = last SENSOR_CHANGE + life.
+            //
+            // Life and warm-up come from preferences because they are per-sensor-family facts that
+            // cannot be inferred from a BG broadcast. This used to hardcode 10 d ("Dexcom G6"), which
+            // silently misreports every other sensor: on a 15-day Libre 3+ the ring went amber on day
+            // 8.5, red on day 9.5 and read "Expired" for the final five days of a perfectly good
+            // sensor. Defaults reproduce the old G6 behaviour (10 d, warm-up off).
             persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
-                val lifeMs = TimeUnit.DAYS.toMillis(10)
-                val remaining = te.timestamp + lifeMs - now
-                val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
-                val remH = TimeUnit.MILLISECONDS.toHours(remaining)
-                val label = when {
-                    remaining <= 0 -> "Expired"
-                    remH >= 24     -> "${remH / 24}d ${remH % 24}h"
-                    remH >= 1      -> "${remH}h"
-                    else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
+                val lifeMs = TimeUnit.DAYS.toMillis(preferences.get(IntKey.OverviewSensorLifeDays).toLong())
+                val warmupMs = TimeUnit.MINUTES.toMillis(preferences.get(IntKey.OverviewSensorWarmupMinutes).toLong())
+                val elapsed = now - te.timestamp
+                if (warmupMs > 0 && elapsed >= 0 && elapsed < warmupMs) {
+                    // Warming up. An hour with no readings must read as "not ready yet", never as
+                    // "broken", so the ring FILLS toward the first reading rather than draining toward
+                    // expiry — same component, inverted fraction.
+                    val minsLeft = TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1
+                    add(
+                        HomeUiState.Supply(
+                            "Sensor", "Warming up ${minsLeft}m", AapsTone.High,
+                            fraction = (elapsed.toFloat() / warmupMs).coerceIn(0f, 1f)
+                        )
+                    )
+                } else {
+                    val remaining = te.timestamp + lifeMs - now
+                    val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
+                    val remH = TimeUnit.MILLISECONDS.toHours(remaining)
+                    val label = when {
+                        remaining <= 0 -> "Expired"
+                        remH >= 24     -> "${remH / 24}d ${remH % 24}h"
+                        remH >= 1      -> "${remH}h"
+                        else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
+                    }
+                    val tone = when {
+                        remaining <= 0 -> AapsTone.Low
+                        remH < 12      -> AapsTone.Low
+                        remH < 48      -> AapsTone.High
+                        else           -> AapsTone.InRange
+                    }
+                    add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
                 }
-                val tone = when {
-                    remaining <= 0 -> AapsTone.Low
-                    remH < 12      -> AapsTone.Low
-                    remH < 48      -> AapsTone.High
-                    else           -> AapsTone.InRange
-                }
-                add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
             }
             // Reservoir. This used to be drawn ONLY when `> 0`, so the pill quietly VANISHED at exactly
             // the moment it mattered — an empty cartridge looked identical to a screen that had never
@@ -667,6 +688,14 @@ class OverviewFragment : DaggerFragment() {
             .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
         if (readings.isEmpty()) return HomeChartData()
 
+        // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
+        // statistics are computed from; on a 5-minute source it is effectively the readings again.
+        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy()
+            ?.filter { it.timestamp in from..to }
+            ?.sortedBy { it.timestamp }
+            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated)) }
+            ?: emptyList()
+
         // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
         // rather than drawing one step per record — a per-record path doubles back on itself.
         val samples = 240
@@ -696,6 +725,7 @@ class OverviewFragment : DaggerFragment() {
             to = to,
             now = dateUtil.now(),
             readings = readings,
+            bucketed = bucketed,
             basal = basal,
             scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,

@@ -37,6 +37,7 @@ enum class Sources {
     Glunovo,
     Intelligo,
     Xdrip,
+    Libre3,             //Native Libre 3/3+ BG source
     Ottai,              //From Ottai Plugin
     SyaiTag,
     SiBionic,
