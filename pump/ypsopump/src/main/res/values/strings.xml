@@ -3,12 +3,12 @@
     <string name="ypsopump_name_short">Ypso</string>
     <string name="ypsopump_description">Authenticated YpsoPump status viewer; therapy disabled</string>
     <string name="ypsopump_idle">Idle</string>
-    <string name="ypsopump_last_status">Last status</string>
+    <string name="ypsopump_last_status">Last updated</string>
     <string name="ypsopump_serial">Serial</string>
     <string name="ypsopump_firmware">Firmware</string>
     <string name="ypsopump_mode">Mode</string>
     <string name="ypsopump_last_error">Last error</string>
-    <string name="ypsopump_authenticated_no_status">Authenticated · status unavailable</string>
+    <string name="ypsopump_authenticated_no_status">Connected · no readings yet</string>
     <string name="ypsopump_not_implemented">YpsoPump: not implemented yet</string>
     <string name="ypsopump_read_only_profile_blocked">Status-only mode: profile not sent to pump</string>
     <string name="ypsopump_profile_programmed_on_pump">YpsoPump: basal profile is programmed on the pump</string>
@@ -37,6 +37,6 @@
     <string name="ypsopump_value_unavailable">Unavailable</string>
     <string name="ypsopump_value_unknown">Unknown</string>
     <string name="ypsopump_mode_unknown">Unknown (not validated)</string>
-    <string name="ypsopump_status_only_note">Status-only · therapy disabled</string>
-    <string name="ypsopump_provisional_status_note">Last measured status · provisional · freshness not enforced</string>
+    <string name="ypsopump_status_only_note">This app can read pump information but cannot control insulin delivery.</string>
+    <string name="ypsopump_provisional_status_note">Readings are from the last update and may have changed. Check the pump to confirm. This app cannot control insulin delivery.</string>
 </resources>

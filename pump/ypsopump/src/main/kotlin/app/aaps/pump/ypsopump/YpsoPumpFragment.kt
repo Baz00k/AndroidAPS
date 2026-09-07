@@ -60,9 +60,8 @@ class YpsoPumpFragment : DaggerFragment() {
 
     private fun build() {
         val rows = buildList {
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber.ifEmpty { rh.gs(R.string.ypsopump_value_unknown) }))
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion.ifEmpty { rh.gs(R.string.ypsopump_value_unknown) }))
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_mode), rh.gs(R.string.ypsopump_mode_unknown)))
+            if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
+            if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
             if (pumpState.lastConnectionTime > 0) {
                 add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, pumpState.lastConnectionTime)))
             }
@@ -79,7 +78,6 @@ class YpsoPumpFragment : DaggerFragment() {
         state.value = PumpStatusState(
             title = "YpsoPump",
             connection = when {
-                pumpState.connectionState == ConnectionState.DISCONNECTED && pumpState.hasVerifiedStatus -> rh.gs(R.string.ypsopump_last_status)
                 pumpState.connectionState == ConnectionState.CONNECTED && !pumpState.hasVerifiedStatus   -> rh.gs(R.string.ypsopump_authenticated_no_status)
                 else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
             },

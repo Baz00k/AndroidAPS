@@ -11,9 +11,9 @@ writes are restricted to the access-authentication handshake (**AUTH-only**).
 After a successful encrypted status read, the UI can show provisional reservoir and battery values.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
-- delivery mode is **Unknown (not validated)**;
+- delivery mode is not shown because its interpretation is not validated;
 - basal rate, TBR duration, bolus progress and history are unavailable;
-- serial and firmware remain unknown unless actually read; a BLE MAC is not shown as a serial;
+- serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - status age handling is incomplete; an earlier successful read is not proof of current contact.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
