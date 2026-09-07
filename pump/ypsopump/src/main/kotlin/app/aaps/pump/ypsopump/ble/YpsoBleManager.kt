@@ -28,9 +28,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BLE manager for the YpsoPump — read-only flow, validated against a real pump in the `ypso-reader`
- * reference app: connect over the existing OS bond -> MD5(mac+salt) auth -> multi-frame read of
- * SYSTEM_STATUS -> XChaCha20-Poly1305 decrypt -> parse -> update [YpsoPumpState].
+ * BLE manager for the YpsoPump status-only flow: connect over the existing OS bond -> MD5 access
+ * authentication -> encrypted multi-frame status read -> update [YpsoPumpState]. The target-firmware
+ * protocol contract is not yet qualified; see https://github.com/Baz00k/AndroidAPS/issues/6.
  *
  * Set the captured session key with [setSharedKey] before connecting. No write/dosing path here yet.
  */
@@ -58,16 +58,13 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
         private val CHAR_EVENT_INDEX: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecc3b7bc5")
         private val CHAR_EVENT_VALUE: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
-        // Control (dosing). Verified against mylife / firmware V05.02.03 (vicktor + SandraK82 agree),
-        // not yet on OUR pump — gated behind capture-verify before any live use.
+        // Provisional control UUIDs. Therapy remains blocked; target validation belongs to the owning
+        // roadmap tickets: https://github.com/Baz00k/AndroidAPS/issues/2
         private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
         private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
-        // Control-notification characteristic (handle 0x006f). mylife enables NOTIFY (CCCD 0x0001) on
-        // this as its FIRST op after connect, before any write; the pump GATES control writes on this
-        // subscription and rejects writes with ATT app-error 0x8A (138) if it is absent. Confirmed by
-        // diffing mylife vs AAPS btsnoop: mylife 0 ERROR_RSP / AAPS 3423× err=0x8A on event-index
-        // writes, the ONLY difference being this subscription. This is the write-handshake precondition.
+        // Provisional control-notification UUID. Non-auth write transport is unsupported in the current
+        // artifact; investigation and bench evidence belong to https://github.com/Baz00k/AndroidAPS/issues/12.
         private val CHAR_CTRL_NOTIFY: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
         private val AUTH_SALT = byteArrayOf(
             0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
@@ -200,8 +197,6 @@ class YpsoBleManager @Inject constructor(
             queue.clear()
             current = null
             pumpState.pumpAddress = macAddress
-            // AAPS requires a stable, non-empty serial to accept pump-synchronized records.
-            if (pumpState.serialNumber.isEmpty()) pumpState.serialNumber = macAddress.replace(":", "")
             aapsLogger.info(LTag.PUMP, "YpsoPump connecting to $macAddress (bonded=${device.bondState == BluetoothDevice.BOND_BONDED})")
             val openedGatt = runCatching { device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE) }
                 .getOrElse {
@@ -554,16 +549,10 @@ class YpsoBleManager @Inject constructor(
                 onResult("no write counter seeded — set CAPTURED_WRITE_COUNTER to the pump's CURRENT write counter")
                 return@readMultiframe
             }
-            // SAFE single write at the WRITE counter + 1. The pump's write-counter check is FORWARD-GAP
-            // TOLERANT (accepts ANY counter > last_write, not just exactly-next), so probing read-counter
-            // values or scanning UPWARD is DANGEROUS: a too-high value is accepted and jumps the pump's
-            // write counter far ahead of where mylife sits, making mylife's subsequent writes read as
-            // replays (APPERR_COUNTER_ERROR — it breaks). So write EXACTLY ONCE at writeCounter+1 from the
-            // (separate) write sequence; NEVER use a read-counter value and NEVER scan. On reject the seed
-            // is stale → abort and reseed (do NOT search upward). [confirmed on pump 2026-06-30]
+            // Unsupported diagnostic path retained behind compile-time gates. Counter behavior and safe
+            // ownership are not established here; see https://github.com/Baz00k/AndroidAPS/issues/8.
             val base = sessionCrypto.writeCounter
-            // Index/selection commands are complement-protected (value||~value) and carry NO CRC — verified
-            // against mylife's accepted event-index writes (8-byte `00000000ffffffff`). A CRC here → 0x8A.
+            // Selector encoding/transport validation belongs to https://github.com/Baz00k/AndroidAPS/issues/12.
             val payload = glbEncode(count - 1)
             aapsLogger.info(LTag.PUMP, "YpsoPump write-validate: single index write at writeCounter=${base + 1} (readCounter=${sessionCrypto.readCounter} is NOT used for writes)")
             writeOnceAt(CHAR_EVENT_INDEX, payload, base + 1) { st ->

@@ -9,8 +9,8 @@ package app.aaps.pump.ypsopump.comm
  * command must be CRC-wrapped before [SessionCrypto.encrypt] and a decrypted response must be
  * CRC-checked (and the 2 trailing bytes stripped) before parsing.
  *
- * Verified against real YpsoPump BLE traffic — a captured history-entry payload CRCs to the exact
- * 2 bytes the pump sent (see YpsoCrcTest and report/aaps-driver-audit.md C2).
+ * This is the currently implemented interpretation, not a qualified target-firmware contract.
+ * Integrity validation is owned by https://github.com/Baz00k/AndroidAPS/issues/6.
  */
 object YpsoCrc {
 

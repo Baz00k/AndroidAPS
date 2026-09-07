@@ -11,8 +11,8 @@ package app.aaps.pump.ypsopump.comm
  *
  * i.e. the high nibble is the 1-based frame number and the low nibble is the total frame count.
  *
- * Verified against real YpsoPump BLE traffic — a captured 6-frame status read reassembles exactly
- * (see YpsoFramingTest and report/aaps-driver-audit.md C3).
+ * This is the currently implemented interpretation, not a qualified target-firmware contract.
+ * Framing validation is owned by https://github.com/Baz00k/AndroidAPS/issues/6.
  */
 object YpsoFraming {
 

@@ -49,13 +49,13 @@ fun PumpStatusScreen(state: PumpStatusState) {
 
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
             GaugeTile(
-                "RESERVOIR", String.format(java.util.Locale.getDefault(), "%.0f U", state.reservoir),
-                (state.reservoir / state.reservoirMax).toFloat(),
-                if (state.reservoir < 20) colors.high else colors.inRange, Modifier.weight(1f)
+                "RESERVOIR", state.reservoir?.let { String.format(java.util.Locale.getDefault(), "%.0f U", it) } ?: state.unavailableLabel,
+                state.reservoir?.let { (it / state.reservoirMax).toFloat() },
+                if (state.reservoir != null && state.reservoir < 20) colors.high else colors.inRange, Modifier.weight(1f)
             )
             GaugeTile(
-                "BATTERY", "${state.battery}%", state.battery / 100f,
-                if (state.battery < 25) colors.low else colors.inRange, Modifier.weight(1f)
+                "BATTERY", state.battery?.let { "$it%" } ?: state.unavailableLabel, state.battery?.div(100f),
+                if (state.battery != null && state.battery < 25) colors.low else colors.inRange, Modifier.weight(1f)
             )
         }
 
@@ -95,14 +95,16 @@ fun PumpStatusScreen(state: PumpStatusState) {
 
 
 @Composable
-private fun GaugeTile(label: String, value: String, fraction: Float, color: Color, modifier: Modifier) {
+private fun GaugeTile(label: String, value: String, fraction: Float?, color: Color, modifier: Modifier) {
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
             Text(value, style = AapsTheme.type.cardValue, color = colors.textPrimary)
             Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(colors.controlFill)) {
-                Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(6.dp).clip(RoundedCornerShape(3.dp)).background(color))
+                if (fraction != null) {
+                    Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(6.dp).clip(RoundedCornerShape(3.dp)).background(color))
+                }
             }
         }
     }

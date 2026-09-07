@@ -1,8 +1,8 @@
 package app.aaps.pump.ypsopump.comm
 
 /**
- * Pump delivery mode = byte 0 of the decrypted SYSTEM_STATUS body.
- * Values from the YpsoPump firmware (via vicktor/ypsomed-pump).
+ * Provisional delivery-mode interpretation. Target-firmware validation is tracked in
+ * https://github.com/Baz00k/AndroidAPS/issues/6; status-only UI must not present these names as verified.
  */
 object DeliveryMode {
     const val STOPPED = 0
@@ -23,7 +23,7 @@ object DeliveryMode {
         BOLUS_AND_BASAL -> "Bolus + Basal"
         PRIMING -> "Priming"
         PAUSED -> "Paused"
-        else -> "Unknown($mode)"
+        else -> "Unknown (not validated)"
     }
 
     /** The pump is not delivering basal in these modes. */
