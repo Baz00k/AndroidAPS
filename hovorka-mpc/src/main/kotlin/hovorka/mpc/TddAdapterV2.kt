@@ -1,4 +1,4 @@
-package app.aaps.plugins.aps.hovorka
+package hovorka.mpc
 
 import kotlin.math.max
 import kotlin.math.min

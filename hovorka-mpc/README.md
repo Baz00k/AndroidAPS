@@ -2,7 +2,7 @@
 
 Standalone Kotlin (no Android/AAPS) that validates the HovorkaMPC dosing algorithm before it ever
 touches hardware. The algorithm files here (`HovorkaModel`, `HovorkaParams`, `HovorkaEkf`,
-`HovorkaMpc`, `HovorkaImmBank`, `TddAdapter`) are the **same clean-room code** shipped in the AAPS
+`HovorkaMpc`, `HovorkaImmBank`, `TddAdapterV2`) are the **same clean-room code** shipped in the AAPS
 plugin at `plugins/aps/src/main/kotlin/app/aaps/plugins/aps/hovorka/` (package differs only:
 `hovorka.mpc` here vs `app.aaps.plugins.aps.hovorka` there). Keep the two in sync.
 

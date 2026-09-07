@@ -142,8 +142,8 @@ ratchets down**; reducing noise removed a systematic 6% bias, not just variance.
 
 An EGP/disturbance state in the Kalman filter was also built and A/B'd as a candidate fix for the same
 symptom, and **rejected**: it improved the dawn dose barely, degraded forecast error, and spent most of
-its time pinned against its own bound. The harness for that negative result is kept so it is not
-re-proposed.
+its time pinned against its own bound. The replay that produced that negative result is kept in the
+project's analysis tree (outside this repo) so it is not quietly re-proposed.
 
 `TddAdapterV2` carries the full derivation in its KDoc, and `TddAdapterV2Test` pins each property as a
 contract — written against realistic days from the recorded history, because the defect was invisible to
