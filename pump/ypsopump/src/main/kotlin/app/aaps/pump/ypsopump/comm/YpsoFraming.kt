@@ -19,7 +19,8 @@ object YpsoFraming {
 
     /** Split [data] into BLE frames, each prefixed with its header byte. */
     fun chunkPayload(data: ByteArray): List<ByteArray> {
-        if (data.isEmpty()) return listOf(byteArrayOf(0x10))
+        require(data.isNotEmpty()) { "Empty payload has no observed encoding" }
+        require(data.size <= 15 * MAX_PAYLOAD_PER_FRAME) { "Payload exceeds four-bit frame count" }
         val totalFrames = maxOf(1, (data.size + MAX_PAYLOAD_PER_FRAME - 1) / MAX_PAYLOAD_PER_FRAME)
         val frames = ArrayList<ByteArray>(totalFrames)
         for (idx in 0 until totalFrames) {
@@ -33,21 +34,31 @@ object YpsoFraming {
 
     /** Reassemble received [frames] into the original payload (drops the per-frame header byte). */
     fun parseMultiFrameRead(frames: List<ByteArray>): ByteArray {
+        require(frames.isNotEmpty()) { "No frames" }
+        val total = getTotalFrames(frames.first().firstOrNull() ?: throw IllegalArgumentException("Empty frame"))
+        require(frames.size == total) { "Incomplete frame set" }
         val merged = ArrayList<Byte>()
-        for (frame in frames) if (frame.size > 1) merged.addAll(frame.drop(1))
+        frames.forEachIndexed { index, frame ->
+            require(validateFrame(frame, index + 1, total) != null) { "Invalid frame sequence or length" }
+            merged.addAll(frame.drop(1))
+        }
         return merged.toByteArray()
     }
 
-    /** Total frame count encoded in the low nibble of the first frame's header byte (min 1). */
-    fun getTotalFrames(firstByte: Byte): Int =
-        (firstByte.toInt() and 0x0F).let { if (it == 0) 1 else it }
+    /**
+     * Total frame count from the low nibble of the first frame's header byte. A zero total was
+     * never observed on target and is rejected downstream by [validateFrame] (fail closed).
+     */
+    fun getTotalFrames(firstByte: Byte): Int = firstByte.toInt() and 0x0F
 
     /** Return the declared frame count only when [frame] is the expected next frame in this message. */
     fun validateFrame(frame: ByteArray, expectedFrame: Int, expectedTotal: Int = 0): Int? {
-        if (frame.isEmpty()) return null
+        if (frame.size !in 2..20) return null
         val header = frame[0].toInt() and 0xFF
         val frameNumber = header ushr 4
         val total = getTotalFrames(frame[0])
+        if (frameNumber !in 1..total || expectedFrame !in 1..15) return null
+        if (frameNumber < total && frame.size != 20) return null
         if (frameNumber != expectedFrame || (expectedTotal != 0 && total != expectedTotal)) return null
         return total
     }

@@ -16,7 +16,13 @@ class YpsoPumpState @Inject constructor() {
         const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
     }
 
-    data class StatusSnapshot(val reservoirUnits: Double, val batteryPercent: Int, val acquiredAt: Long, val elapsedAt: Long)
+    data class StatusSnapshot(
+        val reservoirUnits: Double,
+        val batteryPercent: Int?,
+        val batteryBars: Int?,
+        val acquiredAt: Long,
+        val elapsedAt: Long
+    )
 
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     @Volatile private var sample: StatusSnapshot? = null
@@ -31,6 +37,10 @@ class YpsoPumpState @Inject constructor() {
     // -- Pump Status --
     val batteryPercent: Int get() = statusSnapshot?.batteryPercent ?: 0
     val reservoirUnits: Double get() = statusSnapshot?.reservoirUnits ?: 0.0
+    // Single canonical mapping: the wire reports bars, consumers expect percent.
+    val mappedBatteryPercent: Int?
+        get() = statusSnapshot?.batteryPercent
+            ?: statusSnapshot?.batteryBars?.let { (it * 20).coerceIn(0, 100) }
     @Volatile var isSuspended: Boolean = false
     @Volatile var isBolusingInProgress: Boolean = false
     @Volatile var isTbrActive: Boolean = false
@@ -39,6 +49,11 @@ class YpsoPumpState @Inject constructor() {
     @Volatile var firmwareVersion: String = ""
     @Volatile var masterVersion: String = ""
     @Volatile var supervisorVersion: String = ""
+    // Service protocol versions: GATT service compatibility, never pump firmware.
+    @Volatile var baseServiceVersion: String = ""
+    @Volatile var settingsServiceVersion: String = ""
+    @Volatile var historyServiceVersion: String = ""
+    @Volatile var controlServiceVersion: String = ""
 
     // -- Active Delivery --
     @Volatile var activeBasalRate: Double = 0.0
@@ -75,14 +90,15 @@ class YpsoPumpState @Inject constructor() {
     @Synchronized
     fun publishStatus(
         reservoirUnits: Double,
-        batteryPercent: Int,
+        batteryPercent: Int?,
         isSuspended: Boolean,
         activeTbrPercent: Int,
-        timestamp: Long
+        timestamp: Long,
+        batteryBars: Int? = null
     ) {
         this.isSuspended = isSuspended
         this.activeTbrPercent = activeTbrPercent
-        sample = StatusSnapshot(reservoirUnits, batteryPercent, timestamp, elapsedRealtime())
+        sample = StatusSnapshot(reservoirUnits, batteryPercent, batteryBars, timestamp, elapsedRealtime())
         lastConnectionTime = timestamp
     }
 

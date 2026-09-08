@@ -217,7 +217,9 @@ class YpsoPumpPlugin @Inject constructor(
     override val baseBasalRate: Double get() =
         if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
-    override val batteryLevel: Int? get() = pumpState.statusSnapshot?.batteryPercent
+    // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
+    // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
+    override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
 
     // ---- dosing (wired to the proven canary-gated BLE writes; AAPS owns the write counter) ----
 
@@ -651,7 +653,11 @@ class YpsoPumpPlugin @Inject constructor(
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
         return if (snapshot != null) {
-            rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, snapshot.batteryPercent)
+            // Framework-facing percent; bars stay internal (see batteryLevel mapping).
+            val battery = batteryLevel
+            if (battery != null)
+                rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, battery)
+            else rh.gs(R.string.ypsopump_short_status_reservoir, snapshot.reservoirUnits)
         } else {
             rh.gs(R.string.ypsopump_status_unavailable)
         }

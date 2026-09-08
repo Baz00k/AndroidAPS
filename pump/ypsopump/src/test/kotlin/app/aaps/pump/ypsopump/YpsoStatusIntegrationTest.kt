@@ -49,8 +49,9 @@ class YpsoStatusIntegrationTest {
             var counter = 591L
             whenever(crypto.writeCounter).thenAnswer { counter }
             doAnswer { counter = it.getArgument(0); null }.whenever(crypto).writeCounter = any()
-            // Fixed independently CRC-checked status body: reservoir 550 centi-units, battery 85%.
-            whenever(crypto.decrypt(any())).thenReturn(hex("002602000001550000006400000000000000b86a"))
+            // Synthetic running status: reservoir 550 centi-units, 2 battery bars, basal 0.85 U/h.
+            // CRC computed independently using a Python bitwise polynomial loop.
+            whenever(crypto.decrypt(any())).thenReturn(hex("0a2602000002550000006400000000000000a9d1"))
             var elapsed = 1_000L
             val state = YpsoPumpState().apply { elapsedRealtime = { elapsed }; pumpAddress = "12:34:56:78:9A:BC" }
             val manager = YpsoBleManager(context, AAPSLoggerTest(), crypto, state).apply {
@@ -71,16 +72,39 @@ class YpsoStatusIntegrationTest {
             var readSucceeds = true
             fun authenticate() {
                 val gatt: BluetoothGatt = mock()
-                val service: BluetoothGattService = mock()
+                val identityService: BluetoothGattService = mock()
+                val controlService: BluetoothGattService = mock()
                 val auth: BluetoothGattCharacteristic = mock()
                 val status: BluetoothGattCharacteristic = mock()
                 val authUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
                 val statusUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
+                val controlServiceUuid = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
+                whenever(identityService.uuid).thenReturn(UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000"))
+                whenever(controlService.uuid).thenReturn(controlServiceUuid)
                 whenever(auth.uuid).thenReturn(authUuid)
                 whenever(status.uuid).thenReturn(statusUuid)
-                whenever(service.getCharacteristic(authUuid)).thenReturn(auth)
-                whenever(service.getCharacteristic(statusUuid)).thenReturn(status)
-                whenever(gatt.services).thenReturn(listOf(service))
+                whenever(identityService.getCharacteristic(authUuid)).thenReturn(auth)
+                whenever(controlService.getCharacteristic(statusUuid)).thenReturn(status)
+                whenever(gatt.getService(controlServiceUuid)).thenReturn(controlService)
+                whenever(gatt.services).thenReturn(listOf(identityService, controlService))
+                for (suffix in listOf("fcbeb0147bc5", "fcbeb1147bc5")) {
+                    val uuid = UUID.fromString("669a0c20-0008-969e-e211-$suffix")
+                    val version: BluetoothGattCharacteristic = mock()
+                    whenever(version.uuid).thenReturn(uuid)
+                    whenever(identityService.getCharacteristic(uuid)).thenReturn(version)
+                    whenever(gatt.readCharacteristic(version)).thenAnswer {
+                        manager.gattCallback.onCharacteristicRead(gatt, version, "V05.00.52\u0000".toByteArray(), 0)
+                        true
+                    }
+                }
+                val controlVersionUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
+                val controlVersion: BluetoothGattCharacteristic = mock()
+                whenever(controlVersion.uuid).thenReturn(controlVersionUuid)
+                whenever(controlService.getCharacteristic(controlVersionUuid)).thenReturn(controlVersion)
+                whenever(gatt.readCharacteristic(controlVersion)).thenAnswer {
+                    manager.gattCallback.onCharacteristicRead(gatt, controlVersion, "1.3\u0000".toByteArray(), 0)
+                    true
+                }
                 var legacy = byteArrayOf()
                 whenever(auth.setValue(any<ByteArray>())).thenAnswer { legacy = it.getArgument<ByteArray>(0).copyOf(); true }
                 whenever(gatt.writeCharacteristic(any())).thenAnswer { writes.add(authUuid to legacy.toList()); true }
@@ -101,14 +125,14 @@ class YpsoStatusIntegrationTest {
             authenticate()
             plugin.getPumpStatus("poll")
             assertEquals(5.5, plugin.reservoirLevel)
-            assertEquals(85, plugin.batteryLevel)
+            assertEquals(40, plugin.batteryLevel)
             val acquired = plugin.lastDataTime
             assertTrue(acquired > 0)
             val date: DateUtil = mock()
             whenever(date.minOrSecAgo(eq(rh), any())).thenReturn("reading age")
             fun display() = buildPumpStatusState(state, mock(), date, rh)
             assertEquals(5.5, display().reservoir)
-            assertEquals(85, display().battery)
+            assertEquals(40, display().battery)
             plugin.disconnect("Queue empty")
             elapsed += 299_999
             assertEquals(acquired, plugin.lastDataTime)

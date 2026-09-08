@@ -38,6 +38,12 @@ class YpsoPumpFragment : DaggerFragment() {
     private val refresh = object : Runnable {
         override fun run() {
             build()
+            val context = context
+            if (context != null &&
+                (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+                context.getSharedPreferences("ypso_ble_state", android.content.Context.MODE_PRIVATE).getBoolean("ypso_protocol_capture", false) &&
+                commandQueue.performing() == null && commandQueue.size() == 0)
+                commandQueue.readStatus(rh.gs(R.string.ypso_protocol_capture_reason), null)
             handler.postDelayed(this, 5_000)
         }
     }
@@ -95,7 +101,8 @@ internal fun buildPumpStatusState(
         },
         connectionHealthy = pumpState.isConnected && snapshot != null,
         reservoir = snapshot?.reservoirUnits,
-        battery = snapshot?.batteryPercent,
+        // Bars are the internal wire representation; the UI only ever shows the mapped percent.
+        battery = pumpState.mappedBatteryPercent,
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,

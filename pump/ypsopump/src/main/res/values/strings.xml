@@ -33,10 +33,12 @@
     <string name="ypsopump_tbr_cancel_failed">YpsoPump: temporary basal cancellation failed</string>
     <string name="ypsopump_tbr_cancel_result">YpsoPump: temporary basal cancelled</string>
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
+    <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>
     <string name="ypsopump_status_unavailable">Pump status unavailable</string>
     <string name="ypsopump_value_unavailable">Unavailable</string>
     <string name="ypsopump_value_unknown">Unknown</string>
     <string name="ypsopump_mode_unknown">Unknown (not validated)</string>
     <string name="ypsopump_status_only_note">Insulin delivery control is disabled in status-only mode.</string>
     <string name="ypsopump_provisional_status_note">Readings are from the last update and may have changed. Check the pump to confirm.</string>
+    <string name="ypso_protocol_capture_reason">YpsoPump bench protocol capture</string>
 </resources>

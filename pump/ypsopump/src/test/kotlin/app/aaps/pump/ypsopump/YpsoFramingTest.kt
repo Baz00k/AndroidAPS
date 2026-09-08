@@ -48,7 +48,7 @@ class YpsoFramingTest {
 
     @Test
     fun `rejects a duplicate callback frame in the next frame slot`() {
-        val first = byteArrayOf(0x13, 0x01)
+        val first = byteArrayOf(0x13) + ByteArray(19) { 1 }
 
         assertEquals(3, YpsoFraming.validateFrame(first, expectedFrame = 1))
         assertNull(YpsoFraming.validateFrame(first, expectedFrame = 2, expectedTotal = 3))
@@ -57,5 +57,12 @@ class YpsoFramingTest {
     @Test
     fun `rejects a frame whose declared total changes mid-message`() {
         assertNull(YpsoFraming.validateFrame(byteArrayOf(0x24, 0x01), expectedFrame = 2, expectedTotal = 3))
+    }
+
+    @Test
+    fun `zero total nibble is unobserved and rejected`() {
+        // No target capture has ever shown a zero frame total; fail closed.
+        assertEquals(0, YpsoFraming.getTotalFrames(0x10.toByte()))
+        assertNull(YpsoFraming.validateFrame(byteArrayOf(0x10.toByte()) + ByteArray(19) { 1 }, expectedFrame = 1))
     }
 }

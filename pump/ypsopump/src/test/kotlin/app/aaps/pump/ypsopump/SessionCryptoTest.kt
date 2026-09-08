@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -127,6 +128,41 @@ class SessionCryptoTest {
         assertArrayEquals(byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte()), command)
         assertEquals(8, crypto.rebootCounter)
         assertEquals(2743L, crypto.readCounter)
+    }
+
+    @Test
+    fun `authenticated messages without complete counter tail are rejected without state mutation`() {
+        // Independently encrypted using Python ctypes and system libsodium, key 00..1f,
+        // nonce 00..17, plaintext bytes 00..(length-1). Valid tags, lengths 0, 1 and 11.
+        val vectors = listOf(
+            "2d351a65cd1abe591f22dc1269c82d90000102030405060708090a0b0c0d0e0f1011121314151617",
+            "9e4f6209a02022f5a5e517bcb5daf711a1000102030405060708090a0b0c0d0e0f1011121314151617",
+            "9ec30d7c94d78ba93b4d2c49882442b8275339baa43d9e8874d247000102030405060708090a0b0c0d0e0f1011121314151617"
+        )
+        crypto.writeCounter = 42
+        crypto.readCounter = 17
+        crypto.rebootCounter = 8
+        vectors.forEach { vector ->
+            assertThrows(IllegalArgumentException::class.java) { crypto.decrypt(hexToBytes(vector)) }
+            assertEquals(42L, crypto.writeCounter)
+            assertEquals(17L, crypto.readCounter)
+            assertEquals(8, crypto.rebootCounter)
+        }
+    }
+
+    @Test
+    fun `rejected counter cannot partially adopt a newer reboot`() {
+        val frame = hexToBytes(
+            "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
+                "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+        )
+        crypto.rebootCounter = 7
+        crypto.readCounter = 2743
+        crypto.writeCounter = 42
+        assertThrows(SecurityException::class.java) { crypto.decrypt(frame) }
+        assertEquals(7, crypto.rebootCounter)
+        assertEquals(2743L, crypto.readCounter)
+        assertEquals(42L, crypto.writeCounter)
     }
 
     private fun hexToBytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()

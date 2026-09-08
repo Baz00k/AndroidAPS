@@ -80,7 +80,7 @@ class SessionCrypto @Inject constructor() {
     fun decrypt(blePayload: ByteArray): ByteArray {
         val key = sharedKey ?: throw IllegalStateException("No shared key set")
 
-        if (blePayload.size < NONCE_SIZE + TAG_SIZE) {
+        if (blePayload.size < NONCE_SIZE + TAG_SIZE + COUNTER_DATA_SIZE) {
             throw IllegalArgumentException("Payload too short: ${blePayload.size} bytes")
         }
 
@@ -105,11 +105,9 @@ class SessionCrypto @Inject constructor() {
             val pumpRebootCounter = buf.getInt()
             val pumpCounter = buf.getLong()
 
-            // Handle reboot detection
-            if (pumpRebootCounter > rebootCounter) {
-                rebootCounter = pumpRebootCounter
-                writeCounter = 0L
-            } else if (pumpRebootCounter < 0) {
+            // Validate before mutating session state. Durable reboot/read ownership is
+            // a separate concern; a rejected response must not reset the write counter.
+            if (pumpRebootCounter < 0) {
                 throw IllegalArgumentException("Invalid reboot counter: $pumpRebootCounter")
             }
 
@@ -117,12 +115,16 @@ class SessionCrypto @Inject constructor() {
             if (readCounter > 0 && pumpCounter <= readCounter) {
                 throw SecurityException("Read counter not increasing: $pumpCounter <= $readCounter")
             }
+            if (pumpRebootCounter > rebootCounter) {
+                rebootCounter = pumpRebootCounter
+                writeCounter = 0L
+            }
             readCounter = pumpCounter
 
             return plaintext.sliceArray(0 until plaintext.size - COUNTER_DATA_SIZE)
         }
 
-        return plaintext
+        throw IllegalArgumentException("Missing mandatory counter tail")
     }
 
     fun reset() {
