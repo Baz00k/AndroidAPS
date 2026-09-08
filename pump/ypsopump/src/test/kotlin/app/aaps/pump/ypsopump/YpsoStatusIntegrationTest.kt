@@ -112,7 +112,7 @@ class YpsoStatusIntegrationTest {
             authenticate()
             plugin.getPumpStatus("poll")
             assertEquals(5.5, plugin.reservoirLevel)
-            assertNull(plugin.batteryLevel)
+            assertEquals(40, plugin.batteryLevel)
             val acquired = plugin.lastDataTime
             assertTrue(acquired > 0)
             val date: DateUtil = mock()

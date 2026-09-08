@@ -9,7 +9,11 @@ The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled.
 writes are restricted to the access-authentication handshake (**AUTH-only**).
 
 After a successful encrypted status read, the UI can show reservoir values and battery bars
-(`n/5`). Battery percentage is not reported by the pump and is never shown.
+(`n/5`). Battery percentage is not reported by the pump and is never shown in the driver tile.
+For AAPS framework consumers that expect a percentage (`pump.batteryLevel`), the plugin maps
+bars linearly (`bars × 20`, steps of 20). Only bar values 2 and 3 have been observed; 0-bar
+pump behavior is unvalidated, and the bar-to-charge curve is the manufacturer's quantization,
+not a measured percentage.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
 - delivery mode is not shown because its interpretation is not validated;

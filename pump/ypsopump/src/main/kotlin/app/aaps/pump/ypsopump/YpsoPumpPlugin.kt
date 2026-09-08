@@ -217,7 +217,13 @@ class YpsoPumpPlugin @Inject constructor(
     override val baseBasalRate: Double get() =
         if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
-    override val batteryLevel: Int? get() = pumpState.statusSnapshot?.batteryPercent
+    // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent,
+    // so map bars linearly (bars × 20). This is quantized in steps of 20 — coarse by construction,
+    // never a measured percentage. Observed bar values so far are only 2 and 3; 0-bar pump behavior
+    // is unvalidated. Our own tile shows the exact bars; this mapping serves core/framework consumers.
+    override val batteryLevel: Int?
+        get() = pumpState.statusSnapshot?.batteryPercent
+            ?: pumpState.statusSnapshot?.batteryBars?.let { (it * 20).coerceIn(0, 100) }
 
     // ---- dosing (wired to the proven canary-gated BLE writes; AAPS owns the write counter) ----
 

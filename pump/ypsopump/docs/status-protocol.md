@@ -112,6 +112,15 @@ but decodes to mode 3 with reservoir `0xFFFFFFFF`, three battery bars, zero basa
 100%/0 minutes. The sentinel fails closed: no reservoir measurement is published.
 Standard serial (0x2A25) is absent on this pump, so serial identity remains an evidence gap.
 
+### Battery representation
+
+Offset 5 is battery bars (0–5), validated 2→3 against the pump display's 2/5→3/5.To serve
+AAPS framework consumers that expect a percentage, `batteryLevel` maps bars × 20. This is
+an explicitly coarse quantization in steps of 20, not a measured percentage: the driver's
+own tile and short status show the exact bars (`n/5`), while core consumers (overview pill,
+status lights, Nightscout upload) receive the mapped value. Only bars 2 and 3 observed;
+0-bar behavior unvalidated.
+
 Extended public fixtures were transformed from private filtered logcat trace SHA-256
 `60a70be8d538fc474cc32c9c560959cc87a3f20c6d610507991b2d41c5a70547`:
 
