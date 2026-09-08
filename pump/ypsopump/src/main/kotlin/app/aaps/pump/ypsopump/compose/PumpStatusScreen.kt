@@ -54,8 +54,9 @@ fun PumpStatusScreen(state: PumpStatusState) {
                 if (state.reservoir != null && state.reservoir < 20) colors.high else colors.inRange, Modifier.weight(1f)
             )
             GaugeTile(
-                "BATTERY", state.battery?.let { "$it%" } ?: state.unavailableLabel, state.battery?.div(100f),
-                if (state.battery != null && state.battery < 25) colors.low else colors.inRange, Modifier.weight(1f)
+                "BATTERY", state.batteryBars?.let { "$it/${state.batteryMax}" } ?: state.battery?.let { "$it%" } ?: state.unavailableLabel,
+                state.batteryBars?.div(state.batteryMax.toFloat()) ?: state.battery?.div(100f),
+                if ((state.batteryBars ?: 5) < 2 || (state.battery != null && state.battery < 25)) colors.low else colors.inRange, Modifier.weight(1f)
             )
         }
 

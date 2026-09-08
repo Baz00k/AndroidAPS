@@ -25,9 +25,10 @@ class CapturedStatusProtocolTest {
         val command = StatusCommand().apply { decode(requireNotNull(YpsoCrc.validatedPayload(body))) }
         assertTrue(command.success)
         val state = YpsoPumpState().apply { elapsedRealtime = { 1000L } }
-        state.publishStatus(command.reservoirUnits, command.batteryPercent, command.isSuspended, command.activeTbrPercent, 5000L)
+        state.publishStatus(command.reservoirUnits, command.batteryPercent, command.isSuspended, command.activeTbrPercent, 5000L, command.batteryBars)
         assertEquals(40.99, state.statusSnapshot?.reservoirUnits)
         assertNull(state.statusSnapshot?.batteryPercent)
+        assertEquals(2, state.statusSnapshot?.batteryBars)
         assertTrue(state.isSuspended)
         assertEquals(0.0, command.basalRate)
     }

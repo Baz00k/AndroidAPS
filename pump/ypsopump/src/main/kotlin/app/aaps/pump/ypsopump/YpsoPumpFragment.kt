@@ -102,6 +102,7 @@ internal fun buildPumpStatusState(
         connectionHealthy = pumpState.isConnected && snapshot != null,
         reservoir = snapshot?.reservoirUnits,
         battery = snapshot?.batteryPercent,
+        batteryBars = snapshot?.batteryBars,
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,

@@ -8,11 +8,13 @@
 The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT
 writes are restricted to the access-authentication handshake (**AUTH-only**).
 
-After a successful encrypted status read, the UI can show reservoir values.
+After a successful encrypted status read, the UI can show reservoir values and battery bars
+(`n/5`). Battery percentage is not reported by the pump and is never shown.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
 - delivery mode is not shown because its interpretation is not validated;
-- battery percentage is unavailable: the old decoder incorrectly displayed the basal-rate field as battery percentage;
+- battery bars are shown as reported (`n/5`); the full bar range is not yet observed, so no
+  low-battery threshold is claimed;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.

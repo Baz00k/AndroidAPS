@@ -34,6 +34,7 @@
     <string name="ypsopump_tbr_cancel_result">YpsoPump: temporary basal cancelled</string>
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
     <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>
+    <string name="ypsopump_short_status_bars">Reservoir %1$.2f U Battery %2$d/5</string>
     <string name="ypsopump_status_unavailable">Pump status unavailable</string>
     <string name="ypsopump_value_unavailable">Unavailable</string>
     <string name="ypsopump_value_unknown">Unknown</string>

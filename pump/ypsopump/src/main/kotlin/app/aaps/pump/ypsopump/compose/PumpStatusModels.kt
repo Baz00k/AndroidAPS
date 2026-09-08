@@ -16,6 +16,8 @@ data class PumpStatusState(
     val reservoir: Double? = null,
     val reservoirMax: Double = 200.0,
     val battery: Int? = null,
+    val batteryBars: Int? = null,
+    val batteryMax: Int = 5,
     val unavailableLabel: String = "Unavailable",
     val rows: List<PumpStatusRow> = emptyList(),
     val queue: List<QueueItem> = emptyList(),

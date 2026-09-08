@@ -604,7 +604,8 @@ class YpsoBleManager @Inject constructor(
                         batteryPercent = status.batteryPercent,
                         isSuspended = status.isSuspended,
                         activeTbrPercent = status.activeTbrPercent,
-                        timestamp = System.currentTimeMillis()
+                        timestamp = System.currentTimeMillis(),
+                        batteryBars = status.batteryBars
                     )
                     // DIAG: log the decoded delivery mode + isSuspended + raw payload so a pump-side Stop can be
                     // seen (validate DeliveryMode.STOPPED/PAUSED against real firmware; raw shows which byte moves).

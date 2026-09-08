@@ -120,6 +120,7 @@ class YpsoStatusIntegrationTest {
             fun display() = buildPumpStatusState(state, mock(), date, rh)
             assertEquals(5.5, display().reservoir)
             assertNull(display().battery)
+            assertEquals(2, display().batteryBars)
             plugin.disconnect("Queue empty")
             elapsed += 299_999
             assertEquals(acquired, plugin.lastDataTime)

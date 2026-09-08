@@ -62,6 +62,7 @@ class YpsoBleManagerTest {
         assertTrue(pumpState.hasVerifiedStatus)
         assertEquals(5.5, pumpState.reservoirUnits)
         assertEquals(null, pumpState.statusSnapshot?.batteryPercent)
+        assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         verify(sessionCrypto).decrypt(byteArrayOf(0x55))
     }
 
