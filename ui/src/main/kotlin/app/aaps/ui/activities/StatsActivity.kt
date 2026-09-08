@@ -21,7 +21,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.ui.R
 import app.aaps.ui.activities.stats.StatsScreen
-import app.aaps.ui.activities.stats.RangeBucket
+import app.aaps.ui.activities.stats.HourProfile
 import app.aaps.ui.activities.stats.StatsUiState
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
@@ -78,45 +78,43 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     /**
-     * Split readings into [slots] buckets and give each its own five-band percentage.
+     * Hour-of-day profile: for each hour, the spread of every reading recorded in that hour across the
+     * whole range.
      *
-     * Uses the SAME thresholds as the headline bar — the user's low/high marks, plus the clinical
-     * 54 / 250 mg/dL extremes — so a pattern bar and the number above it cannot tell different stories.
+     * Percentiles, not mean/SD — see [HourProfile]. [HourProfile.days] counts distinct calendar days,
+     * which is the honest measure of how much is behind each hour; a reading count would report ~288
+     * for a single day and make one day look like a trend.
      */
-    private fun bucket(
-        readings: List<Pair<Long, Double>>,
-        lowMark: Double,
-        highMark: Double,
-        slots: Int,
-        slotOf: (Calendar) -> Pair<Int, String>
-    ): List<RangeBucket> {
-        val counts = Array(slots) { IntArray(5) }
-        val labels = arrayOfNulls<String>(slots)
+    private fun hourlyProfile(readings: List<Pair<Long, Double>>, units: GlucoseUnit): List<HourProfile> {
+        val perHour = Array(24) { mutableListOf<Double>() }
+        val days = Array(24) { mutableSetOf<Int>() }
         val cal = Calendar.getInstance()
         readings.forEach { (ts, mgdl) ->
             cal.timeInMillis = ts
-            val (i, label) = slotOf(cal)
-            if (i !in 0 until slots) return@forEach
-            labels[i] = label
-            val band = when {
-                mgdl < 54.0      -> 0
-                mgdl < lowMark   -> 1
-                mgdl <= highMark -> 2
-                mgdl <= 250.0    -> 3
-                else             -> 4
-            }
-            counts[i][band]++
+            val h = cal.get(Calendar.HOUR_OF_DAY)
+            perHour[h].add(profileUtil.fromMgdlToUnits(mgdl))
+            days[h].add(cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR))
         }
-        return (0 until slots).map { i ->
-            val c = counts[i]
-            val n = c.sum()
-            fun p(v: Int) = if (n == 0) 0.0 else v.toDouble() / n * 100.0
-            RangeBucket(
-                label = labels[i] ?: "",
-                veryLow = p(c[0]), low = p(c[1]), inRange = p(c[2]), high = p(c[3]), veryHigh = p(c[4]),
-                readings = n
+        return (0 until 24).map { h ->
+            val v = perHour[h].sorted()
+            if (v.isEmpty()) HourProfile(hour = h)
+            else HourProfile(
+                hour = h,
+                p10 = pct(v, 0.10), p25 = pct(v, 0.25), median = pct(v, 0.50),
+                p75 = pct(v, 0.75), p90 = pct(v, 0.90),
+                readings = v.size, days = days[h].size
             )
         }
+    }
+
+    /** Linear-interpolated percentile of an already-sorted list. */
+    private fun pct(sorted: List<Double>, q: Double): Double {
+        if (sorted.isEmpty()) return 0.0
+        if (sorted.size == 1) return sorted[0]
+        val pos = q * (sorted.size - 1)
+        val lo = pos.toInt()
+        val hi = (lo + 1).coerceAtMost(sorted.size - 1)
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
     }
 
     private fun buildStats(days: Int): StatsUiState {
@@ -137,14 +135,7 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
 
         val lowMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
-        val byHour = bucket(readings, lowMark, highMark, 24) { cal -> cal.get(Calendar.HOUR_OF_DAY) to String.format(Locale.getDefault(), "%02d", cal.get(Calendar.HOUR_OF_DAY)) }
-        // Calendar numbers Sunday=1; shift so the week reads Mon..Sun, which is how a clinic report
-        // and most people's week are laid out.
-        val byWeekday = bucket(readings, lowMark, highMark, 7) { cal ->
-            val idx = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7
-            idx to arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[idx]
-        }
-
+        val hourly = hourlyProfile(readings, units)
         val main = agg(tirCalculator.calculate(days.toLong(), lowMark, highMark))
         val ext = agg(tirCalculator.calculate(days.toLong(), 54.0, 250.0)) // 3.0 / 13.9 mmol clinical extremes
         val count = main[3].coerceAtLeast(1)
@@ -166,8 +157,10 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
             cvGood = cv in 0.1..36.0,
             avgTdd = tddU?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
             carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--",
-            byHour = byHour,
-            byWeekday = byWeekday
+            hourly = hourly,
+            lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
+            highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
+            decimals = if (units == GlucoseUnit.MGDL) 0 else 1
         )
     }
 

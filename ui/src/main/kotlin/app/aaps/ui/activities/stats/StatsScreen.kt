@@ -6,6 +6,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import java.util.Locale
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -94,10 +105,7 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
             StatTile("AVG TDD", state.avgTdd, Modifier.weight(1f))
         }
 
-        if (!state.loading) {
-            PatternChart("BY HOUR OF DAY", state.byHour, labelEvery = 6)
-            PatternChart("BY DAY OF WEEK", state.byWeekday, labelEvery = 1)
-        }
+        GlucoseProfile(state)
 
         // extra
         AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap, bottom = 24.dp)) {
@@ -134,71 +142,121 @@ private fun StatTile(label: String, value: String, modifier: Modifier = Modifier
 }
 
 /**
- * A stacked bar per time bucket — the view a clinic summary leads with, because a number that is fine
- * on average can still hide a bad hour every night.
+ * Ambulatory glucose profile: what a typical day looks like, hour by hour.
  *
- * Each bar is normalised to its own bucket so the shape is comparable across buckets regardless of how
- * many readings each holds; buckets with too few readings are dimmed rather than dropped, so a gap in
- * the data reads as a gap and not as a good result.
+ * A percentage-in-range bar per hour came first, and could not answer the question that matters — an
+ * hour can be entirely "in range" while sitting at 4.5 or at 9.8, which call for opposite corrections.
+ * Here the median line says where the hour typically sits, and the bands say how reproducible it is:
+ * a narrow band is a habit, a wide one is a coin toss.
  */
 @Composable
-private fun PatternChart(title: String, buckets: List<RangeBucket>, labelEvery: Int) {
+private fun GlucoseProfile(state: StatsUiState) {
     val colors = AapsTheme.colors
-    if (buckets.isEmpty()) return
+    val measurer = rememberTextMeasurer()
+    val axis = AapsTheme.type.caption.copy(fontSize = 9.sp, color = colors.textTertiary)
+
+    val hours = state.hourly.filter { it.readings > 0 }
+    val maxDays = hours.maxOfOrNull { it.days } ?: 0
+    val depth = when {
+        state.loading   -> "computing…"
+        hours.isEmpty() -> ""
+        maxDays <= 1    -> "1 day — not a pattern yet"
+        else            -> "$maxDays days"
+    }
+
     Column(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
-        Text(title, style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("A TYPICAL DAY", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+            if (depth.isNotEmpty())
+                Text(depth, style = AapsTheme.type.caption, color = if (maxDays <= 1 && !state.loading) colors.high else colors.textTertiary)
+        }
         AapsCard(Modifier.fillMaxWidth()) {
             Column {
-                Row(
-                    Modifier.fillMaxWidth().height(112.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    buckets.forEach { b ->
-                        val dim = if (b.sparse) 0.28f else 1f
-                        Column(
-                            Modifier.weight(1f).fillMaxHeight().clip(AapsTheme.shape.extraSmall),
-                            verticalArrangement = Arrangement.Bottom
-                        ) {
-                            if (b.readings == 0) {
-                                Box(Modifier.fillMaxWidth().weight(1f).background(colors.controlFill))
-                            } else {
-                                // Top-down: worst-high first, so the in-range block sits on the baseline
-                                // and the eye can run along its top edge across the day.
-                                Seg(b.veryHigh, colors.veryHigh.copy(alpha = dim))
-                                Seg(b.high, colors.high.copy(alpha = dim))
-                                Seg(b.inRange, colors.inRange.copy(alpha = dim))
-                                Seg(b.low, colors.low.copy(alpha = dim))
-                                Seg(b.veryLow, colors.veryLow.copy(alpha = dim))
-                            }
+                Box(Modifier.fillMaxWidth().height(150.dp)) {
+                    if (hours.size < 2) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(if (state.loading) "Computing…" else "Not enough data", style = AapsTheme.type.body, color = colors.textTertiary)
+                        }
+                    } else {
+                        Canvas(Modifier.fillMaxSize()) {
+                            drawProfile(state, hours, colors, measurer, axis)
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    buckets.forEachIndexed { i, b ->
-                        // The slot is one bar wide, which is narrower than a two-digit label, so let
-                        // the text overflow its box instead of being clipped to "0".
-                        Box(Modifier.weight(1f)) {
-                            if (i % labelEvery == 0)
-                                Text(
-                                    b.label,
-                                    style = AapsTheme.type.caption,
-                                    color = colors.textTertiary,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.wrapContentWidth(unbounded = true)
-                                )
-                        }
-                    }
+                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Legend("Median", colors.textPrimary, colors)
+                    Legend("25–75%", colors.accent.copy(alpha = 0.55f), colors)
+                    Legend("10–90%", colors.accent.copy(alpha = 0.22f), colors)
                 }
             }
         }
     }
 }
 
-/** One vertical slice of a stacked bar; zero-height segments are skipped so they cannot show as hairlines. */
 @Composable
-private fun ColumnScope.Seg(pct: Double, color: Color) {
-    if (pct <= 0.0) return
-    Box(Modifier.fillMaxWidth().weight(pct.toFloat()).background(color))
+private fun Legend(label: String, swatch: Color, colors: app.aaps.core.compose.theme.AapsColors) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 12.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(swatch))
+        Text(label, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 5.dp))
+    }
 }
+
+private fun DrawScope.drawProfile(
+    state: StatsUiState,
+    hours: List<HourProfile>,
+    colors: app.aaps.core.compose.theme.AapsColors,
+    measurer: TextMeasurer,
+    axis: TextStyle
+) {
+    val left = 26.dp.toPx()
+    val bottom = 14.dp.toPx()
+    val w = size.width - left - 6.dp.toPx()
+    val h = size.height - bottom
+    if (w <= 0f || h <= 0f) return
+
+    // A little headroom so the top of the 10-90 band is not drawn flush against the card edge.
+    val hi = maxOf(state.highMark + 2.0, hours.maxOf { it.p90 } + 1.0)
+    val lo = minOf(state.lowMark - 1.0, hours.minOf { it.p10 } - 0.5).coerceAtLeast(0.0)
+    fun y(v: Double) = (((hi - v.coerceIn(lo, hi)) / (hi - lo)).toFloat() * h)
+    // Anchor on hour centres so the line spans the full day rather than stopping at 23:00.
+    fun x(hour: Int) = left + (hour + 0.5f) / 24f * w
+
+    // target band + the two gridlines that mean something
+    drawRect(colors.inRange.copy(alpha = 0.08f), Offset(left, y(state.highMark)), Size(w, y(state.lowMark) - y(state.highMark)))
+    listOf(state.lowMark, state.highMark).forEach { v ->
+        drawLine(colors.inRange.copy(alpha = 0.22f), Offset(left, y(v)), Offset(left + w, y(v)), 1f)
+        val txt = measurer.measure(fmt(v, state.decimals), axis)
+        drawText(txt, topLeft = Offset(left - 4.dp.toPx() - txt.size.width, y(v) - txt.size.height / 2f))
+    }
+    // Top of scale. Without it the highs are unreadable — the point of this chart is the LEVEL, and
+    // an unlabelled ceiling cannot distinguish a 14 from a 20.
+    measurer.measure(fmt(hi, state.decimals), axis).let { txt ->
+        drawText(txt, topLeft = Offset(left - 4.dp.toPx() - txt.size.width, y(hi)))
+    }
+
+    fun band(loSel: (HourProfile) -> Double, hiSel: (HourProfile) -> Double, alpha: Float) {
+        val path = Path()
+        hours.forEachIndexed { i, p -> if (i == 0) path.moveTo(x(p.hour), y(hiSel(p))) else path.lineTo(x(p.hour), y(hiSel(p))) }
+        hours.reversed().forEach { p -> path.lineTo(x(p.hour), y(loSel(p))) }
+        path.close()
+        drawPath(path, colors.accent.copy(alpha = alpha))
+    }
+    band({ it.p10 }, { it.p90 }, 0.22f)
+    band({ it.p25 }, { it.p75 }, 0.55f)
+
+    // median
+    for (i in 1 until hours.size) {
+        val a = hours[i - 1]; val b = hours[i]
+        drawLine(colors.textPrimary, Offset(x(a.hour), y(a.median)), Offset(x(b.hour), y(b.median)), 2.dp.toPx(), cap = StrokeCap.Round)
+    }
+
+    // hour axis
+    listOf(0, 6, 12, 18).forEach { hr ->
+        val txt = measurer.measure(String.format(Locale.getDefault(), "%02d", hr), axis)
+        drawText(txt, topLeft = Offset(x(hr) - txt.size.width / 2f, h + 2.dp.toPx()))
+    }
+}
+
+private fun fmt(v: Double, decimals: Int): String =
+    if (decimals <= 0) String.format(Locale.getDefault(), "%.0f", v)
+    else String.format(Locale.getDefault(), "%.1f", v)
