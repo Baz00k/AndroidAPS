@@ -18,19 +18,29 @@ import org.json.JSONObject
  * is destroyed BEFORE replacing the file. A crash anywhere in that interval requires recovery;
  * it cannot restore an older replay floor. The file is excluded from Android backup.
  */
-class SessionJournal(context: Context) : PumpSession.Store {
+class SessionJournal internal constructor(private val storage: Storage) : PumpSession.Store {
 
-    private val file = File(context.noBackupFilesDir, "ypso-session.json")
-    private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    constructor(context: Context) : this(AndroidStorage(context))
+
+    internal interface Storage {
+        fun read(): String?
+        fun anchors(): List<String>
+        fun create(alias: String)
+        fun delete(alias: String)
+        fun authenticate(alias: String, body: String): ByteArray
+        fun writeAndSync(value: String)
+    }
+
 
     override fun load(): PumpSession.State {
-        val anchors = anchors()
-        if (!file.exists() && anchors.isEmpty()) return PumpSession.State()
-        val envelope = JSONObject(file.readText())
+        val anchors = storage.anchors()
+        val contents = storage.read()
+        if (contents == null && anchors.isEmpty()) return PumpSession.State()
+        val envelope = JSONObject(checkNotNull(contents))
         val alias = envelope.getString("anchor")
         check(anchors == listOf(alias)) { "Incomplete or restored session journal" }
         val body = envelope.getString("body")
-        check(java.security.MessageDigest.isEqual(mac(alias, body), unhex(envelope.getString("mac")))) { "Corrupt session journal" }
+        check(java.security.MessageDigest.isEqual(storage.authenticate(alias, body), unhex(envelope.getString("mac")))) { "Corrupt session journal" }
         val json = JSONObject(body)
         check(json.getInt("version") == 1)
         val records = json.getJSONArray("records")
@@ -43,10 +53,11 @@ class SessionJournal(context: Context) : PumpSession.Store {
                 r.getString("pump"), r.getString("key"), r.getString("generation"), r.getInt("reboot"),
                 r.getLong("read"), if (r.isNull("write")) null else r.getLong("write"), reservation
             )
-        })
+        }).also(PumpSession::validate)
     }
 
     override fun commit(state: PumpSession.State) {
+        PumpSession.validate(state)
         val records = JSONArray()
         state.records.forEach { r ->
             records.put(JSONObject().put("pump", r.pump).put("key", r.keyId).put("generation", r.generation)
@@ -56,25 +67,37 @@ class SessionJournal(context: Context) : PumpSession.Store {
                 } ?: JSONObject.NULL))
         }
         val body = JSONObject().put("version", 1).put("records", records).toString()
-        val old = anchors()
+        val old = storage.anchors()
         val alias = PREFIX + UUID.randomUUID()
-        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore").apply {
-            init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
-                .setDigests(KeyProperties.DIGEST_SHA256).build())
-        }.generateKey()
-        val envelope = JSONObject().put("anchor", alias).put("body", body).put("mac", hex(mac(alias, body))).toString()
+        storage.create(alias)
+        val envelope = JSONObject().put("anchor", alias).put("body", body).put("mac", hex(storage.authenticate(alias, body))).toString()
         // Invalidate every previous revision before the commit can become observable.
-        old.forEach(keys::deleteEntry)
-        FileOutputStream(file).use { out ->
-            out.write(envelope.toByteArray(Charsets.UTF_8))
-            out.fd.sync()
-        }
+        old.forEach(storage::delete)
+        storage.writeAndSync(envelope)
     }
 
-    private fun anchors(): List<String> = keys.aliases().toList().filter { it.startsWith(PREFIX) }
-    private fun mac(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
-        init(keys.getKey(alias, null) as SecretKey)
-        doFinal(body.toByteArray(Charsets.UTF_8))
+    private class AndroidStorage(context: Context) : Storage {
+        private val file = File(context.noBackupFilesDir, "ypso-session.json")
+        private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        override fun read(): String? = if (file.exists()) file.readText() else null
+        override fun anchors(): List<String> = keys.aliases().toList().filter { it.startsWith(PREFIX) }
+        override fun create(alias: String) {
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore").apply {
+                init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+                    .setDigests(KeyProperties.DIGEST_SHA256).build())
+            }.generateKey()
+        }
+        override fun delete(alias: String) = keys.deleteEntry(alias)
+        override fun authenticate(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
+            init(keys.getKey(alias, null) as SecretKey)
+            doFinal(body.toByteArray(Charsets.UTF_8))
+        }
+        override fun writeAndSync(value: String) {
+            FileOutputStream(file).use { out ->
+                out.write(value.toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+        }
     }
 
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }

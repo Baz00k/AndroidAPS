@@ -26,7 +26,7 @@ class PumpSession(private val store: Store) {
     data class State(val records: List<Record> = emptyList())
     class Token internal constructor(val generation: String, val connection: String)
 
-    private var state: State? = runCatching { store.load() }.getOrNull()
+    private var state: State? = runCatching { store.load().also(::validate) }.getOrNull()
     private var record: Record? = null
     private var token: Token? = null
     private var key: ByteArray? = null
@@ -144,6 +144,7 @@ class PumpSession(private val store: Store) {
 
     private fun persist(next: State) {
         try {
+            validate(next)
             store.commit(next)
             state = next
         } catch (e: Exception) {
@@ -155,5 +156,17 @@ class PumpSession(private val store: Store) {
 
     companion object {
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
+
+        fun validate(state: State) {
+            require(state.records.map { it.keyId }.distinct().size == state.records.size)
+            require(state.records.map { it.generation }.distinct().size == state.records.size)
+            state.records.forEach { r ->
+                require(r.pump.isNotBlank() && r.generation.isNotBlank() && r.keyId.matches(Regex("[0-9a-f]{64}")))
+                require(r.reboot >= 0 && r.read >= 0 && (r.write == null || r.write >= 0))
+                r.reservation?.let {
+                    require(it.id.isNotBlank() && it.counter > 0 && it.counter == r.write)
+                }
+            }
+        }
     }
 }
