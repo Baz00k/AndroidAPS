@@ -117,7 +117,10 @@ immediate status 1 and 0.79 U reported before returning to idle.
 Rewinding, rebooting and leaving the disconnected pump without a cartridge produced a
 no-cartridge alarm on the pump display. Forcing the alarm with an empty second cartridge
 produced the byte-identical body, so the pump does not distinguish empty from missing
-cartridge in system status; the sentinel covers both. System status authenticated and CRC-validated,
+cartridge in system status; the sentinel covers both. Hypothesized to cover every alarm that
+halts delivery (occlusion, faults), but only the two cartridge alarms are confirmed —
+unconfirmed by choice, not by gap: any alarm encoding outside the validated ranges fails
+closed by construction, so enumerating every alarm is unnecessary for status-only safety. System status authenticated and CRC-validated,
 but decodes to mode 3 with reservoir `0xFFFFFFFF`, three battery bars, zero basal and
 100%/0 minutes. The sentinel fails closed: no reservoir measurement is published.
 Standard serial (0x2A25) is absent on this pump, so serial identity remains an evidence gap.
