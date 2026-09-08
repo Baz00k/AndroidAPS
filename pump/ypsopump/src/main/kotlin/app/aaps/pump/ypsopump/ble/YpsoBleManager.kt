@@ -218,6 +218,7 @@ class YpsoBleManager @Inject constructor(
             if (pumpState.connectionState != ConnectionState.DISCONNECTED) return
             try {
                 val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
+                importDebugBaseline(owner, macAddress, checkNotNull(configuredKey))
                 sessionToken = owner.open(macAddress.uppercase(java.util.Locale.ROOT), checkNotNull(configuredKey))
             } catch (e: Exception) {
                 pumpState.invalidateStatus()
@@ -630,6 +631,19 @@ class YpsoBleManager @Inject constructor(
         } finally {
             owner.finish(origin, transaction)
         }
+    }
+
+    /** ADB migration input is private to the app and is never consumed by distributed artifacts. */
+    private fun importDebugBaseline(owner: PumpSession, mac: String, key: ByteArray) {
+        if (((context.applicationInfo?.flags ?: 0) and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) return
+        val input = java.io.File(context.filesDir, "ypso-read-baseline.json")
+        if (!input.exists()) return
+        val baseline = org.json.JSONObject(input.readText())
+        require(baseline.getString("pump").equals(mac, ignoreCase = true)) { "Baseline pump mismatch" }
+        require(baseline.getString("keyId") == PumpSession.fingerprint(key)) { "Baseline key mismatch" }
+        owner.provisionReadBaseline(mac.uppercase(java.util.Locale.ROOT), key, baseline.getInt("reboot"), baseline.getLong("read"))
+        check(input.delete()) { "Cannot remove consumed baseline" }
+        aapsLogger.info(LTag.PUMP, "YpsoPump independently captured read baseline imported")
     }
 
     private fun authPassword(mac: String): ByteArray {

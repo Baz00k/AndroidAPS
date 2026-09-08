@@ -29,6 +29,14 @@ independently captured current pump read floor. This is an internal migration se
 a normal-build provisioning UI. Provisioning must also persist the matching key/MAC through
 the existing setup mechanism. Real keys and identifying captures must remain private.
 
+For debug/ADB migration only, place `files/ypso-read-baseline.json` in the app-private
+directory while the app is force-stopped. Fields are `pump` (MAC), `keyId` (SHA-256 of
+the matching raw key), `reboot` and `read` (independently authenticated counter values).
+The next connection checks the identity, imports the floor and removes the file after
+success. Failed imports remain for diagnosis and block that connection. Non-debuggable
+artifacts never consume this input. Remove rejected test inputs before resuming normal
+reads. The JSON contains no raw key but still contains private pump identity.
+
 A fresh key needs its own independently validated baseline. Re-importing an existing key
 can only retain/raise its floor within the same reboot generation. A mismatched, missing,
 corrupt or restored established journal blocks import and connection; deleting state or
