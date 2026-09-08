@@ -30,7 +30,6 @@ import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.graph.data.GraphViewWithCleanup
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.aps.RT
@@ -108,7 +107,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.viewinterop.AndroidView
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.TE
@@ -123,18 +121,15 @@ import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
-import app.aaps.plugins.main.general.overview.graphData.GraphData
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
 import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
-import com.jjoe64.graphview.GraphView
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import javax.inject.Provider
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -172,7 +167,6 @@ class OverviewFragment : DaggerFragment() {
     @Inject lateinit var bgQualityCheck: BgQualityCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
-    @Inject lateinit var graphDataProvider: Provider<GraphData>
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var calculationWorkflow: CalculationWorkflow
 
@@ -194,20 +188,6 @@ class OverviewFragment : DaggerFragment() {
     // (which already reads persistence there) and read synchronously by buildHomeState().
     private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
     private var recentInsulin: List<HomeUiState.InsulinEntry> = emptyList()
-
-    /**
-     * The legacy overview layout is inflated but `android:visibility="gone"` and covered by the
-     * opaque Compose home, so nothing in it is ever seen. With this set, its update functions
-     * return immediately instead of formatting ~120 values into invisible views and redrawing the
-     * legacy primary and secondary GraphViews on every refresh, and the hidden subtree costs no
-     * measure/layout/draw.
-     *
-     * Flip to false to bring the legacy overview back (it also needs its `visibility` removed in
-     * overview_fragment.xml) — useful if something in the redesign needs comparing against it.
-     */
-
-
-
 
     //@SuppressLint("NewApi")
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =

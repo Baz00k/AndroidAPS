@@ -219,6 +219,15 @@ Actions & Careportal, Statistics, History timeline, Profile view and editor, Con
 screens, YpsoPump and Medtrum pump status (the live pump's tab was the last screen still rendering as stock
 AAPS), and around a dozen legacy dialogs.
 
+The charts are drawn rather than plotted: the Home glucose graph and the Statistics "typical day" are
+Compose `Canvas` code, not a charting library. That was not a purity exercise — it is what allows the
+graph to share the app's colour tokens, so the band around target and the tint on the trace agree with
+the hero BG by construction instead of by coincidence. The Home chart draws the same 5-minute bucketed
+series the loop computes on, with the raw sensor scatter faint underneath, so a surprising dose can be
+read off the picture the algorithm actually saw. Statistics shows a median with 25–75% and 10–90% bands
+by hour of day — an AGP, the view a clinic reads — because "85% in range" hides whether a flat hour sits
+at 4 or at 10.
+
 The shared confirmation dialog went with them. `OKDialog` no longer builds a MaterialAlertDialog — it
 renders the design system's alert surface — so roughly forty-six call sites across the app moved over
 without being touched. That needed the module dependency between `core:ui` and `core:compose` reversed:
@@ -235,6 +244,8 @@ and IME actions on the protection path, and a botched conversion there locks you
   it, reachable from the Home "+" menu
 - **Recent-insulin undo** — the IOB tap removes a bolus the pump never delivered; see
   [section 6](#6-delivery-the-pump-cannot-make)
+- **Removing a mis-entered treatment** — long-press any History row to select and delete. Records are
+  invalidated rather than erased, so the audit trail and Nightscout sync still see them
 - **Fresh-site advisory** — see [section 3](#3-infusion-site-handling)
 - The second confirmation popup was removed; the hold-to-deliver control is the confirmation
 
@@ -249,9 +260,9 @@ Captured on the phone that runs the loop, so every number is live data rather th
 | <img src="docs/screenshots/loop-control.png" width="240" alt="Loop control sheet"> | <img src="docs/screenshots/temp-target.png" width="240" alt="Temp target sheet"> | <img src="docs/screenshots/actions.png" width="240" alt="Actions screen"> |
 | **Loop control** — mode, suspend, disconnect | **Temp target** — intent presets, then adjust | **Actions** — therapy, event log, tools |
 | <img src="docs/screenshots/algorithm-hovorkampc.png" width="240" alt="HovorkaMPC screen"> | <img src="docs/screenshots/statistics.png" width="240" alt="Statistics screen"> | <img src="docs/screenshots/history.png" width="240" alt="History timeline"> |
-| **HovorkaMPC** — model response and its switches | **Statistics** — TIR, GMI, CV, TDD | **History** — unified, day-grouped timeline |
-| <img src="docs/screenshots/profile.png" width="240" alt="Profile screen"> | <img src="docs/screenshots/config-builder.png" width="240" alt="Config Builder screen"> | |
-| **Profile** — DIA, basal curve, ISF/IC/target | **Config Builder** — active loop, plugins, settings | |
+| **HovorkaMPC** — model response and its switches | **Statistics** — TIR, GMI, CV, TDD, typical day | **History** — unified, day-grouped timeline |
+| <img src="docs/screenshots/profile.png" width="240" alt="Profile screen"> | <img src="docs/screenshots/config-builder.png" width="240" alt="Config Builder screen"> | <img src="docs/screenshots/pump-medtrum.png" width="240" alt="Medtrum pump status screen"> |
+| **Profile** — DIA, basal curve, ISF/IC/target | **Config Builder** — active loop, plugins, settings | **Pump** — reservoir, patch age, connection |
 
 The design is mmol/L-first, and the accent colour is reserved for "this is tappable" while greens,
 ambers and reds mean glucose or loop state and nothing else.
@@ -403,8 +414,10 @@ Only two touch behaviour, and neither is on the dosing path:
   queued thirteenth. The chain now runs IOB/COB and the loop first, and prepares graph series only while
   a screen is visible; `OverviewFragment` rebuilds them on resume. Hidden cycles run 5 workers in under a
   second against 17 taking several.
-- **The hidden legacy overview no longer runs or draws.** The Compose home is an opaque overlay over the
-  original layout, which was still being fed ~120 values per refresh and redrawing its own graphs.
+- **The legacy overview is gone, not hidden.** For a while the Compose home sat as an opaque overlay
+  over the original layout, which was still inflated, still being fed ~120 values per refresh and still
+  redrawing its own GraphViews underneath. `overview_fragment.xml` and the sixteen update functions that
+  filled it have since been deleted; the fragment inflates a bare `ComposeView`.
 
 Plus: Nightscout upload/download failures back off and log one stack per distinct error rather than one per
 record, and `deviceStatus` — write-only rows that existed to be uploaded — is kept for 7 days instead of 186.
