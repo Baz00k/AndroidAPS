@@ -120,7 +120,9 @@ a percentage; the driver's tile and short status show that percent.
 
 A pump-side 0% TBR for 60 minutes reads mode 10 with basal 0.00 U/h, percent 0 and
 remaining 59 minutes one minute in — running, not suspended. Zero basal with a running mode
-is therefore valid and distinct from Stop (mode 3, basal 0).
+is therefore valid and distinct from Stop (mode 3, basal 0). Pump-side cancellation of that
+TBR transitioned directly from 57 minutes remaining to percent 100 / remaining 0 / basal
+0.50 within one five-second poll — no intermediate state.
 
 Extended public fixtures from private filtered logcat trace SHA-256
 `ffcdadf9cf58cf0ef382fed5b05a09a959b89f80c964fc7d95df4182545ee54e`:
