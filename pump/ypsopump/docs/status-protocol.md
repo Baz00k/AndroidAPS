@@ -115,7 +115,9 @@ returning directly to idle after pump-side cancellation; standard 1.00 U bolus w
 immediate status 1 and 0.79 U reported before returning to idle.
 
 Rewinding, rebooting and leaving the disconnected pump without a cartridge produced a
-no-cartridge alarm on the pump display. System status authenticated and CRC-validated,
+no-cartridge alarm on the pump display. Forcing the alarm with an empty second cartridge
+produced the byte-identical body, so the pump does not distinguish empty from missing
+cartridge in system status; the sentinel covers both. System status authenticated and CRC-validated,
 but decodes to mode 3 with reservoir `0xFFFFFFFF`, three battery bars, zero basal and
 100%/0 minutes. The sentinel fails closed: no reservoir measurement is published.
 Standard serial (0x2A25) is absent on this pump, so serial identity remains an evidence gap.
