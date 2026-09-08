@@ -60,7 +60,10 @@ androidComponents.onVariants { variant ->
     variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(verify)
         .toGet(ScopedArtifact.CLASSES, VerifyGattWriteOwnership::jars, VerifyGattWriteOwnership::directories)
     tasks.matching {
-        it.name in setOf("assemble$name", "bundle${name}Aar", "test${name}UnitTest", "lint$name")
+        it.name in setOf(
+            "assemble$name", "bundle${name}Aar", "test${name}UnitTest", "lint$name",
+            "bundleLibRuntimeToDir$name", "bundleLibRuntimeToJar$name", "bundleLibCompileToJar$name"
+        )
     }.configureEach { dependsOn(verify) }
 }
 

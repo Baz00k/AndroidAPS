@@ -19,6 +19,10 @@ It inspects JVM calls and method-reference handles targeting `BluetoothGatt.writ
 matching guarded dispatch methods in `YpsoBleManager` may call these Android APIs. Source formatting,
 comments and unrelated methods with the same name do not affect the check.
 
+The consumed compile/runtime library bundles also depend on this check, so app assembly cannot bypass
+it by skipping the library's lifecycle tasks. Run `bash pump/ypsopump/tests/verify-app-build-ownership.sh`
+to verify the FullLoop and FullDebug app task graphs.
+
 This enforces ownership, not the correctness of the owner's policy. Behavioral mock-GATT recorders
 exercise both Android dispatch forms and verify the allowed AUTH destination and independently derived
 password bytes, phase checks, descriptor refusal, and counter preservation. Runtime policy review and
