@@ -21,10 +21,12 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.ui.R
 import app.aaps.ui.activities.stats.StatsScreen
+import app.aaps.ui.activities.stats.HourProfile
 import app.aaps.ui.activities.stats.StatsUiState
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import java.util.Calendar
 import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.sqrt
@@ -75,11 +77,57 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
         return out
     }
 
+    /**
+     * Hour-of-day profile: for each hour, the spread of every reading recorded in that hour across the
+     * whole range.
+     *
+     * Percentiles, not mean/SD — see [HourProfile]. [HourProfile.days] counts distinct calendar days,
+     * which is the honest measure of how much is behind each hour; a reading count would report ~288
+     * for a single day and make one day look like a trend.
+     */
+    private fun hourlyProfile(readings: List<Pair<Long, Double>>, units: GlucoseUnit): List<HourProfile> {
+        val perHour = Array(24) { mutableListOf<Double>() }
+        val days = Array(24) { mutableSetOf<Int>() }
+        val cal = Calendar.getInstance()
+        readings.forEach { (ts, mgdl) ->
+            cal.timeInMillis = ts
+            val h = cal.get(Calendar.HOUR_OF_DAY)
+            perHour[h].add(profileUtil.fromMgdlToUnits(mgdl))
+            days[h].add(cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR))
+        }
+        return (0 until 24).map { h ->
+            val v = perHour[h].sorted()
+            if (v.isEmpty()) HourProfile(hour = h)
+            else HourProfile(
+                hour = h,
+                p10 = pct(v, 0.10), p25 = pct(v, 0.25), median = pct(v, 0.50),
+                p75 = pct(v, 0.75), p90 = pct(v, 0.90),
+                readings = v.size, days = days[h].size
+            )
+        }
+    }
+
+    /** Linear-interpolated percentile of an already-sorted list. */
+    private fun pct(sorted: List<Double>, q: Double): Double {
+        if (sorted.isEmpty()) return 0.0
+        if (sorted.size == 1) return sorted[0]
+        val pos = q * (sorted.size - 1)
+        val lo = pos.toInt()
+        val hi = (lo + 1).coerceAtMost(sorted.size - 1)
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
+    }
+
     private fun buildStats(days: Int): StatsUiState {
         val units = profileFunction.getUnits()
         val now = dateUtil.now()
         val from = now - days * 86_400_000L
-        val values = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).map { it.value }.filter { it > 0 }
+        val raw = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).filter { it.value > 0 }
+        // Dedupe per 5-minute bucket. xDrip double-broadcasts, so the table holds ~1.85x the real
+        // reading count — harmless for an overall percentage, but NOT for a by-hour view: if the
+        // duplication rate varies across the day (phone awake vs asleep) it would tilt exactly the
+        // pattern this screen exists to show.
+        val readings = raw.groupBy { it.timestamp / 300_000L }.values.map { g -> g.first().timestamp to g.map { it.value }.average() }
+        val values = readings.map { it.second }
         val avgMgdl = if (values.isNotEmpty()) values.average() else 0.0
         val sd = if (values.size > 1) sqrt(values.sumOf { (it - avgMgdl) * (it - avgMgdl) } / values.size) else 0.0
         val cv = if (avgMgdl > 0) sd / avgMgdl * 100 else 0.0
@@ -87,6 +135,7 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
 
         val lowMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
+        val hourly = hourlyProfile(readings, units)
         val main = agg(tirCalculator.calculate(days.toLong(), lowMark, highMark))
         val ext = agg(tirCalculator.calculate(days.toLong(), 54.0, 250.0)) // 3.0 / 13.9 mmol clinical extremes
         val count = main[3].coerceAtLeast(1)
@@ -107,7 +156,11 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
             cv = if (cv > 0) String.format(Locale.getDefault(), "%.0f%%", cv) else "--",
             cvGood = cv in 0.1..36.0,
             avgTdd = tddU?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
-            carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--"
+            carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--",
+            hourly = hourly,
+            lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
+            highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
+            decimals = if (units == GlucoseUnit.MGDL) 0 else 1
         )
     }
 

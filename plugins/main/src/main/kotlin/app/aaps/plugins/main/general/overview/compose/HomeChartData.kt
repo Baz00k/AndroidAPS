@@ -34,7 +34,14 @@ data class HomeChartData(
     val from: Long = 0L,
     val to: Long = 0L,
     val now: Long = 0L,
+    /** Raw sensor readings — every one, drawn as a faint scatter. */
     val readings: List<GlucosePoint> = emptyList(),
+    /**
+     * The 5-minute bucketed series — what the loop's own statistics are computed from. Drawn as
+     * the trace so the line and the decisions cannot disagree. Empty on a 5-minute source, where
+     * bucketing is a no-op and [readings] is already the right thing to draw.
+     */
+    val bucketed: List<GlucosePoint> = emptyList(),
     val basal: List<BasalStep> = emptyList(),
     val scheduledBasal: Double = 0.0,
     val treatments: List<ChartTreatment> = emptyList(),
@@ -44,4 +51,15 @@ data class HomeChartData(
 ) {
 
     val hasData: Boolean get() = readings.isNotEmpty() && to > from
+
+    /**
+     * The series the trace is drawn from: bucketed when it adds something, raw otherwise.
+     *
+     * Only meaningfully different on a dense (1-minute) source. Never a cosmetic filter — it is
+     * the same averaging the loop uses, so a surprising decision can be read off the graph.
+     */
+    val trace: List<GlucosePoint> get() = if (bucketed.size > 1) bucketed else readings
+
+    /** True when raw and trace differ, i.e. there is a scatter worth drawing underneath. */
+    val hasDenseScatter: Boolean get() = bucketed.size > 1 && readings.size > bucketed.size
 }

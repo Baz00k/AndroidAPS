@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -39,7 +43,14 @@ import app.aaps.core.compose.theme.AapsTheme
  * boluses / carbs / events. Read-only. [onBack] finishes the activity.
  */
 @Composable
-fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
+fun HistoryScreen(
+    state: HistoryUiState,
+    onBack: () -> Unit,
+    onToggle: (HistoryItem) -> Unit = {},
+    onStartSelecting: (HistoryItem) -> Unit = {},
+    onCancelSelecting: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {}
+) {
     val colors = AapsTheme.colors
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
 
@@ -55,10 +66,24 @@ fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(colors.background)) {
         // header
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.clip(CircleShape).clickable(onClick = onBack).padding(8.dp)) {
-                Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary)
+            Box(Modifier.clip(CircleShape).clickable(onClick = if (state.selecting) onCancelSelecting else onBack).padding(8.dp)) {
+                Icon(Icons.Rounded.ArrowBack, contentDescription = if (state.selecting) "Cancel" else "Back", tint = colors.textSecondary)
             }
-            Text("History", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
+            Text(
+                if (state.selecting) "${state.selected.size} selected" else "History",
+                style = AapsTheme.type.title, color = colors.textPrimary,
+                modifier = Modifier.padding(start = 4.dp).weight(1f)
+            )
+            if (state.selecting)
+                Text(
+                    "Remove",
+                    style = AapsTheme.type.label,
+                    color = if (state.selected.isEmpty()) colors.textTertiary else colors.low,
+                    modifier = Modifier
+                        .clip(AapsTheme.shape.button)
+                        .then(if (state.selected.isEmpty()) Modifier else Modifier.clickable(onClick = onDeleteSelected))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                )
         }
         // filter chips
         Row(Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.screenH, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -80,7 +105,15 @@ fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
                     item(key = "h_$day") {
                         Text(day.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
                     }
-                    items(dayItems, key = { it.kind.name + it.timestamp }) { HistoryRow(it) }
+                    items(dayItems, key = { it.key }) { row ->
+                        HistoryRow(
+                            item = row,
+                            selecting = state.selecting,
+                            selected = row.key in state.selected,
+                            onToggle = { onToggle(row) },
+                            onLongPress = { onStartSelecting(row) }
+                        )
+                    }
                 }
             }
         }
@@ -91,10 +124,29 @@ fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
 private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) =
     Chip(label, onClick, selected = selected)
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HistoryRow(item: HistoryItem) {
+private fun HistoryRow(
+    item: HistoryItem,
+    selecting: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onLongPress: () -> Unit
+) {
     val colors = AapsTheme.colors
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = { if (selecting) onToggle() }, onLongClick = onLongPress)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (selecting)
+            Checkbox(
+                checked = selected, onCheckedChange = { onToggle() },
+                colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary),
+                modifier = Modifier.padding(end = 2.dp)
+            )
         Text(item.time, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(end = 10.dp))
         Box(
             Modifier.size(34.dp).clip(CircleShape).background(tintFor(item.kind).copy(alpha = 0.15f)),

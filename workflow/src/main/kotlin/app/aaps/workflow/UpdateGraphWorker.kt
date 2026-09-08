@@ -22,10 +22,10 @@ class UpdateGraphWorker(
 
     override suspend fun doWorkAndLog(): Result {
         val pass = inputData.getInt(CalculationWorkflow.PASS, -1)
-        if (inputData.getString(CalculationWorkflow.JOB) == CalculationWorkflow.MAIN_CALCULATION)
-            activePlugin.activeOverview.overviewBus.send(EventUpdateOverviewGraph("UpdateGraphWorker"))
-        else
-            rxBus.send(EventUpdateOverviewGraph("UpdateGraphWorker"))
+        // Always the overview's own bus: that is where OverviewFragment listens, and it is now the only
+        // listener. The rxBus branch this replaces was for HistoryBrowseActivity, which is gone — so a
+        // rebuild triggered by a scale change or a therapy event was being sent where nobody was.
+        activePlugin.activeOverview.overviewBus.send(EventUpdateOverviewGraph("UpdateGraphWorker"))
         rxBus.send(EventIobCalculationProgress(CalculationWorkflow.ProgressData.entries.find { it.pass == pass } ?: throw InvalidParameterSpecException(), 100, null))
         return Result.success()
     }

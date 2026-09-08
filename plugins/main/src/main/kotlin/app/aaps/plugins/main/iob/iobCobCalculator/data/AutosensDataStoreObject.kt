@@ -23,6 +23,10 @@ class AutosensDataStoreObject : AutosensDataStore {
     companion object {
 
         const val IRREGULAR_DATA_SEC = 30L
+
+        /** Median interval below which data counts as denser than the 5-minute grid. */
+        const val DENSE_DATA_MAX_INTERVAL_SEC = 150L
+        const val DENSE_DATA_MIN_READINGS = 6
     }
 
     // we need to make sure that bucketed_data will always have the same timestamp for correct use of cached values
@@ -198,7 +202,11 @@ class AutosensDataStoreObject : AutosensDataStore {
             reset()
         }
         lastUsed5minCalculation = fiveMinData
-        if (fiveMinData) createBucketedData5min(aapsLogger, dateUtil) else createBucketedDataRecalculated(aapsLogger, dateUtil)
+        when {
+            fiveMinData    -> createBucketedData5min(aapsLogger, dateUtil)
+            isDenseData()  -> createBucketedDataAveraged(aapsLogger, dateUtil)
+            else           -> createBucketedDataRecalculated(aapsLogger, dateUtil)
+        }
     }
 
     fun findNewer(time: Long): GV? {
@@ -223,6 +231,89 @@ class AutosensDataStoreObject : AutosensDataStore {
             if (bgReadings[i].timestamp > time) break
         }
         return lastFound
+    }
+
+    /**
+     * True when readings genuinely arrive faster than the 5-minute grid — the 1-minute stream
+     * from a native Libre 3 source, for example.
+     *
+     * Gated on the MEDIAN interval rather than the mean so that a handful of dropouts cannot
+     * make dense data look sparse, nor one burst make sparse data look dense. This matters
+     * because [createBucketedDataRecalculated] is ALSO the fallback for ordinary irregular or
+     * gappy 5-minute data (Dexcom included), and that behaviour must not change.
+     */
+    private fun isDenseData(): Boolean {
+        if (bgReadings.size < DENSE_DATA_MIN_READINGS) return false
+        val intervals = ArrayList<Long>(bgReadings.size - 1)
+        for (i in 1 until bgReadings.size) {
+            val d = bgReadings[i - 1].timestamp - bgReadings[i].timestamp
+            if (d > 0) intervals.add(d)
+        }
+        if (intervals.size < DENSE_DATA_MIN_READINGS - 1) return false
+        intervals.sort()
+        return intervals[intervals.size / 2] < T.secs(DENSE_DATA_MAX_INTERVAL_SEC).msecs()
+    }
+
+    /**
+     * Bucket dense data by AVERAGING every reading inside each 5-minute slot.
+     *
+     * The interpolating path takes a single sample per slot and throws the rest away — on a
+     * 1-minute source that discards four readings in five and leaves the loop acting on an
+     * unsmoothed single sample. Averaging keeps all of them: noise falls by about √5 for only
+     * ~2 min of group delay, where an external 25-min filter costs ~7.5 min.
+     *
+     * Slots with no readings fall back to the same linear interpolation used elsewhere, so
+     * genuine gaps are still bridged rather than truncating the series.
+     */
+    private fun createBucketedDataAveraged(aapsLogger: AAPSLogger, dateUtil: DateUtil) {
+        if (bgReadings.size < 3) {
+            bucketedData = null
+            return
+        }
+        val lastBg = bgReadings[0]
+        val newBucketedData = ArrayList<InMemoryGlucoseValue>()
+        var currentTime = bgReadings[0].timestamp
+        val adjustedTime = adjustToReferenceTime(currentTime)
+        currentTime = if (adjustedTime > currentTime) adjustedTime - T.mins(5).msecs() else adjustedTime
+        aapsLogger.debug(LTag.AUTOSENS) { "Dense data: averaging into 5-min buckets from ${dateUtil.dateAndTimeAndSecondsString(currentTime)}" }
+
+        val half = T.mins(5).msecs() / 2
+        // bgReadings is newest-first and the grid descends, so one forward-only index suffices.
+        var idx = 0
+        while (true) {
+            while (idx < bgReadings.size && bgReadings[idx].timestamp > currentTime + half) idx++
+            var j = idx
+            var sum = 0.0
+            var n = 0
+            while (j < bgReadings.size && bgReadings[j].timestamp >= currentTime - half) {
+                sum += bgReadings[j].value
+                n++
+                j++
+            }
+            if (n > 0) {
+                newBucketedData.add(
+                    InMemoryGlucoseValue(currentTime, sum / n, sourceSensor = lastBg.sourceSensor)
+                )
+                idx = j
+            } else {
+                // Empty slot: bridge it the same way the irregular path does, so a dropout does
+                // not truncate the series.
+                val newer = findNewer(currentTime) ?: break
+                val older = findOlder(currentTime) ?: break
+                if (older.timestamp == newer.timestamp) {
+                    newBucketedData.add(InMemoryGlucoseValue.fromGv(newer))
+                } else {
+                    val bgDelta = newer.value - older.value
+                    val timeDiffToNew = newer.timestamp - currentTime
+                    val currentBg = newer.value - timeDiffToNew.toDouble() / (newer.timestamp - older.timestamp) * bgDelta
+                    newBucketedData.add(
+                        InMemoryGlucoseValue(currentTime, currentBg.roundToLong().toDouble(), filledGap = true, sourceSensor = lastBg.sourceSensor)
+                    )
+                }
+            }
+            currentTime -= T.mins(5).msecs()
+        }
+        bucketedData = newBucketedData
     }
 
     private fun createBucketedDataRecalculated(aapsLogger: AAPSLogger, dateUtil: DateUtil) {

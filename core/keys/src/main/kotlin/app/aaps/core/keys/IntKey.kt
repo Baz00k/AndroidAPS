@@ -32,6 +32,15 @@ enum class IntKey(
     OverviewIageCritical("statuslights_iage_critical", 144, 24, 240, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewSageWarning("statuslights_sage_warning", 216, 24, 720, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewSageCritical("statuslights_sage_critical", 240, 24, 720, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
+
+    // Sensor wear life and warm-up, used by the home Supply countdown ring. These are per-sensor-family
+    // facts AAPS cannot infer from a BG broadcast (G6 10 d / 2 h; Libre 2 and 3 14 d; Libre 2+ and 3+
+    // 15 d), so they are preferences rather than a guess. Defaults reproduce the previously hardcoded
+    // Dexcom G6 behaviour: 10-day life, warm-up display off. Deliberately NOT dependent on
+    // OverviewShowStatusLights — the ring is part of the redesigned home and is drawn regardless, so
+    // hiding these with the legacy status lights would leave the ring using values you cannot see.
+    OverviewSensorLifeDays("sensor_life_days", 10, 1, 30, defaultedBySM = true),
+    OverviewSensorWarmupMinutes("sensor_warmup_minutes", 0, 0, 240, defaultedBySM = true),
     OverviewSbatWarning("statuslights_sbat_warning", 25, 0, 100, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewSbatCritical("statuslights_sbat_critical", 5, 0, 100, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewBageWarning("statuslights_bage_warning", 216, 24, 1000, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),

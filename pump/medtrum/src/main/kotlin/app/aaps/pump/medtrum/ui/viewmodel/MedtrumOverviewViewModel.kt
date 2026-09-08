@@ -92,19 +92,22 @@ class MedtrumOverviewViewModel @Inject constructor(
         scope.launch {
             medtrumPump.connectionStateFlow.collect { state ->
                 aapsLogger.debug(LTag.PUMP, "MedtrumViewModel connectionStateFlow: $state")
+                // Readable text, not the FontAwesome glyph tokens the old data-binding layout rendered
+                // with a custom typeface: nothing outside that layout could resolve them, so the Compose
+                // screen was showing a literal "{fa-bluetooth-b}".
                 when (state) {
                     ConnectionState.CONNECTING    -> {
-                        _bleStatus.postValue("{fa-bluetooth-b spin}")
+                        _bleStatus.postValue(rh.gs(app.aaps.core.ui.R.string.connecting))
                         _canDoRefresh.postValue(false)
                     }
 
                     ConnectionState.CONNECTED     -> {
-                        _bleStatus.postValue("{fa-bluetooth}")
+                        _bleStatus.postValue(rh.gs(R.string.ble_connected))
                         _canDoRefresh.postValue(false)
                     }
 
                     ConnectionState.DISCONNECTED  -> {
-                        _bleStatus.postValue("{fa-bluetooth-b}")
+                        _bleStatus.postValue(rh.gs(app.aaps.core.ui.R.string.disconnected))
                         if (medtrumPump.pumpState > MedtrumPumpState.EJECTED && medtrumPump.pumpState < MedtrumPumpState.STOPPED) {
                             _canDoRefresh.postValue(true)
                         } else {
@@ -113,7 +116,7 @@ class MedtrumOverviewViewModel @Inject constructor(
                     }
 
                     ConnectionState.DISCONNECTING -> {
-                        _bleStatus.postValue("{fa-bluetooth-b spin}")
+                        _bleStatus.postValue(rh.gs(R.string.ble_disconnecting))
                         _canDoRefresh.postValue(true)
                     }
                 }

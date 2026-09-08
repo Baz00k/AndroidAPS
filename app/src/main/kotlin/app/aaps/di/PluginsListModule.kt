@@ -33,6 +33,7 @@ import app.aaps.plugins.smoothing.AvgSmoothingPlugin
 import app.aaps.plugins.smoothing.ExponentialSmoothingPlugin
 import app.aaps.plugins.smoothing.NoSmoothingPlugin
 import app.aaps.plugins.source.RandomBgPlugin
+import app.aaps.plugins.source.Libre3SourcePlugin
 import app.aaps.plugins.source.XdripSourcePlugin
 import app.aaps.plugins.sync.nsclientV3.NSClientV3Plugin
 import app.aaps.pump.ypsopump.YpsoPumpPlugin
@@ -233,6 +234,12 @@ abstract class PluginsListModule {
     @IntoMap
     @IntKey(400)
     abstract fun bindXdripSourcePlugin(plugin: XdripSourcePlugin): PluginBase
+
+    @Binds
+    @AllConfigs
+    @IntoMap
+    @IntKey(401)
+    abstract fun bindLibre3SourcePlugin(plugin: Libre3SourcePlugin): PluginBase
 
     @Binds
     @AllConfigs

@@ -317,6 +317,7 @@ class TranslatorImpl @Inject internal constructor(
         Sources.Aidex                              -> TODO()
         Sources.Tomato                             -> TODO()
         Sources.Xdrip                              -> TODO()
+        Sources.Libre3                             -> TODO()
         Sources.LocalProfile                       -> TODO()
         Sources.Maintenance                        -> TODO()
         Sources.NSProfile                          -> TODO()

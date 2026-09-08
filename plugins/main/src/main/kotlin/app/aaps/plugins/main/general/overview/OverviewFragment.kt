@@ -30,7 +30,6 @@ import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.graph.data.GraphViewWithCleanup
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.aps.RT
@@ -48,7 +47,6 @@ import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
 import app.aaps.core.interfaces.overview.LastBgData
 import app.aaps.core.interfaces.overview.Overview
 import app.aaps.core.interfaces.overview.OverviewData
-import app.aaps.core.interfaces.overview.OverviewMenus
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -108,7 +106,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.viewinterop.AndroidView
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.TE
@@ -123,18 +120,15 @@ import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
-import app.aaps.plugins.main.general.overview.graphData.GraphData
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
 import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
-import com.jjoe64.graphview.GraphView
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import javax.inject.Provider
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -160,7 +154,6 @@ class OverviewFragment : DaggerFragment() {
     @Inject lateinit var config: Config
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var fabricPrivacy: FabricPrivacy
-    @Inject lateinit var overviewMenus: OverviewMenus
     @Inject lateinit var trendCalculator: TrendCalculator
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var uel: UserEntryLogger
@@ -172,7 +165,6 @@ class OverviewFragment : DaggerFragment() {
     @Inject lateinit var bgQualityCheck: BgQualityCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
-    @Inject lateinit var graphDataProvider: Provider<GraphData>
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var calculationWorkflow: CalculationWorkflow
 
@@ -194,20 +186,6 @@ class OverviewFragment : DaggerFragment() {
     // (which already reads persistence there) and read synchronously by buildHomeState().
     private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
     private var recentInsulin: List<HomeUiState.InsulinEntry> = emptyList()
-
-    /**
-     * The legacy overview layout is inflated but `android:visibility="gone"` and covered by the
-     * opaque Compose home, so nothing in it is ever seen. With this set, its update functions
-     * return immediately instead of formatting ~120 values into invisible views and redrawing the
-     * legacy primary and secondary GraphViews on every refresh, and the hidden subtree costs no
-     * measure/layout/draw.
-     *
-     * Flip to false to bring the legacy overview back (it also needs its `visibility` removed in
-     * overview_fragment.xml) — useful if something in the redesign needs comparing against it.
-     */
-
-
-
 
     //@SuppressLint("NewApi")
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
@@ -549,26 +527,47 @@ class OverviewFragment : DaggerFragment() {
             ageDays(TE.Type.CANNULA_CHANGE)?.let {
                 add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsTone.InRange))
             }
-            // Sensor: show a depleting countdown to EXPIRY (not just elapsed age). Life assumed 10 d
-            // (Dexcom G6); expiry = last SENSOR_CHANGE + life. Ring fraction = life remaining.
+            // Sensor: a depleting countdown to EXPIRY (not elapsed age), with the warm-up window drawn
+            // as a FILLING ring instead. Expiry = last SENSOR_CHANGE + life.
+            //
+            // Life and warm-up come from preferences because they are per-sensor-family facts that
+            // cannot be inferred from a BG broadcast. This used to hardcode 10 d ("Dexcom G6"), which
+            // silently misreports every other sensor: on a 15-day Libre 3+ the ring went amber on day
+            // 8.5, red on day 9.5 and read "Expired" for the final five days of a perfectly good
+            // sensor. Defaults reproduce the old G6 behaviour (10 d, warm-up off).
             persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
-                val lifeMs = TimeUnit.DAYS.toMillis(10)
-                val remaining = te.timestamp + lifeMs - now
-                val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
-                val remH = TimeUnit.MILLISECONDS.toHours(remaining)
-                val label = when {
-                    remaining <= 0 -> "Expired"
-                    remH >= 24     -> "${remH / 24}d ${remH % 24}h"
-                    remH >= 1      -> "${remH}h"
-                    else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
+                val lifeMs = TimeUnit.DAYS.toMillis(preferences.get(IntKey.OverviewSensorLifeDays).toLong())
+                val warmupMs = TimeUnit.MINUTES.toMillis(preferences.get(IntKey.OverviewSensorWarmupMinutes).toLong())
+                val elapsed = now - te.timestamp
+                if (warmupMs > 0 && elapsed >= 0 && elapsed < warmupMs) {
+                    // Warming up. An hour with no readings must read as "not ready yet", never as
+                    // "broken", so the ring FILLS toward the first reading rather than draining toward
+                    // expiry — same component, inverted fraction.
+                    val minsLeft = TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1
+                    add(
+                        HomeUiState.Supply(
+                            "Sensor", "Warming up ${minsLeft}m", AapsTone.High,
+                            fraction = (elapsed.toFloat() / warmupMs).coerceIn(0f, 1f)
+                        )
+                    )
+                } else {
+                    val remaining = te.timestamp + lifeMs - now
+                    val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
+                    val remH = TimeUnit.MILLISECONDS.toHours(remaining)
+                    val label = when {
+                        remaining <= 0 -> "Expired"
+                        remH >= 24     -> "${remH / 24}d ${remH % 24}h"
+                        remH >= 1      -> "${remH}h"
+                        else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
+                    }
+                    val tone = when {
+                        remaining <= 0 -> AapsTone.Low
+                        remH < 12      -> AapsTone.Low
+                        remH < 48      -> AapsTone.High
+                        else           -> AapsTone.InRange
+                    }
+                    add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
                 }
-                val tone = when {
-                    remaining <= 0 -> AapsTone.Low
-                    remH < 12      -> AapsTone.Low
-                    remH < 48      -> AapsTone.High
-                    else           -> AapsTone.InRange
-                }
-                add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
             }
             // Reservoir. This used to be drawn ONLY when `> 0`, so the pill quietly VANISHED at exactly
             // the moment it mattered — an empty cartridge looked identical to a screen that had never
@@ -667,6 +666,14 @@ class OverviewFragment : DaggerFragment() {
             .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
         if (readings.isEmpty()) return HomeChartData()
 
+        // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
+        // statistics are computed from; on a 5-minute source it is effectively the readings again.
+        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy()
+            ?.filter { it.timestamp in from..to }
+            ?.sortedBy { it.timestamp }
+            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated)) }
+            ?: emptyList()
+
         // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
         // rather than drawing one step per record — a per-record path doubles back on itself.
         val samples = 240
@@ -696,6 +703,7 @@ class OverviewFragment : DaggerFragment() {
             to = to,
             now = dateUtil.now(),
             readings = readings,
+            bucketed = bucketed,
             basal = basal,
             scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,

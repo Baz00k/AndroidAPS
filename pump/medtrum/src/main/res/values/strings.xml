@@ -17,6 +17,8 @@
 
     <!-- overview fragment -->
     <string name="ble_status_label">BLE Status</string>
+    <string name="ble_connected">Connected</string>
+    <string name="ble_disconnecting">Disconnecting</string>
     <string name="last_connection_label">Last connected</string>
     <string name="active_bolus_label">Active bolus</string>
     <string name="pump_state_label">Pump state</string>

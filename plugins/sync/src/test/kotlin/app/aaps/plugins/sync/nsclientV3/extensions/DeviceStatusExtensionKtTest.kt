@@ -5,10 +5,8 @@ import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
-import app.aaps.core.interfaces.overview.OverviewData
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
-import app.aaps.core.interfaces.workflow.CalculationWorkflow
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.nssdk.interfaces.RunningConfiguration
 import app.aaps.core.nssdk.mapper.convertToRemoteAndBack
@@ -32,8 +30,6 @@ internal class DeviceStatusExtensionKtTest : TestBase() {
     @Mock lateinit var runningConfiguration: RunningConfiguration
     @Mock lateinit var apsResultProvider: Provider<APSResult>
     @Mock lateinit var persistenceLayer: PersistenceLayer
-    @Mock lateinit var overviewData: OverviewData
-    @Mock lateinit var calculationWorkflow: CalculationWorkflow
 
     private lateinit var processedDeviceStatusData: ProcessedDeviceStatusData
     private lateinit var nsDeviceStatusHandler: NSDeviceStatusHandler
@@ -41,7 +37,7 @@ internal class DeviceStatusExtensionKtTest : TestBase() {
     @BeforeEach
     fun setup() {
         processedDeviceStatusData = ProcessedDeviceStatusDataImpl(rh, dateUtil, preferences, apsResultProvider)
-        nsDeviceStatusHandler = NSDeviceStatusHandler(preferences, config, dateUtil, runningConfiguration, processedDeviceStatusData, aapsLogger, persistenceLayer, overviewData, calculationWorkflow)
+        nsDeviceStatusHandler = NSDeviceStatusHandler(preferences, config, dateUtil, runningConfiguration, processedDeviceStatusData, aapsLogger, persistenceLayer)
         whenever(config.AAPSCLIENT).thenReturn(true)
     }
 

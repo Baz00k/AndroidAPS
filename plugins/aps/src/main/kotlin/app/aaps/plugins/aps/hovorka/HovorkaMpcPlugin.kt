@@ -274,10 +274,10 @@ class HovorkaMpcPlugin @Inject constructor(
         // ANCHOR THE MODEL TO THE RATE THE CONTROLLER ACTUALLY TREATS AS NEUTRAL (fixed 2026-08-23).
         // `personalize` solves egp0 so that the basal it is GIVEN holds target. This used to be handed the
         // PROFILE basal while `nominalBasalMuMin` below — the EKF's initial steady state, the MPC's effort
-        // origin, and the correction floor's centre — came from TddAdapter instead. When the adapter moved,
+        // origin, and the correction floor's centre — came from the 2d adapter instead. When the adapter moved,
         // the two disagreed, and inside the model the "neutral" rate no longer held target at all:
-        //     profile 0.45 anchored, TddAdapter nominal 0.28  ->  nominal holds 11.4 mmol/L  (+4.4)
-        //     profile 0.55 anchored, TddAdapter nominal 0.30  ->  nominal holds 13.8 mmol/L  (+6.8)
+        //     profile 0.45 anchored, 2d nominal 0.28  ->  nominal holds 11.4 mmol/L  (+4.4)
+        //     profile 0.55 anchored, 2d nominal 0.30  ->  nominal holds 13.8 mmol/L  (+6.8)
         // So the controller believed its own baseline parked glucose at 11-14, rolled out a rise that was
         // pure artefact, and demanded insulin to stop it — while its effort term simultaneously penalised
         // going above that same nominal. Measured live 2026-08-23: the 3 h forecast ran high in proportion
@@ -957,40 +957,77 @@ class HovorkaMpcPlugin @Inject constructor(
         }
     }
 
-    // 2d adaptive-gain cache: the adapted operating basal is a DAILY quantity, so recompute once per day
+    // 2d adaptive-gain cache: the GAIN is a DAILY quantity, so recompute once per day
     // (like the 2a calibration cache). Stateless across restarts — reconstructed from persisted history.
     private var adaptCacheDay = -1L
-    private var adaptCacheBasalUhr = 0.0
+    private var adaptCacheGain = 1.0
 
     /**
-     * 2d: adapt the operating basal from the last [ADAPT_DAYS] completed days of outcomes. Rebuilds a fresh
-     * [TddAdapter] from the PROFILE basal and folds each past day (mean enacted basal + glucose summary) —
-     * stateless (no new schema; survives restarts), bounded, and self-healing toward the profile if the
-     * profile is later fixed. Returns the profile basal unchanged when the feature is off or history is thin.
+     * 2d: adapt the operating basal from the last [ADAPT_DAYS] completed days of outcomes.
+     *
+     * Rewritten 2026-09-08 to use [TddAdapterV2]. The previous implementation deviated from the decoded
+     * CamAPS design (report/hovorka-plugin-plan.md §"TDD ADAPTATION") in ways that, measured on 60 days
+     * of this user's own history, removed 63% of the dawn basal and made the 30-min forecast worse:
+     *
+     *  - it folded `meanEnactedBasalUhr` ONLY. Decoded is `MPC::GetTotalDailyDose`; the plan's step 1
+     *    says "basal TBRs AND boluses". Basal is 30% of this user's insulin and correlates -0.01 with
+     *    their daily total, so the layer was learning from the loop's own output rather than from any
+     *    measure of need — a feedback loop with no external reference.
+     *  - it returned a scalar that REPLACED the profile for all 24 h, deleting the 03:00-09:00 block
+     *    (0.50 vs 0.35 overnight). In CamAPS the circadian basal lives in the patient file and TDD
+     *    SCALES it; the plan's step 5 says the adapted TDD sets the operating point and "nothing else
+     *    in the control law changes". A dimensionless gain on `profile.getBasal(now)` restores that.
+     *  - it seeded from `profile.getBasal()` (one BLOCK) and folded 24-h MEANS into it, which reads low
+     *    by construction: seeded at 0.45 and folding ~0.36 it walked to ~0.30, then governed a dawn
+     *    window whose profile value is 0.50.
+     *  - its cache key was `now / DAY_MS`, a UTC day, so the "daily" value rolled over at local noon.
+     *    The number governing a dawn rise had been computed at midday the previous day.
+     *
+     * Still stateless (no new schema, survives restarts) and still bounded; returns the profile basal
+     * unchanged when the feature is off or history is too thin for the gain to mean anything.
      */
     private fun adaptedOperatingBasalUhr(profile: Profile, weightKg: Double, targetMmol: Double, maxBasalUhr: Double, now: Long): Double {
         val profileBasalUhr = profile.getBasal()
         if (!preferences.get(BooleanKey.HovorkaTddAdaptation)) return profileBasalUhr
-        val dayKey = now / DAY_MS
-        if (dayKey == adaptCacheDay) return adaptCacheBasalUhr
-        val adapter = TddAdapter(weightKg, profileBasalUhr, targetMmol = targetMmol, maxBasalUhr = maxBasalUhr)
-        var folded = 0
-        for (d in ADAPT_DAYS downTo 1) {                          // oldest completed day first
-            val dayStart = now - d * DAY_MS
-            val dayEnd = dayStart + DAY_MS
-            val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(dayStart, dayEnd, true)
-            if (bg.size < 96) continue                            // need ~8 h of CGM to trust the day
-            val gsMmol = bg.map { it.value / MGDL_PER_MMOL }
-            val meanG = gsMmol.average()
-            val minG = gsMmol.min()
-            val tbrFrac = gsMmol.count { it < 3.9 }.toDouble() / gsMmol.size
-            aapsLogger.debug(LTag.APS, "HovorkaMPC 2d " + adapter.endOfDay(meanEnactedBasalUhr(profile, dayStart, dayEnd), meanG, tbrFrac, minG))
-            folded++
+        // LOCAL day, not `now / DAY_MS`: that is a UTC day index, so the recompute landed at local noon.
+        val tz = java.util.TimeZone.getDefault()
+        val dayKey = (now + tz.getOffset(now)) / DAY_MS
+        if (dayKey != adaptCacheDay) {
+            val adapter = TddAdapterV2(weightKg, targetMmol = targetMmol)
+            // Ledger over the trailing BASELINE_FROM days, oldest first. A day with under ~8 h of CGM is
+            // not scoreable and is dropped rather than guessed at.
+            val ledger = (TddAdapterV2.BASELINE_FROM downTo 1).map { d ->
+                val dayStart = now - d * DAY_MS
+                val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(dayStart, dayStart + DAY_MS, true)
+                if (bg.size < 96) null
+                else {
+                    val gsMmol = bg.map { it.value / MGDL_PER_MMOL }
+                    TddAdapterV2.Day(
+                        tddU = dailyInsulinU(profile, dayStart, dayStart + DAY_MS),
+                        meanG = gsMmol.average(), minG = gsMmol.min(),
+                        tbrFrac = gsMmol.count { it < 3.9 }.toDouble() / gsMmol.size)
+                }
+            }
+            val reason = adapter.foldTrailing(ledger, ADAPT_DAYS)
+            if (reason.isNotEmpty()) aapsLogger.debug(LTag.APS, "HovorkaMPC 2d $reason")
+            adaptCacheGain = adapter.gain
+            adaptCacheDay = dayKey
+            aapsLogger.debug(LTag.APS, "HovorkaMPC 2d gain=%.3f (%d scoreable days) → operating basal scales the PROFILE curve"
+                .format(adaptCacheGain, ledger.count { it != null }))
         }
-        adaptCacheBasalUhr = if (folded > 0) adapter.operatingBasalUhr else profileBasalUhr
-        adaptCacheDay = dayKey
-        aapsLogger.debug(LTag.APS, "HovorkaMPC 2d operating basal: profile=%.3f → adapted=%.3f U/hr (%d days)".format(profileBasalUhr, adaptCacheBasalUhr, folded))
-        return adaptCacheBasalUhr
+        // The GAIN is the daily quantity; the operating point still tracks the profile's blocks.
+        return (profileBasalUhr * adaptCacheGain).coerceIn(0.0, maxBasalUhr)
+    }
+
+    /** Total insulin delivered in [start,end): enacted basal plus boluses — the decoded TDD, not basal alone. */
+    private fun dailyInsulinU(profile: Profile, start: Long, end: Long): Double {
+        val basalU = meanEnactedBasalUhr(profile, start, end) * (end - start) / 3_600_000.0
+        // PRIMING never reaches the patient (matches TddCalculatorImpl). SMB is loop output and so is a
+        // small self-referential component, but it is insulin delivered and the decoded ledger counts it.
+        val bolusU = persistenceLayer.getBolusesFromTimeToTime(start, end, true)
+            .filter { it.type != BS.Type.PRIMING }
+            .sumOf { it.amount }
+        return basalU + bolusU
     }
 
     /** Time-weighted mean enacted basal (U/hr) over [start,end), honouring active temp basals. */

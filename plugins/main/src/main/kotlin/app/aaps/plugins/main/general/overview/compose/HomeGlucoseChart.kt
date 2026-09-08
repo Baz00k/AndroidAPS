@@ -108,8 +108,24 @@ private fun DrawScope.drawChart(
     }
     measurer.label(this, fmt(gHi, 0), leftPad - 4.dp.toPx(), y(gHi) + 4.dp.toPx(), axisStyle, alignEnd = true)
 
+    // ---- raw scatter: every sensor reading, under the trace ----
+    // Only present on a dense (1-minute) source. Kept deliberately faint and drawn UNDER the
+    // trace: the real spread stays visible — compression lows, early-wear instability, a failing
+    // sensor all show up here — while the line stays readable. Smoothing the trace itself would
+    // hide exactly the signal you want when something is wrong.
+    if (d.hasDenseScatter) {
+        val r = 1.dp.toPx()
+        d.readings.forEach { p ->
+            drawCircle(
+                color = colors.textOnSurfaceStrong.copy(alpha = 0.28f),
+                radius = r,
+                center = Offset(x(p.time), y(p.value))
+            )
+        }
+    }
+
     // ---- area under the trace ----
-    val pts = d.readings
+    val pts = d.trace
     if (pts.size > 1) {
         val area = Path().apply {
             moveTo(x(pts.first().time), gTop + gH)

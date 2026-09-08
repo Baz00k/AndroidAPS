@@ -17,7 +17,6 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.nsclient.NSSettingsStatus
 import app.aaps.core.interfaces.overview.Overview
 import app.aaps.core.interfaces.overview.OverviewData
-import app.aaps.core.interfaces.overview.OverviewMenus
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBaseWithPreferences
 import app.aaps.core.interfaces.plugin.PluginDescription
@@ -51,7 +50,6 @@ import app.aaps.core.validators.preferences.AdaptiveIntentPreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
 import app.aaps.core.validators.preferences.AdaptiveUnitPreference
 import app.aaps.plugins.main.R
-import app.aaps.plugins.main.general.overview.keys.OverviewStringKey
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
 import app.aaps.plugins.main.general.overview.notifications.receivers.DismissNotificationReceiver
@@ -72,7 +70,6 @@ class OverviewPlugin @Inject constructor(
     private val rxBus: RxBus,
     private val aapsSchedulers: AapsSchedulers,
     private val overviewData: OverviewData,
-    private val overviewMenus: OverviewMenus,
     private val context: Context,
     private val constraintsChecker: ConstraintsChecker,
     private val uiInteraction: UiInteraction,
@@ -91,8 +88,7 @@ class OverviewPlugin @Inject constructor(
         .shortName(R.string.overview_shortname)
         .preferencesId(PluginDescription.PREFERENCE_SCREEN)
         .description(R.string.description_overview),
-    ownPreferences = listOf(OverviewStringKey::class.java),
-    aapsLogger, rh, preferences
+    aapsLogger = aapsLogger, rh = rh, preferences = preferences
 ), Overview {
 
     private var disposable: CompositeDisposable = CompositeDisposable()
@@ -102,7 +98,6 @@ class OverviewPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         registerLocalBroadcastReceiver()
-        overviewMenus.loadGraphConfig()
         overviewData.initRange()
 
         notificationStore.createNotificationChannel()
@@ -160,6 +155,8 @@ class OverviewPlugin @Inject constructor(
             .put(IntKey.OverviewIageCritical, preferences)
             .put(IntKey.OverviewSageWarning, preferences)
             .put(IntKey.OverviewSageCritical, preferences)
+            .put(IntKey.OverviewSensorLifeDays, preferences)
+            .put(IntKey.OverviewSensorWarmupMinutes, preferences)
             .put(IntKey.OverviewSbatWarning, preferences)
             .put(IntKey.OverviewSbatCritical, preferences)
             .put(IntKey.OverviewBageWarning, preferences)
@@ -190,6 +187,8 @@ class OverviewPlugin @Inject constructor(
             .store(IntKey.OverviewIageCritical, preferences)
             .store(IntKey.OverviewSageWarning, preferences)
             .store(IntKey.OverviewSageCritical, preferences)
+            .store(IntKey.OverviewSensorLifeDays, preferences)
+            .store(IntKey.OverviewSensorWarmupMinutes, preferences)
             .store(IntKey.OverviewSbatWarning, preferences)
             .store(IntKey.OverviewSbatCritical, preferences)
             .store(IntKey.OverviewBageWarning, preferences)
@@ -287,6 +286,8 @@ class OverviewPlugin @Inject constructor(
                 }
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSageWarning, title = R.string.statuslights_sage_warning))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSageCritical, title = R.string.statuslights_sage_critical))
+                addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSensorLifeDays, title = R.string.sensor_life_days))
+                addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSensorWarmupMinutes, title = R.string.sensor_warmup_minutes))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSbatWarning, title = R.string.statuslights_sbat_warning))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewSbatCritical, title = R.string.statuslights_sbat_critical))
                 addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.OverviewResWarning, title = R.string.statuslights_res_warning))
