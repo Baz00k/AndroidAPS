@@ -99,6 +99,11 @@ class CapturedStatusProtocolTest {
         assertEquals(0, command.activeTbrPercent)
         assertEquals(59, command.tbrRemainingMinutes)
         assertEquals(3, command.batteryBars)
+        val state = YpsoPumpState().apply { elapsedRealtime = { 1000L } }
+        state.publishStatus(command.reservoirUnits, command.batteryPercent, command.isSuspended, command.activeTbrPercent, 5000L, command.batteryBars)
+        assertEquals(0, state.activeTbrPercent)
+        assertFalse(state.isSuspended)
+        assertEquals(60, state.mappedBatteryPercent)
     }
 
     @Test

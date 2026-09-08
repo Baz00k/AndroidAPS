@@ -43,7 +43,7 @@ class YpsoPumpFragment : DaggerFragment() {
                 (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
                 context.getSharedPreferences("ypso_ble_state", android.content.Context.MODE_PRIVATE).getBoolean("ypso_protocol_capture", false) &&
                 commandQueue.performing() == null && commandQueue.size() == 0)
-                commandQueue.readStatus("YpsoPump bench protocol capture", null)
+                commandQueue.readStatus(rh.gs(R.string.ypso_protocol_capture_reason), null)
             handler.postDelayed(this, 5_000)
         }
     }

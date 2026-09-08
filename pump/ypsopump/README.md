@@ -10,10 +10,11 @@ writes are restricted to the access-authentication handshake (**AUTH-only**).
 
 After a successful encrypted status read, the UI shows reservoir values and battery percent.
 The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent.
-Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
+Connection state is also shown. Status fields have bench evidence on firmware V05.00.52;
+see the [capability matrix](docs/status-protocol.md) for the exact publication boundary:
 
-- delivery mode is not shown because its interpretation is not validated;
-- battery percent is bars × 20 as reported by the pump;
+- running and Stop are the observed operating states; other mode values reject the status;
+- battery percent is a coarse display mapping from reported bars, not a measured percentage;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
@@ -51,7 +52,11 @@ Firmware and field observations are recorded in [the status protocol documentati
 
 ## Current limitations
 
-- Firmware identity and the status protocol are not qualified.
+- Firmware V05.00.52 is bench-tested on one pump and Android device/OS. Newer firmware is
+  eligible by compatibility policy, not individually validated; older or malformed firmware
+  and unsupported status layouts fail closed.
+- Status reads also require the observed control-service protocol `1.3` and captured
+  containing-service mapping; changed or missing control protocols are unsupported.
 - Protected provisioning and durable unavailable-state reporting are not implemented.
 - Therapy remains blocked unless a future artifact is independently qualified for it.
 

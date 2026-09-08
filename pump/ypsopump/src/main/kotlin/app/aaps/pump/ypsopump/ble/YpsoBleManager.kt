@@ -52,6 +52,9 @@ class YpsoBleManager @Inject constructor(
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
         private const val READ_ONLY_BLOCKED_STATUS = -3
+        private val SUPPORTED_CONTROL_SERVICE_VERSION = "1.3\u0000".toByteArray(Charsets.US_ASCII)
+        private val SERVICE_CONTROL: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
+        private val SERVICE_EXTREAD: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
         private val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
         private val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
         private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
@@ -63,6 +66,7 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
         private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
+        private val CHAR_CONTROL_VERSION: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
         // Provisional control-notification UUID. Non-auth write transport is unsupported in this artifact.
         private val CHAR_CTRL_NOTIFY: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
         private val AUTH_SALT = byteArrayOf(
@@ -252,10 +256,9 @@ class YpsoBleManager @Inject constructor(
         }
         readIdentity(originGatt) {
             if (!attempt.isActive) return@readIdentity
-            // Diagnostic bolus capture stays behind the firmware gate: unknown versions get
-            // raw diagnostics only, never parsed measurements.
-            val eligible = YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum == true &&
-                YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum == true
+            // Diagnostic bolus capture stays behind the firmware + control-protocol gate:
+            // unknown versions get raw diagnostics only, never parsed measurements.
+            val eligible = hasCompatibleStatusProtocol()
             if (protocolCaptureEnabled && eligible && findChar(originGatt, CHAR_BOLUS_STATUS) != null)
                 readBolusStatus { readStatusInternal(originGatt, attempt, onDone) }
             else readStatusInternal(originGatt, attempt, onDone)
@@ -282,7 +285,7 @@ class YpsoBleManager @Inject constructor(
             "base-service" to "669a0c20-0008-969e-e211-fcbee23b7bc5",
             "settings-service" to "669a0c20-0008-969e-e211-fcbee33b7bc5",
             "history-service" to "669a0c20-0008-969e-e211-fcbee43b7bc5",
-            "control-service" to "669a0c20-0008-969e-e211-fcbee08b7bc5"
+            "control-service" to CHAR_CONTROL_VERSION.toString()
         )
         fun step(index: Int) {
             if (finished) return
@@ -301,8 +304,14 @@ class YpsoBleManager @Inject constructor(
                 if (owner === gatt && status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
                     if (name == "serial") pumpState.serialNumber = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
                     // Service versions are dotted ASCII ("1.1\0"); only master/supervisor are firmware.
-                    val serviceVersion = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
-                        .takeIf { it.matches(Regex("[0-9]+\\.[0-9]+")) }.orEmpty()
+                    // Control is consumed by the status decoder, so accept only the independently
+                    // observed canonical wire value. Other service versions remain diagnostic only.
+                    val serviceVersion = if (name == "control-service") {
+                        "1.3".takeIf { bytes.contentEquals(SUPPORTED_CONTROL_SERVICE_VERSION) }.orEmpty()
+                    } else {
+                        bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                            .takeIf { it.matches(Regex("[0-9]+\\.[0-9]+")) }.orEmpty()
+                    }
                     when (name) {
                         "base-service"     -> pumpState.baseServiceVersion = serviceVersion
                         "settings-service" -> pumpState.settingsServiceVersion = serviceVersion
@@ -580,9 +589,20 @@ class YpsoBleManager @Inject constructor(
     }
 
     private fun findChar(g: BluetoothGatt, uuid: UUID): BluetoothGattCharacteristic? {
+        val observedService = when (uuid) {
+            CHAR_STATUS, CHAR_BOLUS_STATUS, CHAR_CONTROL_VERSION -> SERVICE_CONTROL
+            CHAR_EXTREAD -> SERVICE_EXTREAD
+            else         -> null
+        }
+        if (observedService != null) return g.getService(observedService)?.getCharacteristic(uuid)
         for (s in g.services) s.getCharacteristic(uuid)?.let { return it }
         return null
     }
+
+    private fun hasCompatibleStatusProtocol(): Boolean =
+        YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum == true &&
+            YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum == true &&
+            pumpState.controlServiceVersion == "1.3"
 
     private fun authPassword(mac: String): ByteArray {
         val macBytes = mac.replace(":", "").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -607,9 +627,8 @@ class YpsoBleManager @Inject constructor(
                     if (!status.success) throw IllegalArgumentException(
                         "status decode failed (${payload.size}B) raw=${payload.joinToString("") { "%02x".format(it) }}"
                     )
-                    if (YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum != true ||
-                        YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum != true)
-                        throw IllegalArgumentException("Unknown or unsupported pump firmware")
+                    if (!hasCompatibleStatusProtocol())
+                        throw IllegalArgumentException("Unknown or unsupported pump firmware/control protocol")
                     status to payload
                 }.onFailure { failure = it }.getOrNull()
                 completionClaimed = attempt.tryComplete()
@@ -1069,6 +1088,16 @@ class YpsoBleManager @Inject constructor(
                 if (!ownsGattLocked(g)) return
                 if (pumpState.connectionState != ConnectionState.DISCOVERING) return
                 if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "service discovery failed ($status)"
+                g.services
+                    .mapNotNull { service ->
+                        val customCharacteristics = service.characteristics
+                            .map { it.uuid }
+                            .filter { it.toString().startsWith("669a0c20", ignoreCase = true) }
+                        customCharacteristics.takeIf { it.isNotEmpty() }?.let { service.uuid to it }
+                    }
+                    .forEach { (serviceUuid, characteristicUuids) ->
+                        aapsLogger.info(LTag.PUMP, "YpsoPump discovered service $serviceUuid custom characteristics=$characteristicUuids")
+                    }
                 val auth = findChar(g, CHAR_AUTH) ?: return@synchronized "AUTH characteristic not found"
                 if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
                     return@synchronized "authentication write blocked by safety policy"

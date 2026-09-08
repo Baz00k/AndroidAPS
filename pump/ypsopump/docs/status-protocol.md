@@ -7,15 +7,19 @@ Newer firmware is a compatibility assumption based on the reported CamAPS minimu
 user report of successful operation on a newer pump; it is not evidence that every version
 has been tested. Firmware eligibility and validation of a received status layout are separate
 checks. A service-version string must never stand in for pump firmware.
+Trusted status and the debug capture path additionally require the observed control
+protocol version, canonical ASCII `1.3\0`. Missing, malformed or changed control versions
+fail closed. Settings/history versions do not gate these control-status reads.
 
 ## Status capability matrix (V05.00.52, bench pump)
 
-| Published field | Wire source | Trusted states | Fails closed on |
+| Field / publication boundary | Wire source | Observed states | Fails closed on |
 |---|---|---|---|
 | Reservoir (U) | System status @1, u32 LE centi-units | Running, stopped, TBR, bolus; 0–17129 observed | `0xFFFFFFFF` sentinel (no/empty cartridge), > 20000, wrong length |
 | Battery (%) | System status @5, bars 0–5, shown as bars × 20 | Bars 0, 2, 3, 5 against display; 100% on full | Bars > 5, wrong length |
-| Suspended | System status @0 == 3 | Stop verified twice | Any other mode value |
-| TBR percent / remaining | System status @10/@14, u32 LE | 130% (~2.5 h), 0% (1 h), cancel transition, expiry by cancel | Percent > 500, remaining > 1440 or > total-equivalent, wrong length |
+| Suspended | System status @0 == 3 | Stop verified twice; mode 10 running | Mode outside 3/10 |
+| TBR percent (published) | System status @10, u32 LE | 130% (~2.5 h), 0% (1 h), cancellation to 100% | Percent > 500, wrong length |
+| TBR remaining (decoder diagnostic only) | System status @14, u32 LE minutes | Countdown and cancellation to 0; natural expiry unobserved | Remaining > 1440, wrong length |
 | Basal rate (diagnostic) | System status @6, u32 LE centi-units/h | Profile A/B rates, TBR scalings, 0 stopped/0% TBR | > 40.00 U/h, nonzero while stopped |
 | Bolus activity (diagnostic) | Bolus status, 42 B | Immediate active, mixed active, square active, idle | Non-42 B, unknown codes, injected > total, elapsed > total |
 | Firmware identity | Master + supervisor characteristics | `V05.00.52` strict `Vxx.xx.xx\0` match, minimum gate | Malformed, absent, or below minimum → no trusted status |
@@ -24,8 +28,10 @@ Not published: serial (characteristic absent), active profile identity, measured
 terminal bolus outcomes (idle is ambiguous), delivery-halting alarms beyond the cartridge
 sentinel (hypothesized same sentinel, unconfirmed).
 
-Rejected responses never mutate session counters (validated before commit); durable
-counter ownership and session transitions belong to step 05.
+Responses rejected by envelope, AEAD, counter-tail or counter-freshness validation do not
+mutate session counters. Later CRC/schema/firmware rejection publishes no status; an
+authenticated fresh response can still advance counters. Durable counter ownership and
+session transitions remain separate work.
 
 ## Sources and unresolved differences
 
@@ -179,7 +185,28 @@ absent; software revision (0x2A28) is binary `00 02 02 01` and is not pump firmw
 Idle bolus status reassembles from six frames into 96 bytes, decrypting to 42 zero status
 bytes plus two integrity bytes and the counter tail.
 
-Containing service UUIDs,
-bolus-status integrity/layout, exact field ranges and enums, zero-total framing, physical
-stopped/paused/bolusing/supply/fault cases, and independent publication fixtures are pending.
-The initial observations alone do not qualify the complete schema or all firmware versions.
+### Containing-service discovery
+
+On 2026-09-08 at 16:46:37, the non-debuggable FullLoop metadata-logging build observed:
+
+| Service UUID | Relevant characteristics |
+|---|---|
+| `fb349b5f-8000-0080-0010-0000feda0000` | System status `669a0c20-0008-969e-e211-fcbee48b7bc5`, bolus status `669a0c20-0008-969e-e211-fcbee28b7bc5`, control version `669a0c20-0008-969e-e211-fcbee08b7bc5` |
+| `fb349b5f-8000-0080-0010-0000feda0002` | EXTREAD `669a0c20-0008-969e-e211-fcff000000ff` |
+
+The five discovery-metadata log lines have SHA-256
+`7cb54cf4e16210be416efc5eb00128e91cca078af5eff788658d0726e84c9cfa`.
+The capture APK SHA-256 is
+`003c5af7ca129ec9d00499455bede413807e042d139ac0ee0fee59ffc83d2645`.
+It was built from the working review-fix candidate after `78e9c4cc57`, before service-scoped
+lookup was added. Normal status resumed on the same pump: 166.52 U, 3 battery bars,
+0.50 U/h, mode 10. This observation establishes the mapping; it is not final-artifact
+acceptance of the subsequent lookup gate.
+
+Remaining evidence gaps are exact physical range limits, unobserved alarm/terminal-bolus
+enums, natural TBR expiry, and zero-total framing semantics (zero-total is rejected).
+This pump has Stop, not Pause. Stop, active boluses and no/empty-cartridge cases have the
+observations above; other fault states remain unobserved. Independent real-crypto fixtures
+cover stopped and zero-TBR publication as well as decoder/rejection cases. Basal rate and
+TBR remaining minutes are decoder diagnostics, not published framework measurements.
+Evidence covers one pump firmware and one Android device/OS, not all eligible versions.

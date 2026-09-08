@@ -72,25 +72,38 @@ class YpsoStatusIntegrationTest {
             var readSucceeds = true
             fun authenticate() {
                 val gatt: BluetoothGatt = mock()
-                val service: BluetoothGattService = mock()
+                val identityService: BluetoothGattService = mock()
+                val controlService: BluetoothGattService = mock()
                 val auth: BluetoothGattCharacteristic = mock()
                 val status: BluetoothGattCharacteristic = mock()
                 val authUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
                 val statusUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
+                val controlServiceUuid = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
+                whenever(identityService.uuid).thenReturn(UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000"))
+                whenever(controlService.uuid).thenReturn(controlServiceUuid)
                 whenever(auth.uuid).thenReturn(authUuid)
                 whenever(status.uuid).thenReturn(statusUuid)
-                whenever(service.getCharacteristic(authUuid)).thenReturn(auth)
-                whenever(service.getCharacteristic(statusUuid)).thenReturn(status)
-                whenever(gatt.services).thenReturn(listOf(service))
+                whenever(identityService.getCharacteristic(authUuid)).thenReturn(auth)
+                whenever(controlService.getCharacteristic(statusUuid)).thenReturn(status)
+                whenever(gatt.getService(controlServiceUuid)).thenReturn(controlService)
+                whenever(gatt.services).thenReturn(listOf(identityService, controlService))
                 for (suffix in listOf("fcbeb0147bc5", "fcbeb1147bc5")) {
                     val uuid = UUID.fromString("669a0c20-0008-969e-e211-$suffix")
                     val version: BluetoothGattCharacteristic = mock()
                     whenever(version.uuid).thenReturn(uuid)
-                    whenever(service.getCharacteristic(uuid)).thenReturn(version)
+                    whenever(identityService.getCharacteristic(uuid)).thenReturn(version)
                     whenever(gatt.readCharacteristic(version)).thenAnswer {
                         manager.gattCallback.onCharacteristicRead(gatt, version, "V05.00.52\u0000".toByteArray(), 0)
                         true
                     }
+                }
+                val controlVersionUuid = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
+                val controlVersion: BluetoothGattCharacteristic = mock()
+                whenever(controlVersion.uuid).thenReturn(controlVersionUuid)
+                whenever(controlService.getCharacteristic(controlVersionUuid)).thenReturn(controlVersion)
+                whenever(gatt.readCharacteristic(controlVersion)).thenAnswer {
+                    manager.gattCallback.onCharacteristicRead(gatt, controlVersion, "1.3\u0000".toByteArray(), 0)
+                    true
                 }
                 var legacy = byteArrayOf()
                 whenever(auth.setValue(any<ByteArray>())).thenAnswer { legacy = it.getArgument<ByteArray>(0).copyOf(); true }
