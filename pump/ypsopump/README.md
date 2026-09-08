@@ -8,10 +8,11 @@
 The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT
 writes are restricted to the access-authentication handshake (**AUTH-only**).
 
-After a successful encrypted status read, the UI can show provisional reservoir and battery values.
+After a successful encrypted status read, the UI can show reservoir values.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
 - delivery mode is not shown because its interpretation is not validated;
+- battery percentage is unavailable: the old decoder incorrectly displayed the basal-rate field as battery percentage;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
@@ -45,6 +46,7 @@ A successful BLE connection or MD5 authentication ACK is **not a verified status
 accepted encrypted status response provides displayed measurements.
 
 Implementation and verification details are in [the driver lifecycle documentation](docs/status-lifecycle.md).
+Firmware and field observations are recorded in [the status protocol documentation](docs/status-protocol.md).
 
 ## Current limitations
 

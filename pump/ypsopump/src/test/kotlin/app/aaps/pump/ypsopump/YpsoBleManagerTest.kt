@@ -61,7 +61,7 @@ class YpsoBleManagerTest {
         assertEquals(listOf(true), results)
         assertTrue(pumpState.hasVerifiedStatus)
         assertEquals(5.5, pumpState.reservoirUnits)
-        assertEquals(85, pumpState.batteryPercent)
+        assertEquals(null, pumpState.statusSnapshot?.batteryPercent)
         verify(sessionCrypto).decrypt(byteArrayOf(0x55))
     }
 
@@ -190,9 +190,9 @@ class YpsoBleManagerTest {
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x13, 0x01), BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23, 0x02), BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23, 0x02), BluetoothGatt.GATT_SUCCESS)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x13) + ByteArray(19) { 1 }, BluetoothGatt.GATT_SUCCESS)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23) + ByteArray(19) { 2 }, BluetoothGatt.GATT_SUCCESS)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23) + ByteArray(19) { 2 }, BluetoothGatt.GATT_SUCCESS)
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x33, 0x03), BluetoothGatt.GATT_SUCCESS)
 
         assertEquals(listOf(false), results)
@@ -207,7 +207,7 @@ class YpsoBleManagerTest {
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12, 0x01), BluetoothGatt.GATT_SUCCESS)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12) + ByteArray(19) { 1 }, BluetoothGatt.GATT_SUCCESS)
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23, 0x02), BluetoothGatt.GATT_SUCCESS)
 
         assertEquals(listOf(false), results)
@@ -343,6 +343,16 @@ class YpsoBleManagerTest {
         whenever(gatt.services).thenReturn(listOf(service))
         whenever(gatt.readCharacteristic(status)).thenReturn(readDispatched)
         whenever(gatt.readCharacteristic(extRead)).thenReturn(readDispatched)
+        for (suffix in listOf("fcbeb0147bc5", "fcbeb1147bc5")) {
+            val uuid = UUID.fromString("669a0c20-0008-969e-e211-$suffix")
+            val version: BluetoothGattCharacteristic = mock()
+            whenever(version.uuid).thenReturn(uuid)
+            whenever(service.getCharacteristic(uuid)).thenReturn(version)
+            whenever(gatt.readCharacteristic(version)).thenAnswer {
+                manager.gattCallback.onCharacteristicRead(gatt, version, "V05.00.52\u0000".toByteArray(), 0)
+                true
+            }
+        }
         ownGatt(gatt, ConnectionState.CONNECTED)
         return GattFixture(gatt, status, extRead)
     }
@@ -462,7 +472,7 @@ class YpsoBleManagerTest {
     @Test
     fun `legacy multi frame bytes are owned until reassembly`() {
         val fixture = connectedGatt()
-        val first = byteArrayOf(0x12, 0x41)
+        val first = byteArrayOf(0x12) + ByteArray(19) { 0x41 }
         whenever(fixture.status.value).thenReturn(first)
         whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
         val results = mutableListOf<Boolean>()
@@ -471,7 +481,7 @@ class YpsoBleManagerTest {
         first[1] = 0x7f
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
         assertEquals(listOf(true), results)
-        verify(sessionCrypto).decrypt(byteArrayOf(0x41, 0x42))
+        verify(sessionCrypto).decrypt(ByteArray(19) { 0x41 } + byteArrayOf(0x42))
     }
 
     @Test
@@ -499,12 +509,12 @@ class YpsoBleManagerTest {
         val statuses = mutableListOf<Boolean>()
         val diagnostics = mutableListOf<Int?>()
         manager.readStatus(statuses::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12, 0x41), 0)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12) + ByteArray(19) { 0x41 }, 0)
         manager.readEventCount(diagnostics::add)
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
         assertEquals(listOf<Int?>(null), diagnostics)
         assertEquals(listOf(true), statuses)
-        verify(sessionCrypto).decrypt(byteArrayOf(0x41, 0x42))
+        verify(sessionCrypto).decrypt(ByteArray(19) { 0x41 } + byteArrayOf(0x42))
     }
 
     @Test
@@ -580,9 +590,10 @@ class YpsoBleManagerTest {
 
     private fun validStatusPayload(): ByteArray {
         val body = ByteArray(18)
+        body[0] = 0x0a
         body[1] = 0x26
         body[2] = 0x02
-        body[5] = 0x01
+        body[5] = 0x02
         body[6] = 0x55
         body[10] = 0x64
         return YpsoCrc.appendCrc(body)

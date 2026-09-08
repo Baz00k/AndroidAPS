@@ -16,7 +16,7 @@ class YpsoPumpState @Inject constructor() {
         const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
     }
 
-    data class StatusSnapshot(val reservoirUnits: Double, val batteryPercent: Int, val acquiredAt: Long, val elapsedAt: Long)
+    data class StatusSnapshot(val reservoirUnits: Double, val batteryPercent: Int?, val acquiredAt: Long, val elapsedAt: Long)
 
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     @Volatile private var sample: StatusSnapshot? = null
@@ -75,7 +75,7 @@ class YpsoPumpState @Inject constructor() {
     @Synchronized
     fun publishStatus(
         reservoirUnits: Double,
-        batteryPercent: Int,
+        batteryPercent: Int?,
         isSuspended: Boolean,
         activeTbrPercent: Int,
         timestamp: Long

@@ -21,6 +21,7 @@ import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.comm.commands.TbrCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -249,8 +250,62 @@ class YpsoBleManager @Inject constructor(
             if (attempt.tryComplete()) onDone(false)
             return attempt
         }
-        readStatusInternal(originGatt, attempt, onDone)
+        readIdentity(originGatt) {
+            if (!attempt.isActive) return@readIdentity
+            if (findChar(originGatt, CHAR_BOLUS_STATUS) != null)
+                readBolusStatus { readStatusInternal(originGatt, attempt, onDone) }
+            else readStatusInternal(originGatt, attempt, onDone)
+        }
         return attempt
+    }
+
+    private fun readIdentity(gatt: BluetoothGatt, done: () -> Unit) {
+        pumpState.firmwareVersion = ""
+        pumpState.masterVersion = ""
+        pumpState.supervisorVersion = ""
+        pumpState.serialNumber = ""
+        var finished = false
+        val candidates = listOf(
+            "serial" to "00002a25-0000-1000-8000-00805f9b34fb",
+            "firmware" to "00002a26-0000-1000-8000-00805f9b34fb",
+            "software" to "00002a28-0000-1000-8000-00805f9b34fb",
+            "master" to "669a0c20-0008-969e-e211-fcbeb0147bc5",
+            "supervisor" to "669a0c20-0008-969e-e211-fcbeb1147bc5",
+            "base-service" to "669a0c20-0008-969e-e211-fcbee23b7bc5",
+            "settings-service" to "669a0c20-0008-969e-e211-fcbee33b7bc5",
+            "history-service" to "669a0c20-0008-969e-e211-fcbee43b7bc5",
+            "control-service" to "669a0c20-0008-969e-e211-fcbee08b7bc5"
+        )
+        fun step(index: Int) {
+            if (finished) return
+            if (bluetoothGatt !== gatt || index == candidates.size) { finished = true; done(); return }
+            val (name, address) = candidates[index]
+            val uuid = UUID.fromString(address)
+            if (findChar(gatt, uuid) == null) {
+                aapsLogger.info(LTag.PUMP, "YpsoPump identity $name absent")
+                step(index + 1)
+                return
+            }
+            readOp(gatt, uuid) { owner, bytes, status ->
+                if (finished) return@readOp
+                if (bluetoothGatt !== gatt) { finished = true; done(); return@readOp }
+                aapsLogger.info(LTag.PUMP, "YpsoPump identity $name status=$status raw=${if (name == "serial") "redacted" else bytes?.joinToString("") { "%02x".format(it) }}")
+                if (owner === gatt && status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
+                    if (name == "serial") pumpState.serialNumber = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                    val version = YpsoFirmwareVersion.fromWire(bytes)?.toString().orEmpty()
+                    if (name == "master") {
+                        pumpState.masterVersion = version
+                        pumpState.firmwareVersion = version
+                    }
+                    if (name == "supervisor") pumpState.supervisorVersion = version
+                }
+                if (owner === gatt && status == BluetoothGatt.GATT_SUCCESS) step(index + 1) else {
+                    finished = true
+                    done()
+                }
+            }
+        }
+        step(0)
     }
 
     class StatusReadAttempt internal constructor() {
@@ -527,6 +582,9 @@ class YpsoBleManager @Inject constructor(
                     val payload = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid status CRC")
                     val status = StatusCommand().apply { decode(payload) }
                     if (!status.success) throw IllegalArgumentException("status decode failed (${payload.size}B)")
+                    if (YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum != true ||
+                        YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum != true)
+                        throw IllegalArgumentException("Unknown or unsupported pump firmware")
                     status to payload
                 }.onFailure { failure = it }.getOrNull()
                 completionClaimed = attempt.tryComplete()
@@ -542,7 +600,7 @@ class YpsoBleManager @Inject constructor(
                     )
                     // DIAG: log the decoded delivery mode + isSuspended + raw payload so a pump-side Stop can be
                     // seen (validate DeliveryMode.STOPPED/PAUSED against real firmware; raw shows which byte moves).
-                    aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U battery=${status.batteryPercent}% deliveryMode=${status.deliveryMode}(${status.deliveryModeName}) suspended=${status.isSuspended} raw=${payload.joinToString("") { "%02x".format(it) }}")
+                    aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U batteryBars=${status.batteryBars} basal=${status.basalRate}U/h mode=${status.deliveryMode}(${status.deliveryModeName}) suspended=${status.isSuspended} raw=${payload.joinToString("") { "%02x".format(it) }}")
                 }.onFailure { failure = it }.isSuccess
             }
             if (!completionClaimed) return@readMultiframe
@@ -651,9 +709,9 @@ class YpsoBleManager @Inject constructor(
         readMultiframe(CHAR_BOLUS_STATUS, onFailure = { onResult(null) }) { _, f ->
             val cmd = runCatching {
                 val body = sessionCrypto.decrypt(f)
-                val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
+                val p = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid bolus-status CRC")
                 aapsLogger.info(LTag.PUMP, "YpsoPump bolus-status raw (${p.size}B): ${p.joinToString("") { "%02x".format(it) }}")
-                BolusCommand(0.0).apply { decode(p) }
+                BolusCommand(0.0).apply { decode(p); require(success) { "invalid bolus-status layout" } }
             }.getOrNull()
             onResult(cmd)
         }

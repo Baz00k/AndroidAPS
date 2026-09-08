@@ -60,7 +60,14 @@ class BolusCommand(
     }
 
     override fun decode(data: ByteArray) {
-        if (data.size >= 13) {
+        success = false
+        if (data.size == 42) {
+            val states = setOf(STATUS_IDLE, STATUS_DELIVERING, STATUS_CANCELLED, STATUS_COMPLETED)
+            if ((data[0].toInt() and 0xFF) !in states || (data[13].toInt() and 0xFF) !in states) return
+            for ((injected, total) in listOf(5 to 9, 18 to 22, 26 to 30)) {
+                if (data.getUInt32(total) > MAX_BOLUS_X100 || data.getUInt32(injected) > data.getUInt32(total)) return
+            }
+            if (data.getUInt32(38) > 1440 || data.getUInt32(34) > data.getUInt32(38)) return
             // Immediate ("fast") block: status u8 @0 | seq u32 @1 | injected u32/100 @5 | total u32/100 @9
             bolusStatusCode = data[0].toInt() and 0xFF
             deliveredUnits = data.getUInt32(5) / 100.0

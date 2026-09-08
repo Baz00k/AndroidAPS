@@ -48,7 +48,7 @@ class YpsoFramingTest {
 
     @Test
     fun `rejects a duplicate callback frame in the next frame slot`() {
-        val first = byteArrayOf(0x13, 0x01)
+        val first = byteArrayOf(0x13) + ByteArray(19) { 1 }
 
         assertEquals(3, YpsoFraming.validateFrame(first, expectedFrame = 1))
         assertNull(YpsoFraming.validateFrame(first, expectedFrame = 2, expectedTotal = 3))

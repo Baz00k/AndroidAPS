@@ -80,7 +80,7 @@ class SessionCrypto @Inject constructor() {
     fun decrypt(blePayload: ByteArray): ByteArray {
         val key = sharedKey ?: throw IllegalStateException("No shared key set")
 
-        if (blePayload.size < NONCE_SIZE + TAG_SIZE) {
+        if (blePayload.size < NONCE_SIZE + TAG_SIZE + COUNTER_DATA_SIZE) {
             throw IllegalArgumentException("Payload too short: ${blePayload.size} bytes")
         }
 
@@ -122,7 +122,7 @@ class SessionCrypto @Inject constructor() {
             return plaintext.sliceArray(0 until plaintext.size - COUNTER_DATA_SIZE)
         }
 
-        return plaintext
+        throw IllegalArgumentException("Missing mandatory counter tail")
     }
 
     fun reset() {

@@ -651,7 +651,9 @@ class YpsoPumpPlugin @Inject constructor(
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
         return if (snapshot != null) {
-            rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, snapshot.batteryPercent)
+            if (snapshot.batteryPercent != null)
+                rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, snapshot.batteryPercent)
+            else rh.gs(R.string.ypsopump_short_status_reservoir, snapshot.reservoirUnits)
         } else {
             rh.gs(R.string.ypsopump_status_unavailable)
         }
