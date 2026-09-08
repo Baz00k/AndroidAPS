@@ -90,6 +90,13 @@ The capture app was a locally built FullDebug instrumentation candidate, not a f
 qualified artifact. Its decoder still logged the old incorrect labels; raw bytes and
 operator observations, not those labels, establish the corrections above.
 
+### Bench recovery
+
+Pump-side Bluetooth off during polling rejected the in-flight read immediately and a
+connect attempt hit the 8 s handshake deadline without hanging. With Bluetooth back on,
+the next cycle reconnected, re-authenticated and resumed successful reads within seconds;
+session counters survived (reads accepted, no re-key). No app restart needed.
+
 ### Local bench capture mode
 
 An explicit `ypso_protocol_capture` boolean in private `ypso_ble_state` preferences opts a
