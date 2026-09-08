@@ -44,22 +44,10 @@ These are separate security layers:
 A successful BLE connection or MD5 authentication ACK is **not a verified status read**. Only a completed,
 accepted encrypted status response provides displayed measurements.
 
-## Status lifecycle
-
-Connect, service discovery and access authentication each have an eight-second deadline. A failed read
-or abandoned attempt invalidates the current measurements. A normal queue-idle disconnect preserves the
-original sample time, but cannot extend its five-minute monotonic freshness budget. Reconnecting and
-changing the phone's wall clock do not refresh a sample. The driver tab refreshes its display every five
-seconds; Pump API consumers evaluate freshness when reading it.
-
-KeepAlive can request status reads. The profile-check API returns satisfied to avoid repeatedly queuing
-a blocked profile write; it does **not** verify equivalence with the pump's programmed profile. The
-status-only pump advertises no dosing capabilities and exposes zero base basal to prevent loop/SMB
-actuation. Authentication and a fresh status sample do not establish therapy readiness.
+Implementation and verification details are in [the driver lifecycle documentation](docs/status-lifecycle.md).
 
 ## Current limitations
 
-- Status lifecycle, write-boundary recording and freshness expiry are incomplete.
 - Firmware identity and the status protocol are not qualified.
 - Protected provisioning and durable unavailable-state reporting are not implemented.
 - Therapy remains blocked unless a future artifact is independently qualified for it.
