@@ -216,7 +216,8 @@ goes through `BolusWizard.confirmAndExecute` and the same constraint chain.
 
 Rewritten: Home (hero card, graph, actions), Bolus/Carb wizard, Loop control, Temp target, Profile switch,
 Actions & Careportal, Statistics, History timeline, Profile view and editor, Config Builder, preference
-screens, YpsoPump status, and around a dozen legacy dialogs.
+screens, YpsoPump and Medtrum pump status (the live pump's tab was the last screen still rendering as stock
+AAPS), and around a dozen legacy dialogs.
 
 The shared confirmation dialog went with them. `OKDialog` no longer builds a MaterialAlertDialog — it
 renders the design system's alert surface — so roughly forty-six call sites across the app moved over
