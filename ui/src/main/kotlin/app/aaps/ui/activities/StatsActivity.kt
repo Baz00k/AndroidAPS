@@ -21,10 +21,12 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.ui.R
 import app.aaps.ui.activities.stats.StatsScreen
+import app.aaps.ui.activities.stats.RangeBucket
 import app.aaps.ui.activities.stats.StatsUiState
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import java.util.Calendar
 import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.sqrt
@@ -75,11 +77,59 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
         return out
     }
 
+    /**
+     * Split readings into [slots] buckets and give each its own five-band percentage.
+     *
+     * Uses the SAME thresholds as the headline bar — the user's low/high marks, plus the clinical
+     * 54 / 250 mg/dL extremes — so a pattern bar and the number above it cannot tell different stories.
+     */
+    private fun bucket(
+        readings: List<Pair<Long, Double>>,
+        lowMark: Double,
+        highMark: Double,
+        slots: Int,
+        slotOf: (Calendar) -> Pair<Int, String>
+    ): List<RangeBucket> {
+        val counts = Array(slots) { IntArray(5) }
+        val labels = arrayOfNulls<String>(slots)
+        val cal = Calendar.getInstance()
+        readings.forEach { (ts, mgdl) ->
+            cal.timeInMillis = ts
+            val (i, label) = slotOf(cal)
+            if (i !in 0 until slots) return@forEach
+            labels[i] = label
+            val band = when {
+                mgdl < 54.0      -> 0
+                mgdl < lowMark   -> 1
+                mgdl <= highMark -> 2
+                mgdl <= 250.0    -> 3
+                else             -> 4
+            }
+            counts[i][band]++
+        }
+        return (0 until slots).map { i ->
+            val c = counts[i]
+            val n = c.sum()
+            fun p(v: Int) = if (n == 0) 0.0 else v.toDouble() / n * 100.0
+            RangeBucket(
+                label = labels[i] ?: "",
+                veryLow = p(c[0]), low = p(c[1]), inRange = p(c[2]), high = p(c[3]), veryHigh = p(c[4]),
+                readings = n
+            )
+        }
+    }
+
     private fun buildStats(days: Int): StatsUiState {
         val units = profileFunction.getUnits()
         val now = dateUtil.now()
         val from = now - days * 86_400_000L
-        val values = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).map { it.value }.filter { it > 0 }
+        val raw = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).filter { it.value > 0 }
+        // Dedupe per 5-minute bucket. xDrip double-broadcasts, so the table holds ~1.85x the real
+        // reading count — harmless for an overall percentage, but NOT for a by-hour view: if the
+        // duplication rate varies across the day (phone awake vs asleep) it would tilt exactly the
+        // pattern this screen exists to show.
+        val readings = raw.groupBy { it.timestamp / 300_000L }.values.map { g -> g.first().timestamp to g.map { it.value }.average() }
+        val values = readings.map { it.second }
         val avgMgdl = if (values.isNotEmpty()) values.average() else 0.0
         val sd = if (values.size > 1) sqrt(values.sumOf { (it - avgMgdl) * (it - avgMgdl) } / values.size) else 0.0
         val cv = if (avgMgdl > 0) sd / avgMgdl * 100 else 0.0
@@ -87,6 +137,14 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
 
         val lowMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
+        val byHour = bucket(readings, lowMark, highMark, 24) { cal -> cal.get(Calendar.HOUR_OF_DAY) to String.format(Locale.getDefault(), "%02d", cal.get(Calendar.HOUR_OF_DAY)) }
+        // Calendar numbers Sunday=1; shift so the week reads Mon..Sun, which is how a clinic report
+        // and most people's week are laid out.
+        val byWeekday = bucket(readings, lowMark, highMark, 7) { cal ->
+            val idx = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7
+            idx to arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[idx]
+        }
+
         val main = agg(tirCalculator.calculate(days.toLong(), lowMark, highMark))
         val ext = agg(tirCalculator.calculate(days.toLong(), 54.0, 250.0)) // 3.0 / 13.9 mmol clinical extremes
         val count = main[3].coerceAtLeast(1)
@@ -107,7 +165,9 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
             cv = if (cv > 0) String.format(Locale.getDefault(), "%.0f%%", cv) else "--",
             cvGood = cv in 0.1..36.0,
             avgTdd = tddU?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
-            carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--"
+            carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--",
+            byHour = byHour,
+            byWeekday = byWeekday
         )
     }
 
