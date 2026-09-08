@@ -657,10 +657,10 @@ class YpsoPumpPlugin @Inject constructor(
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
         return if (snapshot != null) {
-            if (snapshot.batteryPercent != null)
-                rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, snapshot.batteryPercent)
-            else if (snapshot.batteryBars != null)
-                rh.gs(R.string.ypsopump_short_status_bars, snapshot.reservoirUnits, snapshot.batteryBars)
+            // Framework-facing percent; bars stay internal (see batteryLevel mapping).
+            val battery = batteryLevel
+            if (battery != null)
+                rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, battery)
             else rh.gs(R.string.ypsopump_short_status_reservoir, snapshot.reservoirUnits)
         } else {
             rh.gs(R.string.ypsopump_status_unavailable)

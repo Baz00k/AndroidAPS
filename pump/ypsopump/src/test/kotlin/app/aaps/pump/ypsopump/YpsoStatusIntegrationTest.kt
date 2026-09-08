@@ -119,8 +119,7 @@ class YpsoStatusIntegrationTest {
             whenever(date.minOrSecAgo(eq(rh), any())).thenReturn("reading age")
             fun display() = buildPumpStatusState(state, mock(), date, rh)
             assertEquals(5.5, display().reservoir)
-            assertNull(display().battery)
-            assertEquals(2, display().batteryBars)
+            assertEquals(40, display().battery)
             plugin.disconnect("Queue empty")
             elapsed += 299_999
             assertEquals(acquired, plugin.lastDataTime)

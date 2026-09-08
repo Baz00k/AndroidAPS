@@ -52,7 +52,7 @@ Paired physical observations corrected the provisional decoder:
 |---|---|---|---|
 | 0 | u8 | 10 running (normal and TBR), 3 stopped | Observed operating states only; other enums unknown |
 | 1 | u32 LE | 4102 then 4099 | Reservoir centi-units; display 41.0 U |
-| 5 | u8 | 2 in all three states | Battery bar candidate; display 2/5 bars; full range unobserved |
+| 5 | u8 | 2, 3 and 5, each matching the pump display bars | Battery bars (0–5); internal representation, UI shows mapped percent |
 | 6 | u32 LE | 78 TBR, 60 normal, 0 stopped | Current basal centi-units/hour; operator confirmed programmed 0.60 U/h |
 | 10 | u32 LE | 130 TBR, 100 normal/stopped | Basal percentage |
 | 14 | u32 LE | 144 TBR, 0 normal/stopped | Remaining TBR minutes |
@@ -64,7 +64,9 @@ The captured basal value describes reported rate, not independently measured phy
 delivery. It does not verify the stored profile or enable therapy readiness.
 
 Replacing the battery while stopped changed offset 5 from 2 to 3, paired with the display
-changing from 2/5 to 3/5 bars. Offset 6 stayed zero. After resuming basal and programming
+changing from 2/5 to 3/5 bars. A third battery later read offset 5 as 5 with the display at
+5/5. Offset 5 is therefore confirmed as battery bars; bar values 0, 1 and 4 remain unobserved,
+as do low-battery alert thresholds. After resuming basal and programming
 a square bolus of 0.50 U over 15 minutes on the disconnected pump, system mode remained
 10 and basal was 60. The separate bolus body reported extended status 1, injected 17,
 total 50, elapsed 5 and total duration 15, all numeric fields u32 LE. Other bolus terminal
@@ -114,12 +116,8 @@ Standard serial (0x2A25) is absent on this pump, so serial identity remains an e
 
 ### Battery representation
 
-Offset 5 is battery bars (0–5), validated 2→3 against the pump display's 2/5→3/5.To serve
-AAPS framework consumers that expect a percentage, `batteryLevel` maps bars × 20. This is
-an explicitly coarse quantization in steps of 20, not a measured percentage: the driver's
-own tile and short status show the exact bars (`n/5`), while core consumers (overview pill,
-status lights, Nightscout upload) receive the mapped value. Only bars 2 and 3 observed;
-0-bar behavior unvalidated.
+Offset 5 is battery bars (0–5), confirmed at display values 2, 3 and 5. Internal
+representation only: UI and framework consumers use the mapped percent (bars × 20).
 
 Extended public fixtures were transformed from private filtered logcat trace SHA-256
 `60a70be8d538fc474cc32c9c560959cc87a3f20c6d610507991b2d41c5a70547`:

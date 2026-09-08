@@ -8,17 +8,15 @@
 The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT
 writes are restricted to the access-authentication handshake (**AUTH-only**).
 
-After a successful encrypted status read, the UI can show reservoir values and battery bars
-(`n/5`). Battery percentage is not reported by the pump and is never shown in the driver tile.
-For AAPS framework consumers that expect a percentage (`pump.batteryLevel`), the plugin maps
-bars linearly (`bars × 20`, steps of 20). Only bar values 2 and 3 have been observed; 0-bar
-pump behavior is unvalidated, and the bar-to-charge curve is the manufacturer's quantization,
-not a measured percentage.
+After a successful encrypted status read, the UI shows reservoir values and battery percent.
+The pump reports battery as 0–5 bars (confirmed at 2, 3 and 5 bars against the pump display);
+the driver maps bars × 20 to percent for display and framework consumers. Only bar values 2,
+3 and 5 have been observed; 0/1/4-bar behavior and low-battery thresholds are unvalidated.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
 - delivery mode is not shown because its interpretation is not validated;
-- battery bars are shown as reported (`n/5`); the full bar range is not yet observed, so no
-  low-battery threshold is claimed;
+- battery percent is bars × 20 as reported by the pump; values below 40% and low-battery
+  thresholds are unvalidated;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
