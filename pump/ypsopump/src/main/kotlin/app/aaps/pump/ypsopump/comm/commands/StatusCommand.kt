@@ -40,7 +40,9 @@ class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
         // left without cartridge, and identically for an empty cartridge): it must fail closed,
         // never publish as a measurement.
         if (reservoir == 0xFFFFFFFFL) return
-        if (mode !in setOf(3, 10) || reservoir > 16000 || bars !in 0..5 || basal > 4000 || percent > 500 || remaining > 1440) return
+        // Upper bound is sanity only: a fresh 160 U cartridge reads 17129 centi-units on the
+        // bench pump, so the cap must clear a full cartridge with margin.
+        if (mode !in setOf(3, 10) || reservoir > 20000 || bars !in 0..5 || basal > 4000 || percent > 500 || remaining > 1440) return
         if (mode == 3 && basal != 0L) return
         deliveryMode = mode
         deliveryModeName = if (mode == 3) "Stopped" else "Running"

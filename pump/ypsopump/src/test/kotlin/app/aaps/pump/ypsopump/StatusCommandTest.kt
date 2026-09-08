@@ -29,6 +29,15 @@ class StatusCommandTest {
     }
 
     @Test
+    fun `fresh full cartridge above nominal capacity decodes`() {
+        // Observed on the bench pump right after inserting a new 160 U cartridge.
+        val cmd = StatusCommand().apply { decode(hex("0ae942000003320000006400000000000000")) }
+        assertTrue(cmd.success)
+        assertEquals(171.29, cmd.reservoirUnits, 0.0001)
+        assertFalse(cmd.isSuspended)
+    }
+
+    @Test
     fun `unknown layouts enum and ranges reject including decoder reuse`() {
         val valid = hex("0a06100000023c0000006400000000000000")
         val invalid = listOf(valid.dropLast(1).toByteArray(), valid + 0, valid.copyOf().apply { this[0] = 99 },
