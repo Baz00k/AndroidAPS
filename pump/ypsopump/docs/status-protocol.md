@@ -118,8 +118,16 @@ Standard serial (0x2A25) is absent on this pump, so serial identity remains an e
 Offset 5 is battery bars (0–5). `batteryLevel` maps bars × 20 for AAPS consumers that expect
 a percentage; the driver's tile and short status show that percent.
 
-Extended public fixtures were transformed from private filtered logcat trace SHA-256
-`60a70be8d538fc474cc32c9c560959cc87a3f20c6d610507991b2d41c5a70547`:
+A pump-side 0% TBR for 60 minutes reads mode 10 with basal 0.00 U/h, percent 0 and
+remaining 59 minutes one minute in — running, not suspended. Zero basal with a running mode
+is therefore valid and distinct from Stop (mode 3, basal 0).
+
+Extended public fixtures from private filtered logcat trace SHA-256
+`ffcdadf9cf58cf0ef382fed5b05a09a959b89f80c964fc7d95df4182545ee54e`:
+
+| Capture | Original concatenated frames SHA-256 | Public envelope SHA-256 |
+|---|---|---|
+| 0% TBR, 59 min remaining | `49a3db518bc689a0f3f6902c511056167818ab2677028a12e73ff217619b03e8` | `61f9d847e415a70d3dd8d1a8c8742845e930dcad2403bd654e843e41460f0447` |
 
 | Capture | Original concatenated frames SHA-256 | Public envelope SHA-256 |
 |---|---|---|

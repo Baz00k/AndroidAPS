@@ -85,6 +85,23 @@ class CapturedStatusProtocolTest {
     }
 
     @Test
+    fun `captured zero-percent TBR decodes zero basal with remaining minutes`() {
+        val frames = listOf(
+            "149adcf8618cf76666f2160bd666a4f0dfb25a12", "24939517e74e6d7c9ed81c790bc55dde5d814c8c",
+            "34eda1ce966b68b3b1eb799d709d6092b5e4283b", "4471ce266e4cef4355192710545e1e0f"
+        ).map(::hex)
+        val body = crypto().decrypt(YpsoFraming.parseMultiFrameRead(frames))
+        assertArrayEquals(hex("0a7e0d00000300000000000000003b000000d660"), body)
+        val command = StatusCommand().apply { decode(requireNotNull(YpsoCrc.validatedPayload(body))) }
+        assertTrue(command.success)
+        assertFalse(command.isSuspended)
+        assertEquals(0.0, command.basalRate)
+        assertEquals(0, command.activeTbrPercent)
+        assertEquals(59, command.tbrRemainingMinutes)
+        assertEquals(3, command.batteryBars)
+    }
+
+    @Test
     fun `no-cartridge sentinel authenticates but fails closed with no published measurement`() {
         val frames = listOf(
             "14ae0e2a6d65cd3086114ea1c7a2066a4f2966e2", "24f3b5083fccc274dbe3ecbabab8377c18a80e30",
