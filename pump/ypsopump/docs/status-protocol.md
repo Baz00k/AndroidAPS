@@ -91,11 +91,14 @@ qualified artifact. Its decoder still logged the old incorrect labels; raw bytes
 operator observations, not those labels, establish the corrections above.
 
 ### Bench recovery
-
 Pump-side Bluetooth off during polling rejected the in-flight read immediately and a
 connect attempt hit the 8 s handshake deadline without hanging. With Bluetooth back on,
 the next cycle reconnected, re-authenticated and resumed successful reads within seconds;
 session counters survived (reads accepted, no re-key). No app restart needed.
+
+Setting the pump clock to a wrong time changed nothing in system status: reads continue to
+decode identically, as expected — the body carries no timestamps. Clock skew matters only
+for history/time conversion, owned by a later ticket.
 
 ### Local bench capture mode
 
