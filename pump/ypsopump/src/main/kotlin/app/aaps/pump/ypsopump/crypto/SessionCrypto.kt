@@ -105,17 +105,19 @@ class SessionCrypto @Inject constructor() {
             val pumpRebootCounter = buf.getInt()
             val pumpCounter = buf.getLong()
 
-            // Handle reboot detection
-            if (pumpRebootCounter > rebootCounter) {
-                rebootCounter = pumpRebootCounter
-                writeCounter = 0L
-            } else if (pumpRebootCounter < 0) {
+            // Validate before mutating session state. Durable reboot/read ownership is
+            // a separate concern; a rejected response must not reset the write counter.
+            if (pumpRebootCounter < 0) {
                 throw IllegalArgumentException("Invalid reboot counter: $pumpRebootCounter")
             }
 
             // Validate read counter (must be monotonically increasing)
             if (readCounter > 0 && pumpCounter <= readCounter) {
                 throw SecurityException("Read counter not increasing: $pumpCounter <= $readCounter")
+            }
+            if (pumpRebootCounter > rebootCounter) {
+                rebootCounter = pumpRebootCounter
+                writeCounter = 0L
             }
             readCounter = pumpCounter
 

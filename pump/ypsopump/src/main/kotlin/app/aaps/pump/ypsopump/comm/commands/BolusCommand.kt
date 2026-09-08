@@ -40,15 +40,14 @@ class BolusCommand(
 
     val isImmediate: Boolean get() = durationMinutes == 0
 
-    // Status byte per firmware / tech-doc §10.2: 0=idle, 1=delivering, 3=cancelled, 4=completed.
-    // "Delivering" is ONLY code 1 — the old `!= 0` treated COMPLETED(4) and CANCELLED(3) as still
-    // in progress, so the confirm-by-read poll loop (`sawDelivering && !isDelivering`) never broke on
-    // a clean completion. That bites a slow (large) bolus, which is likely to be polled AT the
-    // completed/idle frame — where the status char reports injected=0 — leaving `delivered` at 0 and
-    // the dose recorded as nothing. Terminal states must read as NOT delivering. [fix 2026-07-06]
-    val isDelivering: Boolean get() = bolusStatusCode == STATUS_DELIVERING || extendedStatusCode == STATUS_DELIVERING
-    val isCompleted: Boolean get() = bolusStatusCode == STATUS_COMPLETED
-    val isCancelled: Boolean get() = bolusStatusCode == STATUS_CANCELLED
+    // Target-observed bolus activity: 0 = idle, 1 = immediate delivering, 3 = mixed/extended
+    // delivering (observed active on the bench pump). Idle alone does not distinguish
+    // completed from cancelled; codes 4 ("completed") and distinct cancelled/completed enums
+    // are not established by target captures and must not be claimed.
+    val isDelivering: Boolean get() = bolusStatusCode == STATUS_DELIVERING || extendedStatusCode in setOf(STATUS_DELIVERING, STATUS_MIXED_DELIVERING)
+    // Terminal codes are not established by target captures; idle alone proves neither outcome.
+    val isCompleted: Boolean get() = false
+    val isCancelled: Boolean get() = false
 
     override fun encode(): ByteArray {
         val totalScaled = (totalUnits * 100).roundToInt().coerceIn(1, MAX_BOLUS_X100)
@@ -62,8 +61,8 @@ class BolusCommand(
     override fun decode(data: ByteArray) {
         success = false
         if (data.size == 42) {
-            val states = setOf(STATUS_IDLE, STATUS_DELIVERING, STATUS_CANCELLED, STATUS_COMPLETED)
-            if ((data[0].toInt() and 0xFF) !in states || (data[13].toInt() and 0xFF) !in states) return
+            if ((data[0].toInt() and 0xFF) !in setOf(STATUS_IDLE, STATUS_DELIVERING) ||
+                (data[13].toInt() and 0xFF) !in setOf(STATUS_IDLE, STATUS_DELIVERING, STATUS_MIXED_DELIVERING)) return
             for ((injected, total) in listOf(5 to 9, 18 to 22, 26 to 30)) {
                 if (data.getUInt32(total) > MAX_BOLUS_X100 || data.getUInt32(injected) > data.getUInt32(total)) return
             }
@@ -94,11 +93,10 @@ class BolusCommand(
         const val TYPE_IMMEDIATE: Byte = 1
         const val TYPE_EXTENDED: Byte = 2
 
-        // Bolus status-byte codes (CHAR_BOLUS_STATUS / CHAR_BOLUS_NOTIFICATION @0, tech-doc §10.2).
+        // Bolus status-byte codes observed on V05.00.52 bench pump (CHAR_BOLUS_STATUS @0/@13).
         const val STATUS_IDLE = 0
         const val STATUS_DELIVERING = 1
-        const val STATUS_CANCELLED = 3
-        const val STATUS_COMPLETED = 4
+        const val STATUS_MIXED_DELIVERING = 3
 
         /** All-zero 13-byte payload with the type byte set — cancels the running fast/extended bolus. */
         fun cancelPayload(extended: Boolean): ByteArray =

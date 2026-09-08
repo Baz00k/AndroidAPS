@@ -38,6 +38,12 @@ class YpsoPumpFragment : DaggerFragment() {
     private val refresh = object : Runnable {
         override fun run() {
             build()
+            val context = context
+            if (context != null &&
+                (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+                context.getSharedPreferences("ypso_ble_state", android.content.Context.MODE_PRIVATE).getBoolean("ypso_protocol_capture", false) &&
+                commandQueue.performing() == null && commandQueue.size() == 0)
+                commandQueue.readStatus("YpsoPump bench protocol capture", null)
             handler.postDelayed(this, 5_000)
         }
     }

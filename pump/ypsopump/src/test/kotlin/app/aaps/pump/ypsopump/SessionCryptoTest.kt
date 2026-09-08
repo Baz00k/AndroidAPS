@@ -150,5 +150,20 @@ class SessionCryptoTest {
         }
     }
 
+    @Test
+    fun `rejected counter cannot partially adopt a newer reboot`() {
+        val frame = hexToBytes(
+            "873858d502cde7d78f6906561187572ee28bc6380dd1d0e092b58d09876aea28" +
+                "292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+        )
+        crypto.rebootCounter = 7
+        crypto.readCounter = 2743
+        crypto.writeCounter = 42
+        assertThrows(SecurityException::class.java) { crypto.decrypt(frame) }
+        assertEquals(7, crypto.rebootCounter)
+        assertEquals(2743L, crypto.readCounter)
+        assertEquals(42L, crypto.writeCounter)
+    }
+
     private fun hexToBytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

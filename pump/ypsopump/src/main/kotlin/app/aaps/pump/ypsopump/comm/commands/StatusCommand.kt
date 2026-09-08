@@ -34,6 +34,9 @@ class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
         val remaining = data.getUInt32(14)
         // Only physically observed running and stopped states are trusted. Other states
         // remain diagnostics until independently captured; never guess an enum meaning.
+        // Reservoir 0xFFFFFFFF is the observed no-cartridge sentinel (rewound/rebooted pump
+        // left without cartridge): it must fail closed, never publish as a measurement.
+        if (reservoir == 0xFFFFFFFFL) return
         if (mode !in setOf(3, 10) || reservoir > 16000 || bars !in 0..5 || basal > 4000 || percent > 500 || remaining > 1440) return
         if (mode == 3 && basal != 0L) return
         deliveryMode = mode

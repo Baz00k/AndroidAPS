@@ -50,6 +50,53 @@ class CapturedStatusProtocolTest {
     }
 
     @Test
+    fun `captured mixed and standard bolus states decode activity without terminal claims`() {
+        val mixed = listOf(
+            "16bcfc495d3553eb628a1bf28fab9ebd80582220", "264c51a9302bbb034bbf78caa52fbea698e0908a",
+            "36d1948c6bb9c4a668439d4dc14678d17ef085cf", "462c295c87cdbc0412ae1f011d3735795e0aba87",
+            "565d7b6041cb592742dce82efd28b54c86947f8f", "661a"
+        ).map(::hex)
+        val mixedBody = crypto().decrypt(YpsoFraming.parseMultiFrameRead(mixed))
+        assertArrayEquals(
+            hex("000000000000000000000000000387b9000032000000640000003200000032000000010000000f00000060c8"),
+            mixedBody
+        )
+        val mixedCmd = BolusCommand(0.0).apply { decode(requireNotNull(YpsoCrc.validatedPayload(mixedBody))) }
+        assertTrue(mixedCmd.success)
+        assertTrue(mixedCmd.isDelivering)
+        assertEquals(BolusCommand.STATUS_MIXED_DELIVERING, mixedCmd.extendedStatusCode)
+        assertEquals(1.00, mixedCmd.extendedTotalUnits)
+        assertEquals(0.50, mixedCmd.extendedDeliveredUnits)
+        assertFalse(mixedCmd.isCompleted)
+        assertFalse(mixedCmd.isCancelled)
+
+        val standard = listOf(
+            "16f3acace3ecf191ddee5ed9ee45ace6623ac820", "26fe19fa093ece03b74a64aa1ab77460f5639f0c",
+            "364628a046607b3a256d74b530607667fcd2d6bc", "46da93dc66b343f802f00115694846b6540c0193",
+            "564e142a7b7ecaa5401f305d46cd1070e1141569", "6655"
+        ).map(::hex)
+        val standardBody = crypto().decrypt(YpsoFraming.parseMultiFrameRead(standard))
+        val standardCmd = BolusCommand(0.0).apply { decode(requireNotNull(YpsoCrc.validatedPayload(standardBody))) }
+        assertTrue(standardCmd.success)
+        assertTrue(standardCmd.isDelivering)
+        assertEquals(1.00, standardCmd.totalProgrammedUnits)
+        assertEquals(0.79, standardCmd.deliveredUnits, 0.0001)
+    }
+
+    @Test
+    fun `no-cartridge sentinel authenticates but fails closed with no published measurement`() {
+        val frames = listOf(
+            "14ae0e2a6d65cd3086114ea1c7a2066a4f2966e2", "24f3b5083fccc274dbe3ecbabab8377c18a80e30",
+            "34b580d534c651e54d77b5a6a39e05133592e638", "446680c8ff84ceaf5963821ad5b11529"
+        ).map(::hex)
+        val body = crypto().decrypt(YpsoFraming.parseMultiFrameRead(frames))
+        assertArrayEquals(hex("03ffffffff0300000000640000000000000076be"), body)
+        val payload = requireNotNull(YpsoCrc.validatedPayload(body))
+        val command = StatusCommand().apply { decode(payload) }
+        assertFalse(command.success)
+    }
+
+    @Test
     fun `tag corruption truncated and reordered frames reject`() {
         val envelope = YpsoFraming.parseMultiFrameRead(stopped)
         envelope[4] = (envelope[4].toInt() xor 1).toByte()

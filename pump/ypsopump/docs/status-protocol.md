@@ -89,6 +89,38 @@ The capture app was a locally built FullDebug instrumentation candidate, not a f
 qualified artifact. Its decoder still logged the old incorrect labels; raw bytes and
 operator observations, not those labels, establish the corrections above.
 
+### Local bench capture mode
+
+An explicit `ypso_protocol_capture` boolean in private `ypso_ble_state` preferences opts a
+debuggable installed artifact into bolus-status reads. While its pump tab is visible, the
+same flag queues status reads every five seconds when the AAPS queue is idle. Navigation
+away stops this cadence. Non-debuggable artifacts ignore the flag. Disable it after the
+bench session. It does not authorize any additional GATT writes.
+
+Routine polling reads firmware identity and system status; bolus collection is diagnostic.
+Cancelling the square bolus produced an idle all-zero body at the next five-minute poll;
+no distinct cancelled transition was observed at that cadence. Fast five-second bench
+captures then observed: mixed bolus (0.50 U immediate + 0.50 U over 15 minutes) with
+extended status 3 while actively delivering (extended injected 50, total 100; combo
+immediate sub-block 50/50 at offsets 26/30, not separately published), progressing elapsed minutes 1 then 2 and
+returning directly to idle after pump-side cancellation; standard 1.00 U bolus with
+immediate status 1 and 0.79 U reported before returning to idle.
+
+Rewinding, rebooting and leaving the disconnected pump without a cartridge produced a
+no-cartridge alarm on the pump display. System status authenticated and CRC-validated,
+but decodes to mode 3 with reservoir `0xFFFFFFFF`, three battery bars, zero basal and
+100%/0 minutes. The sentinel fails closed: no reservoir measurement is published.
+Standard serial (0x2A25) is absent on this pump, so serial identity remains an evidence gap.
+
+Extended public fixtures were transformed from private filtered logcat trace SHA-256
+`60a70be8d538fc474cc32c9c560959cc87a3f20c6d610507991b2d41c5a70547`:
+
+| Capture | Original concatenated frames SHA-256 | Public envelope SHA-256 |
+|---|---|---|
+| Mixed active, status 3 | `fb83455dd8081bdb0e1b94760d488b50dcd00521c7d46a14a983dd888139963d` | `023ecddee71da91c41f6ccc687cd5d673ebf422beb2617a30d210762a0289285` |
+| Standard active, status 1 | `56627c76b39321d5a205d295acd5a6982d6e8f63a590ba712521cd95b4e8adab` | `378e516d08b664fe404f3282da6bb5b410e5d97979823747e44cc056cd5f1607` |
+| No-cartridge sentinel | `8488055744c1d842677fc62adaf30e098cc2598f5494a670dccff850f5d87789` | `a577aeff53b21e95c873cba5ea5cd3319d5d5a7da542782d8fb8a8b3fc222b86` |
+
 Target discovery returned master and supervisor `V05.00.52\0`, base `1.1\0`, settings
 `1.7\0`, history `1.4\0`, and control `1.3\0`. Standard firmware revision (0x2A26) is
 absent; software revision (0x2A28) is binary `00 02 02 01` and is not pump firmware.

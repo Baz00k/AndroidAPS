@@ -252,7 +252,7 @@ class YpsoBleManager @Inject constructor(
         }
         readIdentity(originGatt) {
             if (!attempt.isActive) return@readIdentity
-            if (findChar(originGatt, CHAR_BOLUS_STATUS) != null)
+            if (protocolCaptureEnabled && findChar(originGatt, CHAR_BOLUS_STATUS) != null)
                 readBolusStatus { readStatusInternal(originGatt, attempt, onDone) }
             else readStatusInternal(originGatt, attempt, onDone)
         }
@@ -307,6 +307,11 @@ class YpsoBleManager @Inject constructor(
         }
         step(0)
     }
+
+    /** Explicit local bench capture; unavailable in non-debuggable installed artifacts. */
+    private val protocolCaptureEnabled: Boolean
+        get() = (context.applicationInfo?.flags?.and(android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) ?: 0) != 0 &&
+            ypsoPrefs.getBoolean("ypso_protocol_capture", false)
 
     class StatusReadAttempt internal constructor() {
         private val active = AtomicBoolean(true)
@@ -579,9 +584,12 @@ class YpsoBleManager @Inject constructor(
                 if (!attempt.isActive) return@synchronized false
                 val decoded = runCatching {
                     val body = sessionCrypto.decrypt(frame)                   // strips 12-byte LE counter tail
-                    val payload = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid status CRC")
+                    val payload = YpsoCrc.validatedPayload(body)
+                        ?: throw SecurityException("invalid status CRC raw=${body.joinToString("") { "%02x".format(it) }}")
                     val status = StatusCommand().apply { decode(payload) }
-                    if (!status.success) throw IllegalArgumentException("status decode failed (${payload.size}B)")
+                    if (!status.success) throw IllegalArgumentException(
+                        "status decode failed (${payload.size}B) raw=${payload.joinToString("") { "%02x".format(it) }}"
+                    )
                     if (YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum != true ||
                         YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum != true)
                         throw IllegalArgumentException("Unknown or unsupported pump firmware")
