@@ -16,10 +16,8 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.rx.events.Event
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.workflow.CalculationWorkflow
-import app.aaps.core.interfaces.workflow.CalculationWorkflow.Companion.JOB
 import app.aaps.core.interfaces.workflow.CalculationWorkflow.Companion.MAIN_CALCULATION
 import app.aaps.core.interfaces.workflow.CalculationWorkflow.Companion.PASS
-import app.aaps.core.interfaces.workflow.CalculationWorkflow.Companion.UPDATE_PREDICTIONS
 import app.aaps.core.utils.receivers.DataWorkerStorage
 import app.aaps.core.utils.worker.then
 import app.aaps.workflow.iob.IobCobOref1Worker
@@ -62,12 +60,11 @@ class CalculationWorkflowImpl @Inject constructor(
         bgDataReload: Boolean,
         cause: Event?
     ) {
-        // Only prepare graph series when someone is looking at them. Upstream ran all 16 workers on
-        // every CGM tick regardless; measured on device that was 1.54 s of the 1.64 s chain and the
-        // largest single CPU consumer in the app, spent drawing an overview that was in a pocket.
-        // HistoryBrowseActivity is always a foreground, graph-only user of this workflow, so it opts
-        // in explicitly rather than through the lifecycle flag.
-        val drawGraphs = appLifecycle.uiVisible || job != MAIN_CALCULATION
+        // Only load chart data when someone is looking at it. Upstream ran all 16 workers on every CGM
+        // tick regardless; measured on device that was 1.54 s of the 1.64 s chain and the largest single
+        // CPU consumer in the app, spent drawing an overview that was in a pocket. Most of those workers
+        // have since been deleted with the GraphView chart they fed, so what is gated here is one query.
+        val drawGraphs = appLifecycle.uiVisible
         aapsLogger.debug(LTag.WORKER, "Starting calculation worker: $reason to ${dateUtil.dateAndTimeAndSecondsString(end)} (graphs=$drawGraphs)")
 
         WorkManager.getInstance(context)
@@ -98,13 +95,7 @@ class CalculationWorkflowImpl @Inject constructor(
                 runIf = job == MAIN_CALCULATION,
                 OneTimeWorkRequest.Builder(UpdateWidgetWorker::class.java).build()
             )
-            // ---- presentation path: graph series only, skipped when the UI is not on screen ----
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareBucketedDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBucketedDataWorker.PrepareBucketedData(iobCobCalculator, overviewData)))
-                    .build()
-            )
+            // ---- presentation path: the chart window + its readings, skipped when nothing is on screen ----
             .then(
                 runIf = drawGraphs,
                 OneTimeWorkRequest.Builder(PrepareBgDataWorker::class.java)
@@ -113,165 +104,38 @@ class CalculationWorkflowImpl @Inject constructor(
             )
             .then(
                 runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, job).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_BG.pass).build())
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareTreatmentsDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareTreatmentsDataWorker.PrepareTreatmentsData(overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareBasalDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBasalDataWorker.PrepareBasalData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareTemporaryTargetDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareTemporaryTargetDataWorker.PrepareTemporaryTargetData(overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareRunningModeDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareRunningModeDataWorker.PrepareRunningModeData(overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, job).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_TT.pass).build())
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(PrepareIobAutosensGraphDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareIobAutosensGraphDataWorker.PrepareIobAutosensData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs && job == MAIN_CALCULATION,
-                OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, job).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_IOB.pass).build())
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs && job == MAIN_CALCULATION,
-                OneTimeWorkRequest.Builder(PreparePredictionsWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PreparePredictionsWorker.PreparePredictionsData(overviewData)))
-                    .build()
-            )
-            .then(
-                runIf = drawGraphs,
-                OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, job).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_FINAL.pass).build())
-                    .build()
-            )
-            .enqueue()
-    }
-
-    override fun runOnReceivedPredictions(
-        overviewData: OverviewData
-    ) {
-        aapsLogger.debug(LTag.WORKER, "Starting updateReceivedPredictions worker")
-
-        WorkManager.getInstance(context)
-            .beginUniqueWork(
-                UPDATE_PREDICTIONS, ExistingWorkPolicy.REPLACE,
-                OneTimeWorkRequest.Builder(PreparePredictionsWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PreparePredictionsWorker.PreparePredictionsData(overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, UPDATE_PREDICTIONS).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_FINAL.pass).build())
-                    .build()
-            )
-            .enqueue()
-    }
-
-    override fun runOnEventTherapyEventChange(overviewData: OverviewData) {
-        WorkManager.getInstance(context)
-            .beginUniqueWork(
-                MAIN_CALCULATION, ExistingWorkPolicy.APPEND,
-                OneTimeWorkRequest.Builder(PrepareTreatmentsDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareTreatmentsDataWorker.PrepareTreatmentsData(overviewData)))
-                    .build()
-            )
-            .then(
                 OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
                     .setInputData(Data.Builder().putInt(PASS, CalculationWorkflow.ProgressData.DRAW_FINAL.pass).build())
                     .build()
             )
             .enqueue()
-
     }
 
-    override fun runGraphsOnly(iobCobCalculator: IobCobCalculator, overviewData: OverviewData) {
-        aapsLogger.debug(LTag.WORKER, "Rebuilding graph series after UI became visible")
+    override fun runOnEventTherapyEventChange() {
         WorkManager.getInstance(context)
             .beginUniqueWork(
                 MAIN_CALCULATION, ExistingWorkPolicy.APPEND,
-                OneTimeWorkRequest.Builder(PrepareBucketedDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBucketedDataWorker.PrepareBucketedData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareBgDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBgDataWorker.PrepareBgData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareTreatmentsDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareTreatmentsDataWorker.PrepareTreatmentsData(overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareBasalDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBasalDataWorker.PrepareBasalData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareTemporaryTargetDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareTemporaryTargetDataWorker.PrepareTemporaryTargetData(overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareRunningModeDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareRunningModeDataWorker.PrepareRunningModeData(overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PrepareIobAutosensGraphDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareIobAutosensGraphDataWorker.PrepareIobAutosensData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
-                OneTimeWorkRequest.Builder(PreparePredictionsWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PreparePredictionsWorker.PreparePredictionsData(overviewData)))
-                    .build()
-            )
-            .then(
                 OneTimeWorkRequest.Builder(UpdateGraphWorker::class.java)
-                    .setInputData(Data.Builder().putString(JOB, MAIN_CALCULATION).putInt(PASS, CalculationWorkflow.ProgressData.DRAW_FINAL.pass).build())
+                    .setInputData(Data.Builder().putInt(PASS, CalculationWorkflow.ProgressData.DRAW_FINAL.pass).build())
                     .build()
             )
             .enqueue()
     }
 
+    override fun runGraphsOnly(iobCobCalculator: IobCobCalculator, overviewData: OverviewData) {
+        aapsLogger.debug(LTag.WORKER, "Rebuilding chart data after UI became visible")
+        enqueueChartRebuild(iobCobCalculator, overviewData)
+    }
+
     override fun runOnScaleChanged(iobCobCalculator: IobCobCalculator, overviewData: OverviewData) {
+        enqueueChartRebuild(iobCobCalculator, overviewData)
+    }
+
+    /** Reload the window and its readings, then tell the overview to redraw. Touches no dosing state. */
+    private fun enqueueChartRebuild(iobCobCalculator: IobCobCalculator, overviewData: OverviewData) {
         WorkManager.getInstance(context)
             .beginUniqueWork(
                 MAIN_CALCULATION, ExistingWorkPolicy.APPEND,
-                OneTimeWorkRequest.Builder(PrepareBucketedDataWorker::class.java)
-                    .setInputData(dataWorkerStorage.storeInputData(PrepareBucketedDataWorker.PrepareBucketedData(iobCobCalculator, overviewData)))
-                    .build()
-            )
-            .then(
                 OneTimeWorkRequest.Builder(PrepareBgDataWorker::class.java)
                     .setInputData(dataWorkerStorage.storeInputData(PrepareBgDataWorker.PrepareBgData(iobCobCalculator, overviewData)))
                     .build()
