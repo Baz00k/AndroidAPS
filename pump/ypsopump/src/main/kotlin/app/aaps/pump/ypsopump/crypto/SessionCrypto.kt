@@ -7,137 +7,45 @@ import java.nio.ByteOrder
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * XChaCha20-Poly1305 encryption/decryption for YpsoPump BLE communication.
- *
- * Message format (from decompiled write.java):
- *   Encrypt output:  ciphertext || nonce[24]     (nonce APPENDED)
- *   Decrypt input:   ciphertext || nonce[24]      (nonce at END)
- *   Plaintext:       commandData || rebootCounter[4] || writeCounter[8]
- */
+/** Stateless AEAD codec. Only [PumpSession] may accept counters or reserve writes. */
 @Singleton
 class SessionCrypto @Inject constructor() {
 
     private val lazySodium = LazySodiumAndroid(SodiumAndroid())
+    data class Message(val body: ByteArray, val reboot: Int, val counter: Long)
 
-    var sharedKey: ByteArray? = null
-    var writeCounter: Long = 0L
-    var readCounter: Long = 0L
-    var rebootCounter: Int = 0
-
-    val isInitialized: Boolean
-        get() = sharedKey != null
-
-    /**
-     * Encrypt command data for writing to the pump.
-     * @return BLE payload: ciphertext+tag || nonce
-     */
-    fun encrypt(commandData: ByteArray): ByteArray {
-        val key = sharedKey ?: throw IllegalStateException("No shared key set")
-
-        // PRE-increment the writeCounter: the pump requires the EXACT next counter (= last accepted
-        // + 1), so the first write after seeding N must use N+1. This matches the proven ypso-reader
-        // flow; the earlier POST-increment (first write used the seed verbatim) made the pump reject
-        // every write with counter-mismatch (err 138). Rejected writes do NOT advance the pump, so
-        // the caller auto-syncs by retrying with the next value on 138.
-        writeCounter++
-
-        // Build plaintext: command + rebootCounter(4B LE) + writeCounter(8B LE).
-        // Endianness is LITTLE — confirmed against real pump traffic (rebootCounter=8 is sane in LE
-        // but garbage in BE; the pump's read counter is monotonic only when read as LE). The earlier
-        // BIG-endian assumption made the pump reject every command (counter mismatch, err 138/139).
-        val counterData = ByteBuffer.allocate(COUNTER_DATA_SIZE)
-            .order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(rebootCounter)
-            .putLong(writeCounter)
-            .array()
-        val plaintext = commandData + counterData
-
-        // Random 24-byte nonce (raw libsodium binding lives on the Sodium object)
+    fun encrypt(commandData: ByteArray, key: ByteArray, reboot: Int, counter: Long): ByteArray {
+        require(key.size == KEY_SIZE && reboot >= 0 && counter >= 0)
+        val plaintext = commandData + ByteBuffer.allocate(COUNTER_DATA_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(reboot).putLong(counter).array()
         val nonce = ByteArray(NONCE_SIZE)
         lazySodium.sodium.randombytes_buf(nonce, NONCE_SIZE)
-
-        // Encrypt: output = ciphertext + 16-byte tag
         val ciphertext = ByteArray(plaintext.size + TAG_SIZE)
-        val ciphertextLen = longArrayOf(0)
-        val result = lazySodium.cryptoAeadXChaCha20Poly1305IetfEncrypt(
-            ciphertext, ciphertextLen,
-            plaintext, plaintext.size.toLong(),
-            null, 0, null,
-            nonce, key
-        )
-        if (!result) throw SecurityException("Encryption failed")
-
-        // Return ciphertext || nonce (nonce APPENDED, not prepended!)
+        check(lazySodium.cryptoAeadXChaCha20Poly1305IetfEncrypt(
+            ciphertext, longArrayOf(0), plaintext, plaintext.size.toLong(), null, 0, null, nonce, key
+        )) { "Encryption failed" }
         return ciphertext + nonce
     }
 
-    /**
-     * Decrypt data received from pump.
-     * @param blePayload BLE payload: ciphertext+tag || nonce
-     * @return decrypted command data (without counters)
-     */
-    fun decrypt(blePayload: ByteArray): ByteArray {
-        val key = sharedKey ?: throw IllegalStateException("No shared key set")
-
-        if (blePayload.size < NONCE_SIZE + TAG_SIZE + COUNTER_DATA_SIZE) {
-            throw IllegalArgumentException("Payload too short: ${blePayload.size} bytes")
-        }
-
-        // Nonce is the LAST 24 bytes
-        val nonce = blePayload.sliceArray(blePayload.size - NONCE_SIZE until blePayload.size)
-        val ciphertext = blePayload.sliceArray(0 until blePayload.size - NONCE_SIZE)
-
-        // Decrypt
+    fun decrypt(blePayload: ByteArray, key: ByteArray): Message {
+        require(key.size == KEY_SIZE)
+        require(blePayload.size >= NONCE_SIZE + TAG_SIZE + COUNTER_DATA_SIZE) { "Missing mandatory counter tail" }
+        val nonce = blePayload.copyOfRange(blePayload.size - NONCE_SIZE, blePayload.size)
+        val ciphertext = blePayload.copyOfRange(0, blePayload.size - NONCE_SIZE)
         val plaintext = ByteArray(ciphertext.size - TAG_SIZE)
-        val plaintextLen = longArrayOf(0)
-        val result = lazySodium.cryptoAeadXChaCha20Poly1305IetfDecrypt(
-            plaintext, plaintextLen, null,
-            ciphertext, ciphertext.size.toLong(),
-            null, 0, nonce, key
-        )
-        if (!result) throw SecurityException("Decryption failed — invalid key or tampered data")
-
-        // Parse counters from end of plaintext
-        if (plaintext.size >= COUNTER_DATA_SIZE) {
-            val buf = ByteBuffer.wrap(plaintext, plaintext.size - COUNTER_DATA_SIZE, COUNTER_DATA_SIZE)
-                .order(ByteOrder.LITTLE_ENDIAN)
-            val pumpRebootCounter = buf.getInt()
-            val pumpCounter = buf.getLong()
-
-            // Validate before mutating session state. Durable reboot/read ownership is
-            // a separate concern; a rejected response must not reset the write counter.
-            if (pumpRebootCounter < 0) {
-                throw IllegalArgumentException("Invalid reboot counter: $pumpRebootCounter")
-            }
-
-            // Validate read counter (must be monotonically increasing)
-            if (readCounter > 0 && pumpCounter <= readCounter) {
-                throw SecurityException("Read counter not increasing: $pumpCounter <= $readCounter")
-            }
-            if (pumpRebootCounter > rebootCounter) {
-                rebootCounter = pumpRebootCounter
-                writeCounter = 0L
-            }
-            readCounter = pumpCounter
-
-            return plaintext.sliceArray(0 until plaintext.size - COUNTER_DATA_SIZE)
-        }
-
-        throw IllegalArgumentException("Missing mandatory counter tail")
-    }
-
-    fun reset() {
-        sharedKey = null
-        writeCounter = 0L
-        readCounter = 0L
-        rebootCounter = 0
+        val length = longArrayOf(0)
+        if (!lazySodium.cryptoAeadXChaCha20Poly1305IetfDecrypt(
+                plaintext, length, null, ciphertext, ciphertext.size.toLong(), null, 0, nonce, key
+            )) throw SecurityException("Invalid key or tampered data")
+        check(length[0] == plaintext.size.toLong())
+        val counters = ByteBuffer.wrap(plaintext, plaintext.size - COUNTER_DATA_SIZE, COUNTER_DATA_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+        return Message(plaintext.copyOfRange(0, plaintext.size - COUNTER_DATA_SIZE), counters.int, counters.long)
     }
 
     companion object {
         const val KEY_SIZE = 32
         const val NONCE_SIZE = 24
         const val TAG_SIZE = 16
-        const val COUNTER_DATA_SIZE = 12 // rebootCounter(4) + writeCounter(8)
+        const val COUNTER_DATA_SIZE = 12
     }
 }
