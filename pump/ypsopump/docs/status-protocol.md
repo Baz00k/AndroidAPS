@@ -50,7 +50,7 @@ Paired physical observations corrected the provisional decoder:
 
 | Offset | Wire type | Observations | Interpretation |
 |---|---|---|---|
-| 0 | u8 | 10 running (normal and TBR), 3 stopped | Observed operating states only; other enums unknown |
+| 0 | u8 | 10 running (normal and TBR), 3 stopped | Observed operating states only; other enums unknown. This pump offers Stop, not Pause |
 | 1 | u32 LE | 4102 then 4099 | Reservoir centi-units; display 41.0 U |
 | 5 | u8 | Battery bars (0–5) | Reported unit; UI shows mapped percent |
 | 6 | u32 LE | 78 at 130% TBR, 60/50/35 across profiles and hours, 0 stopped or 0% TBR | Current basal centi-units/hour; operator-confirmed (0.60 profile A, 0.35 profile B) |
