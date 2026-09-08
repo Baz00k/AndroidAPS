@@ -86,7 +86,7 @@ class YpsoPumpPlugin @Inject constructor(
         pumpEnactResultProvider.get().success(false).enacted(false).comment(rh.gs(R.string.ypsopump_not_implemented))
 
     // ---- state (read-only) ----
-    override fun isInitialized(): Boolean = pumpState.lastConnectionTime > 0L
+    override fun isInitialized(): Boolean = pumpState.hasVerifiedStatus
     // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
     // mode byte. Write-enabled builds treat an empty cartridge as suspended to stop further dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
@@ -108,16 +108,23 @@ class YpsoPumpPlugin @Inject constructor(
     private fun configured(): Boolean = resolvedKey().isNotEmpty() && resolvedMac().isNotEmpty()
 
     private fun seedAndConnect() {
-        bleManager.setSharedKey(resolvedKey())
-        // Always seed counters so the AAPS-owned PERSISTED write counter is loaded even when no build-time seed
-        // is set (setCounters keeps the higher of persisted/seed). Reboot counter from prefs if present.
-        bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, bleManager.resolveRebootCounter(YpsoPumpConst.CAPTURED_REBOOT_COUNTER))
-        bleManager.connect(resolvedMac())
+        try {
+            bleManager.setSharedKey(resolvedKey())
+            // Reboot counter and key are provisioned externally; reconnect does not refresh a sample.
+            bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, bleManager.resolveRebootCounter(YpsoPumpConst.CAPTURED_REBOOT_COUNTER))
+            bleManager.connect(resolvedMac())
+        } catch (exception: IllegalArgumentException) {
+            bleManager.disconnect()
+            pumpState.invalidateStatus()
+            aapsLogger.error(LTag.PUMP, "YpsoPump configuration is invalid")
+        }
     }
 
     override fun connect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "connect: $reason")
         if (!configured()) {
+            bleManager.disconnect()
+            pumpState.invalidateStatus()
             aapsLogger.info(LTag.PUMP, "YpsoPump: session key and/or pump MAC not set (prefs ypso_shared_key / ypso_pump_mac or build consts) — skipping connect")
             return
         }
@@ -202,15 +209,15 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
-    override val lastDataTime: Long get() = pumpState.lastConnectionTime
+    override val lastDataTime: Long get() = pumpState.lastStatusTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
     // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump. A
     // write-enabled build derives basal from the AAPS profile because the status payload does not expose it.
     override val baseBasalRate: Double get() =
         if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
-    override val reservoirLevel: Double get() = pumpState.reservoirUnits
-    override val batteryLevel: Int? get() = pumpState.batteryPercent
+    override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
+    override val batteryLevel: Int? get() = pumpState.statusSnapshot?.batteryPercent
 
     // ---- dosing (wired to the proven canary-gated BLE writes; AAPS owns the write counter) ----
 
@@ -598,6 +605,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun setTempBasalAbsolute(absoluteRate: Double, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
         val base = profile.getBasal()
         val percent = if (base > 0) Math.round(absoluteRate / base * 100.0).toInt() else 100
         return setTempBasalPercent(percent, durationInMinutes, profile, enforceNew, tbrType)
@@ -640,12 +648,14 @@ class YpsoPumpPlugin @Inject constructor(
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false
     override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}
-    override fun pumpSpecificShortStatus(veryShort: Boolean): String =
-        if (pumpState.hasVerifiedStatus) {
-            rh.gs(R.string.ypsopump_short_status, pumpState.reservoirUnits, pumpState.batteryPercent)
+    override fun pumpSpecificShortStatus(veryShort: Boolean): String {
+        val snapshot = pumpState.statusSnapshot
+        return if (snapshot != null) {
+            rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, snapshot.batteryPercent)
         } else {
             rh.gs(R.string.ypsopump_status_unavailable)
         }
+    }
 
     companion object {
 

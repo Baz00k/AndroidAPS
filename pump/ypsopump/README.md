@@ -14,7 +14,7 @@ Connection state is also shown. Firmware qualification and the status schema are
 - delivery mode is not shown because its interpretation is not validated;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
-- status age handling is incomplete; an earlier successful read is not proof of current contact.
+- measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
@@ -44,9 +44,10 @@ These are separate security layers:
 A successful BLE connection or MD5 authentication ACK is **not a verified status read**. Only a completed,
 accepted encrypted status response provides displayed measurements.
 
+Implementation and verification details are in [the driver lifecycle documentation](docs/status-lifecycle.md).
+
 ## Current limitations
 
-- Status lifecycle, write-boundary recording and freshness expiry are incomplete.
 - Firmware identity and the status protocol are not qualified.
 - Protected provisioning and durable unavailable-state reporting are not implemented.
 - Therapy remains blocked unless a future artifact is independently qualified for it.

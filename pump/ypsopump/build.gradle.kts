@@ -1,4 +1,6 @@
 import org.gradle.api.tasks.testing.Test
+import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.variant.ScopedArtifacts
 
 plugins {
     alias(libs.plugins.android.library)
@@ -37,6 +39,7 @@ dependencies {
     testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
 
     testImplementation(project(":shared:tests"))
+    testImplementation(project(":implementation"))
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)
@@ -51,27 +54,19 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
 }
 
-val verifyYpsoBleWriteSites by tasks.registering {
-    val sourceFile = layout.projectDirectory.file("src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBleManager.kt")
-    inputs.file(sourceFile)
-    doLast {
-        val source = sourceFile.asFile.readText()
-        check(Regex("""\.writeCharacteristic\(""").findAll(source).count() == 2) {
-            "YpsoPump raw characteristic-write sites changed; update and review YpsoWritePolicy coverage"
-        }
-        check(Regex("""\.writeDescriptor\(""").findAll(source).count() == 2) {
-            "YpsoPump raw descriptor-write sites changed; update and review YpsoWritePolicy coverage"
-        }
-        check(Regex("""\bwriteCharacteristic\(""").findAll(source).count() == 5) {
-            "YpsoPump characteristic-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
-        }
-        check(Regex("""\bwriteDescriptor\(""").findAll(source).count() == 4) {
-            "YpsoPump descriptor-write helper use changed; every call must supply a reviewed YpsoRemoteWrite category"
-        }
-    }
+androidComponents.onVariants { variant ->
+    val name = variant.name.replaceFirstChar { it.uppercase() }
+    val verify = tasks.register<VerifyGattWriteOwnership>("verify${name}GattWriteOwnership")
+    variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(verify)
+        .toGet(ScopedArtifact.CLASSES, VerifyGattWriteOwnership::jars, VerifyGattWriteOwnership::directories)
+    tasks.matching {
+        it.name in setOf(
+            "assemble$name", "bundle${name}Aar", "test${name}UnitTest", "lint$name",
+            "bundleLibRuntimeToDir$name", "bundleLibRuntimeToJar$name", "bundleLibCompileToJar$name"
+        )
+    }.configureEach { dependsOn(verify) }
 }
 
 tasks.withType<Test>().configureEach {
-    dependsOn(verifyYpsoBleWriteSites)
     failOnNoDiscoveredTests = true
 }

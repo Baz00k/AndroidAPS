@@ -11,14 +11,26 @@ import javax.inject.Singleton
 @Singleton
 class YpsoPumpState @Inject constructor() {
 
+    companion object {
+        /** Status viewer budget; this is not a therapy-readiness guarantee. */
+        const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
+    }
+
+    data class StatusSnapshot(val reservoirUnits: Double, val batteryPercent: Int, val acquiredAt: Long, val elapsedAt: Long)
+
+    internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+    @Volatile private var sample: StatusSnapshot? = null
+    val statusSnapshot: StatusSnapshot?
+        get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
+
     // -- Connection State --
     @Volatile var connectionState: ConnectionState = ConnectionState.DISCONNECTED
     @Volatile var serialNumber: String = ""
     @Volatile var pumpAddress: String = ""
 
     // -- Pump Status --
-    @Volatile var batteryPercent: Int = 0
-    @Volatile var reservoirUnits: Double = 0.0
+    val batteryPercent: Int get() = statusSnapshot?.batteryPercent ?: 0
+    val reservoirUnits: Double get() = statusSnapshot?.reservoirUnits ?: 0.0
     @Volatile var isSuspended: Boolean = false
     @Volatile var isBolusingInProgress: Boolean = false
     @Volatile var isTbrActive: Boolean = false
@@ -41,7 +53,7 @@ class YpsoPumpState @Inject constructor() {
 
     // -- Timestamps --
     @Volatile var lastConnectionTime: Long = 0L
-    @Volatile var lastStatusTime: Long = 0L
+    val lastStatusTime: Long get() = statusSnapshot?.acquiredAt ?: 0L
     @Volatile var keyExchangeTime: Long = 0L
 
     // -- Error Tracking --
@@ -52,7 +64,7 @@ class YpsoPumpState @Inject constructor() {
         get() = connectionState == ConnectionState.CONNECTED
 
     val hasVerifiedStatus: Boolean
-        get() = lastStatusTime > 0L
+        get() = statusSnapshot != null
 
     val connectionHealthy: Boolean
         get() = isConnected || connectionState == ConnectionState.DISCONNECTED && hasVerifiedStatus
@@ -68,24 +80,20 @@ class YpsoPumpState @Inject constructor() {
         activeTbrPercent: Int,
         timestamp: Long
     ) {
-        this.reservoirUnits = reservoirUnits
-        this.batteryPercent = batteryPercent
         this.isSuspended = isSuspended
         this.activeTbrPercent = activeTbrPercent
-        lastStatusTime = timestamp
+        sample = StatusSnapshot(reservoirUnits, batteryPercent, timestamp, elapsedRealtime())
         lastConnectionTime = timestamp
     }
 
     @Synchronized
-    fun reservoirUnitsIfFresh(): Double? = reservoirUnits.takeIf { lastStatusTime > 0L }
+    fun reservoirUnitsIfFresh(): Double? = statusSnapshot?.reservoirUnits
 
     @Synchronized
     fun invalidateStatus() {
         // Freshness is cleared first; coherent consumers also read these fields under this monitor.
-        lastStatusTime = 0L
+        sample = null
         lastConnectionTime = 0L
-        batteryPercent = 0
-        reservoirUnits = 0.0
         isSuspended = false
         isBolusingInProgress = false
         isTbrActive = false

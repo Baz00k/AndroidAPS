@@ -23,29 +23,15 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains t
 
 ## YpsoPump status viewer
 
-The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. It connects to an already
-bonded Ypsomed mylife YpsoPump and attempts encrypted status reads.
+The YpsoPump integration is a **status viewer only**. It connects to an already paired pump and displays
+provisional reservoir and battery measurements. Readings become unavailable when communication fails
+or they are more than five minutes old. A connection alone does not mean a reading succeeded.
 
-**Current release boundary:**
+Insulin delivery, temporary basal, profile changes and automated dosing are disabled. Delivery details
+and history are unavailable, and firmware support is not yet qualified.
 
-- App-initiated GATT writes are restricted to the access-authentication handshake (**AUTH-only**).
-- A completed encrypted status read can display provisional reservoir and battery measurements.
-- Firmware support, delivery mode and the full status schema are not yet verified.
-- Basal/TBR/bolus details, history and current-status freshness guarantees are unavailable.
-- Bolus, temporary basal, profile/history selector writes, treatment reconciliation and loop/SMB
-  actuation are blocked.
-
-Setup currently requires three separate layers:
-
-1. an Android-managed BLE bond;
-2. MD5 access authentication performed during connection;
-3. an externally provisioned pump MAC and imported AEAD session key.
-
-A BLE connection or successful MD5 authentication is **not** a verified status read.
-There is no in-app provisioning screen, the user must extract and provide all required credentials.
-
-Read the concise [YpsoPump setup and limitations](pump/ypsopump/README.md). Unsupported capabilities remain
-blocked until their protocol, lifecycle and hardware behavior are independently validated.
+Setup requires externally obtained pump credentials; there is no in-app setup screen yet.
+See [YpsoPump setup and limitations](pump/ypsopump/README.md).
 
 ## Other fork changes
 
@@ -67,8 +53,7 @@ blocked until their protocol, lifecycle and hardware behavior are independently 
 ./gradlew :app:assembleFullDebug  # debuggable development build
 ```
 
-Both variants currently use the debug signing key, allowing `adb install -r` to preserve app data.
-If KSP reports stale generated types after a large refactor, run `./gradlew :app:clean` and rebuild.
+See the [build notes](docs/build-notes.md) for signing and troubleshooting details.
 
 ## Licence
 
