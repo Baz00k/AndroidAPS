@@ -19,8 +19,8 @@ object YpsoFraming {
 
     /** Split [data] into BLE frames, each prefixed with its header byte. */
     fun chunkPayload(data: ByteArray): List<ByteArray> {
+        require(data.isNotEmpty()) { "Empty payload has no observed encoding" }
         require(data.size <= 15 * MAX_PAYLOAD_PER_FRAME) { "Payload exceeds four-bit frame count" }
-        if (data.isEmpty()) return listOf(byteArrayOf(0x10))
         val totalFrames = maxOf(1, (data.size + MAX_PAYLOAD_PER_FRAME - 1) / MAX_PAYLOAD_PER_FRAME)
         val frames = ArrayList<ByteArray>(totalFrames)
         for (idx in 0 until totalFrames) {
@@ -45,9 +45,11 @@ object YpsoFraming {
         return merged.toByteArray()
     }
 
-    /** Total frame count encoded in the low nibble of the first frame's header byte (min 1). */
-    fun getTotalFrames(firstByte: Byte): Int =
-        (firstByte.toInt() and 0x0F).let { if (it == 0) 1 else it }
+    /**
+     * Total frame count from the low nibble of the first frame's header byte. A zero total was
+     * never observed on target and is rejected downstream by [validateFrame] (fail closed).
+     */
+    fun getTotalFrames(firstByte: Byte): Int = firstByte.toInt() and 0x0F
 
     /** Return the declared frame count only when [frame] is the expected next frame in this message. */
     fun validateFrame(frame: ByteArray, expectedFrame: Int, expectedTotal: Int = 0): Int? {

@@ -102,7 +102,7 @@ internal fun buildPumpStatusState(
         connectionHealthy = pumpState.isConnected && snapshot != null,
         reservoir = snapshot?.reservoirUnits,
         // Bars are the internal wire representation; the UI only ever shows the mapped percent.
-        battery = snapshot?.batteryPercent ?: snapshot?.batteryBars?.let { (it * 20).coerceIn(0, 100) },
+        battery = pumpState.mappedBatteryPercent,
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,

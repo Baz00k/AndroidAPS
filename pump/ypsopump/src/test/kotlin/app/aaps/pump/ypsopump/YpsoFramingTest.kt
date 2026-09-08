@@ -58,4 +58,11 @@ class YpsoFramingTest {
     fun `rejects a frame whose declared total changes mid-message`() {
         assertNull(YpsoFraming.validateFrame(byteArrayOf(0x24, 0x01), expectedFrame = 2, expectedTotal = 3))
     }
+
+    @Test
+    fun `zero total nibble is unobserved and rejected`() {
+        // No target capture has ever shown a zero frame total; fail closed.
+        assertEquals(0, YpsoFraming.getTotalFrames(0x10.toByte()))
+        assertNull(YpsoFraming.validateFrame(byteArrayOf(0x10.toByte()) + ByteArray(19) { 1 }, expectedFrame = 1))
+    }
 }

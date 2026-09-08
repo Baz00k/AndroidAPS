@@ -24,6 +24,9 @@ Not published: serial (characteristic absent), active profile identity, measured
 terminal bolus outcomes (idle is ambiguous), delivery-halting alarms beyond the cartridge
 sentinel (hypothesized same sentinel, unconfirmed).
 
+Rejected responses never mutate session counters (validated before commit); durable
+counter ownership and session transitions belong to step 05.
+
 ## Sources and unresolved differences
 
 Research references are pinned to
@@ -74,9 +77,8 @@ Paired physical observations corrected the provisional decoder:
 | 14 | u32 LE | 144 TBR, 0 normal/stopped | Remaining TBR minutes |
 
 The previous `batteryPercent = data[6]` and `deliveryMode = data[5]` interpretation was
-incorrect. In particular it generated a false empty battery on Stop. Battery percentage
-is now unknown; the single observed bar value does not justify a percentage conversion.
-The captured basal value describes reported rate, not independently measured physical
+incorrect. In particular it generated a false empty battery on Stop. Offset 5 is battery
+bars shown as bars × 20 percent; offset 6 is the reported basal rate, not measured physical
 delivery. It does not verify the stored profile or enable therapy readiness.
 
 Replacing the battery while stopped moved offset 5 with the display bars (2→3), a fresh

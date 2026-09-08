@@ -252,7 +252,11 @@ class YpsoBleManager @Inject constructor(
         }
         readIdentity(originGatt) {
             if (!attempt.isActive) return@readIdentity
-            if (protocolCaptureEnabled && findChar(originGatt, CHAR_BOLUS_STATUS) != null)
+            // Diagnostic bolus capture stays behind the firmware gate: unknown versions get
+            // raw diagnostics only, never parsed measurements.
+            val eligible = YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum == true &&
+                YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum == true
+            if (protocolCaptureEnabled && eligible && findChar(originGatt, CHAR_BOLUS_STATUS) != null)
                 readBolusStatus { readStatusInternal(originGatt, attempt, onDone) }
             else readStatusInternal(originGatt, attempt, onDone)
         }
@@ -263,6 +267,10 @@ class YpsoBleManager @Inject constructor(
         pumpState.firmwareVersion = ""
         pumpState.masterVersion = ""
         pumpState.supervisorVersion = ""
+        pumpState.baseServiceVersion = ""
+        pumpState.settingsServiceVersion = ""
+        pumpState.historyServiceVersion = ""
+        pumpState.controlServiceVersion = ""
         pumpState.serialNumber = ""
         var finished = false
         val candidates = listOf(
@@ -292,6 +300,15 @@ class YpsoBleManager @Inject constructor(
                 aapsLogger.info(LTag.PUMP, "YpsoPump identity $name status=$status raw=${if (name == "serial") "redacted" else bytes?.joinToString("") { "%02x".format(it) }}")
                 if (owner === gatt && status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
                     if (name == "serial") pumpState.serialNumber = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                    // Service versions are dotted ASCII ("1.1\0"); only master/supervisor are firmware.
+                    val serviceVersion = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                        .takeIf { it.matches(Regex("[0-9]+\\.[0-9]+")) }.orEmpty()
+                    when (name) {
+                        "base-service"     -> pumpState.baseServiceVersion = serviceVersion
+                        "settings-service" -> pumpState.settingsServiceVersion = serviceVersion
+                        "history-service"  -> pumpState.historyServiceVersion = serviceVersion
+                        "control-service"  -> pumpState.controlServiceVersion = serviceVersion
+                    }
                     val version = YpsoFirmwareVersion.fromWire(bytes)?.toString().orEmpty()
                     if (name == "master") {
                         pumpState.masterVersion = version
