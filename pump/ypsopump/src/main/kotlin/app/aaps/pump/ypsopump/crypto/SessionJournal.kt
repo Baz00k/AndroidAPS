@@ -76,26 +76,40 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         storage.writeAndSync(envelope)
     }
 
-    private class AndroidStorage(context: Context) : Storage {
+    internal class AndroidStorage(context: Context, private val checkpoint: (String) -> Unit = {}) : Storage {
         private val file = File(context.noBackupFilesDir, "ypso-session.json")
         private val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         override fun read(): String? = if (file.exists()) file.readText() else null
         override fun anchors(): List<String> = keys.aliases().toList().filter { it.startsWith(PREFIX) }
         override fun create(alias: String) {
+            checkpoint("before-create")
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore").apply {
                 init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
                     .setDigests(KeyProperties.DIGEST_SHA256).build())
             }.generateKey()
+            checkpoint("after-create")
         }
-        override fun delete(alias: String) = keys.deleteEntry(alias)
+        override fun delete(alias: String) {
+            checkpoint("before-delete")
+            keys.deleteEntry(alias)
+            checkpoint("after-delete")
+        }
         override fun authenticate(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
             init(keys.getKey(alias, null) as SecretKey)
             doFinal(body.toByteArray(Charsets.UTF_8))
         }
         override fun writeAndSync(value: String) {
+            checkpoint("before-truncate")
             FileOutputStream(file).use { out ->
-                out.write(value.toByteArray(Charsets.UTF_8))
+                checkpoint("after-truncate")
+                val bytes = value.toByteArray(Charsets.UTF_8)
+                val middle = bytes.size / 2
+                out.write(bytes, 0, middle)
+                checkpoint("partial-write")
+                out.write(bytes, middle, bytes.size - middle)
+                checkpoint("before-sync")
                 out.fd.sync()
+                checkpoint("after-sync")
             }
         }
     }
