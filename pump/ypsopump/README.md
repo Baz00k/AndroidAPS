@@ -9,14 +9,11 @@ The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled.
 writes are restricted to the access-authentication handshake (**AUTH-only**).
 
 After a successful encrypted status read, the UI shows reservoir values and battery percent.
-The pump reports battery as 0–5 bars (confirmed at 2, 3 and 5 bars against the pump display);
-the driver maps bars × 20 to percent for display and framework consumers. Only bar values 2,
-3 and 5 have been observed; 0/1/4-bar behavior and low-battery thresholds are unvalidated.
+The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent.
 Connection state is also shown. Firmware qualification and the status schema are not yet verified, so:
 
 - delivery mode is not shown because its interpretation is not validated;
-- battery percent is bars × 20 as reported by the pump; values below 40% and low-battery
-  thresholds are unvalidated;
+- battery percent is bars × 20 as reported by the pump;
 - basal rate, TBR duration, bolus progress and history are unavailable;
 - serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
 - measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.

@@ -13,8 +13,8 @@ class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
     var deliveryMode: Int = 0; private set
     var deliveryModeName: String = ""; private set
     var reservoirUnits: Double = 0.0; private set
-    // Battery bars (0–5) as reported on the wire, confirmed against the pump display at 2, 3
-    // and 5 bars. Internal representation only: presentation and framework layers map to percent.
+    // Battery bars (0–5) as reported on the wire. Internal representation only:
+    // presentation and framework layers map to percent.
     var batteryBars: Int = 0; private set
     // The wire reports bars, not a measured percentage. No percentage is published.
     val batteryPercent: Int? get() = null
