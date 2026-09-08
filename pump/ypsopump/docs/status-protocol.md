@@ -8,6 +8,22 @@ user report of successful operation on a newer pump; it is not evidence that eve
 has been tested. Firmware eligibility and validation of a received status layout are separate
 checks. A service-version string must never stand in for pump firmware.
 
+## Status capability matrix (V05.00.52, bench pump)
+
+| Published field | Wire source | Trusted states | Fails closed on |
+|---|---|---|---|
+| Reservoir (U) | System status @1, u32 LE centi-units | Running, stopped, TBR, bolus; 0–17129 observed | `0xFFFFFFFF` sentinel (no/empty cartridge), > 20000, wrong length |
+| Battery (%) | System status @5, bars 0–5, shown as bars × 20 | Bars 0, 2, 3, 5 against display; 100% on full | Bars > 5, wrong length |
+| Suspended | System status @0 == 3 | Stop verified twice | Any other mode value |
+| TBR percent / remaining | System status @10/@14, u32 LE | 130% (~2.5 h), 0% (1 h), cancel transition, expiry by cancel | Percent > 500, remaining > 1440 or > total-equivalent, wrong length |
+| Basal rate (diagnostic) | System status @6, u32 LE centi-units/h | Profile A/B rates, TBR scalings, 0 stopped/0% TBR | > 40.00 U/h, nonzero while stopped |
+| Bolus activity (diagnostic) | Bolus status, 42 B | Immediate active, mixed active, square active, idle | Non-42 B, unknown codes, injected > total, elapsed > total |
+| Firmware identity | Master + supervisor characteristics | `V05.00.52` strict `Vxx.xx.xx\0` match, minimum gate | Malformed, absent, or below minimum → no trusted status |
+
+Not published: serial (characteristic absent), active profile identity, measured delivery,
+terminal bolus outcomes (idle is ambiguous), delivery-halting alarms beyond the cartridge
+sentinel (hypothesized same sentinel, unconfirmed).
+
 ## Sources and unresolved differences
 
 Research references are pinned to
