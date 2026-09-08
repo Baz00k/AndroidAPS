@@ -53,7 +53,7 @@ Paired physical observations corrected the provisional decoder:
 | 0 | u8 | 10 running (normal and TBR), 3 stopped | Observed operating states only; other enums unknown |
 | 1 | u32 LE | 4102 then 4099 | Reservoir centi-units; display 41.0 U |
 | 5 | u8 | Battery bars (0–5) | Reported unit; UI shows mapped percent |
-| 6 | u32 LE | 78 TBR, 60 normal, 0 stopped | Current basal centi-units/hour; operator confirmed programmed 0.60 U/h |
+| 6 | u32 LE | 78 at 130% TBR, 60/50/35 across profiles and hours, 0 stopped or 0% TBR | Current basal centi-units/hour; operator-confirmed (0.60 profile A, 0.35 profile B) |
 | 10 | u32 LE | 130 TBR, 100 normal/stopped | Basal percentage |
 | 14 | u32 LE | 144 TBR, 0 normal/stopped | Remaining TBR minutes |
 
@@ -122,7 +122,10 @@ A pump-side 0% TBR for 60 minutes reads mode 10 with basal 0.00 U/h, percent 0 a
 remaining 59 minutes one minute in — running, not suspended. Zero basal with a running mode
 is therefore valid and distinct from Stop (mode 3, basal 0). Pump-side cancellation of that
 TBR transitioned directly from 57 minutes remaining to percent 100 / remaining 0 / basal
-0.50 within one five-second poll — no intermediate state.
+0.50 within one five-second poll — no intermediate state. Switching the active basal profile
+from A to B later moved the reported rate 0.50→0.35 U/h with mode running at 100%, and the
+operator confirmed profile B programs 0.35 U/h this hour. The rate tracks the active profile,
+but status never identifies which profile is active.
 
 Extended public fixtures from private filtered logcat trace SHA-256
 `ffcdadf9cf58cf0ef382fed5b05a09a959b89f80c964fc7d95df4182545ee54e`:
