@@ -382,10 +382,47 @@ class YpsoBleManagerTest {
         assertTrue(pumpState.hasVerifiedStatus)
     }
 
+    @Test
+    fun `reboot recovery uses minimum firmware policy and requires fresh reconnect`() {
+        for (firmware in listOf("V05.00.52", "V05.02.03", "V06.00.00")) {
+            setUp()
+            val old = connectedGatt(firmware = firmware)
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            val results = mutableListOf<Boolean>()
+            manager.readStatus(results::add)
+            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false), results)
+            assertFalse(pumpState.hasVerifiedStatus)
+            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+            val next = connectedGatt(firmware = firmware)
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 2))
+            manager.readStatus(results::add)
+            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false), results)
+            manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false, true), results)
+            assertEquals(9, manager.session!!.snapshot()!!.reboot)
+        }
+    }
+
+    @Test
+    fun `unsupported firmware or control cannot adopt reboot`() {
+        for ((firmware, control) in listOf("V05.00.51" to "1.3", "invalid" to "1.3", "V05.02.03" to "1.4")) {
+            setUp()
+            val fixture = connectedGatt(firmware = firmware, controlVersion = "$control\u0000".toByteArray())
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            manager.readStatus()
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), 0)
+            connectedGatt()
+            assertEquals(8, manager.session!!.snapshot()!!.reboot)
+        }
+    }
+
     private fun connectedGatt(
         readDispatched: Boolean = true,
         controlVersion: ByteArray? = "1.3\u0000".toByteArray(),
-        controlVersionInObservedService: Boolean = true
+        controlVersionInObservedService: Boolean = true,
+        firmware: String = "V05.00.52"
     ): GattFixture {
         val gatt: BluetoothGatt = mock()
         val identityService: BluetoothGattService = mock()
@@ -413,7 +450,7 @@ class YpsoBleManagerTest {
             whenever(version.uuid).thenReturn(uuid)
             whenever(identityService.getCharacteristic(uuid)).thenReturn(version)
             whenever(gatt.readCharacteristic(version)).thenAnswer {
-                manager.gattCallback.onCharacteristicRead(gatt, version, "V05.00.52\u0000".toByteArray(), 0)
+                manager.gattCallback.onCharacteristicRead(gatt, version, "$firmware\u0000".toByteArray(), 0)
                 true
             }
         }

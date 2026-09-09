@@ -31,6 +31,67 @@ class PumpSessionTest {
     }
 
     @Test
+    fun `observed reboot commits independent floor and invalidates old connection`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val old = owner.open(pump, key)
+        val id = owner.begin(old)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(old, id, SessionCrypto.Message(byteArrayOf(0), 9, 1), true)
+        }
+        assertEquals(9, store.saved.records.single().reboot)
+        assertEquals(1L, store.saved.records.single().read)
+        assertNull(store.saved.records.single().write)
+        assertThrows(IllegalStateException::class.java) { owner.begin(old) }
+        val restored = PumpSession(store)
+        val token = restored.open(pump, key)
+        assertThrows(SecurityException::class.java) { accept(restored, token, 1, 9) }
+        assertThrows(SecurityException::class.java) { accept(restored, token, 101, 8) }
+        accept(restored, token, 2, 9)
+    }
+
+    @Test
+    fun `observed reboot failures never publish or partially update`() {
+        for (fault in 1..2) {
+            val store = MemoryStore()
+            val owner = initialized(store)
+            val token = owner.open(pump, key)
+            val id = owner.begin(token)
+            store.fault = fault
+            assertThrows(SecurityException::class.java) {
+                owner.accept(token, id, SessionCrypto.Message(byteArrayOf(), 9, 7), true)
+            }
+            assertNull(owner.snapshot())
+            assertEquals(if (fault == 1) 8 else 9, store.saved.records.single().reboot)
+            assertEquals(if (fault == 1) 100L else 7L, store.saved.records.single().read)
+        }
+    }
+
+    @Test
+    fun `reboot policy rejects jumps zero counter and outstanding reservations`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+        val id = owner.begin(token)
+        for ((reboot, read) in listOf(7 to 101L, 10 to 1L, 9 to 0L)) {
+            assertThrows(SecurityException::class.java) {
+                owner.accept(token, id, SessionCrypto.Message(byteArrayOf(), reboot, read), true)
+            }
+        }
+        store.saved = store.saved.copy(records = store.saved.records.map {
+            it.copy(write = 42, reservation = PumpSession.Reservation("pending", 42, PumpSession.Phase.POSSIBLY_SENT))
+        })
+        val restored = PumpSession(store)
+        val next = restored.open(pump, key)
+        assertThrows(IllegalStateException::class.java) {
+            restored.accept(next, restored.begin(next), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        assertEquals(8, store.saved.records.single().reboot)
+    }
+
+    @Test
     fun `reconnect and process restart retain replay floor`() {
         val store = MemoryStore()
         var owner = initialized(store)

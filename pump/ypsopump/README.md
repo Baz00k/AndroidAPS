@@ -62,9 +62,10 @@ Firmware and field observations are recorded in [the status protocol documentati
 - Status reads also require the observed control-service protocol `1.3` and captured
   containing-service mapping; changed or missing control protocols are unsupported.
 - Protected provisioning and durable unavailable-state reporting are not implemented.
-- Replay protection is journaled before status publication. Reboot-generation changes, lost/restored
-  journals and missing read baselines block reads; restarting or re-importing the same key cannot
-  reset replay protection. Android Keystore crash durability still requires target-phone validation.
+- Replay protection is journaled before status publication. Compatible authenticated next-reboot
+  transitions adopt a new read floor and reconnect; lower/jumped generations, lost/restored journals
+  and missing baselines block reads. Re-importing the same key cannot erase replay protection.
+  See the session contract for the scope of target-phone storage and reboot evidence.
 - Therapy remains blocked unless a future artifact is independently qualified for it.
 
 Any capability change must update its user-facing usage text in the same change. Unverified protocol

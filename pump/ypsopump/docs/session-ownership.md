@@ -6,7 +6,7 @@ The status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCr
 a stateless XChaCha20-Poly1305 codec: ciphertext/tag followed by a 24-byte nonce, with
 a mandatory authenticated 12-byte little-endian reboot/read-counter tail. `PumpSession`
 owns acceptance. AEAD failure, incomplete tails, unsupported signed counter ranges,
-replay, and a different reboot generation cannot update the durable record.
+replay, lower reboot generations and unsupported generation transitions cannot update the record.
 
 Each record binds a normalized pump MAC, SHA-256 key identity, random local key
 generation, reboot generation, read floor, optional write floor and reservation. Serial
@@ -45,12 +45,24 @@ are separate work.
 
 ## Reboot and recovery decision
 
-Target evidence establishes little-endian tails and monotonically increasing reads within
-the observed reboot generation. It does not establish read/write reset semantics across a
-reboot or re-key. Consequently larger and lower reboot values both reject without mutation.
-No read or write reseeding occurs automatically. Recovery is bounded to **zero speculative
-counter probes**. An independently validated new session is required for unsupported
-transitions; same-key replay floors cannot be discarded to manufacture one.
+Storage-mode testing on V05.00.52 established the same key surviving reboot 16 → 17,
+with the read counter restarting at 1 and increasing thereafter. The operator confirmed
+self-test and date/time reset, and restored the clock. Cartridge rewind/self-check alone
+preserved reboot 16 and continued its read counter.
+
+Reboot recovery follows the existing firmware >= V05.00.52 compatibility policy and verified
+control protocol, including newer firmware by assumption unless contradicted by evidence.
+Only V05.00.52 has physical transition evidence. An authenticated next generation (+1) with
+a positive read counter atomically replaces the reboot/read floor and makes write state
+uncertain. The first observed read need not be 1: earlier responses may have been missed.
+The transition response is discarded and the connection quiesced; a new connection must
+authenticate a later response before publishing status. CRC/schema-invalid transition bodies
+still consume the authenticated floor. Missing firmware/control eligibility, lower generations,
+generation jumps, zero counters and any outstanding write record reject without adoption.
+
+There are **zero speculative counter probes**, no inferred write reset, and no recovery by
+same-key import that erases a replay floor. Write reset/acceptance and re-key reset semantics
+remain separate evidence gaps.
 
 The pinned source reference is
 [`docs/19-key-lifecycle-pump-rotation.md` at de7e867241fafd2fb8061ceeecf42af2883b9eb4](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/docs/19-key-lifecycle-pump-rotation.md).

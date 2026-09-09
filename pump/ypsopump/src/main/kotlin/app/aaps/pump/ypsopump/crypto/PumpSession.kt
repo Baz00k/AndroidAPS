@@ -87,24 +87,35 @@ class PumpSession(private val store: Store) {
     }
 
     @Synchronized
-    internal fun accept(origin: Token, id: String, message: SessionCrypto.Message): ByteArray {
+    internal fun accept(origin: Token, id: String, message: SessionCrypto.Message, allowObservedReboot: Boolean = false): ByteArray {
         val old = owned(origin)
         check(transaction == id) { "Stale transaction" }
         require(message.reboot >= 0 && message.counter >= 0) { "Counter outside supported signed range" }
-        // Authenticated metadata is not evidence of reboot/reset semantics. Neither direction can
-        // automatically reseed either counter until a target transition is independently validated.
-        if (message.reboot != old.reboot) throw SecurityException("Unvalidated reboot transition")
+        if (message.reboot != old.reboot) {
+            // V05.00.52 storage-mode capture: same key, reboot +1, read reset to 1.
+            // A missed first response is allowed; neither old read nor write floor seeds this epoch.
+            if (!allowObservedReboot || old.reboot == Int.MAX_VALUE || message.reboot != old.reboot + 1 || message.counter == 0L)
+                throw SecurityException("Unvalidated reboot transition")
+            check(old.reservation == null) { "Cannot transition with an outstanding write record" }
+            val next = old.copy(reboot = message.reboot, read = message.counter, write = null)
+            update(next)
+            quiesce()
+            throw RebootAdoptedException()
+        }
         if (message.counter <= old.read) throw SecurityException("Replayed or rolled-back read")
         update(old.copy(read = message.counter))
         return message.body // Later CRC/schema rejection must not undo this durable replay floor.
     }
 
     @Synchronized
-    fun decrypt(origin: Token, id: String, payload: ByteArray, crypto: SessionCrypto): ByteArray {
+    fun decrypt(origin: Token, id: String, payload: ByteArray, crypto: SessionCrypto, allowObservedReboot: Boolean = false): ByteArray {
         owned(origin)
         check(transaction == id) { "Stale transaction" }
-        return accept(origin, id, crypto.decrypt(payload, checkNotNull(key)))
+        return accept(origin, id, crypto.decrypt(payload, checkNotNull(key)), allowObservedReboot)
     }
+
+    /** Persisted transition; discard this response and reconnect with a new connection token. */
+    class RebootAdoptedException : SecurityException("Authenticated reboot adopted; reconnect required")
 
     /** No production caller can establish write certainty in the status-only contract. */
     @Synchronized

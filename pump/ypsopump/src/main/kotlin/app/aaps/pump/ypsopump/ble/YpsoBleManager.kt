@@ -627,7 +627,11 @@ class YpsoBleManager @Inject constructor(
         val origin = checkNotNull(sessionToken) { "No session generation" }
         val transaction = owner.begin(origin)
         try {
-            owner.decrypt(origin, transaction, payload, sessionCrypto)
+            owner.decrypt(origin, transaction, payload, sessionCrypto,
+                allowObservedReboot = hasCompatibleStatusProtocol())
+        } catch (e: PumpSession.RebootAdoptedException) {
+            disconnect()
+            throw e
         } finally {
             owner.finish(origin, transaction)
         }
