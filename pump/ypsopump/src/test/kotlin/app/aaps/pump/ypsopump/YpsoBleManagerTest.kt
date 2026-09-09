@@ -14,6 +14,7 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -34,6 +35,10 @@ class YpsoBleManagerTest {
     private val sessionCrypto: SessionCrypto = mock()
     private lateinit var pumpState: YpsoPumpState
     private lateinit var manager: YpsoBleManager
+    private val key = ByteArray(32)
+    private fun stubStatus(body: ByteArray = validStatusPayload()) {
+        whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, 1))
+    }
 
     @BeforeEach
     fun setUp() {
@@ -43,12 +48,18 @@ class YpsoBleManagerTest {
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
             }
+        manager.session = PumpSession(object : PumpSession.Store {
+            var saved = PumpSession.State()
+            override fun load() = saved
+            override fun commit(state: PumpSession.State) { saved = state }
+        }).apply { provisionReadBaseline("12:34:56:78:9A:BC", key, 8, 0) }
+        manager.setSharedKey("00".repeat(32))
     }
 
     @Test
     fun `valid callback publishes only after decrypt CRC and decode`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
         pumpState.publishStatus(42.0, 50, false, 100, 1234L)
         assertTrue(pumpState.hasVerifiedStatus)
@@ -64,7 +75,7 @@ class YpsoBleManagerTest {
         assertEquals(null, pumpState.statusSnapshot?.batteryPercent)
         assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         assertEquals("1.3", pumpState.controlServiceVersion)
-        verify(sessionCrypto).decrypt(byteArrayOf(0x55))
+        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(byteArrayOf(0x55)), any())
     }
 
     @Test
@@ -79,7 +90,7 @@ class YpsoBleManagerTest {
         unsupportedVersions.forEach { controlVersion ->
             setUp()
             val fixture = connectedGatt(controlVersion = controlVersion)
-            whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+            stubStatus()
             val results = mutableListOf<Boolean>()
 
             manager.readStatus(results::add)
@@ -94,7 +105,7 @@ class YpsoBleManagerTest {
     @Test
     fun `canonical control version in wrong service rejects status before publication`() {
         val fixture = connectedGatt(controlVersionInObservedService = false)
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -108,7 +119,7 @@ class YpsoBleManagerTest {
     @Test
     fun `invalid CRC fails once without publishing status`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(ByteArray(20))
+        stubStatus(ByteArray(20))
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -123,7 +134,7 @@ class YpsoBleManagerTest {
     @Test
     fun `decrypt failure fails once without publishing status`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenThrow(SecurityException("authentication failed"))
+        whenever(sessionCrypto.decrypt(any(), any())).thenThrow(SecurityException("authentication failed"))
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -137,7 +148,7 @@ class YpsoBleManagerTest {
     @Test
     fun `decoded short status fails without publishing`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(YpsoCrc.appendCrc(byteArrayOf(0x01)))
+        stubStatus(YpsoCrc.appendCrc(byteArrayOf(0x01)))
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -158,13 +169,13 @@ class YpsoBleManagerTest {
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
-        verify(sessionCrypto, never()).decrypt(any())
+        verify(sessionCrypto, never()).decrypt(any(), any())
     }
 
     @Test
     fun `cancelled attempt suppresses late valid publication`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
         val attempt = manager.readStatus(results::add)
 
@@ -180,7 +191,7 @@ class YpsoBleManagerTest {
         var timeout: Runnable? = null
         manager.scheduleOpTimeout = { runnable, _ -> timeout = runnable }
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -189,7 +200,7 @@ class YpsoBleManagerTest {
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
-        verify(sessionCrypto, never()).decrypt(any())
+        verify(sessionCrypto, never()).decrypt(any(), any())
     }
 
     @Test
@@ -211,7 +222,7 @@ class YpsoBleManagerTest {
     fun `callback from stale GATT cannot complete owned operation`() {
         val fixture = connectedGatt()
         val staleGatt: BluetoothGatt = mock()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -237,7 +248,7 @@ class YpsoBleManagerTest {
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
-        verify(sessionCrypto, never()).decrypt(any())
+        verify(sessionCrypto, never()).decrypt(any(), any())
         verify(fixture.gatt, times(2)).readCharacteristic(fixture.extRead)
     }
 
@@ -360,7 +371,7 @@ class YpsoBleManagerTest {
     @Test
     fun `legacy read callback publishes valid status`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         whenever(fixture.status.value).thenReturn(byteArrayOf(0x11, 0x55))
         val results = mutableListOf<Boolean>()
 
@@ -371,10 +382,47 @@ class YpsoBleManagerTest {
         assertTrue(pumpState.hasVerifiedStatus)
     }
 
+    @Test
+    fun `reboot recovery uses minimum firmware policy and requires fresh reconnect`() {
+        for (firmware in listOf("V05.00.52", "V05.02.03", "V06.00.00")) {
+            setUp()
+            val old = connectedGatt(firmware = firmware)
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            val results = mutableListOf<Boolean>()
+            manager.readStatus(results::add)
+            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false), results)
+            assertFalse(pumpState.hasVerifiedStatus)
+            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+            val next = connectedGatt(firmware = firmware)
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 2))
+            manager.readStatus(results::add)
+            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false), results)
+            manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
+            assertEquals(listOf(false, true), results)
+            assertEquals(9, manager.session!!.snapshot()!!.reboot)
+        }
+    }
+
+    @Test
+    fun `unsupported firmware or control cannot adopt reboot`() {
+        for ((firmware, control) in listOf("V05.00.51" to "1.3", "invalid" to "1.3", "V05.02.03" to "1.4")) {
+            setUp()
+            val fixture = connectedGatt(firmware = firmware, controlVersion = "$control\u0000".toByteArray())
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            manager.readStatus()
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), 0)
+            connectedGatt()
+            assertEquals(8, manager.session!!.snapshot()!!.reboot)
+        }
+    }
+
     private fun connectedGatt(
         readDispatched: Boolean = true,
         controlVersion: ByteArray? = "1.3\u0000".toByteArray(),
-        controlVersionInObservedService: Boolean = true
+        controlVersionInObservedService: Boolean = true,
+        firmware: String = "V05.00.52"
     ): GattFixture {
         val gatt: BluetoothGatt = mock()
         val identityService: BluetoothGattService = mock()
@@ -402,7 +450,7 @@ class YpsoBleManagerTest {
             whenever(version.uuid).thenReturn(uuid)
             whenever(identityService.getCharacteristic(uuid)).thenReturn(version)
             whenever(gatt.readCharacteristic(version)).thenAnswer {
-                manager.gattCallback.onCharacteristicRead(gatt, version, "V05.00.52\u0000".toByteArray(), 0)
+                manager.gattCallback.onCharacteristicRead(gatt, version, "$firmware\u0000".toByteArray(), 0)
                 true
             }
         }
@@ -458,9 +506,6 @@ class YpsoBleManagerTest {
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk")
             assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
 
-            var counter = 731L
-            whenever(sessionCrypto.writeCounter).thenAnswer { counter }
-            org.mockito.kotlin.doAnswer { counter = it.getArgument(0); null }.whenever(sessionCrypto).writeCounter = any()
             val outcomes = mutableListOf<Boolean>()
             manager.validateWriteTransport { outcomes.add(true) }
             manager.deliverBolus(1.25, 0, 1.25) { outcomes.add(true) }
@@ -473,7 +518,7 @@ class YpsoBleManagerTest {
                 assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
             }
             assertEquals(List(7) { true }, outcomes)
-            assertEquals(731L, manager.writeCounter)
+            assertEquals(0L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
         }
     }
@@ -525,7 +570,7 @@ class YpsoBleManagerTest {
         assertEquals(listOf<Int?>(null), results)
         verify(first.gatt).close()
         val next = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val statusResults = mutableListOf<Boolean>()
         manager.readStatus(statusResults::add)
         manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
@@ -538,14 +583,14 @@ class YpsoBleManagerTest {
         val fixture = connectedGatt()
         val first = byteArrayOf(0x12) + ByteArray(19) { 0x41 }
         whenever(fixture.status.value).thenReturn(first)
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
         manager.readStatus(results::add)
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, 0)
         first[1] = 0x7f
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
         assertEquals(listOf(true), results)
-        verify(sessionCrypto).decrypt(ByteArray(19) { 0x41 } + byteArrayOf(0x42))
+        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(ByteArray(19) { 0x41 } + byteArrayOf(0x42)), any())
     }
 
     @Test
@@ -558,7 +603,7 @@ class YpsoBleManagerTest {
         manager.disconnect()
         assertEquals(1, completions)
         val next = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val results = mutableListOf<Boolean>()
         manager.readStatus(results::add)
         manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
@@ -569,7 +614,7 @@ class YpsoBleManagerTest {
     @Test
     fun `overlapping diagnostic completes refusal while original EXTREAD transaction completes`() {
         val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val statuses = mutableListOf<Boolean>()
         val diagnostics = mutableListOf<Int?>()
         manager.readStatus(statuses::add)
@@ -578,7 +623,7 @@ class YpsoBleManagerTest {
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
         assertEquals(listOf<Int?>(null), diagnostics)
         assertEquals(listOf(true), statuses)
-        verify(sessionCrypto).decrypt(ByteArray(19) { 0x41 } + byteArrayOf(0x42))
+        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(ByteArray(19) { 0x41 } + byteArrayOf(0x42)), any())
     }
 
     @Test
@@ -588,7 +633,7 @@ class YpsoBleManagerTest {
         val attempt = manager.readStatus(firstResults::add)
         manager.disconnect()
         val next = connectedGatt()
-        whenever(sessionCrypto.decrypt(any())).thenReturn(validStatusPayload())
+        stubStatus()
         val nextResults = mutableListOf<Boolean>()
         manager.readStatus(nextResults::add)
         manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
@@ -645,6 +690,10 @@ class YpsoBleManagerTest {
         gatt: BluetoothGatt,
         state: ConnectionState,
     ) {
+        manager.javaClass.getDeclaredField("sessionToken").apply {
+            isAccessible = true
+            set(manager, manager.session!!.open("12:34:56:78:9A:BC", key))
+        }
         manager.javaClass.getDeclaredField("bluetoothGatt").apply {
             isAccessible = true
             set(manager, gatt)

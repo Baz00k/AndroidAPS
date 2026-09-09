@@ -30,8 +30,8 @@ sentinel (hypothesized same sentinel, unconfirmed).
 
 Responses rejected by envelope, AEAD, counter-tail or counter-freshness validation do not
 mutate session counters. Later CRC/schema/firmware rejection publishes no status; an
-authenticated fresh response can still advance counters. Durable counter ownership and
-session transitions remain separate work.
+authenticated fresh response advances its durable replay floor before publication. See
+[session ownership](session-ownership.md) for restart, migration and unsupported transitions.
 
 ## Sources and unresolved differences
 

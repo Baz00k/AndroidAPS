@@ -12,7 +12,8 @@ import org.junit.jupiter.api.Test
 /** Target captures transformed by tests/transform-status-capture.py, not the driver encoder. */
 class CapturedStatusProtocolTest {
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    private fun crypto() = SessionCrypto().apply { sharedKey = ByteArray(32) { it.toByte() } }
+    private fun crypto() = SessionCrypto()
+    private fun SessionCrypto.decrypt(payload: ByteArray): ByteArray = decrypt(payload, ByteArray(32) { it.toByte() }).body
     private val stopped = listOf(
         "142fd1c1c017eb4678c3d76ff187e084cb6782c8", "24458af9006a106c3385e60aed47898cab13c3df",
         "34a3656123c7a7a3de8d5c250269614216d7bc9e", "44d72b3f175dd6024a2c2d528e1ddf48"

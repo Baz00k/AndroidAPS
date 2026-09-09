@@ -30,6 +30,10 @@ The current artifact has no supported in-app provisioning screen. Configuration 
 2. **Pump MAC** — externally place `ypso_pump_mac` in the private `ypso_ble_state` preferences.
 3. **AEAD session key** — externally import the existing 32-byte key as `ypso_shared_key` in the same
    preferences. Never commit, log or share a real key.
+4. **Durable read baseline** — explicitly migrate the matching MAC/key and independently captured
+   reboot/read counters through `YpsoBleManager.importReadBaseline`. Key-only preference imports no
+   longer enable reads. This internal integration seam has no in-app UI; see the
+   [session migration and recovery contract](docs/session-ownership.md).
 
 This interim storage is ordinary `MODE_PRIVATE` SharedPreferences: the key is plaintext inside the app
 sandbox and is exposed by the debug/ADB access used to install it. It is not protected provisioning.
@@ -58,6 +62,10 @@ Firmware and field observations are recorded in [the status protocol documentati
 - Status reads also require the observed control-service protocol `1.3` and captured
   containing-service mapping; changed or missing control protocols are unsupported.
 - Protected provisioning and durable unavailable-state reporting are not implemented.
+- Replay protection is journaled before status publication. Compatible authenticated next-reboot
+  transitions adopt a new read floor and reconnect; lower/jumped generations, lost/restored journals
+  and missing baselines block reads. Re-importing the same key cannot erase replay protection.
+  See the session contract for the scope of target-phone storage and reboot evidence.
 - Therapy remains blocked unless a future artifact is independently qualified for it.
 
 Any capability change must update its user-facing usage text in the same change. Unverified protocol

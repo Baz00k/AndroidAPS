@@ -15,6 +15,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -46,12 +47,10 @@ class YpsoStatusIntegrationTest {
             whenever(prefs.getString(eq(YpsoPumpConst.PREF_SHARED_KEY), isNull())).thenReturn("01".repeat(32))
             whenever(prefs.getString(eq(YpsoPumpConst.PREF_PUMP_MAC), isNull())).thenReturn("12:34:56:78:9A:BC")
             val crypto: SessionCrypto = mock()
-            var counter = 591L
-            whenever(crypto.writeCounter).thenAnswer { counter }
-            doAnswer { counter = it.getArgument(0); null }.whenever(crypto).writeCounter = any()
+            var counter = 0L
             // Synthetic running status: reservoir 550 centi-units, 2 battery bars, basal 0.85 U/h.
             // CRC computed independently using a Python bitwise polynomial loop.
-            whenever(crypto.decrypt(any())).thenReturn(hex("0a2602000002550000006400000000000000a9d1"))
+            whenever(crypto.decrypt(any(), any())).thenAnswer { SessionCrypto.Message(hex("0a2602000002550000006400000000000000a9d1"), 8, ++counter) }
             var elapsed = 1_000L
             val state = YpsoPumpState().apply { elapsedRealtime = { elapsed }; pumpAddress = "12:34:56:78:9A:BC" }
             val manager = YpsoBleManager(context, AAPSLoggerTest(), crypto, state).apply {
@@ -60,6 +59,11 @@ class YpsoStatusIntegrationTest {
                 cancelOpTimeout = {}
             }
             val rh: ResourceHelper = mock()
+            manager.session = PumpSession(object : PumpSession.Store {
+                var saved = PumpSession.State()
+                override fun load() = saved
+                override fun commit(state: PumpSession.State) { saved = state }
+            }).apply { provisionReadBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0) }
             whenever(rh.gs(any())).thenReturn("localized")
             whenever(rh.gs(any(), anyVararg())).thenReturn("localized")
             val preferences: Preferences = mock()
@@ -71,6 +75,10 @@ class YpsoStatusIntegrationTest {
             val writes = mutableListOf<Pair<UUID, List<Byte>>>()
             var readSucceeds = true
             fun authenticate() {
+                manager.javaClass.getDeclaredField("sessionToken").apply {
+                    isAccessible = true
+                    set(manager, manager.session!!.open(state.pumpAddress, ByteArray(32) { 1 }))
+                }
                 val gatt: BluetoothGatt = mock()
                 val identityService: BluetoothGattService = mock()
                 val controlService: BluetoothGattService = mock()
@@ -155,7 +163,7 @@ class YpsoStatusIntegrationTest {
             assertEquals(0L, plugin.lastDataTime)
             verify(ui, times(2)).addNotification(eq(Notification.PUMP_RESERVOIR_LOW), any(), eq(Notification.URGENT))
             verifyNoInteractions(sync)
-            assertEquals(591L, manager.writeCounter)
+            assertEquals(0L, manager.writeCounter)
             val expectedAuth = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5") to hex("04319d09e5ba61be2acf95ebebffe38a").toList()
             assertEquals(listOf(expectedAuth, expectedAuth), writes)
         }
