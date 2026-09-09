@@ -11,6 +11,9 @@ import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.crypto.PumpSession
+import java.time.Instant
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -27,9 +30,14 @@ class YpsoPumpPluginTest {
     private val sync: PumpSync = mock()
     private val ui: UiInteraction = mock()
     private val preferences: Preferences = mock()
+    private val provisioning: YpsoProvisioningService = mock()
+    private val installed = YpsoProvisioningService.InstalledSession(
+        "10175983", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
+        PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+    )
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), mock(), mock(), ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
     )
 
     @Test
@@ -70,8 +78,9 @@ class YpsoPumpPluginTest {
 
     @Test
     fun `polling alarms use verified measurements and failed reads cannot fabricate empty reservoir`() {
-        whenever(manager.resolveSharedKey(any())).thenReturn("01".repeat(32))
-        whenever(manager.resolvePumpMac(any())).thenReturn("12:34:56:78:9A:BC")
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
         whenever(manager.isConnected).thenReturn(true)
         whenever(preferences.get(IntKey.OverviewResCritical)).thenReturn(10)
         var sample: Double? = 0.0

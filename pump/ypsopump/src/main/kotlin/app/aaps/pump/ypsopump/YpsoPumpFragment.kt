@@ -19,6 +19,7 @@ import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
 import app.aaps.pump.ypsopump.compose.QueueItem
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
@@ -79,12 +80,16 @@ internal fun buildPumpStatusState(
     val snapshot = pumpState.statusSnapshot
     val rows = buildList {
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
+        else if (pumpState.claimedSerialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), rh.gs(R.string.ypsopump_unverified_serial, pumpState.claimedSerialNumber)))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
         if (snapshot != null) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
         }
         if (pumpState.lastErrorCode != 0) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
+        }
+        if (pumpState.availability.causes.isNotEmpty()) {
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_availability), pumpState.availability.causes.localizedSummary { rh.gs(it) }))
         }
     }
     val queue = buildList {
@@ -96,6 +101,7 @@ internal fun buildPumpStatusState(
     return PumpStatusState(
         title = "YpsoPump",
         connection = when {
+            pumpState.availability.causes.contains(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED) -> rh.gs(R.string.ypsopump_reprovisioning_required)
             pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null   -> rh.gs(R.string.ypsopump_authenticated_no_status)
             else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
         },

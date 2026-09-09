@@ -1,80 +1,98 @@
 # YpsoPump status viewer
 
-> **Experimental and not therapy-ready.** The accepted artifact is status-only. Do not rely on it for
+> **Experimental and not therapy-ready.** The supported artifact is status-only. Do not rely on it for
 > insulin delivery or as the only way to monitor the pump.
 
 ## Supported artifact
 
-The supported artifact is the build with `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT
-writes are restricted to the access-authentication handshake (**AUTH-only**).
+The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes are
+restricted to the access-authentication handshake (**AUTH-only**).
 
-After a successful encrypted status read, the UI shows reservoir values and battery percent.
-The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent.
-Connection state is also shown. Status fields have bench evidence on firmware V05.00.52;
-see the [capability matrix](docs/status-protocol.md) for the exact publication boundary:
+After a successful verified encrypted status read, the UI shows reservoir values and battery percent.
+The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent. Status fields have bench
+evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol.md):
 
 - running and Stop are the observed operating states; other mode values reject the status;
 - battery percent is a coarse display mapping from reported bars, not a measured percentage;
 - basal rate, TBR duration, bolus progress and history are unavailable;
-- serial and firmware are shown only when available; a BLE MAC is not shown as a serial;
-- measurements expire five minutes after acquisition, including while disconnected; an earlier successful read is not proof of current contact.
+- measurements expire five minutes after acquisition, including while disconnected;
+- a BLE MAC is never displayed or synthesized as a serial.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
 
-## Setup boundary
+## Protected setup
 
-The current artifact has no supported in-app provisioning screen. Configuration requires all of:
+The signed, non-debuggable status-only artifact provides **Pump connection setup** in the YpsoPump
+plugin preferences. The AAPS target phone does not need root, ADB, `run-as`, recompilation or direct
+preference editing. Configuration requires all of:
 
 1. **BLE bond** — Android must already be bonded to the pump. Bonding is OS-managed.
-2. **Pump MAC** — externally place `ypso_pump_mac` in the private `ypso_ble_state` preferences.
-3. **AEAD session key** — externally import the existing 32-byte key as `ypso_shared_key` in the same
-   preferences. Never commit, log or share a real key.
-4. **Durable read baseline** — explicitly migrate the matching MAC/key and independently captured
-   reboot/read counters through `YpsoBleManager.importReadBaseline`. Key-only preference imports no
-   longer enable reads. This internal integration seam has no in-app UI; see the
-   [session migration and recovery contract](docs/session-ownership.md).
+2. **Real serial and BLE MAC** — enter the supported eight-digit serial beginning with `10` and its
+   matching `EC:2A:F0:xx:xx:xx` address. The serial is never synthesized from the MAC.
+3. **Existing AEAD session key** — either enter the nonzero 32-byte key as 64 hexadecimal characters,
+   or import the canonical schema-v1 `.session.json` produced by
+   [`ypso-keys` at `df5badb6433c4127a41f7da589888acf5dd0309c`](https://github.com/Baz00k/ypso-keys/tree/df5badb6433c4127a41f7da589888acf5dd0309c).
+4. **Independent identity and encrypted-status verification** — **Save and verify status** remains
+   configured-but-unverified until the bonded pump name or GATT serial independently matches the claimed
+   serial and an authenticated encrypted status is accepted. MD5 AUTH or successful decryption alone is
+   not identity verification.
 
-This interim storage is ordinary `MODE_PRIVATE` SharedPreferences: the key is plaintext inside the app
-sandbox and is exposed by the debug/ADB access used to install it. It is not protected provisioning.
+The key, identity, provenance, replay floor and availability state are installed atomically in the
+no-backup session journal. The journal body is AES-GCM encrypted with a non-exportable Android Keystore
+key. AAPS shows only a truncated SHA-256 fingerprint. The setup activity blocks screenshots and does not
+save the plaintext key in UI state. A selected import document is never deleted by AAPS.
 
-Obtaining the key is an external provisioning operation involving the genuine app and a separate rooted
-source device. The current AAPS target also needs debug/ADB preference access. There is no normal-user,
-release-build setup flow yet.
+Obtaining the key is an external operation involving the genuine app and a separate rooted source device.
+That extractor-side requirement does not apply to the AAPS target. See the complete
+[provisioning, controller handoff and renewal procedure](docs/provisioning.md).
 
-These are separate security layers:
+Legacy raw `ypso_ble_state` credentials are accepted only through one-way migration into protected
+storage. A complete serial/MAC/key triple migrates automatically. Older MAC/key-only installations wait
+for explicit real serial entry; entering the matching serial upgrades the existing generation without
+resetting its replay floor. Build-compiled credentials are unsupported.
+
+These remain separate security layers:
 
 - the Android BLE bond permits link access;
 - the pump's MD5 challenge/response authenticates access to GATT;
-- the imported AEAD key decrypts the protected session/status payload.
+- the imported AEAD key decrypts the protected session/status payload;
+- the independently observed pump name or serial binds the claimed serial to the connected device.
 
-A successful BLE connection or MD5 authentication ACK is **not a verified status read**. Only a completed,
-accepted encrypted status response provides displayed measurements.
+## Durable unavailability
 
-Implementation and verification details are in [the driver lifecycle documentation](docs/status-lifecycle.md).
-Firmware and field observations are recorded in [the status protocol documentation](docs/status-protocol.md).
+Availability causes are persisted separately: unconfigured, bond/permission, transport, authentication,
+encrypted-status unavailable, suspected re-key required, counter uncertain and identity mismatch.
+Transport retries back off at 5 s, 15 s, 30 s, 60 s and 5 min; a durable alert is raised after the third
+consecutive transport failure, while actionable non-transport failures alert immediately. Dismissing an
+alert does not clear the condition. Only a verified current-pump encrypted status clears status-related
+causes; status-only write-counter uncertainty remains explicit.
+
+Code 140 is reported as **suspected re-key/session loss**, preserving the code, operation and observed
+firmware. Its exact pump semantics and lifetime trigger remain unproven. Automatic retries stop until an
+operator saves a replacement session and requests its one controlled verification read.
 
 ## Current limitations
 
-- Firmware V05.00.52 is bench-tested on one pump and Android device/OS. Newer firmware is
-  eligible by compatibility policy, not individually validated; older or malformed firmware
-  and unsupported status layouts fail closed.
-- Status reads also require the observed control-service protocol `1.3` and captured
-  containing-service mapping; changed or missing control protocols are unsupported.
-- Protected provisioning and durable unavailable-state reporting are not implemented.
-- Replay protection is journaled before status publication. Compatible authenticated next-reboot
-  transitions adopt a new read floor and reconnect; lower/jumped generations, lost/restored journals
-  and missing baselines block reads. Re-importing the same key cannot erase replay protection.
-  See the session contract for the scope of target-phone storage and reboot evidence.
-- Therapy remains blocked unless a future artifact is independently qualified for it.
+- Firmware V05.00.52 is bench-tested on one pump and Android device/OS. Newer firmware is eligible by
+  compatibility policy, not individually validated; older or malformed firmware and unsupported layouts
+  fail closed.
+- Status reads require observed control-service protocol `1.3` and the captured containing-service mapping.
+- Replay protection is committed before status publication. Compatible authenticated next-reboot
+  transitions adopt a new read floor and reconnect; lower/jumped generations, lost/restored journals and
+  missing protected records block reads. Re-importing the same key cannot erase replay protection.
+- A second controller cannot be reliably excluded by Android inspection alone. Exclusive ownership also
+  requires the operator to quiesce and physically control the other phone.
+- Therapy remains blocked unless a future exact artifact is independently qualified.
 
-Any capability change must update its user-facing usage text in the same change. Unverified protocol
-observations must not be presented as supported behavior.
+Implementation details are in [status lifecycle](docs/status-lifecycle.md), [session ownership](docs/session-ownership.md)
+and [status protocol](docs/status-protocol.md). Any capability change must update user-facing usage text in
+the same change. Unverified observations must not be presented as supported behavior.
 
 ## Build
 
 ```bash
-./gradlew :app:assembleFullLoop   # non-debuggable; YpsoPump is still status-only
+./gradlew :app:assembleFullLoop   # non-debuggable; YpsoPump remains status-only
 ./gradlew :app:assembleFullDebug  # debuggable setup/testing artifact
 ```
 

@@ -30,7 +30,9 @@ or they are more than five minutes old. A connection alone does not mean a readi
 Insulin delivery, temporary basal, profile changes and automated dosing are disabled. Delivery details
 and history are unavailable, and firmware support is not yet qualified.
 
-Setup requires externally obtained pump credentials; there is no in-app setup screen yet.
+Setup uses the release-build **Pump connection setup** screen with manual real serial/MAC/key entry or
+canonical `ypso-keys` session-file import. Credentials must still be obtained through the documented
+external source-device workflow; the AAPS target does not require root or ADB.
 See [YpsoPump setup and limitations](pump/ypsopump/README.md).
 
 ## Other fork changes

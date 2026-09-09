@@ -23,18 +23,23 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.eq
+import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.UUID
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 
 class YpsoBleManagerTest {
     private val context: Context = mock()
     private val sessionCrypto: SessionCrypto = mock()
     private lateinit var pumpState: YpsoPumpState
     private lateinit var manager: YpsoBleManager
+    private lateinit var provisioning: YpsoProvisioningService
     private val key = ByteArray(32)
     private fun stubStatus(body: ByteArray = validStatusPayload()) {
         whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, 1))
@@ -43,8 +48,9 @@ class YpsoBleManagerTest {
     @BeforeEach
     fun setUp() {
         pumpState = YpsoPumpState()
+        provisioning = mock()
         manager =
-            YpsoBleManager(context, AAPSLoggerTest(), sessionCrypto, pumpState).apply {
+            YpsoBleManager(context, AAPSLoggerTest(), sessionCrypto, pumpState, provisioning).apply {
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
             }
@@ -76,6 +82,52 @@ class YpsoBleManagerTest {
         assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         assertEquals("1.3", pumpState.controlServiceVersion)
         verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(byteArrayOf(0x55)), any())
+    }
+
+    @Test
+    fun `successful decryption cannot publish when independent serial verification is unavailable`() {
+        val fixture = connectedGatt()
+        stubStatus()
+        doThrow(SecurityException("Pump serial could not be independently observed"))
+            .whenever(provisioning).markVerified(isNull(), any())
+        val results = mutableListOf<Boolean>()
+
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        assertEquals(listOf(false), results)
+        assertFalse(pumpState.hasVerifiedStatus)
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+    }
+
+    @Test
+    fun `matching GATT serial independently verifies status`() {
+        val fixture = connectedGatt(serial = "10175983\u0000".toByteArray())
+        stubStatus()
+        val results = mutableListOf<Boolean>()
+
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        assertEquals(listOf(true), results)
+        assertTrue(pumpState.hasVerifiedStatus)
+        verify(provisioning).markVerified(eq("10175983"), any())
+    }
+
+    @Test
+    fun `mismatched GATT serial cannot publish status`() {
+        val fixture = connectedGatt(serial = "10175984\u0000".toByteArray())
+        stubStatus()
+        doThrow(SecurityException("Observed pump identity does not match configured serial"))
+            .whenever(provisioning).markVerified(eq("10175984"), any())
+        val results = mutableListOf<Boolean>()
+
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        assertEquals(listOf(false), results)
+        assertFalse(pumpState.hasVerifiedStatus)
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
     }
 
     @Test
@@ -422,7 +474,8 @@ class YpsoBleManagerTest {
         readDispatched: Boolean = true,
         controlVersion: ByteArray? = "1.3\u0000".toByteArray(),
         controlVersionInObservedService: Boolean = true,
-        firmware: String = "V05.00.52"
+        firmware: String = "V05.00.52",
+        serial: ByteArray? = null
     ): GattFixture {
         val gatt: BluetoothGatt = mock()
         val identityService: BluetoothGattService = mock()
@@ -444,6 +497,16 @@ class YpsoBleManagerTest {
         whenever(gatt.services).thenReturn(listOf(identityService, controlService, extReadService, wrongService))
         whenever(gatt.readCharacteristic(status)).thenReturn(readDispatched)
         whenever(gatt.readCharacteristic(extRead)).thenReturn(readDispatched)
+        serial?.let { value ->
+            val uuid = UUID.fromString("00002a25-0000-1000-8000-00805f9b34fb")
+            val serialCharacteristic: BluetoothGattCharacteristic = mock()
+            whenever(serialCharacteristic.uuid).thenReturn(uuid)
+            whenever(identityService.getCharacteristic(uuid)).thenReturn(serialCharacteristic)
+            whenever(gatt.readCharacteristic(serialCharacteristic)).thenAnswer {
+                manager.gattCallback.onCharacteristicRead(gatt, serialCharacteristic, value, BluetoothGatt.GATT_SUCCESS)
+                true
+            }
+        }
         for (suffix in listOf("fcbeb0147bc5", "fcbeb1147bc5")) {
             val uuid = UUID.fromString("669a0c20-0008-969e-e211-$suffix")
             val version: BluetoothGattCharacteristic = mock()
@@ -535,6 +598,26 @@ class YpsoBleManagerTest {
         assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password.copyOf().apply { this[0] = 0 }, YpsoRemoteWrite.AUTHENTICATION))
         pumpState.connectionState = ConnectionState.CONNECTED
         assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password, YpsoRemoteWrite.AUTHENTICATION))
+    }
+
+    @Test
+    fun `authentication code 140 preserves suspected rekey evidence and disconnects`() {
+        val gatt: BluetoothGatt = mock()
+        val auth: BluetoothGattCharacteristic = mock()
+        whenever(auth.uuid).thenReturn(CHAR_AUTH)
+        pumpState.masterVersion = "V05.00.52"
+        ownGatt(gatt, ConnectionState.READY)
+
+        manager.gattCallback.onCharacteristicWrite(gatt, auth, 140)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        verify(provisioning).recordUnavailable(
+            eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+            eq(140),
+            eq(CHAR_AUTH.toString()),
+            eq("V05.00.52"),
+            any()
+        )
     }
 
     @Test
@@ -665,6 +748,49 @@ class YpsoBleManagerTest {
         manager.connect("12:34:56:78:9A:BC")
         assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
         verify(device, times(2)).connectGatt(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `recognized bonded name must match configured serial while unknown names defer to GATT identity`() {
+        val bluetooth: BluetoothManager = mock()
+        val adapter: BluetoothAdapter = mock()
+        val device: BluetoothDevice = mock()
+        val gatt: BluetoothGatt = mock()
+        val installed = YpsoProvisioningService.InstalledSession(
+            "10175983", "EC:2A:F0:02:AF:6F", "fingerprint", null, null, emptyMap(), null,
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+        )
+        whenever(provisioning.installed()).thenReturn(installed)
+        val installedKey = ByteArray(32) { 1 }
+        manager.session = PumpSession(object : PumpSession.Store {
+            var saved = PumpSession.State()
+            override fun load() = saved
+            override fun commit(state: PumpSession.State) { saved = state }
+        }).apply { provisionReadBaseline(installed.mac, installedKey, 8, 0) }
+        manager.setSharedKey("01".repeat(32))
+        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
+        whenever(bluetooth.adapter).thenReturn(adapter)
+        whenever(adapter.isEnabled).thenReturn(true)
+        whenever(adapter.getRemoteDevice(installed.mac)).thenReturn(device)
+        whenever(device.bondState).thenReturn(BluetoothDevice.BOND_BONDED)
+        whenever(device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
+
+        whenever(device.name).thenReturn("mylife YpsoPump 175984")
+        manager.connect(installed.mac)
+        verify(provisioning).recordUnavailable(
+            eq(setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH)),
+            isNull(),
+            eq("connect"),
+            isNull(),
+            any()
+        )
+        verify(device, never()).connectGatt(any(), any(), any(), any())
+
+        whenever(device.name).thenReturn("custom pump alias")
+        manager.connect(installed.mac)
+        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
+        assertEquals("", pumpState.observedIdentitySerial)
+        verify(device).connectGatt(any(), any(), any(), any())
     }
 
     @Test

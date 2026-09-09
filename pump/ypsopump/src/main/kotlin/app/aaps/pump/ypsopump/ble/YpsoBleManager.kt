@@ -24,6 +24,8 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.provisioning.PumpIdentity
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,8 +44,13 @@ class YpsoBleManager @Inject constructor(
     private val context: Context,
     private val aapsLogger: AAPSLogger,
     private val sessionCrypto: SessionCrypto,
-    private val pumpState: YpsoPumpState
+    private val pumpState: YpsoPumpState,
+    private val provisioning: YpsoProvisioningService
 ) {
+
+    init {
+        provisioning.quiesceConnection = { disconnect() }
+    }
 
     enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, DISCOVERING, READY, CONNECTED }
 
@@ -52,6 +59,7 @@ class YpsoBleManager @Inject constructor(
     internal var session: PumpSession? = null
     private var sessionToken: PumpSession.Token? = null
     private var configuredKey: ByteArray? = null
+    private var bondedIdentitySerial: String? = null
     private val readCounter: Long get() = session?.snapshot()?.read ?: 0L
 
     companion object {
@@ -90,25 +98,10 @@ class YpsoBleManager @Inject constructor(
         // counter is off by >=1 and the pump requires strictly-greater). Recover by scanning the counter
         // FORWARD (benign zero-therapy canary) until accepted; see [COUNTER_RESYNC_SCAN].
         private const val ERR_COUNTER_BEHIND = 139
-        // App-error 0x8C (140) = NO_SHARED_KEY, "key exchange required" (SandraK82,
-        // guides/building-a-driver-app.md). The pump has discarded the shared key and will refuse EVERY
-        // encrypted read until a new key exchange is performed. NOT recoverable in software.
-        //
-        // PROVEN on our own pump 2026-07-28: the pump enforces a 28-DAY key expiry, contradicting
-        // report/key-lifetime.md, which concluded "NO pump-side expiry ... the only expiry is a 28-day
-        // APP-side check that the pump ignores". It does not ignore it:
-        //     sharedKeyDate (minted)  2026-06-29 17:30:58
-        //     last successful read    2026-07-28 00:08:04   key age 28d 6.62h
-        //     first NO_SHARED_KEY     2026-07-28 00:17:31   key age 28d 6.78h
-        // Reads had succeeded every 20 min right up to 00:08, so this is a switch flipping, not drift.
-        // The ~6.7h past an exact 28 days suggests a lazy check (timer / daily boundary) rather than an
-        // instantaneous one.
-        //
-        // The trap is that the link looks perfectly healthy: GATT connect, MD5 auth (a static
-        // MD5(mac+salt), unrelated to the shared key) and CTRL_NOTIFY all succeed, and only the first
-        // encrypted read fails. It survives an app restart, a pump BLE stop/start AND a battery pull
-        // (the key normally survives reboot, so a battery pull changing nothing is itself diagnostic),
-        // and the counters never move — which rules out 0x8B desync.
+        // App-error 0x8C (140) is documented as NO_SHARED_KEY / key exchange required. It was observed
+        // after prolonged access on V05.00.52, but the exact invalidating event and lifetime remain
+        // unresolved. Treat it as suspected re-key/session loss and preserve target evidence rather than
+        // claiming a fixed 28-day expiry.
         private const val ERR_NO_SHARED_KEY = 140
         // How far to scan the write counter forward when it is behind (each step = one benign canary write).
         // Desync is normally +1/+2; a wide-ish bound covers multiple lost acks without unbounded runaway.
@@ -127,8 +120,8 @@ class YpsoBleManager @Inject constructor(
         const val EVT_FAST_BOLUS_CANCELLED = 3
     }
 
-    /** Seed the captured session key (hex) into the cryptor before connecting. */
-    fun setSharedKey(hex: String) {
+    /** Test/bench seam; normal builds load the key only through [configureInstalledSession]. */
+    internal fun setSharedKey(hex: String) {
         require(hex.length == 64 && hex.all { it.digitToIntOrNull(16) != null }) {
             disconnect()
             "session key must contain 32 hex-encoded bytes"
@@ -141,40 +134,25 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    fun configureInstalledSession(): Boolean {
+        val installed = provisioning.installed() ?: return false
+        val key = provisioning.keyBytes() ?: return false
+        synchronized(opLock) {
+            if (!key.contentEquals(configuredKey)) disconnect()
+            configuredKey?.fill(0)
+            configuredKey = key
+            session = provisioning.owner
+        }
+        return installed.mac.isNotBlank()
+    }
+
+    fun installedPumpMac(): String = provisioning.installed()?.mac.orEmpty()
+
     private val ypsoPrefs by lazy { context.getSharedPreferences("ypso_ble_state", Context.MODE_PRIVATE) }
     private fun persistWriteCounter() = Unit // Legacy gated callers cannot establish counter certainty.
 
-    /**
-     * Resolve the session key at runtime: a value persisted in prefs (ypso_ble_state / [YpsoPumpConst.PREF_SHARED_KEY])
-     * WINS over the build-time [fallbackHex]. This lets a re-captured key be dropped into prefs (adb/frida) WITHOUT
-     * rebuilding, and keeps the key out of the APK. Returns "" if neither is set. (Model-1 onboarding: the key is
-     * always established by the genuine app + captured — see memory/model3-keyexchange-backend.md.)
-     */
-    fun resolveSharedKey(fallbackHex: String): String {
-        val fromPrefs = ypsoPrefs.getString(YpsoPumpConst.PREF_SHARED_KEY, null)?.trim().orEmpty()
-        return if (fromPrefs.isNotEmpty()) fromPrefs else fallbackHex
-    }
-
-    /** rebootCounter from prefs ([YpsoPumpConst.PREF_REBOOT_COUNTER]) if set, else [fallback]. Changes only on a pump battery pull. */
-    fun resolveRebootCounter(fallback: Int): Int = ypsoPrefs.getInt(YpsoPumpConst.PREF_REBOOT_COUNTER, fallback)
-
-    /**
-     * Resolve the pump BLE MAC at runtime: prefs ([YpsoPumpConst.PREF_PUMP_MAC]) WIN over the build-time
-     * [fallbackMac]. Keeps the user's pump address out of the APK/source (it's per-user, like the key).
-     */
-    fun resolvePumpMac(fallbackMac: String): String {
-        val fromPrefs = ypsoPrefs.getString(YpsoPumpConst.PREF_PUMP_MAC, null)?.trim().orEmpty()
-        return if (fromPrefs.isNotEmpty()) fromPrefs else fallbackMac
-    }
-
-    /** Persist a freshly-captured key into prefs so it survives rebuilds/reconnects (call after a re-capture). */
-    fun saveSharedKey(hex: String) {
-        disconnect()
-        ypsoPrefs.edit().putString(YpsoPumpConst.PREF_SHARED_KEY, hex.trim()).apply()
-    }
-
-    /** Explicit migration seam: these counters must come from an independent current pump capture. */
-    fun importReadBaseline(mac: String, hex: String, reboot: Int, read: Long) = synchronized(opLock) {
+    /** Debug/test migration seam retained for independently captured replay evidence. */
+    internal fun importReadBaseline(mac: String, hex: String, reboot: Int, read: Long) = synchronized(opLock) {
         require(mac.matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")))
         require(hex.length == 64 && hex.all { it.digitToIntOrNull(16) != null })
         disconnect()
@@ -188,7 +166,7 @@ class YpsoBleManager @Inject constructor(
     }
 
     /** Legacy imported counters are diagnostics, never replay recovery or write readiness. */
-    fun setCounters(writeCounter: Long, rebootCounter: Int) {
+    internal fun setCounters(writeCounter: Long, rebootCounter: Int) {
         aapsLogger.debug(LTag.PUMP, "YpsoPump ignoring legacy counter seeds ($writeCounter/$rebootCounter); durable session required")
     }
 
@@ -202,14 +180,24 @@ class YpsoBleManager @Inject constructor(
      */
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String) {
+        var independentlyObservedSerial: String? = null
         val device = runCatching {
             val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
             check(adapter != null && adapter.isEnabled) { "Bluetooth unavailable" }
             adapter.getRemoteDevice(macAddress).also {
                 check(it.bondState == BluetoothDevice.BOND_BONDED) { "existing Bluetooth bond required" }
+                val configuredSerial = provisioning.installed()?.serial
+                if (configuredSerial != null && PumpIdentity.isSupportedDeviceName(it.name)) {
+                    check(PumpIdentity.deviceNameMatches(configuredSerial, it.name)) { "Bonded pump name does not match configured serial" }
+                    independentlyObservedSerial = configuredSerial
+                }
             }
         }.getOrElse {
             disconnect()
+            val cause = if (it.message == "Bonded pump name does not match configured serial")
+                PumpSession.AvailabilityCause.IDENTITY_MISMATCH
+            else PumpSession.AvailabilityCause.BOND_OR_PERMISSION
+            provisioning.recordUnavailable(setOf(cause), operation = "connect")
             aapsLogger.error(LTag.PUMP, "YpsoPump connection unavailable: ${it.message}")
             return
         }
@@ -222,9 +210,12 @@ class YpsoBleManager @Inject constructor(
                 sessionToken = owner.open(macAddress.uppercase(java.util.Locale.ROOT), checkNotNull(configuredKey))
             } catch (e: Exception) {
                 pumpState.invalidateStatus()
+                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), operation = "session-open")
                 aapsLogger.error(LTag.PUMP, "YpsoPump session unavailable: ${e.message}")
                 return
             }
+            bondedIdentitySerial = independentlyObservedSerial
+            pumpState.observedIdentitySerial = independentlyObservedSerial.orEmpty()
             if (pumpState.pumpAddress != macAddress) pumpState.invalidateStatus()
             pumpState.connectionState = ConnectionState.CONNECTING
             queue.clear()
@@ -241,6 +232,7 @@ class YpsoBleManager @Inject constructor(
             if (openedGatt == null) {
                 pumpState.connectionState = ConnectionState.DISCONNECTED
                 pumpState.invalidateStatus()
+                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "connect-gatt")
             } else if (pumpState.connectionState != ConnectionState.DISCONNECTED) {
                 bluetoothGatt = openedGatt
                 armHandshakeTimeout(openedGatt, ConnectionState.CONNECTING)
@@ -290,7 +282,7 @@ class YpsoBleManager @Inject constructor(
         pumpState.settingsServiceVersion = ""
         pumpState.historyServiceVersion = ""
         pumpState.controlServiceVersion = ""
-        pumpState.serialNumber = ""
+        pumpState.observedIdentitySerial = bondedIdentitySerial.orEmpty()
         var finished = false
         val candidates = listOf(
             "serial" to "00002a25-0000-1000-8000-00805f9b34fb",
@@ -318,7 +310,7 @@ class YpsoBleManager @Inject constructor(
                 if (bluetoothGatt !== gatt) { finished = true; done(); return@readOp }
                 aapsLogger.info(LTag.PUMP, "YpsoPump identity $name status=$status raw=${if (name == "serial") "redacted" else bytes?.joinToString("") { "%02x".format(it) }}")
                 if (owner === gatt && status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
-                    if (name == "serial") pumpState.serialNumber = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                    if (name == "serial") pumpState.observedIdentitySerial = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
                     // Service versions are dotted ASCII ("1.1\0"); only master/supervisor are firmware.
                     // Control is consumed by the status decoder, so accept only the independently
                     // observed canonical wire value. Other service versions remain diagnostic only.
@@ -528,14 +520,18 @@ class YpsoBleManager @Inject constructor(
                 // fault and invites hours of restarting things that cannot possibly help; it actually
                 // means the shared key is gone and only a re-key will fix it.
                 val message = if (s == ERR_NO_SHARED_KEY)
-                    "KEY EXPIRED — pump returned NO_SHARED_KEY (0x8C) on $now. The shared key has " +
-                        "expired (28-day pump-side expiry) or been cleared; a NEW KEY EXCHANGE is required. " +
-                        "Restarting AAPS, toggling pump Bluetooth and pulling the pump battery will NOT fix this."
+                    "Pump returned code 140 (0x8C) on $now; the configured key/session is probably no longer accepted and external re-provisioning is required."
                 else if (invalidFrame)
                     "read $now returned an invalid frame; expected frame $expectedFrame${if (totalFrames == 0) "" else "/$totalFrames"}"
                 else
                     "read $now failed (status=$s, got ${frames.size} frames)"
                 fail(originGatt, message)
+                provisioning.recordUnavailable(
+                    causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED) else setOf(PumpSession.AvailabilityCause.TRANSPORT),
+                    code = s.takeIf { it >= 0 },
+                    operation = now.toString(),
+                    firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                )
                 onFailure()
                 return@readOp
             }
@@ -681,6 +677,7 @@ class YpsoBleManager @Inject constructor(
                 if (!completionClaimed || decoded == null) return@synchronized false
                 val (status, payload) = decoded
                 runCatching {
+                    provisioning.markVerified(pumpState.observedIdentitySerial.takeIf(String::isNotBlank))
                     pumpState.publishStatus(
                         reservoirUnits = status.reservoirUnits,
                         batteryPercent = status.batteryPercent,
@@ -696,6 +693,13 @@ class YpsoBleManager @Inject constructor(
             }
             if (!completionClaimed) return@readMultiframe
             failure?.let {
+                if (!pumpState.availability.causes.contains(PumpSession.AvailabilityCause.IDENTITY_MISMATCH)) {
+                    provisioning.recordUnavailable(
+                        setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE),
+                        operation = "encrypted-status",
+                        firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    )
+                }
                 aapsLogger.error(LTag.PUMP, "YpsoPump status rejected: ${it.message}")
                 fail(gatt, "status rejected: ${it.message}")
             }
@@ -1121,6 +1125,7 @@ class YpsoBleManager @Inject constructor(
                         drainPendingOperationsLocked()
                     }
                     failOperations(failed)
+                    provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "gatt-disconnected")
                     runCatching { g.close() }
                 }
             }
@@ -1174,7 +1179,10 @@ class YpsoBleManager @Inject constructor(
                     }
                     null
                 }
-                failure?.let { fail(g, it) }
+                failure?.let {
+                    fail(g, it)
+                    if (status == ERR_NO_SHARED_KEY) recordSuspectedRekey(CHAR_AUTH)
+                }
             } else {
                 completeCurrent(g, ch.uuid, null, status)
             }
@@ -1227,9 +1235,22 @@ class YpsoBleManager @Inject constructor(
             drainPendingOperationsLocked()
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump: $message")
+        if (!message.contains("status rejected") && !message.startsWith("read ") && !message.contains("code 140") && !message.contains("failed (140)")) {
+            val cause = if (message.contains("auth", ignoreCase = true)) PumpSession.AvailabilityCause.AUTHENTICATION else PumpSession.AvailabilityCause.TRANSPORT
+            runCatching { provisioning.recordUnavailable(setOf(cause), operation = "ble", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)) }
+        }
         failOperations(failed)
         runCatching { g.disconnect() }
         runCatching { g.close() }
+    }
+
+    private fun recordSuspectedRekey(operation: UUID) {
+        provisioning.recordUnavailable(
+            causes = setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED),
+            code = ERR_NO_SHARED_KEY,
+            operation = operation.toString(),
+            firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+        )
     }
 
     private fun drainPendingOperationsLocked(): List<Op> {

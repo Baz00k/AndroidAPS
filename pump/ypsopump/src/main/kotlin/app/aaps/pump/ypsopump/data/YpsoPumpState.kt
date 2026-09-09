@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump.data
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,6 +33,8 @@ class YpsoPumpState @Inject constructor() {
     // -- Connection State --
     @Volatile var connectionState: ConnectionState = ConnectionState.DISCONNECTED
     @Volatile var serialNumber: String = ""
+    @Volatile var claimedSerialNumber: String = ""
+    @Volatile var observedIdentitySerial: String = ""
     @Volatile var pumpAddress: String = ""
 
     // -- Pump Status --
@@ -74,6 +77,7 @@ class YpsoPumpState @Inject constructor() {
     // -- Error Tracking --
     @Volatile var lastErrorCode: Int = 0
     @Volatile var lastErrorMessage: String = ""
+    @Volatile var availability: PumpSession.Availability = PumpSession.Availability()
 
     val isConnected: Boolean
         get() = connectionState == ConnectionState.CONNECTED
@@ -117,6 +121,10 @@ class YpsoPumpState @Inject constructor() {
         activeTbrPercent = 100
         activeTbrRemainingMinutes = 0
         activeBolusRemaining = 0.0
+    }
+
+    fun updateAvailability(value: PumpSession.Availability) {
+        availability = value
     }
 
     fun reset() {

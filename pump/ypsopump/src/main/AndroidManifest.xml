@@ -6,4 +6,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <application>
+        <activity
+            android:name=".YpsoProvisioningActivity"
+            android:exported="false"
+            android:label="@string/ypsopump_connection_setup" />
+    </application>
+
 </manifest>

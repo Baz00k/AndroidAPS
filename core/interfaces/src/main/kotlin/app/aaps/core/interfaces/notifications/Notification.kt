@@ -149,6 +149,7 @@ open class Notification {
         // to zero — while the loop carried on dosing into nothing.
         const val PUMP_RESERVOIR_LOW = 95
         const val PUMP_RESERVOIR_EMPTY = 96
+        const val YPSOPUMP_UNAVAILABLE = 97
 
         const val USER_MESSAGE = 1000
 

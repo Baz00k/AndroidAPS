@@ -49,17 +49,8 @@ object YpsoPumpConst {
     const val PREF_PUMP_SERIAL = "ypso_pump_serial"
     const val PREF_PUMP_MAC = "ypso_pump_mac"
 
-    // -- Per-user config (Model 1: key + pump identity come from the genuine app / the user's own pump;
-    //    see memory/model3-keyexchange-backend.md). PREFERRED: set these in prefs at runtime — NO rebuild
-    //    needed, nothing sensitive/personal in the APK or source:
-    //      adb: add to /data/data/info.nightscout.androidaps/shared_prefs/ypso_ble_state.xml (plain MODE_PRIVATE):
-    //        <string name="ypso_shared_key">AEC10ED9...</string>
-    //        <string name="ypso_pump_mac">AA:BB:CC:DD:EE:FF</string>
-    //        <int name="ypso_reboot_counter" value="8" />   (optional; only changes on a battery pull)
-    //    resolveSharedKey()/resolvePumpMac() take prefs over these consts. The consts below are build-time
-    //    FALLBACKS only — leave "" for shared/published builds (never commit a real key or pump MAC).
-    const val PUMP_MAC = ""            // fallback only — prefer the ypso_pump_mac pref (see above)
-    const val CAPTURED_KEY_HEX = ""    // fallback only — prefer the ypso_shared_key pref (see above)
+    // Legacy credential names are retained solely for one-time protected migration. Normal setup never
+    // reads credentials directly from preferences, build constants, ADB or configuration exports.
 
     // -- Write path (counters). Needed only for WRITEs (history index, dosing); reads need none.
     // Seed CAPTURED_WRITE_COUNTER with mylife's CURRENT numericWriteAppCounter (frida ml-readprefs,

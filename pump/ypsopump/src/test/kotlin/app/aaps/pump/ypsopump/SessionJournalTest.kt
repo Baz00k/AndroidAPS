@@ -7,12 +7,13 @@ import javax.crypto.spec.SecretKeySpec
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Executes real journal serialization/order and HMAC; injected storage is not Android Keystore. */
+/** Executes journal serialization/order, legacy HMAC and sealed-body behavior; storage is not Android Keystore. */
 class SessionJournalTest {
     private class Storage : SessionJournal.Storage {
         var file: String? = null
         val keys = mutableMapOf<String, ByteArray>()
         var fault = ""
+        var failSeal = false
         private fun boundary(name: String) { check(fault != name) { "Injected crash: $name" } }
         override fun read() = file
         override fun anchors() = keys.keys.toList()
@@ -26,9 +27,19 @@ class SessionJournalTest {
             keys.remove(alias)
             boundary("after-delete")
         }
-        override fun authenticate(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
+        override fun authenticateLegacy(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(checkNotNull(keys[alias]), "HmacSHA256"))
             doFinal(body.toByteArray())
+        }
+        override fun seal(alias: String, body: String): String {
+            check(!failSeal) { "Injected seal failure" }
+            return body + "." + authenticateLegacy(alias, body).joinToString("") { "%02x".format(it) }
+        }
+        override fun open(alias: String, sealed: String): String {
+            val body = sealed.substringBeforeLast('.')
+            val mac = sealed.substringAfterLast('.').chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            check(java.security.MessageDigest.isEqual(authenticateLegacy(alias, body), mac))
+            return body
         }
         override fun writeAndSync(value: String) {
             boundary("before-truncate")
@@ -58,6 +69,40 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `legacy version one journal selects its sole generation without inventing protected credentials`() {
+        val storage = Storage()
+        val alias = "ypso.session.revision.legacy"
+        storage.create(alias)
+        val body = """{"version":1,"records":[{"pump":"pump","key":"${"00".repeat(32)}","generation":"generation","reboot":8,"read":100,"write":null,"reservation":null}]}"""
+        storage.file = org.json.JSONObject()
+            .put("anchor", alias)
+            .put("body", body)
+            .put("mac", storage.authenticateLegacy(alias, body).joinToString("") { "%02x".format(it) })
+            .toString()
+
+        val loaded = SessionJournal(storage).load()
+
+        assertEquals("generation", loaded.activeGeneration)
+        assertNull(loaded.records.single().keyHex)
+        assertEquals(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), loaded.availability.causes)
+    }
+
+    @Test
+    fun `failed seal removes its uncommitted anchor and preserves the prior revision`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val prior = old
+        journal.commit(prior)
+        storage.failSeal = true
+
+        assertThrows(Exception::class.java) { journal.commit(next) }
+
+        storage.failSeal = false
+        assertEquals(prior, journal.load())
+        assertEquals(1, storage.anchors().size)
+    }
+
+    @Test
     fun `every journal crash boundary restores new state or becomes unavailable`() {
         val boundaries = listOf("before-create", "after-create", "before-delete", "after-delete", "before-truncate", "after-truncate", "partial-write", "before-sync", "after-sync")
         for (boundary in boundaries) {
@@ -69,7 +114,7 @@ class SessionJournalTest {
             storage.fault = ""
             val loaded = runCatching { SessionJournal(storage).load() }.getOrNull()
             when (boundary) {
-                "before-create" -> assertEquals(old, loaded) // No change and no publication/dispatch.
+                "before-create", "after-create" -> assertEquals(old, loaded) // No change and no publication/dispatch.
                 "before-sync", "after-sync" -> assertEquals(next, loaded)
                 else -> assertNull(loaded, boundary)
             }

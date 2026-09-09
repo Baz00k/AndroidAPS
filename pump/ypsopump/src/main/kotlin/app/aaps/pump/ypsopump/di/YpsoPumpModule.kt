@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump.di
 
 import app.aaps.pump.ypsopump.YpsoPumpFragment
 import app.aaps.pump.ypsopump.YpsoPumpPlugin
+import app.aaps.pump.ypsopump.YpsoProvisioningActivity
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.crypto.KeyExchange
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
@@ -27,4 +28,5 @@ abstract class YpsoPumpModule {
     // DaggerFragment — without this binding that attach throws
     // "No injector factory bound for YpsoPumpFragment" and takes the whole app down.
     @ContributesAndroidInjector abstract fun contributesYpsoPumpFragment(): YpsoPumpFragment
+    @ContributesAndroidInjector abstract fun contributesYpsoProvisioningActivity(): YpsoProvisioningActivity
 }
