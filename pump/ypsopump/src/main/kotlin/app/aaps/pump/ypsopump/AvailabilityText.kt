@@ -18,6 +18,8 @@ internal enum class PumpSetupPresentation(@StringRes val message: Int) {
     CONNECTION_FAILED(R.string.ypsopump_cause_transport),
     PUMP_NEEDS_CHECKING(R.string.ypsopump_cause_authentication),
     STATUS_NEEDS_CHECKING(R.string.ypsopump_cause_encrypted_status),
+    // Internal counter uncertainty is never its own instruction: it resolves to the same
+    // "check the pump" step the operator can actually perform.
     DETAILS_NEED_VERIFICATION(R.string.ypsopump_configured_unverified),
     READY(R.string.ypsopump_connected),
 }

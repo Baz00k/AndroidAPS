@@ -7,25 +7,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,7 +30,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -41,12 +37,12 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.annotation.StringRes
+import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
@@ -60,16 +56,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
-import java.time.ZoneId
-import java.time.Duration
-import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 internal enum class VerificationPresentation { IDLE, CHECKING, SUCCEEDED, FAILED, CANCELLED }
 
 internal enum class ProvisioningFeedbackTone { NEUTRAL, SUCCESS, ERROR }
 
-internal data class ProvisioningFeedback(@StringRes val message: Int, val tone: ProvisioningFeedbackTone, val wrapsAction: Boolean = false)
+internal data class ProvisioningFeedback(@StringRes val message: Int, val tone: ProvisioningFeedbackTone)
 
 /** Copies the reviewed secret for an operation, then makes the screen's copy unusable. */
 internal fun detachDocumentForInstallation(document: YpsoSessionDocument): YpsoSessionDocument =
@@ -117,7 +110,10 @@ internal fun verificationPresentation(
     null -> VerificationPresentation.IDLE
 }
 
-/** The setup screen's single feedback message, independent of device configuration or Compose. */
+/**
+ * The setup screen's single feedback message. One sentence, never a joined chain of causes, so the
+ * screen states exactly one thing to do next.
+ */
 internal fun provisioningFeedback(
     verification: VerificationPresentation,
     presentation: PumpSetupPresentation,
@@ -128,8 +124,8 @@ internal fun provisioningFeedback(
     VerificationPresentation.SUCCEEDED, VerificationPresentation.IDLE -> when (presentation) {
         PumpSetupPresentation.SETUP_REQUIRED -> ProvisioningFeedback(R.string.ypsopump_cause_unconfigured, ProvisioningFeedbackTone.NEUTRAL)
         PumpSetupPresentation.DETAILS_NEED_VERIFICATION -> ProvisioningFeedback(R.string.ypsopump_configured_unverified, ProvisioningFeedbackTone.NEUTRAL)
-        PumpSetupPresentation.READY -> ProvisioningFeedback(R.string.ypsopump_verified_at, ProvisioningFeedbackTone.SUCCESS)
-        else -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.ERROR, wrapsAction = true)
+        PumpSetupPresentation.READY -> ProvisioningFeedback(R.string.ypsopump_setup_complete, ProvisioningFeedbackTone.SUCCESS)
+        else -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.ERROR)
     }
 }
 
@@ -165,6 +161,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         if (uri == null) return
         selectedDocument?.sharedKey?.fill(0)
         selectedDocument = null
+        importError = null
         importingDocument = true
         lifecycleScope.launch {
             var reviewed: Result<YpsoSessionDocument>? = null
@@ -194,6 +191,10 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         super.onDestroy()
     }
 
+    /**
+     * One instruction, one set of fields, one file button. Everything the operator cannot act on -
+     * key fingerprints, key age, import timestamps, protocol wording - stays out of the screen.
+     */
     @Composable
     private fun ProvisioningScreen(service: YpsoProvisioningService, importingDocument: Boolean, onPicked: (Uri?) -> Unit) {
         var installed by remember { mutableStateOf(service.installed()) }
@@ -248,6 +249,14 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 if (updated?.attemptId != attemptId || verificationPresentation(updated) != VerificationPresentation.CHECKING) return@LaunchedEffect
             }
         }
+        // Saved details are authoritative once a candidate is promoted, so an import that changes the
+        // pump leaves the fields showing what is actually stored.
+        LaunchedEffect(installed?.serial, installed?.mac) {
+            installed?.let {
+                if (it.serial != serial) serial = it.serial
+                if (it.mac != mac) mac = it.mac
+            }
+        }
         val displayedSession = pending ?: installed
         val feedback = provisioningFeedback(
             verification = verification,
@@ -257,70 +266,56 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 verified = installed?.verifiedAt != null,
             ),
         )
+        // One busy state, one message, one place on the screen.
+        val busyMessage = when {
+            importingDocument -> R.string.ypsopump_importing
+            installing -> R.string.ypsopump_saving
+            verification == VerificationPresentation.CHECKING -> R.string.ypsopump_verifying
+            else -> null
+        }
+        val busy = busyMessage != null
+        val failure = generalError ?: importError
+        val statusText = when {
+            busyMessage != null -> getString(busyMessage)
+            failure != null -> failure
+            else -> getString(feedback.message)
+        }
+        val statusIsError = !busy && (failure != null || feedback.tone == ProvisioningFeedbackTone.ERROR)
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
+            if (installed == null) Text(
                 getString(R.string.ypsopump_setup_explanation),
                 style = MaterialTheme.typography.bodyMedium,
-                color = colors.textPrimary
+                color = colors.textSecondary
             )
-            installed?.let {
-                Text(
-                    getString(R.string.ypsopump_installed_summary, it.serial, it.mac, it.keyFingerprint),
-                    color = colors.textPrimary
-                )
-                Text(
-                    it.createdAt?.let { created -> getString(R.string.ypsopump_key_age, age(created)) }
-                        ?: getString(R.string.ypsopump_key_age_unknown),
-                    color = colors.textSecondary
-                )
-                it.importedAt?.let { imported ->
+            AapsCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        getString(R.string.ypsopump_imported_at, format(imported)),
-                        color = colors.textSecondary
+                        statusText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (statusIsError) MaterialTheme.colorScheme.error else colors.textPrimary,
+                        modifier = Modifier.semantics {
+                            liveRegion = if (statusIsError) LiveRegionMode.Assertive else LiveRegionMode.Polite
+                        }
                     )
-                }
-            }
-            pending?.let {
-                Text(getString(R.string.ypsopump_pending_summary, it.serial, it.mac, it.keyFingerprint), color = colors.textPrimary)
-            }
-            when {
-                verification == VerificationPresentation.CHECKING -> {
-                    Text(
-                        getString(R.string.ypsopump_verifying),
-                        color = colors.textPrimary,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                    )
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Button(
-                        onClick = {
+                    if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    if (verification == VerificationPresentation.CHECKING) {
+                        TextButton(onClick = {
                             service.cancelCandidate()
                             installed = service.installed()
                             pending = service.pending()
                             verificationState = service.verificationState()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(getString(R.string.ypsopump_cancel_verification)) }
-                }
-                else -> {
-                    val message = if (feedback.message == R.string.ypsopump_verified_at)
-                        getString(R.string.ypsopump_verified_at, format(installed!!.verifiedAt!!))
-                    else if (feedback.wrapsAction) getString(R.string.ypsopump_verification_failed, getString(feedback.message))
-                    else getString(feedback.message)
-                    Text(
-                        if (feedback.tone == ProvisioningFeedbackTone.ERROR) getString(R.string.ypsopump_setup_error, message) else message,
-                        color = colors.textPrimary,
-                        modifier = if (feedback.tone == ProvisioningFeedbackTone.ERROR) Modifier.semantics { liveRegion = LiveRegionMode.Assertive } else Modifier
-                    )
+                        }) { Text(getString(R.string.ypsopump_cancel_verification)) }
+                    }
                 }
             }
             OutlinedTextField(
                 serial, { serial = it; serialError = null }, label = { Text(getString(R.string.ypsopump_real_serial)) },
                 modifier = Modifier.fillMaxWidth().focusRequester(serialFocus), singleLine = true, isError = serialError != null,
                 supportingText = serialError?.let { value -> { Text(value) } },
-                enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing,
+                enabled = !busy,
                 colors = fieldColors,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { macFocus.requestFocus() })
@@ -329,7 +324,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 mac, { mac = it; macError = null }, label = { Text(getString(R.string.ypsopump_ble_mac)) },
                 modifier = Modifier.fillMaxWidth().focusRequester(macFocus), singleLine = true, isError = macError != null,
                 supportingText = macError?.let { value -> { Text(value) } },
-                enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing,
+                enabled = !busy,
                 colors = fieldColors,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { keyFocus.requestFocus() })
@@ -345,36 +340,18 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 isError = keyError != null,
                 supportingText = keyError?.let { value -> { Text(value) } },
-                enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing,
+                // The visibility control lives in the field it belongs to instead of a separate row.
+                trailingIcon = {
+                    TextButton(onClick = { showKey = !showKey }, enabled = !busy) {
+                        Text(getString(if (showKey) R.string.ypsopump_hide_key else R.string.ypsopump_show_key))
+                    }
+                },
+                enabled = !busy,
                 colors = fieldColors
             )
-            Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(
-                    value = showKey,
-                    role = Role.Checkbox,
-                    enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing,
-                    onValueChange = { showKey = it }
-                ),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = showKey,
-                    onCheckedChange = null,
-                    enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing,
-                    colors = CheckboxDefaults.colors(
-                        checkedColor = colors.accent,
-                        checkmarkColor = colors.onAccent,
-                        uncheckedColor = colors.textTertiary
-                    )
-                )
-                Text(
-                    getString(R.string.ypsopump_show_key),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.textPrimary,
-                    modifier = Modifier.padding(start = 4.dp)
-                )
-            }
             Button(onClick = {
+                generalError = null
+                importError = null
                 installing = true
                 lifecycleScope.launch {
                     val result = runCatching {
@@ -402,79 +379,54 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                         }
                     }
                 }
-            }, enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_save_verify)) }
-            if (installing) {
-                Text(
-                    getString(R.string.ypsopump_saving),
-                    color = colors.textPrimary,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                )
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            Text(
-                getString(R.string.ypsopump_import_heading),
-                style = MaterialTheme.typography.titleMedium,
-                color = colors.textPrimary
-            )
-            Text(
+            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_save_verify)) }
+            OutlinedButton(
+                onClick = {
+                    generalError = null
+                    picker.launch(arrayOf("application/json", "text/json", "text/plain"))
+                },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(getString(R.string.ypsopump_import_session_file)) }
+            if (selected == null) Text(
                 getString(R.string.ypsopump_private_transfer_warning),
+                style = MaterialTheme.typography.bodySmall,
                 color = colors.textSecondary
             )
-            Button(onClick = { picker.launch(arrayOf("application/json", "text/json", "text/plain")) }, enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing, modifier = Modifier.fillMaxWidth()) {
-                Text(getString(R.string.ypsopump_import_session_file))
-            }
-            if (importingDocument) {
-                Text(
-                    getString(R.string.ypsopump_importing),
-                    color = colors.textPrimary,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                )
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
             selected?.let { document ->
-                Text(
-                    getString(R.string.ypsopump_import_review, document.serial, document.mac, document.fingerprint),
-                    color = colors.textPrimary
-                )
-                Text(getString(R.string.ypsopump_key_created_at, format(document.createdAt)), color = colors.textSecondary)
-                Text(getString(R.string.ypsopump_key_age, age(document.createdAt)), color = colors.textSecondary)
-                Button(onClick = {
-                    val operationDocument = detachDocumentForInstallation(document)
-                    selectedDocument = null
-                    installing = true
-                    lifecycleScope.launch {
-                        val result = runCatching {
-                            verificationStarter.installDocument(operationDocument)
-                        }
-                        installing = false
-                        result.onSuccess {
-                            generalError = null; verificationState = service.verificationState()
-                        }
-                        .onFailure {
+                AapsCard(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            getString(R.string.ypsopump_import_review, document.serial, document.mac),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textPrimary
+                        )
+                        Button(onClick = {
+                            val operationDocument = detachDocumentForInstallation(document)
                             selectedDocument = null
-                            generalError = if (it.message == "Replacement key required after rejection")
-                                getString(R.string.ypsopump_rekey_new_key_required)
-                            else if (it is VerificationStartException) getString(R.string.ypsopump_verification_start_failed)
-                            else getString(R.string.ypsopump_save_failed)
-                        }
+                            generalError = null
+                            importError = null
+                            installing = true
+                            lifecycleScope.launch {
+                                val result = runCatching {
+                                    verificationStarter.installDocument(operationDocument)
+                                }
+                                installing = false
+                                result.onSuccess {
+                                    generalError = null; verificationState = service.verificationState()
+                                }
+                                .onFailure {
+                                    selectedDocument = null
+                                    generalError = if (it.message == "Replacement key required after rejection")
+                                        getString(R.string.ypsopump_rekey_new_key_required)
+                                    else if (it is VerificationStartException) getString(R.string.ypsopump_verification_start_failed)
+                                    else getString(R.string.ypsopump_save_failed)
+                                }
+                            }
+                        }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_apply_import)) }
                     }
-                }, enabled = verification != VerificationPresentation.CHECKING && !importingDocument && !installing, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_apply_import)) }
-            }
-            (generalError ?: importError)?.let {
-                Text(
-                    getString(R.string.ypsopump_setup_error, it),
-                    color = colors.textPrimary,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }
-                )
+                }
             }
         }
     }
-
-    private fun format(instant: java.time.Instant): String = DateTimeFormatter.ISO_LOCAL_DATE_TIME.withZone(ZoneId.systemDefault()).format(instant)
-
-    private fun age(instant: java.time.Instant): String {
-        val days = Duration.between(instant, java.time.Instant.now()).toDays().coerceAtLeast(0)
-        return resources.getQuantityString(R.plurals.ypsopump_key_age_days, days.toInt(), days)
-    }
-
 }

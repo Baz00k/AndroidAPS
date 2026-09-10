@@ -684,7 +684,7 @@ class YpsoPumpPlugin @Inject constructor(
         category.apply {
             addPreference(Preference(context).apply {
                 title = rh.gs(R.string.ypsopump_connection_setup)
-                summary = provisioning.installed()?.let { rh.gs(R.string.ypsopump_configured_summary, it.serial, it.mac, it.keyFingerprint) }
+                summary = provisioning.installed()?.let { rh.gs(R.string.ypsopump_configured_summary, it.serial) }
                     ?: rh.gs(R.string.ypsopump_not_configured)
                 setOnPreferenceClickListener {
                     context.startActivity(Intent(context, YpsoProvisioningActivity::class.java))

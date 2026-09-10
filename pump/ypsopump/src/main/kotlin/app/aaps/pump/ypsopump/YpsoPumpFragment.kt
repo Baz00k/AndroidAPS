@@ -78,8 +78,9 @@ internal fun buildPumpStatusState(
 ): PumpStatusState {
     val snapshot = pumpState.statusSnapshot
     val rows = buildList {
+        // Only facts the pump itself confirmed. An unconfirmed serial is a setup state, and the
+        // status message above already says so; it is not a second half-true reading.
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
-        else if (pumpState.claimedSerialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), rh.gs(R.string.ypsopump_unverified_serial, pumpState.claimedSerialNumber)))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
         if (snapshot != null) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
@@ -116,9 +117,6 @@ internal fun buildPumpStatusState(
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,
-        note = buildList {
-            if (snapshot != null) add(rh.gs(R.string.ypsopump_provisional_status_note))
-            if (YpsoPumpConst.READ_ONLY_MODE) add(rh.gs(R.string.ypsopump_status_only_note))
-        }.joinToString(" ")
+        note = if (YpsoPumpConst.READ_ONLY_MODE) rh.gs(R.string.ypsopump_status_only_note) else ""
     )
 }

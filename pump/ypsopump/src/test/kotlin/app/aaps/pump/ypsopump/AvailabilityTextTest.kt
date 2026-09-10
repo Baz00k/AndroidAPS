@@ -26,6 +26,16 @@ import org.mockito.kotlin.whenever
 
 class AvailabilityTextTest {
 
+    /** Every lookup answers, so a missing stub cannot masquerade as a rendering decision. */
+    private fun resources(vararg text: Pair<Int, String>): ResourceHelper {
+        val resources = mock<ResourceHelper> {
+            on { gs(org.mockito.kotlin.any<Int>()) } doReturn "Fallback"
+            on { gs(org.mockito.kotlin.any<Int>(), org.mockito.kotlin.anyVararg()) } doReturn "Fallback"
+        }
+        text.forEach { (id, value) -> whenever(resources.gs(id)).thenReturn(value) }
+        return resources
+    }
+
     @Test
     fun `one operator state is derived from multiple diagnostic facts`() {
         val presentation = pumpSetupPresentation(
@@ -73,14 +83,12 @@ class AvailabilityTextTest {
             serialNumber = "verified"
             connectionState = ConnectionState.DISCONNECTED
         }
-        val resources = org.mockito.kotlin.mock<ResourceHelper> {
-            on { gs(org.mockito.kotlin.any(), org.mockito.kotlin.anyVararg()) } doReturn "Fallback"
-            on { gs(R.string.ypsopump_serial) } doReturn "Serial"
-            on { gs(R.string.ypsopump_value_unavailable) } doReturn "Unavailable"
-            on { gs(R.string.ypsopump_cause_identity_mismatch) } doReturn "check pump identity"
-            on { gs(R.string.ypsopump_availability) } doReturn "Availability"
-            on { gs(R.string.ypsopump_disconnected) } doReturn "Pump not connected"
-        }
+        val resources = resources(
+            R.string.ypsopump_serial to "Serial",
+            R.string.ypsopump_value_unavailable to "Unavailable",
+            R.string.ypsopump_cause_identity_mismatch to "check pump identity",
+            R.string.ypsopump_disconnected to "Pump not connected",
+        )
 
         val status = buildPumpStatusState(
             state,
@@ -91,7 +99,46 @@ class AvailabilityTextTest {
 
         assertThat(status.connectionSummary).isEqualTo("Pump not connected")
         assertThat(status.connectionAction).isEqualTo("check pump identity")
-        assertThat(status.rows.map { it.label }).doesNotContain("Availability")
+        assertThat(status.rows.map { it.label }).containsExactly("Serial")
+    }
+
+    @Test
+    fun `an unconfirmed serial is a setup state rather than a second half-true reading`() {
+        val state = YpsoPumpState().apply {
+            claimedSerialNumber = "10000001"
+            serialNumber = ""
+            availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
+            connectionState = ConnectionState.DISCONNECTED
+        }
+        val resources = resources(
+            R.string.ypsopump_serial to "Serial",
+            R.string.ypsopump_configured_unverified to "Not checked yet.",
+            R.string.ypsopump_disconnected to "Not connected",
+        )
+
+        val status = buildPumpStatusState(state, org.mockito.kotlin.mock(), org.mockito.kotlin.mock(), resources)
+
+        assertThat(status.rows).isEmpty()
+        assertThat(status.connectionAction).isEqualTo("Not checked yet.")
+    }
+
+    @Test
+    fun `an idle command queue is not rendered as pump status`() {
+        val state = YpsoPumpState().apply {
+            claimedSerialNumber = "10000001"
+            serialNumber = "10000001"
+            availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
+            connectionState = ConnectionState.DISCONNECTED
+        }
+        val queue = org.mockito.kotlin.mock<CommandQueue> {
+            on { performing() } doReturn null
+            on { size() } doReturn 0
+        }
+        val resources = resources()
+
+        val status = buildPumpStatusState(state, queue, org.mockito.kotlin.mock(), resources)
+
+        assertThat(status.queue).isEmpty()
     }
 
     @Test
@@ -104,12 +151,11 @@ class AvailabilityTextTest {
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
             connectionState = ConnectionState.DISCONNECTED
         }
-        val resources = org.mockito.kotlin.mock<ResourceHelper> {
-            on { gs(org.mockito.kotlin.any(), org.mockito.kotlin.anyVararg()) } doReturn "Fallback"
-            on { gs(R.string.ypsopump_serial) } doReturn "Serial"
-            on { gs(R.string.ypsopump_value_unavailable) } doReturn "Unavailable"
-            on { gs(R.string.ypsopump_disconnected) } doReturn "Pump not connected"
-        }
+        val resources = resources(
+            R.string.ypsopump_serial to "Serial",
+            R.string.ypsopump_value_unavailable to "Unavailable",
+            R.string.ypsopump_disconnected to "Pump not connected",
+        )
 
         val status = buildPumpStatusState(
             state,
@@ -170,7 +216,6 @@ class AvailabilityTextTest {
 
         assertThat(feedback.message).isEqualTo(R.string.ypsopump_cause_unconfigured)
         assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.NEUTRAL)
-        assertThat(feedback.wrapsAction).isFalse()
     }
 
     @Test
@@ -182,7 +227,17 @@ class AvailabilityTextTest {
 
         assertThat(feedback.message).isEqualTo(R.string.ypsopump_verification_failed_generic)
         assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.ERROR)
-        assertThat(feedback.wrapsAction).isFalse()
+    }
+
+    @Test
+    fun `a verified setup reports completion without exposing an internal timestamp`() {
+        val feedback = provisioningFeedback(
+            verification = VerificationPresentation.SUCCEEDED,
+            presentation = PumpSetupPresentation.READY,
+        )
+
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_setup_complete)
+        assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.SUCCESS)
     }
 
     @Test
@@ -193,13 +248,12 @@ class AvailabilityTextTest {
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(setOf(AvailabilityCause.TRANSPORT))
             connectionState = ConnectionState.DISCONNECTED
         }
-        val resources = org.mockito.kotlin.mock<ResourceHelper> {
-            on { gs(org.mockito.kotlin.any(), org.mockito.kotlin.anyVararg()) } doReturn "Fallback"
-            on { gs(R.string.ypsopump_serial) } doReturn "Serial"
-            on { gs(R.string.ypsopump_value_unavailable) } doReturn "Unavailable"
-            on { gs(R.string.ypsopump_disconnected) } doReturn "Pump not connected"
-            on { gs(R.string.ypsopump_cause_transport) } doReturn "Keep the pump nearby and awake, then try again."
-        }
+        val resources = resources(
+            R.string.ypsopump_serial to "Serial",
+            R.string.ypsopump_value_unavailable to "Unavailable",
+            R.string.ypsopump_disconnected to "Pump not connected",
+            R.string.ypsopump_cause_transport to "Keep the pump nearby and awake, then try again.",
+        )
 
         val status = buildPumpStatusState(state, org.mockito.kotlin.mock(), org.mockito.kotlin.mock(), resources)
 

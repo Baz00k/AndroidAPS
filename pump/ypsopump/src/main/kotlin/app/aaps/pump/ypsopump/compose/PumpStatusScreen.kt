@@ -28,9 +28,10 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Redesigned pump status screen (handoff Section 7): connection pill, Reservoir + Battery gauge tiles,
- * status rows, and the command-queue list. Read-only view over the pump state + CommandQueue. The card
- * layout is generic enough to reuse for any driver.
+ * Redesigned pump status screen (handoff Section 7): connection pill with at most one instruction,
+ * Reservoir + Battery gauge tiles, confirmed status rows, and the command queue while it is busy.
+ * Read-only view over the pump state + CommandQueue. The card layout is generic enough to reuse for
+ * any driver.
  */
 @Composable
 fun PumpStatusScreen(state: PumpStatusState) {
@@ -78,17 +79,16 @@ fun PumpStatusScreen(state: PumpStatusState) {
             }
         }
 
-        Text("COMMAND QUEUE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
-        AapsCard(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            Column {
-                if (state.queue.isEmpty()) {
-                    Text("Idle", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
-                } else state.queue.forEachIndexed { i, q ->
-                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
-                        Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                        if (q.running) Text("running", style = AapsTheme.type.caption, color = colors.inRange)
+        // The queue is transient machinery: it appears only while something is actually running.
+        if (state.queue.isNotEmpty()) {
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Column {
+                    state.queue.forEachIndexed { i, q ->
+                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
+                            Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                        }
                     }
                 }
             }

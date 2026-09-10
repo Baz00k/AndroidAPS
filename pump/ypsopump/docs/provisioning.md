@@ -40,8 +40,9 @@ no-backup copy and never silently deletes the selected document.
      colon-separated Bluetooth address and key. When later editing identity metadata, leave the key blank
      to retain the installed key — except after a suspected re-key, which requires the pump’s current
      (different) key.
-   - **Import:** choose **Import session file** in the system picker. Review serial number, Bluetooth
-     address, key check code and key creation time/age; the plaintext key is not displayed.
+   - **Import:** choose **Import file from ypso-keys** in the system picker. The screen shows the
+     serial number and Bluetooth address read from the file for confirmation; the key is never
+     displayed.
 7. Start verification. The old BLE connection is quiesced and the submitted details are staged as a
    protected candidate. The saved session is retained while the candidate is checked. A format-valid
    key is not treated as a working key.
@@ -49,7 +50,7 @@ no-backup copy and never silently deletes the selected document.
    serial match plus an accepted encrypted status can promote the candidate to the saved session.
    Failure or cancellation leaves the previous saved details intact. AUTH success, reconnect, file
    parsing, and candidate staging alone do not constitute successful setup.
-9. Restart AAPS and re-open setup/status. Confirm fingerprint, real serial, verified state and durable
+9. Restart AAPS and re-open setup/status. Confirm the real serial, the set-up state and durable
    availability survive. Delete the temporary target transfer copy only after confirming the protected
    copy and fallback procedure.
 
