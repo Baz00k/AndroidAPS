@@ -48,9 +48,10 @@ That extractor-side requirement does not apply to the AAPS target. See the compl
 [provisioning, controller handoff and renewal procedure](docs/provisioning.md).
 
 Legacy raw `ypso_ble_state` credentials are accepted only through one-way migration into protected
-storage. A complete serial/MAC/key triple migrates automatically. Older MAC/key-only installations wait
-for explicit real serial entry; entering the matching serial upgrades the existing generation without
-resetting its replay floor. Build-compiled credentials are unsupported.
+storage. A complete serial/MAC/key triple migrates automatically. Older MAC/key-only installations also
+migrate when the same MAC is already bonded and its recognized pump name independently supplies the real
+serial; otherwise they wait for explicit real serial entry. Migration preserves an existing generation and
+replay floor. Build-compiled credentials are unsupported.
 
 These remain separate security layers:
 

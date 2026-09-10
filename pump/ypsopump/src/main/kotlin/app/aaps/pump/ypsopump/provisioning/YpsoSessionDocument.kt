@@ -178,6 +178,10 @@ object YpsoSessionDocumentParser {
 object PumpIdentity {
     private val macPattern = Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")
     private val supportedSerial = Regex("10[0-9]{6}")
+    private val supportedDeviceNames = listOf(
+        Regex("(?i)^mylife\\s+YpsoPump(?:[ _])?(10[0-9]{6}|[0-9]{6})$"),
+        Regex("(?i)^YpsoPump_(10[0-9]{6}|[0-9]{6})$")
+    )
 
     fun normalizeMac(value: String): String {
         val normalized = value.trim().uppercase(Locale.ROOT)
@@ -207,12 +211,15 @@ object PumpIdentity {
 
     fun deviceNameMatches(serial: String, deviceName: String?): Boolean {
         val normalized = normalizeSerial(serial)
-        val suffix = (normalized.toLong() - 10_000_000L).toString().padStart(6, '0')
-        val name = deviceName.orEmpty().trim()
-        return isSupportedDeviceName(name) &&
-            (name.endsWith(normalized) || name.endsWith(suffix))
+        return serialFromDeviceName(deviceName) == normalized
     }
 
-    fun isSupportedDeviceName(deviceName: String?): Boolean =
-        deviceName.orEmpty().trim().startsWith("mylife YpsoPump", ignoreCase = true)
+    fun serialFromDeviceName(deviceName: String?): String? {
+        val identity = supportedDeviceNames.firstNotNullOfOrNull { it.matchEntire(deviceName.orEmpty().trim()) }
+            ?.groupValues?.get(1)
+            ?: return null
+        return runCatching { normalizeSerial(if (identity.length == 6) "10$identity" else identity) }.getOrNull()
+    }
+
+    fun isSupportedDeviceName(deviceName: String?): Boolean = serialFromDeviceName(deviceName) != null
 }

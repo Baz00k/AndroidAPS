@@ -55,8 +55,11 @@ class YpsoSessionDocumentTest {
         PumpIdentity.validatePair(" 10175983 ", "ec:2a:f0:02:af:6f")
         assertTrue(PumpIdentity.deviceNameMatches("10175983", "mylife YpsoPump 175983"))
         assertTrue(PumpIdentity.deviceNameMatches("10175983", "mylife YpsoPump 10175983"))
+        assertTrue(PumpIdentity.deviceNameMatches("10054912", "YpsoPump_10054912"))
+        assertEquals("10054912", PumpIdentity.serialFromDeviceName("YpsoPump_10054912"))
         assertTrue(PumpIdentity.isSupportedDeviceName("mylife YpsoPump 175984"))
         assertFalse(PumpIdentity.deviceNameMatches("10175983", "unknown 175983"))
+        assertFalse(PumpIdentity.isSupportedDeviceName("YpsoPump_123"))
         assertFalse(PumpIdentity.isSupportedDeviceName("unknown 175983"))
         assertThrows(IllegalArgumentException::class.java) { PumpIdentity.validatePair("10175984", "EC:2A:F0:02:AF:6F") }
         assertThrows(IllegalArgumentException::class.java) { PumpIdentity.normalizeSerial("02AF6F") }

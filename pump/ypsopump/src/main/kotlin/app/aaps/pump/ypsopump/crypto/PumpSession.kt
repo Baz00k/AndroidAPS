@@ -102,7 +102,9 @@ class PumpSession(private val store: Store) {
                     causes = nextCauses,
                     since = current.availability.since.takeIf { retainedCauses.isNotEmpty() } ?: provisioning.importedAt,
                     failures = current.availability.failures.takeIf { retainedCauses.isNotEmpty() } ?: 0,
-                    retryAt = current.availability.retryAt.takeUnless { AvailabilityCause.SUSPECTED_REKEY_REQUIRED in nextCauses }
+                    retryAt = current.availability.retryAt.takeIf {
+                        retainedCauses.isNotEmpty() && AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in nextCauses
+                    }
                 )
             )
         )

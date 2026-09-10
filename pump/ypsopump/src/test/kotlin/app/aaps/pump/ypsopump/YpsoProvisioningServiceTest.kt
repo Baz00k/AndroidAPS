@@ -25,8 +25,9 @@ class YpsoProvisioningServiceTest {
     private class MemoryStore(initial: PumpSession.State = PumpSession.State()) : PumpSession.Store {
         var saved = initial
         var unavailable = false
+        var commits = 0
         override fun load() = saved
-        override fun commit(state: PumpSession.State) { check(!unavailable); saved = state }
+        override fun commit(state: PumpSession.State) { check(!unavailable); commits++; saved = state }
     }
 
     private class Legacy(
@@ -219,6 +220,22 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `legacy MAC key migrates when bonded pump name independently supplies the real serial`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(null, mac, key.hex()))
+
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy) { observedMac ->
+            serial.takeIf { observedMac == mac }
+        }
+
+        assertEquals(serial, service.installed()!!.serial)
+        assertEquals(mac, service.installed()!!.mac)
+        assertArrayEquals(key, service.keyBytes())
+        assertEquals("legacy-preferences", service.installed()!!.source["profile"])
+        assertEquals(1, legacy.clears)
+    }
+
+    @Test
     fun `complete validated legacy identity migrates automatically without inventing key age`() {
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
         val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), legacy)
@@ -227,6 +244,59 @@ class YpsoProvisioningServiceTest {
         assertNull(service.installed()!!.createdAt)
         assertEquals("legacy-preferences", service.installed()!!.source["profile"])
         assertEquals(1, legacy.clears)
+    }
+
+    @Test
+    fun `repeated unconfigured polls do not rewrite the protected journal`() {
+        val (service, store) = service()
+
+        repeat(10) {
+            service.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect", now = it.toLong())
+        }
+
+        assertEquals(0, store.commits)
+        assertEquals(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), service.availability().causes)
+        assertTrue(service.notificationRequired())
+    }
+
+    @Test
+    fun `first protected migration does not inherit unconfigured retry delay`() {
+        val delayed = PumpSession.Availability(
+            causes = setOf(PumpSession.AvailabilityCause.UNCONFIGURED),
+            since = 1_000,
+            failures = 5,
+            retryAt = 301_000
+        )
+        val store = MemoryStore(PumpSession.State(availability = delayed))
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+
+        assertEquals(0, service.availability().failures)
+        assertNull(service.availability().retryAt)
+        assertTrue(service.retryAllowed(2_000))
+    }
+
+    @Test
+    fun `upgrade ignores a stale retry timestamp when no configured failure was recorded`() {
+        val staleAvailability = PumpSession.Availability(
+            causes = setOf(
+                PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE,
+                PumpSession.AvailabilityCause.COUNTER_UNCERTAIN
+            ),
+            since = 1_000,
+            failures = 0,
+            retryAt = 301_000
+        )
+        val record = PumpSession.Record(
+            mac, PumpSession.fingerprint(key), "protected-generation", null, null, null,
+            serial = serial, keyHex = key.hex(), importedAt = 1_000
+        )
+        val store = MemoryStore(PumpSession.State(listOf(record), record.generation, staleAvailability))
+
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+
+        assertTrue(service.retryAllowed(2_000))
     }
 
     @Test

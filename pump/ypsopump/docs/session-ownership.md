@@ -30,10 +30,11 @@ proof of the current read/write floor or command readiness. A new generation sta
 floor and adopts the first positive authenticated current-pump read before publishing status.
 
 Legacy `ypso_ble_state` credentials migrate only into the protected journal. A validated complete
-serial/MAC/key triple migrates automatically. Older MAC/key-only state cannot invent a serial: it waits
-for explicit real serial entry, then upgrades the matching existing key generation and preserves its
-replay floor. Raw credentials are removed only after a successful protected install. Compiled
-credentials and direct preference editing are unsupported.
+serial/MAC/key triple migrates automatically. For older MAC/key-only state, a recognized bonded-pump name
+for that exact MAC may independently supply the real serial; the serial is never derived from the MAC. If
+no such observation is available, migration waits for explicit real serial entry. Both paths upgrade the
+matching existing key generation and preserve its replay floor. Raw credentials are removed only after a
+successful protected install. Compiled credentials and direct preference editing are unsupported.
 
 For debug/ADB migration only, place `files/ypso-read-baseline.json` in the app-private
 directory while the app is force-stopped. Fields are `pump` (MAC), `keyId` (SHA-256 of

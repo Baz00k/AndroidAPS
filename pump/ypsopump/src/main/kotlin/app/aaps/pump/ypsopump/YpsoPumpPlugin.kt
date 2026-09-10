@@ -671,9 +671,13 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
         if (requiredKey != null) return
-        parent.addPreference(PreferenceCategory(context).apply {
+        val category = PreferenceCategory(context).apply {
             key = "ypsopump_connection_setup"
             title = rh.gs(R.string.ypsopump_connection_setup)
+        }
+        // PreferenceGroup needs the host PreferenceManager before children can receive stable IDs.
+        parent.addPreference(category)
+        category.apply {
             addPreference(Preference(context).apply {
                 title = rh.gs(R.string.ypsopump_connection_setup)
                 summary = provisioning.installed()?.let { rh.gs(R.string.ypsopump_configured_summary, it.serial, it.mac, it.keyFingerprint) }
@@ -683,7 +687,7 @@ class YpsoPumpPlugin @Inject constructor(
                     true
                 }
             })
-        })
+        }
     }
 
     private fun publishAvailabilityNotification() {
@@ -692,9 +696,14 @@ class YpsoPumpPlugin @Inject constructor(
             rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
             return
         }
+        val operatorCauses = (availability.causes - PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)
+            .ifEmpty { availability.causes }
         uiInteraction.addNotification(
             Notification.YPSOPUMP_UNAVAILABLE,
-            rh.gs(R.string.ypsopump_unavailable_notification, availability.causes.localizedSummary { rh.gs(it) }),
+            rh.gs(
+                R.string.ypsopump_unavailable_notification,
+                operatorCauses.localizedSummary { rh.gs(it) }
+            ),
             Notification.URGENT
         )
     }

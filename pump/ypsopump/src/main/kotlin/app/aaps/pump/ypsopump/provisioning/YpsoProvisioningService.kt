@@ -1,5 +1,8 @@
 package app.aaps.pump.ypsopump.provisioning
 
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.SharedPreferences
 import app.aaps.pump.ypsopump.YpsoPumpConst
@@ -16,13 +19,15 @@ import javax.inject.Singleton
 class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
-    private val legacyStore: LegacyStore
+    private val legacyStore: LegacyStore,
+    private val bondedSerialForMac: (String) -> String? = { null }
 ) {
 
     @Inject constructor(context: Context, pumpState: YpsoPumpState) : this(
         PumpSession(SessionJournal(context)),
         pumpState,
-        SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE))
+        SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
+        { mac -> bondedPumpSerial(context, mac) }
     )
 
     internal var quiesceConnection: () -> Unit = {}
@@ -139,6 +144,9 @@ class YpsoProvisioningService internal constructor(
         val durablePrerequisites = prior.causes.intersect(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN))
         val stickyRekey = prior.causes.intersect(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
         val nextCauses = causes + durablePrerequisites + stickyRekey
+        // An empty journal already has durable UNCONFIGURED state. AAPS may ask to connect every second;
+        // do not rotate the Keystore anchor or repost the same notification for those no-op polls.
+        if (nextCauses == setOf(PumpSession.AvailabilityCause.UNCONFIGURED) && prior.causes == nextCauses) return
         val preservesRekeyMetadata = stickyRekey.isNotEmpty() && PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in causes
         val failures = if (prior.causes == nextCauses) (prior.failures + 1).coerceAtMost(MAX_RECORDED_FAILURES) else 1
         val delay = RETRY_DELAYS_MS[(failures - 1).coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
@@ -191,6 +199,9 @@ class YpsoProvisioningService internal constructor(
         }
         val availability = pumpState.availability
         if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in availability.causes) return false
+        // Retry timestamps are meaningful only after an actual configured-session failure. Older
+        // builds could carry an unconfigured backoff into the first protected migration.
+        if (availability.failures == 0) return true
         return availability.retryAt?.let { now >= it } ?: true
     }
 
@@ -243,12 +254,14 @@ class YpsoProvisioningService internal constructor(
             return
         }
         val legacy = legacyStore.load()
-        val serial = legacy.serial?.takeIf(String::isNotBlank) ?: return
         val mac = legacy.mac?.takeIf(String::isNotBlank) ?: return
         val key = legacy.key?.takeIf(String::isNotBlank) ?: return
         runCatching {
-            val normalizedSerial = PumpIdentity.normalizeSerial(serial)
             val normalizedMac = PumpIdentity.normalizeMac(mac)
+            // Older builds stored only MAC/key. A bonded pump name is an independent identity
+            // observation, so it can supply the missing real serial without deriving it from the MAC.
+            val serial = legacy.serial?.takeIf(String::isNotBlank) ?: bondedSerialForMac(normalizedMac) ?: return
+            val normalizedSerial = PumpIdentity.normalizeSerial(serial)
             PumpIdentity.validatePair(normalizedSerial, normalizedMac)
             install(
                 normalizedSerial,
@@ -336,5 +349,13 @@ class YpsoProvisioningService internal constructor(
         private const val MAX_RECORDED_FAILURES = 5
         private const val TRANSPORT_NOTIFICATION_THRESHOLD = 3
         private const val LEGACY_PREFERENCES = "ypso_ble_state"
+
+        @SuppressLint("MissingPermission")
+        private fun bondedPumpSerial(context: Context, mac: String): String? = runCatching {
+            val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter ?: return null
+            val device = adapter.getRemoteDevice(mac)
+            if (device.bondState != BluetoothDevice.BOND_BONDED) return null
+            PumpIdentity.serialFromDeviceName(device.name)
+        }.getOrNull()
     }
 }
