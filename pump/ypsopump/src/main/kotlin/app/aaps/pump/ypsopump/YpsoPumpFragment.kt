@@ -23,8 +23,7 @@ import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
 /**
- * YpsoPump driver tab — redesigned as a Compose status screen (connection pill, Reservoir/Battery
- * gauges, status rows, command-queue). Read-only view over [YpsoPumpState] + [CommandQueue].
+ * YpsoPump driver tab: read-only Compose status view over [YpsoPumpState] + [CommandQueue].
  */
 class YpsoPumpFragment : DaggerFragment() {
 
@@ -78,8 +77,6 @@ internal fun buildPumpStatusState(
 ): PumpStatusState {
     val snapshot = pumpState.statusSnapshot
     val rows = buildList {
-        // Only facts the pump itself confirmed. An unconfirmed serial is a setup state, and the
-        // status message above already says so; it is not a second half-true reading.
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
         if (snapshot != null) {

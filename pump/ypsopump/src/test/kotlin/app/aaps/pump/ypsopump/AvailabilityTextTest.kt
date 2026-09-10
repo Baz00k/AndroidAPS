@@ -26,7 +26,6 @@ import org.mockito.kotlin.whenever
 
 class AvailabilityTextTest {
 
-    /** Every lookup answers, so a missing stub cannot masquerade as a rendering decision. */
     private fun resources(vararg text: Pair<Int, String>): ResourceHelper {
         val resources = mock<ResourceHelper> {
             on { gs(org.mockito.kotlin.any<Int>()) } doReturn "Fallback"
@@ -60,6 +59,18 @@ class AvailabilityTextTest {
         )
 
         assertThat(presentation).isEqualTo(PumpSetupPresentation.DETAILS_NEED_CHECKING)
+    }
+
+    @Test
+    fun `a key that cannot decrypt the pump is presented as wrong or expired`() {
+        val presentation = pumpSetupPresentation(
+            causes = setOf(AvailabilityCause.KEY_REJECTED),
+            hasSavedDetails = true,
+            verified = false,
+        )
+
+        assertThat(presentation).isEqualTo(PumpSetupPresentation.KEY_MAY_NEED_UPDATING)
+        assertThat(presentation.message).isEqualTo(R.string.ypsopump_cause_rekey)
     }
 
     @Test
@@ -219,10 +230,21 @@ class AvailabilityTextTest {
     }
 
     @Test
-    fun `failed attempt uses the attempt result rather than stale availability action`() {
+    fun `failed key check reports the key problem rather than a generic message`() {
         val feedback = provisioningFeedback(
             verification = VerificationPresentation.FAILED,
             presentation = PumpSetupPresentation.KEY_MAY_NEED_UPDATING,
+        )
+
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_cause_rekey)
+        assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.ERROR)
+    }
+
+    @Test
+    fun `failed check without a specific key cause uses the attempt result`() {
+        val feedback = provisioningFeedback(
+            verification = VerificationPresentation.FAILED,
+            presentation = PumpSetupPresentation.CONNECTION_FAILED,
         )
 
         assertThat(feedback.message).isEqualTo(R.string.ypsopump_verification_failed_generic)

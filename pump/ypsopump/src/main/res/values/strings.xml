@@ -74,7 +74,7 @@
     <string name="ypsopump_cause_transport">Can’t reach the pump. Keep it close.</string>
     <string name="ypsopump_cause_authentication">The pump refused the saved key.</string>
     <string name="ypsopump_cause_encrypted_status">Can’t read the pump right now.</string>
-    <string name="ypsopump_cause_rekey">The pump key changed. Enter the new one.</string>
+    <string name="ypsopump_cause_rekey">The saved pump key is wrong or expired. Enter the current key.</string>
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>
     <string name="ypsopump_rekey_new_key_required">Enter the pump’s new key. The old one won’t work.</string>
 </resources>

@@ -115,12 +115,15 @@ class YpsoProvisioningService internal constructor(
             mutationEpoch.incrementAndGet()
             try {
                 quiesceConnection()
-                synchronized(this) {
+                val cancelled = synchronized(this) {
+                    val hadCandidate = owner.candidateRecord() != null
                     owner.cancelCandidate(PumpSession.AttemptStatus.CANCELLED)
                     pumpState.invalidateStatus()
                     refreshState()
                     publishAvailability()
+                    hadCandidate
                 }
+                if (cancelled) restoreRetainedLegacySession()
             } finally {
                 completeMutationEpoch()
             }
@@ -234,13 +237,15 @@ class YpsoProvisioningService internal constructor(
             mutationEpoch.incrementAndGet()
             try {
                 quiesceConnection()
-                synchronized(this) {
-                    owner.cancelCandidate(candidate.generation, candidate.attemptId, PumpSession.AttemptStatus.CANCELLED)
+                val cancelled = synchronized(this) {
+                    val result = owner.cancelCandidate(candidate.generation, candidate.attemptId, PumpSession.AttemptStatus.CANCELLED)
                     verificationAttemptRequested = false
                     pumpState.invalidateStatus()
                     refreshState()
                     publishAvailability()
+                    result
                 }
+                if (cancelled) restoreRetainedLegacySession()
             } finally {
                 completeMutationEpoch()
             }
@@ -323,34 +328,82 @@ class YpsoProvisioningService internal constructor(
         return markVerified(generation, owner.verificationAttempt()?.id, serialObserved, now)
     }
 
-    @Synchronized
     fun rejectCandidate(generation: String, attemptId: String?): Boolean {
-        if (owner.candidateRecord()?.generation != generation || owner.verificationAttempt()?.id != attemptId) return false
-        owner.cancelCandidate(PumpSession.AttemptStatus.FAILED)
-        refreshState()
-        publishAvailability()
-        return true
+        val rejected = synchronized(this) {
+            if (owner.candidateRecord()?.generation != generation || owner.verificationAttempt()?.id != attemptId) return false
+            owner.cancelCandidate(PumpSession.AttemptStatus.FAILED)
+            refreshState()
+            publishAvailability()
+            true
+        }
+        if (rejected) restoreRetainedLegacySession()
+        return rejected
     }
 
     /** One ownership-gated failure transaction. A stale callback has no availability side effects. */
     fun failCandidateOrRecord(
         generation: String?, attemptId: String?, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long = System.currentTimeMillis(),
         firmware: String? = null, code: Int? = null
-    ): Boolean = synchronized(this) {
-        if (generation != null && owner.candidateRecord()?.generation == generation) {
-            if (owner.verificationAttempt()?.id != attemptId) return@synchronized false
-            val availability = unavailable(owner.availability(), causes, operation, now, firmware).copy(code = code)
-            val failed = owner.failCandidate(generation, attemptId, availability)
-            if (failed) {
-                refreshState()
-                publishAvailability()
+    ): Boolean {
+        val (handled, restore) = synchronized(this) {
+            if (generation != null && owner.candidateRecord()?.generation == generation) {
+                if (owner.verificationAttempt()?.id != attemptId) return false
+                val availability = unavailable(owner.availability(), causes, operation, now, firmware).copy(code = code)
+                val failed = owner.failCandidate(generation, attemptId, availability)
+                if (failed) {
+                    refreshState()
+                    publishAvailability()
+                }
+                failed to (failed && owner.activeRecord() == null)
+            } else {
+                // A callback for a replaced/cancelled candidate is stale. It must not modify its successor.
+                if (generation != null && owner.activeRecord()?.generation != generation) return false
+                recordUnavailable(causes, code = code, operation = operation, firmware = firmware, now = now)
+                true to false
             }
-            return@synchronized failed
         }
-        // A callback for a replaced/cancelled candidate is stale. It must not modify its successor.
-        if (generation != null && owner.activeRecord()?.generation != generation) return@synchronized false
-        recordUnavailable(causes, code = code, operation = operation, firmware = firmware, now = now)
-        true
+        if (restore) restoreRetainedLegacySession()
+        return handled
+    }
+
+    /**
+     * A failed or cancelled replacement must not leave the pump unreachable. If no committed session
+     * survived, the retained legacy credentials become the active, still-unverified session again,
+     * with their previous availability and retry backoff, so the next connection attempt uses the
+     * same protected credentials a process restart would have migrated.
+     */
+    private fun restoreRetainedLegacySession() {
+        synchronized(provisioningLock) {
+            if (owner.activeRecord() != null) return
+            val legacy = legacyStore.load()
+            val mac = legacy.mac?.takeIf(String::isNotBlank) ?: return
+            val key = legacy.key?.takeIf(String::isNotBlank) ?: return
+            runCatching {
+                val normalizedMac = PumpIdentity.normalizeMac(mac)
+                val serial = legacy.serial?.takeIf(String::isNotBlank) ?: bondedSerialForMac(normalizedMac) ?: return
+                val normalizedSerial = PumpIdentity.normalizeSerial(serial)
+                PumpIdentity.validatePair(normalizedSerial, normalizedMac)
+                val normalizedKey = normalizeKey(key)
+                try {
+                    val provisioning = PumpSession.Provisioning(
+                        normalizedMac, normalizedSerial, normalizedKey, null, System.currentTimeMillis(), mapOf("profile" to "legacy-preferences")
+                    )
+                    synchronized(this) {
+                        val availability = owner.availability().let { value ->
+                            // A cancelled first attempt leaves the journal's default UNCONFIGURED cause, but the
+                            // restored bundle is present and merely unverified.
+                            if (value.causes == setOf(PumpSession.AvailabilityCause.UNCONFIGURED)) PumpSession.Availability(emptySet(), value.since)
+                            else value
+                        }
+                        owner.activateUnverified(provisioning, availability)
+                        refreshState()
+                        publishAvailability()
+                    }
+                } finally {
+                    normalizedKey.fill(0)
+                }
+            }
+        }
     }
 
     @Synchronized

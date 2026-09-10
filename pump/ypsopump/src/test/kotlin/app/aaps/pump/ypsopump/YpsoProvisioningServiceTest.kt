@@ -463,20 +463,64 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `legacy credentials remain until a first candidate is verified`() {
+    fun `failed candidate over retained legacy credentials keeps the session connectable`() {
         val store = MemoryStore()
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
         val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val candidate = service.connectionSession()!!
+        val firstCandidate = service.connectionSession()!!
 
-        assertTrue(candidate.candidate)
+        assertTrue(firstCandidate.candidate)
         assertEquals(0, legacy.clears)
         assertTrue(service.failCandidateOrRecord(
-            candidate.generation, candidate.attemptId,
+            firstCandidate.generation, firstCandidate.attemptId,
             setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "identity", now = 2_000
         ))
-        assertNull(service.connectionSession())
+
+        val restored = service.connectionSession()!!
+        assertFalse(restored.candidate)
+        assertArrayEquals(key, restored.key)
+        assertEquals(serial, restored.serial)
+        assertTrue(service.isConfigured())
+        assertTrue(service.isCurrentConnection(restored))
+        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
         assertEquals(key.hex(), legacy.credentials.key)
+    }
+
+    @Test
+    fun `cancelling a legacy replacement keeps the retained session connectable`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+
+        service.installManual(
+            YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+            Instant.ofEpochMilli(2_000)
+        )
+        service.cancelCandidate()
+
+        val restored = service.connectionSession()!!
+        assertFalse(restored.candidate)
+        assertArrayEquals(key, restored.key)
+        assertFalse(PumpSession.AvailabilityCause.UNCONFIGURED in service.availability().causes)
+        assertTrue(service.isCurrentConnection(restored))
+        assertEquals(0, legacy.clears)
+    }
+
+    @Test
+    fun `a final attempt result is not replayed after restart`() {
+        val (service, store) = service()
+        install(service)
+        val candidate = service.connectionSession()!!
+
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "encrypted-status", now = 2_000
+        ))
+        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
+
+        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+
+        assertNull(restarted.verificationState())
     }
 
     @Test
@@ -496,6 +540,9 @@ class YpsoProvisioningServiceTest {
         assertArrayEquals(key, service.keyBytes())
         assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
         assertTrue(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in service.availability().causes)
+        val restored = service.connectionSession()!!
+        assertFalse(restored.candidate)
+        assertTrue(service.isCurrentConnection(restored))
     }
 
     @Test

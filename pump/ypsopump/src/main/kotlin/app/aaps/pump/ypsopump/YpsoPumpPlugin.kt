@@ -486,10 +486,8 @@ class YpsoPumpPlugin @Inject constructor(
      */
     private fun checkReservoir() {
         val units = pumpState.reservoirUnitsIfFresh() ?: return
-        // Thresholds come from the app's OWN reservoir preferences (Overview → status lights), which
-        // already exist, are already translated and are already on a settings screen. They were left
-        // unread when the redesign dropped the status-lights row; this puts them back to work rather
-        // than inventing a second set of numbers nobody can find.
+        // Reuse the app's existing reservoir thresholds rather than inventing a second set of numbers
+        // nobody can find.
         //
         // Only CRITICAL raises a notification. "Warning" is the level the status lights always meant —
         // a colour, not a nag — and it stays a colour, on the Home reservoir pill.

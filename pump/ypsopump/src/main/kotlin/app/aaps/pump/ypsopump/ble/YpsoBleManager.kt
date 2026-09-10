@@ -757,7 +757,10 @@ class YpsoBleManager @Inject constructor(
             failure?.let {
                 provisioning.failCandidateOrRecord(
                     ownership.generation, ownership.attemptId,
-                    setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE),
+                    setOf(
+                        if (it is SessionCrypto.AuthenticationFailedException) PumpSession.AvailabilityCause.KEY_REJECTED
+                        else PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE
+                    ),
                     operation = "encrypted-status", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
                 )
                 aapsLogger.error(LTag.PUMP, "YpsoPump status rejected: ${it.message}")

@@ -19,6 +19,7 @@ class PumpSession(private val store: Store) {
         TRANSPORT,
         AUTHENTICATION,
         ENCRYPTED_STATUS_UNAVAILABLE,
+        KEY_REJECTED,
         SUSPECTED_REKEY_REQUIRED,
         COUNTER_UNCERTAIN,
         IDENTITY_MISMATCH
@@ -72,7 +73,9 @@ class PumpSession(private val store: Store) {
     enum class Installation { SAME_KEY, ROTATED_KEY, SWITCHED_PUMP, FIRST_PUMP }
     class Token internal constructor(val generation: String, val connection: String)
 
-    private var state: State? = runCatching { store.load().also(::validate) }.getOrNull()
+    // A completed attempt is feedback for the interaction that produced it, not durable state: a
+    // fresh process renders the journaled availability instead of replaying the previous result.
+    private var state: State? = runCatching { store.load().also(::validate) }.getOrNull()?.copy(lastAttempt = null)
     private var record: Record? = null
     private var token: Token? = null
     private var key: ByteArray? = null
@@ -279,6 +282,51 @@ class PumpSession(private val store: Store) {
         persist(retireCandidate(current).copy(lastAttempt = AttemptResult(checkNotNull(attemptId), status)))
         quiesce()
         return true
+    }
+
+    /**
+     * Re-establish a retained bundle as the active, still-unverified session after a replacement
+     * failed. The recorded availability (including retry backoff) is preserved; promotion still
+     * requires an independent read. Never call while a candidate or committed session remains.
+     */
+    @Synchronized
+    fun activateUnverified(provisioning: Provisioning, availability: Availability) {
+        require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
+        require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        check(current.activeGeneration == null && current.candidateGeneration == null) { "A session is already active" }
+        val id = fingerprint(provisioning.sharedKey)
+        val existing = current.records.singleOrNull { it.keyId == id }
+        if (existing != null) check(existing.pump == provisioning.pump) { "Key belongs to another pump" }
+        val retained = existing?.copy(
+            serial = provisioning.serial,
+            keyHex = provisioning.sharedKey.toHex(),
+            createdAt = provisioning.createdAt ?: existing.createdAt,
+            importedAt = provisioning.importedAt,
+            source = provisioning.source,
+            verifiedAt = null,
+            verifiedSerial = null
+        ) ?: Record(
+            pump = provisioning.pump,
+            keyId = id,
+            generation = UUID.randomUUID().toString(),
+            reboot = null,
+            read = null,
+            write = null,
+            serial = provisioning.serial,
+            keyHex = provisioning.sharedKey.toHex(),
+            createdAt = provisioning.createdAt,
+            importedAt = provisioning.importedAt,
+            source = provisioning.source
+        )
+        persist(
+            current.copy(
+                records = current.records.filterNot { it.generation == retained.generation } + retained,
+                activeGeneration = retained.generation,
+                availability = availability
+            )
+        )
+        quiesce()
     }
 
     /** Atomically rejects precisely this candidate and retains its actionable failure on the restored bundle. */

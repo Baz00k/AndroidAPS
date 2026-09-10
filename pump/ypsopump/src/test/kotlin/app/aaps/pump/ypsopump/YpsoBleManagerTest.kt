@@ -237,6 +237,22 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `a key that cannot authenticate the status is reported as rejected`() {
+        val fixture = connectedGatt()
+        whenever(sessionCrypto.decrypt(any(), any())).thenThrow(SessionCrypto.AuthenticationFailedException())
+        val results = mutableListOf<Boolean>()
+
+        manager.readStatus(results::add)
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        assertEquals(listOf(false), results)
+        verify(provisioning).failCandidateOrRecord(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.KEY_REJECTED)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
     fun `decoded short status fails without publishing`() {
         val fixture = connectedGatt()
         stubStatus(YpsoCrc.appendCrc(byteArrayOf(0x01)))

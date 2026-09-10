@@ -110,16 +110,15 @@ internal fun verificationPresentation(
     null -> VerificationPresentation.IDLE
 }
 
-/**
- * The setup screen's single feedback message. One sentence, never a joined chain of causes, so the
- * screen states exactly one thing to do next.
- */
 internal fun provisioningFeedback(
     verification: VerificationPresentation,
     presentation: PumpSetupPresentation,
 ): ProvisioningFeedback = when (verification) {
     VerificationPresentation.CHECKING -> ProvisioningFeedback(R.string.ypsopump_verifying, ProvisioningFeedbackTone.NEUTRAL)
-    VerificationPresentation.FAILED -> ProvisioningFeedback(R.string.ypsopump_verification_failed_generic, ProvisioningFeedbackTone.ERROR)
+    VerificationPresentation.FAILED -> when (presentation) {
+        PumpSetupPresentation.KEY_MAY_NEED_UPDATING -> ProvisioningFeedback(R.string.ypsopump_cause_rekey, ProvisioningFeedbackTone.ERROR)
+        else -> ProvisioningFeedback(R.string.ypsopump_verification_failed_generic, ProvisioningFeedbackTone.ERROR)
+    }
     VerificationPresentation.CANCELLED -> ProvisioningFeedback(R.string.ypsopump_verification_cancelled, ProvisioningFeedbackTone.NEUTRAL)
     VerificationPresentation.SUCCEEDED, VerificationPresentation.IDLE -> when (presentation) {
         PumpSetupPresentation.SETUP_REQUIRED -> ProvisioningFeedback(R.string.ypsopump_cause_unconfigured, ProvisioningFeedbackTone.NEUTRAL)
@@ -191,10 +190,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         super.onDestroy()
     }
 
-    /**
-     * One instruction, one set of fields, one file button. Everything the operator cannot act on -
-     * key fingerprints, key age, import timestamps, protocol wording - stays out of the screen.
-     */
     @Composable
     private fun ProvisioningScreen(service: YpsoProvisioningService, importingDocument: Boolean, onPicked: (Uri?) -> Unit) {
         var installed by remember { mutableStateOf(service.installed()) }
@@ -249,8 +244,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 if (updated?.attemptId != attemptId || verificationPresentation(updated) != VerificationPresentation.CHECKING) return@LaunchedEffect
             }
         }
-        // Saved details are authoritative once a candidate is promoted, so an import that changes the
-        // pump leaves the fields showing what is actually stored.
         LaunchedEffect(installed?.serial, installed?.mac) {
             installed?.let {
                 if (it.serial != serial) serial = it.serial
@@ -266,7 +259,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 verified = installed?.verifiedAt != null,
             ),
         )
-        // One busy state, one message, one place on the screen.
         val busyMessage = when {
             importingDocument -> R.string.ypsopump_importing
             installing -> R.string.ypsopump_saving
@@ -340,7 +332,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 isError = keyError != null,
                 supportingText = keyError?.let { value -> { Text(value) } },
-                // The visibility control lives in the field it belongs to instead of a separate row.
                 trailingIcon = {
                     TextButton(onClick = { showKey = !showKey }, enabled = !busy) {
                         Text(getString(if (showKey) R.string.ypsopump_hide_key else R.string.ypsopump_show_key))

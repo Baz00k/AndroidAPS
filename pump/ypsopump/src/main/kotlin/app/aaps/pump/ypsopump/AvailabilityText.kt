@@ -18,8 +18,6 @@ internal enum class PumpSetupPresentation(@StringRes val message: Int) {
     CONNECTION_FAILED(R.string.ypsopump_cause_transport),
     PUMP_NEEDS_CHECKING(R.string.ypsopump_cause_authentication),
     STATUS_NEEDS_CHECKING(R.string.ypsopump_cause_encrypted_status),
-    // Internal counter uncertainty is never its own instruction: it resolves to the same
-    // "check the pump" step the operator can actually perform.
     DETAILS_NEED_VERIFICATION(R.string.ypsopump_configured_unverified),
     READY(R.string.ypsopump_connected),
 }
@@ -35,6 +33,7 @@ internal fun pumpSetupPresentation(
     PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in causes -> PumpSetupPresentation.KEY_MAY_NEED_UPDATING
     PumpSession.AvailabilityCause.BOND_OR_PERMISSION in causes -> PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION
     PumpSession.AvailabilityCause.AUTHENTICATION in causes -> PumpSetupPresentation.PUMP_NEEDS_CHECKING
+    PumpSession.AvailabilityCause.KEY_REJECTED in causes -> PumpSetupPresentation.KEY_MAY_NEED_UPDATING
     PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE in causes -> PumpSetupPresentation.STATUS_NEEDS_CHECKING
     PumpSession.AvailabilityCause.TRANSPORT in causes -> PumpSetupPresentation.CONNECTION_FAILED
     verified -> PumpSetupPresentation.READY

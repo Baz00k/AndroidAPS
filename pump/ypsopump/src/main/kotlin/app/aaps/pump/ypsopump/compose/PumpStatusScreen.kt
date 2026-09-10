@@ -28,10 +28,8 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Redesigned pump status screen (handoff Section 7): connection pill with at most one instruction,
- * Reservoir + Battery gauge tiles, confirmed status rows, and the command queue while it is busy.
- * Read-only view over the pump state + CommandQueue. The card layout is generic enough to reuse for
- * any driver.
+ * Pump status screen: connection pill with at most one instruction, Reservoir + Battery gauge
+ * tiles, confirmed status rows, and the command queue while it is busy. Read-only view.
  */
 @Composable
 fun PumpStatusScreen(state: PumpStatusState) {
@@ -79,7 +77,6 @@ fun PumpStatusScreen(state: PumpStatusState) {
             }
         }
 
-        // The queue is transient machinery: it appears only while something is actually running.
         if (state.queue.isNotEmpty()) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column {

@@ -48,7 +48,9 @@ no-backup copy and never silently deletes the selected document.
    key is not treated as a working key.
 8. Confirm that the screen shows verification progress followed by a clear result. Only an independent
    serial match plus an accepted encrypted status can promote the candidate to the saved session.
-   Failure or cancellation leaves the previous saved details intact. AUTH success, reconnect, file
+   Failure or cancellation leaves the previous saved details intact. When the only saved details are
+   the previously migrated credentials, they remain selected as the unverified session with their
+   retry backoff, so the pump stays reachable without restarting AAPS. AUTH success, reconnect, file
    parsing, and candidate staging alone do not constitute successful setup.
 9. Restart AAPS and re-open setup/status. Confirm the real serial, the set-up state and durable
    availability survive. Delete the temporary target transfer copy only after confirming the protected
