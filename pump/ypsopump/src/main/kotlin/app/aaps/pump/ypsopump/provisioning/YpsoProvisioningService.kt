@@ -11,6 +11,7 @@ import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import java.io.InputStream
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,6 +34,8 @@ class YpsoProvisioningService internal constructor(
     internal var quiesceConnection: () -> Unit = {}
     internal var availabilityChanged: (PumpSession.Availability) -> Unit = {}
     private var verificationAttemptRequested = false
+    private val mutationEpoch = AtomicLong()
+    private val provisioningLock = Any()
 
     init {
         migrateCompleteLegacyCredentials()
@@ -50,6 +53,19 @@ class YpsoProvisioningService internal constructor(
         val availability: PumpSession.Availability
     )
 
+    /** Credentials selected for the next connection. A candidate is never therapy-capable. */
+    internal data class ConnectionSession(
+        val generation: String,
+        val attemptId: String?,
+        val serial: String,
+        val mac: String,
+        val key: ByteArray,
+        val candidate: Boolean,
+        val epoch: Long = 0
+    )
+
+    data class VerificationState(val attemptId: String, val status: PumpSession.AttemptStatus)
+
     data class ManualDraft(val serial: String, val mac: String, val replacementKey: String?)
 
     enum class ManualField { SERIAL, MAC, KEY }
@@ -63,7 +79,14 @@ class YpsoProvisioningService internal constructor(
     }
 
     @Synchronized
-    fun installed(): InstalledSession? = owner.activeRecord()?.toInstalled(owner.availability())
+    fun installed(): InstalledSession? = owner.committedRecord()?.toInstalled(owner.availability())
+
+    /** Public candidate metadata for UI; never contains raw key material. */
+    @Synchronized
+    fun pending(): InstalledSession? = owner.candidateRecord()?.toInstalled(owner.availability())
+
+    @Synchronized
+    fun verificationState(): VerificationState? = owner.verificationAttempt()?.let { VerificationState(it.id, it.status) }
 
     @Synchronized
     fun isConfigured(): Boolean = owner.activeRecord()?.let { it.keyHex != null && it.serial.isNotBlank() && it.pump.isNotBlank() } == true
@@ -72,10 +95,39 @@ class YpsoProvisioningService internal constructor(
     fun availability(): PumpSession.Availability = pumpState.availability
 
     @Synchronized
-    fun keyBytes(): ByteArray? = owner.activeRecord()?.keyHex?.let(::decodeKey)
+    fun keyBytes(): ByteArray? = owner.committedRecord()?.keyHex?.let(::decodeKey)
 
     @Synchronized
-    fun installManual(draft: ManualDraft, now: Instant = Instant.now()): PumpSession.Installation {
+    internal fun connectionSession(): ConnectionSession? = owner.activeRecord()?.let { record ->
+        val key = record.keyHex?.let(::decodeKey) ?: return null
+        val candidate = owner.candidateRecord()?.generation == record.generation
+        ConnectionSession(record.generation, owner.verificationAttempt()?.id.takeIf { candidate }, record.serial, record.pump, key, candidate, mutationEpoch.get())
+    }
+
+    /** Odd epochs denote the quiesce-to-commit interval and are never acquirable. */
+    internal fun isCurrentConnection(value: ConnectionSession): Boolean =
+        value.epoch % 2L == 0L && mutationEpoch.get() == value.epoch && owner.activeRecord()?.generation == value.generation &&
+            (!value.candidate || owner.verificationAttempt()?.id == value.attemptId)
+
+    /** UI/API seam: discard an unverified candidate and return to the last verified/active bundle. */
+    fun cancelCandidate() {
+        synchronized(provisioningLock) {
+            mutationEpoch.incrementAndGet()
+            try {
+                quiesceConnection()
+                synchronized(this) {
+                    owner.cancelCandidate(PumpSession.AttemptStatus.CANCELLED)
+                    pumpState.invalidateStatus()
+                    refreshState()
+                    publishAvailability()
+                }
+            } finally {
+                completeMutationEpoch()
+            }
+        }
+    }
+
+    fun installManual(draft: ManualDraft, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
         val serial = validateField(ManualField.SERIAL) { PumpIdentity.normalizeSerial(draft.serial) }
         val mac = validateField(ManualField.MAC) { PumpIdentity.normalizeMac(draft.mac) }
         validateField(ManualField.MAC) { PumpIdentity.validatePair(serial, mac) }
@@ -98,14 +150,23 @@ class YpsoProvisioningService internal constructor(
             }
         }
         val preservesCurrentKey = explicitKey == null || current?.keyHex?.equals(key.toHex(), ignoreCase = true) == true
-        return install(
+        install(
             serial,
             mac,
             key,
             createdAt = current?.createdAt.takeIf { preservesCurrentKey },
             importedAt = now.toEpochMilli(),
             source = mapOf("profile" to "manual")
-        ).also { clearLegacyCredentials() }
+        ).also { if (owner.candidateRecord() == null) clearLegacyCredentials() }
+    }
+
+    /** Stage, allow one immediate poll, and either enqueue it or roll back this exact candidate. */
+    fun installManualAndStartVerification(
+        draft: ManualDraft,
+        now: Instant = Instant.now(),
+        enqueue: () -> Boolean
+    ): PumpSession.Installation = synchronized(provisioningLock) {
+        startVerification({ installManual(draft, now) }, enqueue)
     }
 
     @Synchronized
@@ -121,8 +182,7 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
-    @Synchronized
-    fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation {
+    fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
         val serial = PumpIdentity.normalizeSerial(document.serial)
         PumpIdentity.validatePair(serial, document.mac)
         if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
@@ -140,9 +200,51 @@ class YpsoProvisioningService internal constructor(
                 document.createdAt.toEpochMilli(),
                 now.toEpochMilli(),
                 document.source
-            ).also { clearLegacyCredentials() }
+            ).also { if (owner.candidateRecord() == null) clearLegacyCredentials() }
         } finally {
             document.sharedKey.fill(0)
+        }
+    }
+
+    /** Document equivalent of [installManualAndStartVerification], including secret destruction. */
+    fun installDocumentAndStartVerification(
+        document: YpsoSessionDocument,
+        now: Instant = Instant.now(),
+        enqueue: () -> Boolean
+    ): PumpSession.Installation = synchronized(provisioningLock) {
+        try {
+            startVerification({ installDocument(document, now) }, enqueue)
+        } finally {
+            document.sharedKey.fill(0)
+        }
+    }
+
+    private fun startVerification(install: () -> PumpSession.Installation, enqueue: () -> Boolean): PumpSession.Installation {
+        val installation = install()
+        val candidate = synchronized(this) {
+            val value = connectionSession()
+            check(value?.candidate == true && value.attemptId != null) { "Provisioning did not stage a verification candidate" }
+            verificationAttemptRequested = true
+            value
+        }
+        try {
+            if (!enqueue()) throw IllegalStateException("Verification status read was not accepted")
+            return installation
+        } catch (error: Throwable) {
+            mutationEpoch.incrementAndGet()
+            try {
+                quiesceConnection()
+                synchronized(this) {
+                    owner.cancelCandidate(candidate.generation, candidate.attemptId, PumpSession.AttemptStatus.CANCELLED)
+                    verificationAttemptRequested = false
+                    pumpState.invalidateStatus()
+                    refreshState()
+                    publishAvailability()
+                }
+            } finally {
+                completeMutationEpoch()
+            }
+            throw error
         }
     }
 
@@ -153,7 +255,7 @@ class YpsoProvisioningService internal constructor(
         operation: String? = null,
         firmware: String? = null,
         now: Long = System.currentTimeMillis()
-    ) {
+    ): Boolean {
         require(causes.isNotEmpty())
         val prior = owner.availability()
         val durablePrerequisites = prior.causes.intersect(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN))
@@ -161,7 +263,7 @@ class YpsoProvisioningService internal constructor(
         val nextCauses = causes + durablePrerequisites + stickyRekey
         // An empty journal already has durable UNCONFIGURED state. AAPS may ask to connect every second;
         // do not rotate the Keystore anchor or repost the same notification for those no-op polls.
-        if (nextCauses == setOf(PumpSession.AvailabilityCause.UNCONFIGURED) && prior.causes == nextCauses) return
+        if (nextCauses == setOf(PumpSession.AvailabilityCause.UNCONFIGURED) && prior.causes == nextCauses) return false
         val preservesRekeyMetadata = stickyRekey.isNotEmpty() && PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in causes
         val failures = if (prior.causes == nextCauses) (prior.failures + 1).coerceAtMost(MAX_RECORDED_FAILURES) else 1
         val delay = RETRY_DELAYS_MS[(failures - 1).coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
@@ -183,27 +285,72 @@ class YpsoProvisioningService internal constructor(
                 pumpState.updateAvailability(unavailable)
                 availabilityChanged(unavailable)
             }
+        return true
     }
 
     /** Verification requires a serial independently observed from the bonded name or GATT identity. */
-    @Synchronized
-    fun markVerified(serialObserved: String?, now: Long = System.currentTimeMillis()) {
-        val configured = owner.activeRecord() ?: throw SecurityException("No configured pump")
+    fun markVerified(generation: String, attemptId: String?, serialObserved: String?, now: Long = System.currentTimeMillis()): Boolean {
+        val (configured, promotingCandidate) = synchronized(this) {
+            val record = owner.activeRecord() ?: throw SecurityException("No configured pump")
+            check(record.generation == generation) { "Stale verification callback" }
+            if (owner.candidateRecord()?.generation == generation) check(owner.verificationAttempt()?.id == attemptId) { "Stale verification attempt" }
+            record to (owner.candidateRecord()?.generation == generation)
+        }
         val observed = serialObserved?.takeIf(String::isNotBlank)?.let {
             runCatching { PumpIdentity.normalizeSerial(it) }.getOrNull()
         }
         if (observed == null) {
-            recordUnavailable(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), operation = "identity-unobservable", now = now)
+            failCandidateOrRecord(generation, attemptId, setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "identity-unobservable", now)
             throw SecurityException("Pump serial could not be independently observed")
         }
         if (observed != configured.serial) {
-            recordUnavailable(setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), operation = "identity-read", now = now)
+            failCandidateOrRecord(generation, attemptId, setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now)
             throw SecurityException("Configured serial does not match the connected pump")
         }
-        owner.markVerified(configured.serial, now)
-        pumpState.claimedSerialNumber = configured.serial
-        pumpState.serialNumber = configured.serial
+        synchronized(this) {
+            owner.markVerified(generation, configured.serial, now)
+            if (owner.candidateRecord() == null) clearLegacyCredentials()
+            pumpState.claimedSerialNumber = configured.serial
+            pumpState.serialNumber = configured.serial
+            publishAvailability()
+        }
+        return promotingCandidate
+    }
+
+    /** Compatibility/test seam; production BLE supplies the connection generation. */
+    fun markVerified(serialObserved: String?, now: Long = System.currentTimeMillis()): Boolean {
+        val generation = synchronized(this) { owner.activeRecord()?.generation ?: throw SecurityException("No configured pump") }
+        return markVerified(generation, owner.verificationAttempt()?.id, serialObserved, now)
+    }
+
+    @Synchronized
+    fun rejectCandidate(generation: String, attemptId: String?): Boolean {
+        if (owner.candidateRecord()?.generation != generation || owner.verificationAttempt()?.id != attemptId) return false
+        owner.cancelCandidate(PumpSession.AttemptStatus.FAILED)
+        refreshState()
         publishAvailability()
+        return true
+    }
+
+    /** One ownership-gated failure transaction. A stale callback has no availability side effects. */
+    fun failCandidateOrRecord(
+        generation: String?, attemptId: String?, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long = System.currentTimeMillis(),
+        firmware: String? = null, code: Int? = null
+    ): Boolean = synchronized(this) {
+        if (generation != null && owner.candidateRecord()?.generation == generation) {
+            if (owner.verificationAttempt()?.id != attemptId) return@synchronized false
+            val availability = unavailable(owner.availability(), causes, operation, now, firmware).copy(code = code)
+            val failed = owner.failCandidate(generation, attemptId, availability)
+            if (failed) {
+                refreshState()
+                publishAvailability()
+            }
+            return@synchronized failed
+        }
+        // A callback for a replaced/cancelled candidate is stale. It must not modify its successor.
+        if (generation != null && owner.activeRecord()?.generation != generation) return@synchronized false
+        recordUnavailable(causes, code = code, operation = operation, firmware = firmware, now = now)
+        true
     }
 
     @Synchronized
@@ -250,14 +397,22 @@ class YpsoProvisioningService internal constructor(
         source: Map<String, String>
     ): PumpSession.Installation = try {
         val provisioning = PumpSession.Provisioning(mac, serial, key, createdAt, importedAt, source)
-        owner.preflight(provisioning)
-        quiesceConnection()
-        verificationAttemptRequested = false
-        owner.install(provisioning).also {
-            pumpState.invalidateStatus()
-            pumpState.claimedSerialNumber = serial
-            pumpState.serialNumber = ""
-            publishAvailability()
+        synchronized(provisioningLock) {
+            synchronized(this) { owner.preflight(provisioning); mutationEpoch.incrementAndGet() }
+            try {
+                quiesceConnection()
+                synchronized(this) {
+                    verificationAttemptRequested = false
+                    owner.install(provisioning).also {
+                        pumpState.invalidateStatus()
+                        pumpState.claimedSerialNumber = serial
+                        pumpState.serialNumber = ""
+                        publishAvailability()
+                    }
+                }
+            } finally {
+                completeMutationEpoch()
+            }
         }
     } finally {
         key.fill(0)
@@ -266,7 +421,7 @@ class YpsoProvisioningService internal constructor(
     /** Complete legacy triples migrate once. MAC/key-only state waits for explicit real serial entry. */
     private fun migrateCompleteLegacyCredentials() {
         if (owner.activeRecord() != null) {
-            if (owner.activeRecord()?.keyHex != null) clearLegacyCredentials()
+            if (owner.candidateRecord() == null && owner.activeRecord()?.keyHex != null) clearLegacyCredentials()
             return
         }
         val legacy = legacyStore.load()
@@ -287,7 +442,7 @@ class YpsoProvisioningService internal constructor(
                 importedAt = System.currentTimeMillis(),
                 source = mapOf("profile" to "legacy-preferences")
             )
-            clearLegacyCredentials()
+            if (owner.candidateRecord() == null) clearLegacyCredentials()
         }
     }
 
@@ -295,6 +450,19 @@ class YpsoProvisioningService internal constructor(
         val value = owner.availability()
         pumpState.updateAvailability(value)
         availabilityChanged(value)
+    }
+
+    /** Called under [provisioningLock]; never strand normal acquisition after a failed durable mutation. */
+    private fun completeMutationEpoch() {
+        if (mutationEpoch.get() % 2L != 0L) mutationEpoch.incrementAndGet()
+    }
+
+    private fun unavailable(prior: PumpSession.Availability, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long, firmware: String?): PumpSession.Availability {
+        val retained = prior.causes.intersect(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN, PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
+        val next = causes + retained
+        val failures = if (prior.causes == next) (prior.failures + 1).coerceAtMost(MAX_RECORDED_FAILURES) else 1
+        val sticky = PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in retained && PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in causes
+        return PumpSession.Availability(next, if (sticky) prior.since else now, if (sticky) prior.code else null, if (sticky) prior.operation else operation, if (sticky) prior.firmware else firmware, failures, if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in next) null else now + RETRY_DELAYS_MS[(failures - 1).coerceAtMost(RETRY_DELAYS_MS.lastIndex)])
     }
 
     private fun clearLegacyCredentials() = legacyStore.clear()

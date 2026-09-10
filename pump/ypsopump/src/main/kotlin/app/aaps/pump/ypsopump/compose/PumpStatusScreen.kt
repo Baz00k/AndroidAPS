@@ -20,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.AapsCard
@@ -42,9 +41,15 @@ fun PumpStatusScreen(state: PumpStatusState) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
-                label = state.connection.ifBlank { "Disconnected" },
+                label = state.connectionSummary,
                 dotColor = if (state.connectionHealthy) colors.inRange else colors.low
             )
+        }
+
+        state.connectionAction?.let { action ->
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Text(action, style = AapsTheme.type.body, color = colors.textPrimary)
+            }
         }
 
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
@@ -66,7 +71,7 @@ fun PumpStatusScreen(state: PumpStatusState) {
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(r.label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         }
                     }
                 }

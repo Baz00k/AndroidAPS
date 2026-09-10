@@ -65,6 +65,11 @@ class YpsoStatusIntegrationTest {
                 override fun load() = saved
                 override fun commit(state: PumpSession.State) { saved = state }
             }).apply { provisionReadBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0) }
+            whenever(provisioning.connectionSession()).thenReturn(
+                YpsoProvisioningService.ConnectionSession(
+                    manager.session!!.activeRecord()!!.generation, null, "10175983", state.pumpAddress, ByteArray(32) { 1 }, false
+                )
+            )
             whenever(rh.gs(any())).thenReturn("localized")
             whenever(rh.gs(any(), anyVararg())).thenReturn("localized")
             val preferences: Preferences = mock()

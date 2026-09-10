@@ -58,7 +58,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..2)
+        check(version in 1..3)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -98,7 +98,21 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         return PumpSession.State(
             records = parsed,
             activeGeneration = activeGeneration,
-            availability = availability
+            availability = availability,
+            candidateGeneration = json.stringOrNull("candidateGeneration"),
+            candidateReplacesGeneration = json.stringOrNull("candidateReplacesGeneration"),
+            candidateAttemptId = json.stringOrNull("candidateAttemptId"),
+            lastAttempt = json.optJSONObject("lastAttempt")?.let {
+                PumpSession.AttemptResult(it.getString("id"), PumpSession.AttemptStatus.valueOf(it.getString("status")))
+            },
+            candidateAvailability = json.optJSONObject("candidateAvailability")?.let { value ->
+                val causes = value.getJSONArray("causes")
+                PumpSession.Availability(
+                    causes = (0 until causes.length()).map { PumpSession.AvailabilityCause.valueOf(causes.getString(it)) }.toSet(),
+                    since = value.getLong("since"), code = value.optIntOrNull("code"), operation = value.stringOrNull("operation"),
+                    firmware = value.stringOrNull("firmware"), failures = value.getInt("failures"), retryAt = value.optLongOrNull("retryAt")
+                )
+            }
         ).also(PumpSession::validate)
     }
 
@@ -121,8 +135,18 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("since", state.availability.since).put("code", state.availability.code ?: JSONObject.NULL)
             .put("operation", state.availability.operation ?: JSONObject.NULL).put("firmware", state.availability.firmware ?: JSONObject.NULL)
             .put("failures", state.availability.failures).put("retryAt", state.availability.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 2).put("records", records)
-            .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability).toString()
+        fun availabilityJson(value: PumpSession.Availability) = JSONObject()
+            .put("causes", JSONArray(value.causes.map { it.name })).put("since", value.since)
+            .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
+            .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
+            .put("retryAt", value.retryAt ?: JSONObject.NULL)
+        val body = JSONObject().put("version", 3).put("records", records)
+            .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
+            .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
+            .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)
+            .put("candidateAttemptId", state.candidateAttemptId ?: JSONObject.NULL)
+            .put("lastAttempt", state.lastAttempt?.let { JSONObject().put("id", it.id).put("status", it.status.name) } ?: JSONObject.NULL)
+            .put("candidateAvailability", state.candidateAvailability?.let(::availabilityJson) ?: JSONObject.NULL).toString()
         val old = storage.anchors()
         val alias = PREFIX + UUID.randomUUID()
         try {

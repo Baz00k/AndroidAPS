@@ -6,6 +6,8 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.notifications.Notification
+import app.aaps.core.interfaces.rx.events.EventDismissNotification
+import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
@@ -29,6 +31,7 @@ class YpsoPumpPluginTest {
     private val manager: YpsoBleManager = mock()
     private val sync: PumpSync = mock()
     private val ui: UiInteraction = mock()
+    private val rxBus: RxBus = mock()
     private val preferences: Preferences = mock()
     private val provisioning: YpsoProvisioningService = mock()
     private val installed = YpsoProvisioningService.InstalledSession(
@@ -36,7 +39,7 @@ class YpsoPumpPluginTest {
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), mock(), mock(), ui,
+        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), rxBus, mock(), ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
     )
 
@@ -105,4 +108,39 @@ class YpsoPumpPluginTest {
         assertEquals(8.0, plugin.reservoirLevel)
         verifyNoInteractions(sync)
     }
+
+    @Test
+    fun `availability notification replaces stale or changed text but does not churn identical state`() {
+        whenever(provisioning.notificationRequired()).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+        )
+
+        plugin.publishAvailabilityNotification() // first publication replaces a possible pre-start notification
+        plugin.publishAvailabilityNotification() // changed presentation replaces the first text
+        plugin.publishAvailabilityNotification() // unchanged presentation is a no-op
+
+        inOrder(ui, rxBus) {
+            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+        }
+        verifyNoMoreInteractions(rxBus)
+        verifyNoMoreInteractions(ui)
+    }
+
+    @Test
+    fun `repeated unavailable absence dismisses a possible stale notification once`() {
+        whenever(provisioning.notificationRequired()).thenReturn(false)
+
+        plugin.publishAvailabilityNotification()
+        plugin.publishAvailabilityNotification()
+
+        verify(rxBus, times(1)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+        verifyNoInteractions(ui)
+    }
+
 }

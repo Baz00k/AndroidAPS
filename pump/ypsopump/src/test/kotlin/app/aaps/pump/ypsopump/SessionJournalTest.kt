@@ -88,6 +88,45 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `version two upgrades with no invented candidate and final candidate attempts survive restart`() {
+        val storage = Storage()
+        val alias = "ypso.session.revision.v2"
+        storage.create(alias)
+        val keyHex = "01".repeat(32)
+        val keyId = PumpSession.fingerprint(ByteArray(32) { 1 })
+        val body = """{"version":2,"records":[{"pump":"pump","key":"$keyId","generation":"generation","reboot":8,"read":100,"write":null,"reservation":null,"serial":"serial","keyHex":"$keyHex","createdAt":null,"importedAt":1,"source":{},"verifiedAt":2,"verifiedSerial":"serial"}],"activeGeneration":"generation","availability":{"causes":[],"since":2,"code":null,"operation":null,"firmware":null,"failures":0,"retryAt":null}}"""
+        storage.file = org.json.JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body)).toString()
+        val journal = SessionJournal(storage)
+
+        val upgraded = journal.load()
+        assertNull(upgraded.candidateGeneration)
+        assertNull(upgraded.lastAttempt)
+
+        val candidateHex = "02".repeat(32)
+        val candidate = PumpSession.Record("pump", PumpSession.fingerprint(ByteArray(32) { 2 }), "candidate", null, null, null, serial = "serial", keyHex = candidateHex)
+        val pending = upgraded.copy(
+            records = upgraded.records + candidate,
+            candidateGeneration = candidate.generation,
+            candidateReplacesGeneration = upgraded.activeGeneration,
+            candidateAttemptId = "attempt",
+            candidateAvailability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+        )
+        journal.commit(pending)
+        assertEquals(pending, SessionJournal(storage).load())
+
+        val cancelled = pending.copy(
+            records = pending.records - candidate,
+            candidateGeneration = null,
+            candidateReplacesGeneration = null,
+            candidateAttemptId = null,
+            candidateAvailability = null,
+            lastAttempt = PumpSession.AttemptResult("attempt", PumpSession.AttemptStatus.CANCELLED)
+        )
+        journal.commit(cancelled)
+        assertEquals(cancelled, SessionJournal(storage).load())
+    }
+
+    @Test
     fun `failed seal removes its uncommitted anchor and preserves the prior revision`() {
         val storage = Storage()
         val journal = SessionJournal(storage)

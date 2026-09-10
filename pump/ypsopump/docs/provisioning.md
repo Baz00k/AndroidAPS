@@ -30,25 +30,25 @@ no-backup copy and never silently deletes the selected document.
    source profile, genuine-app version, tool commit and source OS for the evidence log. Do not record the
    plaintext key in logs or screenshots.
 3. Privately transfer the canonical `.session.json` to the AAPS target, or display the 8-digit pump
-   serial (always starts with `10`, as printed on the pump), BLE MAC and 64 hexadecimal key for manual
+   serial (the supported format starts with `10`; check the number printed on the pump), BLE MAC and 64 hexadecimal key for manual
    entry. The serial is never derived from the MAC.
 4. Ensure Android on the AAPS target is bonded to that physical pump.
 5. Open **YpsoPump → Pump connection setup**.
 6. Choose one supported path:
-   - **Manual:** enter the 8-digit serial beginning with `10` exactly as printed on the pump (for
-     example `10054912` from `YpsoPump_10054912`), the matching
+   - **Manual:** enter the supported 8-digit serial beginning with `10` exactly as printed on the pump,
+     the matching
      colon-separated Bluetooth address and key. When later editing identity metadata, leave the key blank
      to retain the installed key — except after a suspected re-key, which requires the pump’s current
      (different) key.
    - **Import:** choose **Import session file** in the system picker. Review serial number, Bluetooth
      address, key check code and key creation time/age; the plaintext key is not displayed.
-7. Select **Save and verify status** / **Apply and verify status**. The old BLE connection is quiesced,
-   status invalidated and the complete identity/key bundle committed atomically before use. A fresh bundle
-   always starts a fresh verification cycle: prior transport/auth/identity failures and their backoff are
-   not inherited.
-8. Confirm that the screen moves from **saved, awaiting verification** through **checking the nearby pump**
-   to a timestamped verified state. Verification requires an independent serial match plus an accepted
-   encrypted status. AUTH success, reconnect or key save alone must not clear unavailability.
+7. Start verification. The old BLE connection is quiesced and the submitted details are staged as a
+   protected candidate. The saved session is retained while the candidate is checked. A format-valid
+   key is not treated as a working key.
+8. Confirm that the screen shows verification progress followed by a clear result. Only an independent
+   serial match plus an accepted encrypted status can promote the candidate to the saved session.
+   Failure or cancellation leaves the previous saved details intact. AUTH success, reconnect, file
+   parsing, and candidate staging alone do not constitute successful setup.
 9. Restart AAPS and re-open setup/status. Confirm fingerprint, real serial, verified state and durable
    availability survive. Delete the temporary target transfer copy only after confirming the protected
    copy and fallback procedure.

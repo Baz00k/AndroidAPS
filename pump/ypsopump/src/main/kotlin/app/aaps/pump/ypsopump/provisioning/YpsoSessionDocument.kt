@@ -47,6 +47,7 @@ object YpsoSessionDocumentParser {
         val captured = timestamp(root.string("captured_at"))
         require(!created.isAfter(captured.plusSeconds(5 * 60))) { "Key creation time is after capture time" }
         require(!captured.isAfter(now.plusSeconds(5 * 60))) { "Capture time is in the future" }
+        require(!created.isAfter(now)) { "Key creation time is in the future" }
         val reboot = when (val value = root["reboot_counter"]) {
             null -> null
             is JsonNumber -> value.value.also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()

@@ -33,6 +33,8 @@ class PumpSession(private val store: Store) {
         val retryAt: Long? = null
     )
     data class Reservation(val id: String, val counter: Long, val phase: Phase)
+    enum class AttemptStatus { PENDING, SUCCEEDED, FAILED, CANCELLED }
+    data class AttemptResult(val id: String, val status: AttemptStatus)
     data class Record(
         val pump: String,
         val keyId: String,
@@ -52,7 +54,12 @@ class PumpSession(private val store: Store) {
     data class State(
         val records: List<Record> = emptyList(),
         val activeGeneration: String? = null,
-        val availability: Availability = Availability()
+        val availability: Availability = Availability(),
+        val candidateGeneration: String? = null,
+        val candidateReplacesGeneration: String? = null,
+        val candidateAvailability: Availability? = null,
+        val candidateAttemptId: String? = null,
+        val lastAttempt: AttemptResult? = null
     )
     data class Provisioning(
         val pump: String,
@@ -85,25 +92,38 @@ class PumpSession(private val store: Store) {
         return Token(saved.generation, UUID.randomUUID().toString()).also { token = it }
     }
 
-    /** Atomically replaces the active identity/key bundle while retaining every prior generation. */
+    /** Durably stages credentials without changing the active identity/key bundle. */
     @Synchronized
     fun install(provisioning: Provisioning): Installation {
         val plan = planInstallation(provisioning)
         val current = state ?: throw SecurityException("Session storage unavailable")
-        val records = if (plan.previous == null) current.records + plan.installed else
-            current.records.map { if (it.generation == plan.previous.generation) plan.installed else it }
+        val withoutOldCandidate = retireCandidate(current).copy(lastAttempt = current.candidateAttemptId?.let {
+            AttemptResult(it, AttemptStatus.CANCELLED)
+        } ?: current.lastAttempt)
+        val staged = plan.installed.copy(
+            generation = plan.installed.generation.takeIf {
+                current.records.singleOrNull { record -> record.generation == current.candidateGeneration }?.keyId == plan.installed.keyId
+            }
+                ?: UUID.randomUUID().toString()
+        )
+        val records = withoutOldCandidate.records + staged
         // A fresh bundle starts a fresh verification cycle. Only a suspected re-key survives until a
         // verified read clears it; stale transport/auth/identity failures and their backoff must never
         // cross into the new identity. Failures/retry reset so the new bundle can verify immediately.
-        val retainedRekey = current.availability.causes.intersect(setOf(AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
+        val priorAvailability = current.candidateAvailability ?: current.availability
+        val retainedRekey = priorAvailability.causes.intersect(setOf(AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
         val nextCauses = retainedRekey + AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE + AvailabilityCause.COUNTER_UNCERTAIN
         persist(
             current.copy(
                 records = records,
-                activeGeneration = plan.installed.generation,
-                availability = current.availability.copy(
+                activeGeneration = withoutOldCandidate.activeGeneration,
+                candidateGeneration = staged.generation,
+                candidateReplacesGeneration = plan.previous?.generation,
+                candidateAttemptId = UUID.randomUUID().toString(),
+                lastAttempt = withoutOldCandidate.lastAttempt,
+                candidateAvailability = priorAvailability.copy(
                     causes = nextCauses,
-                    since = current.availability.since.takeIf { retainedRekey.isNotEmpty() } ?: provisioning.importedAt,
+                    since = priorAvailability.since.takeIf { retainedRekey.isNotEmpty() } ?: provisioning.importedAt,
                     failures = 0,
                     retryAt = null
                 )
@@ -123,23 +143,27 @@ class PumpSession(private val store: Store) {
         require(provisioning.createdAt == null || provisioning.createdAt <= provisioning.importedAt)
         val current = state ?: throw SecurityException("Session storage unavailable")
         val id = fingerprint(provisioning.sharedKey)
-        val previous = current.records.singleOrNull { it.keyId == id }
+        val oldCandidate = current.records.singleOrNull { it.generation == current.candidateGeneration }
+        val previous = current.records.singleOrNull { it.keyId == id && it.generation != current.candidateGeneration }
         if (previous != null) check(previous.pump == provisioning.pump) { "Key belongs to another pump" }
         val active = current.records.singleOrNull { it.generation == current.activeGeneration }
-        val unresolved = listOfNotNull(active, previous).distinctBy(Record::generation)
+        val currentBundle = active ?: oldCandidate
+        val unresolved = listOfNotNull(active, previous, oldCandidate).distinctBy(Record::generation)
             .firstOrNull { it.reservation != null && it.reservation.phase != Phase.VERIFIED }
         if (unresolved != null)
             throw SecurityException("Cannot replace a session with unresolved pump accounting")
         val installation = when {
             previous != null -> Installation.SAME_KEY
-            active == null -> Installation.FIRST_PUMP
-            active.pump == provisioning.pump -> Installation.ROTATED_KEY
+            oldCandidate?.keyId == id -> Installation.SAME_KEY
+            currentBundle == null -> Installation.FIRST_PUMP
+            currentBundle.pump == provisioning.pump -> Installation.ROTATED_KEY
             else -> Installation.SWITCHED_PUMP
         }
-        val installed = previous?.copy(
+        val baseline = previous ?: oldCandidate?.takeIf { it.keyId == id }
+        val installed = baseline?.copy(
             serial = provisioning.serial,
             keyHex = provisioning.sharedKey.toHex(),
-            createdAt = provisioning.createdAt ?: previous.createdAt,
+            createdAt = provisioning.createdAt ?: baseline.createdAt,
             importedAt = provisioning.importedAt,
             source = provisioning.source,
             verifiedAt = null,
@@ -163,34 +187,149 @@ class PumpSession(private val store: Store) {
     private data class InstallationPlan(val installation: Installation, val previous: Record?, val installed: Record)
 
     @Synchronized
-    fun activeRecord(): Record? = state?.records?.singleOrNull { it.generation == state?.activeGeneration }
+    fun activeRecord(): Record? = candidateRecord() ?: committedRecord()
 
     @Synchronized
-    fun availability(): Availability = state?.availability ?: Availability(setOf(AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+    fun recordForGeneration(generation: String): Record? = state?.records?.singleOrNull { it.generation == generation }
+
+    @Synchronized
+    fun committedRecord(): Record? = state?.records?.singleOrNull { it.generation == state?.activeGeneration }
+
+    @Synchronized
+    fun candidateRecord(): Record? = state?.records?.singleOrNull { it.generation == state?.candidateGeneration }
+
+    @Synchronized
+    fun verificationAttempt(): AttemptResult? = state?.let { current ->
+        current.candidateAttemptId?.let { AttemptResult(it, AttemptStatus.PENDING) } ?: current.lastAttempt
+    }
+
+    @Synchronized
+    fun availability(): Availability = state?.let { it.candidateAvailability ?: it.availability }
+        ?: Availability(setOf(AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
 
     @Synchronized
     fun setAvailability(availability: Availability) {
         val current = state ?: throw SecurityException("Session storage unavailable")
-        persist(current.copy(availability = availability))
+        persist(if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability))
     }
 
     @Synchronized
-    fun markVerified(serial: String, at: Long) {
+    fun markVerified(serial: String, at: Long): Boolean {
         val current = state ?: throw SecurityException("Session storage unavailable")
-        val active = current.records.singleOrNull { it.generation == current.activeGeneration }
+        val generation = current.candidateGeneration ?: current.activeGeneration
+        val active = current.records.singleOrNull { it.generation == generation }
             ?: throw SecurityException("No active session")
         check(active.serial == serial) { "Verified pump serial does not match configured identity" }
         val next = active.copy(verifiedAt = at, verifiedSerial = serial)
-        persist(
+        val promoted = current.candidateGeneration?.let {
+            val final = current.candidateReplacesGeneration?.let { replaced -> next.copy(generation = replaced) } ?: next
             current.copy(
-                records = current.records.map { if (it.generation == next.generation) next else it },
+                records = current.records.filterNot { it.generation == next.generation || it.generation == current.candidateReplacesGeneration } + final,
+                activeGeneration = final.generation,
+                candidateGeneration = null,
+                candidateReplacesGeneration = null,
+                candidateAvailability = null,
+                candidateAttemptId = null,
+                lastAttempt = AttemptResult(checkNotNull(current.candidateAttemptId), AttemptStatus.SUCCEEDED),
                 availability = Availability(
                     causes = if (next.write == null) setOf(AvailabilityCause.COUNTER_UNCERTAIN) else emptySet(),
                     since = at
                 )
             )
+        } ?: current.copy(
+            records = current.records.map { if (it.generation == next.generation) next else it },
+            availability = Availability(if (next.write == null) setOf(AvailabilityCause.COUNTER_UNCERTAIN) else emptySet(), at)
         )
-        record = next
+        persist(promoted)
+        // A candidate promotion changes the installed credential bundle, so any token opened with
+        // the staged record must be discarded.  An ordinary verified refresh does not: callers may
+        // safely perform another read on the same authenticated GATT connection.
+        val promotedCandidate = current.candidateGeneration != null
+        if (promotedCandidate) quiesce()
+        return promotedCandidate
+    }
+
+    /** Promote only the candidate used by this connection; stale callbacks cannot promote a replacement. */
+    @Synchronized
+    fun markVerified(generation: String, serial: String, at: Long): Boolean {
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        check(current.candidateGeneration == generation || current.candidateGeneration == null && current.activeGeneration == generation) {
+            "Stale verification callback"
+        }
+        return markVerified(serial, at)
+    }
+
+    /** Cancel a staged bundle while preserving any authenticated floor learned with an existing key. */
+    @Synchronized
+    fun cancelCandidate(status: AttemptStatus = AttemptStatus.CANCELLED) {
+        require(status == AttemptStatus.CANCELLED || status == AttemptStatus.FAILED)
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        if (current.candidateGeneration == null) return
+        val attemptId = checkNotNull(current.candidateAttemptId)
+        persist(retireCandidate(current).copy(lastAttempt = AttemptResult(attemptId, status)))
+        quiesce()
+    }
+
+    /** Cancel only the candidate owned by this verification start; a newer install is untouched. */
+    @Synchronized
+    fun cancelCandidate(generation: String, attemptId: String?, status: AttemptStatus = AttemptStatus.CANCELLED): Boolean {
+        require(status == AttemptStatus.CANCELLED || status == AttemptStatus.FAILED)
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        if (current.candidateGeneration != generation || current.candidateAttemptId != attemptId) return false
+        persist(retireCandidate(current).copy(lastAttempt = AttemptResult(checkNotNull(attemptId), status)))
+        quiesce()
+        return true
+    }
+
+    /** Atomically rejects precisely this candidate and retains its actionable failure on the restored bundle. */
+    @Synchronized
+    fun failCandidate(generation: String, attemptId: String?, availability: Availability): Boolean {
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        if (current.candidateGeneration != generation || current.candidateAttemptId != attemptId) return false
+        persist(retireCandidate(current).copy(availability = availability, lastAttempt = AttemptResult(checkNotNull(attemptId), AttemptStatus.FAILED)))
+        quiesce()
+        return true
+    }
+
+    @Synchronized
+    fun openGeneration(generation: String, pump: String, sharedKey: ByteArray): Token {
+        require(sharedKey.size == SessionCrypto.KEY_SIZE)
+        quiesce()
+        val current = state
+        check(current?.candidateGeneration == generation || current?.candidateGeneration == null && current?.activeGeneration == generation) {
+            "Session generation is no longer selected"
+        }
+        val saved = current.records.singleOrNull { it.generation == generation && it.pump == pump && it.keyId == fingerprint(sharedKey) }
+            ?: throw SecurityException("Session recovery required: no durable replay baseline")
+        check(saved.keyHex == null || saved.keyHex.equals(sharedKey.toHex(), ignoreCase = true)) { "Protected key does not match session record" }
+        record = saved
+        key = sharedKey.copyOf()
+        return Token(saved.generation, UUID.randomUUID().toString()).also { token = it }
+    }
+
+    private fun retireCandidate(current: State): State {
+        val candidate = current.records.singleOrNull { it.generation == current.candidateGeneration } ?: return current.copy(
+            candidateGeneration = null, candidateReplacesGeneration = null, candidateAvailability = null, candidateAttemptId = null
+        )
+        val replaced = current.records.singleOrNull { it.generation == current.candidateReplacesGeneration }
+        val records = if (replaced != null && replaced.keyId == candidate.keyId) {
+            val merged = replaced.copy(
+                reboot = candidate.reboot ?: replaced.reboot,
+                read = listOfNotNull(replaced.read, candidate.read).maxOrNull(),
+                write = candidate.write ?: replaced.write,
+                reservation = candidate.reservation ?: replaced.reservation
+            )
+            current.records.filterNot { it.generation == candidate.generation || it.generation == replaced.generation } + merged
+        } else if (replaced == null && current.records.none { it.generation != candidate.generation && it.keyId == candidate.keyId }) {
+            current.records - candidate
+        } else current.records // A different key remains an inactive replay tombstone.
+        return current.copy(
+            records = records,
+            candidateGeneration = null,
+            candidateReplacesGeneration = null,
+            candidateAvailability = null,
+            candidateAttemptId = null
+        )
     }
 
     /**
@@ -323,7 +462,11 @@ class PumpSession(private val store: Store) {
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
         fun validate(state: State) {
-            require(state.records.map { it.keyId }.distinct().size == state.records.size)
+            val duplicateKeys = state.records.groupBy { it.keyId }.filterValues { it.size > 1 }
+            require(duplicateKeys.all { (_, records) ->
+                records.size == 2 && state.candidateGeneration in records.map(Record::generation) &&
+                    state.candidateReplacesGeneration in records.map(Record::generation)
+            })
             require(state.records.map { it.generation }.distinct().size == state.records.size)
             state.records.forEach { r ->
                 require(r.pump.isNotBlank() && r.generation.isNotBlank() && r.keyId.matches(Regex("[0-9a-f]{64}")))
@@ -337,6 +480,13 @@ class PumpSession(private val store: Store) {
                 }
             }
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)
+            require(state.candidateGeneration == null || state.records.count { it.generation == state.candidateGeneration } == 1)
+            require(state.candidateGeneration == null || state.candidateGeneration != state.activeGeneration)
+            require((state.candidateGeneration == null) == (state.candidateAvailability == null))
+            require((state.candidateGeneration == null) == (state.candidateAttemptId == null))
+            require(state.candidateAttemptId == null || state.candidateAttemptId.isNotBlank())
+            require(state.lastAttempt == null || state.lastAttempt.id.isNotBlank() && state.lastAttempt.status != AttemptStatus.PENDING)
+            require(state.candidateReplacesGeneration == null || state.records.count { it.generation == state.candidateReplacesGeneration } == 1)
             require(state.availability.failures >= 0)
         }
 

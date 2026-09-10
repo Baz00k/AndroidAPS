@@ -11,7 +11,8 @@ data class QueueItem(val text: String, val running: Boolean)
 @Immutable
 data class PumpStatusState(
     val title: String = "YpsoPump",
-    val connection: String = "",
+    val connectionSummary: String = "",
+    val connectionAction: String? = null,
     val connectionHealthy: Boolean = false,
     val reservoir: Double? = null,
     val reservoirMax: Double = 200.0,

@@ -19,7 +19,6 @@ import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
 import app.aaps.pump.ypsopump.compose.QueueItem
 import app.aaps.pump.ypsopump.data.YpsoPumpState
-import app.aaps.pump.ypsopump.crypto.PumpSession
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
@@ -85,15 +84,6 @@ internal fun buildPumpStatusState(
         if (snapshot != null) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
         }
-        if (pumpState.lastErrorCode != 0) {
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
-        }
-        if (pumpState.availability.causes.isNotEmpty()) {
-            val operator = pumpState.availability.causes.operatorCauses()
-            if (operator.isNotEmpty()) {
-                add(PumpStatusRow(rh.gs(R.string.ypsopump_availability), operator.localizedSummary { rh.gs(it) }))
-            }
-        }
     }
     val queue = buildList {
         val running = commandQueue.performing()
@@ -101,12 +91,23 @@ internal fun buildPumpStatusState(
         val queued = commandQueue.size()
         if (queued > 0) add(QueueItem("$queued command${if (queued == 1) "" else "s"} queued", false))
     }
+    val presentation = pumpSetupPresentation(
+        causes = pumpState.availability.causes,
+        hasSavedDetails = pumpState.claimedSerialNumber.isNotBlank(),
+        verified = pumpState.serialNumber.isNotBlank(),
+    )
+    val connectionSummary = when {
+        pumpState.connectionState == ConnectionState.CONNECTED -> rh.gs(R.string.ypsopump_connected)
+        pumpState.connectionState == ConnectionState.DISCONNECTED -> rh.gs(R.string.ypsopump_disconnected)
+        else -> rh.gs(R.string.ypsopump_connecting)
+    }
     return PumpStatusState(
         title = "YpsoPump",
-        connection = when {
-            pumpState.availability.causes.contains(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED) -> rh.gs(R.string.ypsopump_reprovisioning_required)
-            pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null   -> rh.gs(R.string.ypsopump_authenticated_no_status)
-            else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
+        connectionSummary = connectionSummary,
+        connectionAction = when {
+            presentation != PumpSetupPresentation.READY -> rh.gs(presentation.message)
+            pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null -> rh.gs(R.string.ypsopump_authenticated_no_status)
+            else -> null
         },
         connectionHealthy = pumpState.isConnected && snapshot != null,
         reservoir = snapshot?.reservoirUnits,

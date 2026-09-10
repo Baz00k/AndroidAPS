@@ -3,7 +3,6 @@ package app.aaps.pump.ypsopump
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
-import app.aaps.pump.ypsopump.operatorCauses
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import java.io.ByteArrayInputStream
 import java.time.Instant
@@ -14,6 +13,9 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class YpsoProvisioningServiceTest {
     private val serial = "10175983"
@@ -75,6 +77,172 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `first install is pending across restart and rejected enqueue rolls back to empty`() {
+        val store = MemoryStore()
+        val service = service(store).first
+
+        install(service)
+        assertNull(service.installed())
+        assertEquals(PumpSession.AttemptStatus.PENDING, service.verificationState()!!.status)
+        val restarted = service(store).first
+        assertNull(restarted.installed())
+        assertEquals(serial, restarted.pending()!!.serial)
+        assertEquals(PumpSession.AttemptStatus.PENDING, restarted.verificationState()!!.status)
+
+        val failure = assertThrows(IllegalStateException::class.java) {
+            restarted.installManualAndStartVerification(
+                YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000)
+            ) { false }
+        }
+        assertTrue(failure.message!!.contains("not accepted"))
+        assertNull(restarted.installed())
+        assertNull(restarted.pending())
+        assertEquals(PumpSession.AttemptStatus.CANCELLED, restarted.verificationState()!!.status)
+        assertNull(store.saved.activeGeneration)
+        assertTrue(store.saved.records.isEmpty())
+    }
+
+    @Test
+    fun `invalid candidate preserves active identity key and replay floor`() {
+        val (service, store) = service()
+        install(service)
+        acceptFirst(service.owner, mac, key)
+        service.markVerified(serial, 1_500)
+        val activeBefore = service.owner.committedRecord()!!
+
+        service.installManual(
+            YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+            Instant.ofEpochMilli(2_000)
+        )
+        val candidate = service.connectionSession()!!
+        assertTrue(candidate.candidate)
+        assertEquals(activeBefore, service.owner.committedRecord())
+
+        assertTrue(service.rejectCandidate(candidate.generation, candidate.attemptId))
+
+        assertEquals(activeBefore, service.owner.committedRecord())
+        assertEquals(activeBefore.generation, store.saved.activeGeneration)
+        assertNull(store.saved.candidateGeneration)
+        assertArrayEquals(key, service.connectionSession()!!.key)
+        assertEquals(serial, service.installed()!!.serial)
+    }
+
+    @Test
+    fun `verified candidate is promoted atomically and survives restart`() {
+        val (service, store) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        val old = service.owner.committedRecord()!!
+        service.installManual(
+            YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+            Instant.ofEpochMilli(2_000)
+        )
+        val candidate = service.connectionSession()!!
+
+        service.markVerified(candidate.generation, candidate.attemptId, serial, 3_000)
+
+        assertNull(store.saved.candidateGeneration)
+        assertTrue(service.owner.committedRecord()!!.generation != old.generation)
+        assertArrayEquals(rotatedKey, service.keyBytes())
+        assertNull(service.pending())
+        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        assertArrayEquals(rotatedKey, restarted.keyBytes())
+        assertEquals(Instant.ofEpochMilli(3_000), restarted.installed()!!.verifiedAt)
+    }
+
+    @Test
+    fun `canonical document key is selected for candidate connection and promoted only after protected verification`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        val committed = service.keyBytes()!!
+        val documentText = validDocument().replace(key.hex(), rotatedKey.hex())
+        val document = service.reviewDocument(ByteArrayInputStream(documentText.toByteArray()), Instant.parse("2026-09-09T00:00:00Z"))
+
+        service.installDocument(document, Instant.parse("2026-09-09T00:01:00Z"))
+        val connection = service.connectionSession()!!
+
+        assertTrue(connection.candidate)
+        assertArrayEquals(rotatedKey, connection.key)
+        assertFalse(connection.key.contentEquals(committed))
+        assertArrayEquals(rotatedKey, service.connectionSession()!!.key)
+        service.markVerified(connection.generation, connection.attemptId, serial, 3_000)
+        assertArrayEquals(rotatedKey, service.keyBytes())
+        committed.fill(0)
+        connection.key.fill(0)
+    }
+
+    @Test
+    fun `stale verification and rejection callbacks cannot affect newer candidate`() {
+        val (service, store) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        service.installManual(
+            YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+            Instant.ofEpochMilli(2_000)
+        )
+        val staleGeneration = service.connectionSession()!!.generation
+        val newestKey = ByteArray(32) { 99 }
+        service.installManual(
+            YpsoProvisioningService.ManualDraft(serial, mac, newestKey.hex()),
+            Instant.ofEpochMilli(3_000)
+        )
+        val newest = service.connectionSession()!!
+        val before = store.saved
+
+        assertFalse(service.rejectCandidate(staleGeneration, "stale-attempt"))
+        assertThrows(IllegalStateException::class.java) { service.markVerified(staleGeneration, "stale-attempt", serial, 4_000) }
+
+        assertEquals(before, store.saved)
+        assertEquals(newest.generation, service.connectionSession()!!.generation)
+        assertArrayEquals(key, service.keyBytes())
+        assertEquals(newest.serial, service.pending()!!.serial)
+    }
+
+    @Test
+    fun `reverting a pending replacement to the committed key stages without duplicate corruption`() {
+        val (service, store) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        val active = service.owner.committedRecord()!!
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(3_000))
+
+        assertEquals(active.generation, service.owner.committedRecord()!!.generation)
+        assertArrayEquals(key, service.connectionSession()!!.key)
+        PumpSession.validate(store.saved)
+        assertEquals(2, store.saved.records.count { it.keyId == PumpSession.fingerprint(key) })
+    }
+
+    @Test
+    fun `reimporting an older retained key after verified rotation requires verification`() {
+        val (service, store) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+        service.connectionSession()!!.also { service.markVerified(it.generation, it.attemptId, serial, 2_500) }
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(3_000))
+
+        assertArrayEquals(rotatedKey, service.keyBytes())
+        assertArrayEquals(key, service.connectionSession()!!.key)
+        assertEquals(PumpSession.AttemptStatus.PENDING, service.verificationState()!!.status)
+        PumpSession.validate(store.saved)
+    }
+
+    @Test
+    fun `document review rejects future creation within capture skew before install`() {
+        val (service) = service()
+        val text = validDocument()
+            .replace("2026-09-08T00:00:00Z", "2026-09-09T00:02:00Z")
+            .replace("2026-09-08T00:01:00Z", "2026-09-09T00:03:00Z")
+        assertThrows(IllegalArgumentException::class.java) {
+            service.reviewDocument(ByteArrayInputStream(text.toByteArray()), Instant.parse("2026-09-09T00:00:00Z"))
+        }
+    }
+
+    @Test
     fun `blank manual key and same key import preserve protected key generation and replay floor`() {
         val (service, store) = service()
         assertEquals(PumpSession.Installation.FIRST_PUMP, install(service))
@@ -89,10 +257,11 @@ class YpsoProvisioningServiceTest {
         val after = service.owner.activeRecord()!!
         assertEquals(PumpSession.Installation.SAME_KEY, result)
         assertEquals(before.generation, after.generation)
+        assertNull(store.saved.candidateReplacesGeneration)
         assertEquals(100L, after.read)
         assertEquals(before.reboot, after.reboot)
-        assertArrayEquals(key, service.keyBytes())
-        assertEquals(after.generation, store.saved.activeGeneration)
+        assertArrayEquals(key, service.connectionSession()!!.key)
+        assertNull(store.saved.activeGeneration)
     }
 
     @Test
@@ -110,14 +279,15 @@ class YpsoProvisioningServiceTest {
         assertThrows(IllegalStateException::class.java) { service.owner.begin(old) }
         val rotatedGeneration = service.owner.activeRecord()!!.generation
         assertTrue(rotatedGeneration != oldGeneration)
+        service.markVerified(rotatedGeneration, service.connectionSession()!!.attemptId, serial, 2_500)
 
         val switchedKey = ByteArray(32) { (it + 65).toByte() }
         assertEquals(
             PumpSession.Installation.SWITCHED_PUMP,
             service.installManual(YpsoProvisioningService.ManualDraft(otherSerial, otherMac, switchedKey.hex()), Instant.ofEpochMilli(3_000))
         )
-        assertEquals(3, store.saved.records.size)
-        assertEquals(otherMac, service.installed()!!.mac)
+        assertEquals(2, store.saved.records.size)
+        assertEquals(otherMac, service.pending()!!.mac)
         assertEquals(setOf(mac, otherMac), store.saved.records.map { it.pump }.toSet())
     }
 
@@ -126,6 +296,7 @@ class YpsoProvisioningServiceTest {
         val (service) = service()
         val document = service.reviewDocument(ByteArrayInputStream(validDocument().toByteArray()), Instant.parse("2026-09-09T00:00:00Z"))
         service.installDocument(document, Instant.parse("2026-09-09T00:01:00Z"))
+        service.connectionSession()!!.also { service.markVerified(it.generation, it.attemptId, serial, Instant.parse("2026-09-09T00:01:30Z").toEpochMilli()) }
         assertEquals(Instant.parse("2026-09-08T00:00:00Z"), service.installed()!!.createdAt)
 
         service.installManual(
@@ -133,7 +304,7 @@ class YpsoProvisioningServiceTest {
             Instant.parse("2026-09-09T00:02:00Z")
         )
 
-        assertNull(service.installed()!!.createdAt)
+        assertNull(service.pending()!!.createdAt)
     }
 
     @Test
@@ -171,10 +342,13 @@ class YpsoProvisioningServiceTest {
 
         assertThrows(SecurityException::class.java) { service.markVerified(null, 2_000) }
         assertTrue(service.availability().causes.contains(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
+        install(service)
         assertThrows(SecurityException::class.java) { service.markVerified(otherSerial, 3_000) }
         assertTrue(service.availability().causes.contains(PumpSession.AvailabilityCause.IDENTITY_MISMATCH))
-        assertNull(service.installed()!!.verifiedAt)
+        assertNull(service.installed())
 
+        install(service)
         service.markVerified(serial, 4_000)
         assertEquals(Instant.ofEpochMilli(4_000), service.installed()!!.verifiedAt)
         assertEquals(serial, state.serialNumber)
@@ -212,12 +386,131 @@ class YpsoProvisioningServiceTest {
             service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, null), Instant.ofEpochMilli(2_000))
         )
         val installed = service.owner.activeRecord()!!
-        assertEquals("legacy-generation", installed.generation)
+        assertTrue(installed.generation != "legacy-generation")
+        assertEquals("legacy-generation", store.saved.candidateReplacesGeneration)
         assertEquals(77L, installed.read)
         assertEquals(serial, installed.serial)
-        assertArrayEquals(key, service.keyBytes())
+        assertArrayEquals(key, service.connectionSession()!!.key)
         assertTrue(service.isConfigured())
-        assertEquals(1, legacy.clears)
+        assertEquals(0, legacy.clears)
+    }
+
+    @Test
+    fun `installation quiesce never holds the service monitor`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        val entered = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        val pool = Executors.newSingleThreadExecutor()
+        service.quiesceConnection = {
+            entered.countDown()
+            pool.execute {
+                service.installed()
+                completed.countDown()
+            }
+            assertTrue(completed.await(2, TimeUnit.SECONDS), "quiesce called while service monitor was held")
+        }
+        try {
+            service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `connection snapshot cannot acquire during install quiesce to commit interval`() {
+        val (service) = service()
+        install(service)
+        val old = service.connectionSession()!!
+        val quiescing = CountDownLatch(1)
+        val releaseCommit = CountDownLatch(1)
+        val installer = Executors.newSingleThreadExecutor()
+        service.quiesceConnection = {
+            quiescing.countDown()
+            assertTrue(releaseCommit.await(2, TimeUnit.SECONDS))
+        }
+        try {
+            installer.submit {
+                service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+            }
+            assertTrue(quiescing.await(1, TimeUnit.SECONDS))
+            assertFalse(service.isCurrentConnection(old), "old lease must be invalid while mutation is in progress")
+        } finally {
+            releaseCommit.countDown()
+            installer.shutdown()
+            assertTrue(installer.awaitTermination(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `rejected verification enqueue restores a usable committed connection lease`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+
+        assertThrows(IllegalStateException::class.java) {
+            service.installManualAndStartVerification(
+                YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+                Instant.ofEpochMilli(2_000)
+            ) { false }
+        }
+
+        val restored = service.connectionSession()!!
+        assertFalse(restored.candidate)
+        assertTrue(service.isCurrentConnection(restored))
+    }
+
+    @Test
+    fun `legacy credentials remain until a first candidate is verified`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+        val candidate = service.connectionSession()!!
+
+        assertTrue(candidate.candidate)
+        assertEquals(0, legacy.clears)
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "identity", now = 2_000
+        ))
+        assertNull(service.connectionSession())
+        assertEquals(key.hex(), legacy.credentials.key)
+    }
+
+    @Test
+    fun `candidate failure retains evidence while restoring the committed credentials`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+        val candidate = service.connectionSession()!!
+
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 3_000
+        ))
+
+        assertNull(service.pending())
+        assertArrayEquals(key, service.keyBytes())
+        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
+        assertTrue(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in service.availability().causes)
+    }
+
+    @Test
+    fun `stale candidate failure cannot mutate a newer candidate availability`() {
+        val (service) = service()
+        install(service)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+        val old = service.connectionSession()!!
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(3_000))
+        val replacement = service.connectionSession()!!
+        val before = service.availability()
+
+        assertFalse(service.failCandidateOrRecord(old.generation, old.attemptId, setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "late", now = 4_000))
+        assertEquals(replacement.generation, service.connectionSession()!!.generation)
+        assertEquals(before, service.availability())
     }
 
     @Test
@@ -229,11 +522,12 @@ class YpsoProvisioningServiceTest {
             serial.takeIf { observedMac == mac }
         }
 
-        assertEquals(serial, service.installed()!!.serial)
-        assertEquals(mac, service.installed()!!.mac)
-        assertArrayEquals(key, service.keyBytes())
-        assertEquals("legacy-preferences", service.installed()!!.source["profile"])
-        assertEquals(1, legacy.clears)
+        assertNull(service.installed())
+        assertEquals(serial, service.pending()!!.serial)
+        assertEquals(mac, service.pending()!!.mac)
+        assertArrayEquals(key, service.connectionSession()!!.key)
+        assertEquals("legacy-preferences", service.pending()!!.source["profile"])
+        assertEquals(0, legacy.clears)
     }
 
     @Test
@@ -241,10 +535,11 @@ class YpsoProvisioningServiceTest {
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
         val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), legacy)
 
-        assertEquals(serial, service.installed()!!.serial)
-        assertNull(service.installed()!!.createdAt)
-        assertEquals("legacy-preferences", service.installed()!!.source["profile"])
-        assertEquals(1, legacy.clears)
+        assertNull(service.installed())
+        assertEquals(serial, service.pending()!!.serial)
+        assertNull(service.pending()!!.createdAt)
+        assertEquals("legacy-preferences", service.pending()!!.source["profile"])
+        assertEquals(0, legacy.clears)
     }
 
     @Test
@@ -439,7 +734,6 @@ class YpsoProvisioningServiceTest {
         service.markVerified(serial, 2_000)
 
         assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
-        assertEquals(emptySet<PumpSession.AvailabilityCause>(), service.availability().causes.operatorCauses())
         assertFalse(service.notificationRequired())
     }
 

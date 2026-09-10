@@ -33,10 +33,10 @@ preference editing. Configuration requires all of:
 3. **Existing AEAD session key** — either enter the nonzero 32-byte key as 64 hexadecimal characters,
    or import the canonical schema-v1 `.session.json` produced by
    [`ypso-keys` at `df5badb6433c4127a41f7da589888acf5dd0309c`](https://github.com/Baz00k/ypso-keys/tree/df5badb6433c4127a41f7da589888acf5dd0309c).
-4. **Independent identity and encrypted-status verification** — **Save and verify status** remains
-   configured-but-unverified until the bonded pump name or GATT serial independently matches the claimed
-   serial and an authenticated encrypted status is accepted. MD5 AUTH or successful decryption alone is
-   not identity verification.
+4. **Independent identity and encrypted-status verification** — submitted details are staged as a
+   candidate, preserving the saved session until the bonded pump name or GATT serial independently
+   matches the claimed serial and an authenticated encrypted status is accepted. MD5 AUTH or successful
+   decryption alone is not identity verification.
 
 The key, identity, provenance, replay floor and availability state are installed atomically in the
 no-backup session journal. The journal body is AES-GCM encrypted with a non-exportable Android Keystore
@@ -53,8 +53,9 @@ migrate when the same MAC is already bonded and its recognized pump name indepen
 serial; otherwise they wait for explicit real serial entry. Migration preserves an existing generation and
 replay floor. Build-compiled credentials are unsupported.
 
-Pump serial identity is always the physical 8-digit serial printed on the pump and shown in the bonded
-pump name (for example `YpsoPump_10054912` or `mylife YpsoPump 054912`). It always starts with `10`.
+The supported pump serial format is eight digits beginning with `10`. Check the physical serial printed
+on the pump against the bonded pump name (`YpsoPump_10XXXXXX` or `mylife YpsoPump XXXXXX`).
+This is the driver's supported identity format, not evidence that every YpsoPump model uses that format.
 AAPS enforces `10[0-9]{6}` on every manual, import and migration path and never synthesizes a serial from
 the MAC: the MAC only selects which bonded device may supply the independently observed serial, and the
 pair must still satisfy the serial↔MAC derivation check.
@@ -70,10 +71,10 @@ These remain separate security layers:
 
 Availability causes are persisted separately: unconfigured, bond/permission, transport, authentication,
 encrypted-status unavailable, suspected re-key required, counter uncertain and identity mismatch.
-Write-counter uncertainty (`COUNTER_UNCERTAIN`) is internal replay protection, not an operator action: it
-is excluded from notifications, the status-screen availability row and the setup verification error. A
-verified status-only session normally retains it because no write floor exists; the operator surfaces show
-nothing in that case.
+The presentation boundary translates these diagnostic facts into one operator-facing state and next
+action. Screens and notifications consume that presentation model rather than displaying cause sets.
+Write-counter uncertainty (`COUNTER_UNCERTAIN`) remains internal replay protection; a verified status-only
+session normally retains it because no write floor exists, without making status monitoring unavailable.
 Transport retries back off at 5 s, 15 s, 30 s, 60 s and 5 min; a durable alert is raised after the third
 consecutive transport failure, while actionable non-transport failures alert immediately. Dismissing an
 alert does not clear the condition. Only a verified current-pump encrypted status clears status-related
@@ -82,7 +83,7 @@ causes; status-only write-counter uncertainty remains explicit.
 Code 140 is reported as **suspected re-key/session loss**, preserving the code, operation and observed
 firmware. Its exact pump semantics and lifetime trigger remain unproven. Automatic retries stop until an
 operator saves a replacement session and requests its one controlled verification read. Re-saving the
-identical rejected key is refused: the setup screen requires the pump’s current (different) key before
+identical key is refused while this condition is sticky: the setup screen requires a different key before
 another verification attempt is allowed.
 
 ## Current limitations

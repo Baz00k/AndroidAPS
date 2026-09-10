@@ -80,6 +80,10 @@ class YpsoPumpPlugin @Inject constructor(
     aapsLogger, rh, preferences, commandQueue
 ), Pump {
 
+    private var publishedAvailabilityPresentation: PumpSetupPresentation? = null
+    /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
+    private var availabilityNotificationSynchronized = false
+
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
     }
@@ -125,7 +129,7 @@ class YpsoPumpPlugin @Inject constructor(
                 return
             }
             check(bleManager.configureInstalledSession()) { "No protected session" }
-            bleManager.connect(resolvedMac())
+            bleManager.connectConfiguredSession()
         } catch (exception: RuntimeException) {
             bleManager.disconnect()
             pumpState.invalidateStatus()
@@ -690,25 +694,44 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
-    private fun publishAvailabilityNotification() {
-        val availability = provisioning.availability()
+    @Synchronized
+    internal fun publishAvailabilityNotification() {
         if (!provisioning.notificationRequired()) {
-            rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+            dismissAvailabilityNotification()
             return
         }
-        val operatorCauses = availability.causes.operatorCauses()
-        if (operatorCauses.isEmpty()) {
-            rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        val availability = provisioning.availability()
+        val presentation = pumpSetupPresentation(
+            causes = availability.causes,
+            hasSavedDetails = provisioning.installed() != null,
+            verified = provisioning.installed()?.verifiedAt != null,
+        )
+        if (presentation == PumpSetupPresentation.READY) {
+            dismissAvailabilityNotification()
             return
         }
+        if (presentation == publishedAvailabilityPresentation) return
+        // NotificationStore preserves existing text for a repeated ID. A plugin can also start
+        // after a prior process left this ID in the store, so replace the first publication of
+        // this plugin lifetime and every later changed instruction.
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
         uiInteraction.addNotification(
             Notification.YPSOPUMP_UNAVAILABLE,
             rh.gs(
                 R.string.ypsopump_unavailable_notification,
-                operatorCauses.localizedSummary { rh.gs(it) }
+                rh.gs(presentation.message)
             ),
             Notification.URGENT
         )
+        publishedAvailabilityPresentation = presentation
+        availabilityNotificationSynchronized = true
+    }
+
+    private fun dismissAvailabilityNotification() {
+        if (publishedAvailabilityPresentation == null && availabilityNotificationSynchronized) return
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        publishedAvailabilityPresentation = null
+        availabilityNotificationSynchronized = true
     }
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false

@@ -9,6 +9,8 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
@@ -23,6 +25,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isNull
@@ -37,6 +41,7 @@ import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 class YpsoBleManagerTest {
     private val context: Context = mock()
     private val sessionCrypto: SessionCrypto = mock()
+    private lateinit var logger: AAPSLogger
     private lateinit var pumpState: YpsoPumpState
     private lateinit var manager: YpsoBleManager
     private lateinit var provisioning: YpsoProvisioningService
@@ -49,11 +54,13 @@ class YpsoBleManagerTest {
     fun setUp() {
         pumpState = YpsoPumpState()
         provisioning = mock()
+        logger = mock()
         manager =
-            YpsoBleManager(context, AAPSLoggerTest(), sessionCrypto, pumpState, provisioning).apply {
+            YpsoBleManager(context, logger, sessionCrypto, pumpState, provisioning).apply {
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
             }
+        whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any())).thenReturn(false)
         manager.session = PumpSession(object : PumpSession.Store {
             var saved = PumpSession.State()
             override fun load() = saved
@@ -85,11 +92,43 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `normal status logging excludes decrypted payload and therapy values`() {
+        val fixture = connectedGatt()
+        stubStatus()
+
+        manager.readStatus()
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        val infoMessages = argumentCaptor<String>()
+        verify(logger, org.mockito.kotlin.atLeastOnce()).info(eq(LTag.PUMP), infoMessages.capture())
+        assertTrue(infoMessages.allValues.contains("YpsoPump encrypted status accepted"))
+        assertFalse(infoMessages.allValues.any { it.contains("reservoir=") || it.contains("basal=") || it.contains("raw=") })
+        verify(logger, never()).debug(eq(LTag.PUMP), any<String>())
+    }
+
+    @Test
+    fun `explicit diagnostic gate logs decrypted status only at debug level`() {
+        val fixture = connectedGatt()
+        stubStatus()
+        manager.diagnosticLoggingEnabled = { true }
+
+        manager.readStatus()
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+
+        val debugMessages = argumentCaptor<String>()
+        verify(logger, org.mockito.kotlin.atLeastOnce()).debug(eq(LTag.PUMP), debugMessages.capture())
+        assertTrue(debugMessages.allValues.any { it.contains("reservoir=5.5U") && it.contains("raw=") })
+        val infoMessages = argumentCaptor<String>()
+        verify(logger, org.mockito.kotlin.atLeastOnce()).info(eq(LTag.PUMP), infoMessages.capture())
+        assertFalse(infoMessages.allValues.any { it.contains("reservoir=") || it.contains("basal=") || it.contains("raw=") })
+    }
+
+    @Test
     fun `successful decryption cannot publish when independent serial verification is unavailable`() {
         val fixture = connectedGatt()
         stubStatus()
         doThrow(SecurityException("Pump serial could not be independently observed"))
-            .whenever(provisioning).markVerified(isNull(), any())
+            .whenever(provisioning).markVerified(any(), anyOrNull(), isNull(), any())
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -111,7 +150,7 @@ class YpsoBleManagerTest {
 
         assertEquals(listOf(true), results)
         assertTrue(pumpState.hasVerifiedStatus)
-        verify(provisioning).markVerified(eq("10175983"), any())
+        verify(provisioning).markVerified(any(), anyOrNull(), eq("10175983"), any())
     }
 
     @Test
@@ -119,7 +158,7 @@ class YpsoBleManagerTest {
         val fixture = connectedGatt(serial = "10175984\u0000".toByteArray())
         stubStatus()
         doThrow(SecurityException("Observed pump identity does not match configured serial"))
-            .whenever(provisioning).markVerified(eq("10175984"), any())
+            .whenever(provisioning).markVerified(any(), anyOrNull(), eq("10175984"), any())
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
@@ -611,12 +650,9 @@ class YpsoBleManagerTest {
         manager.gattCallback.onCharacteristicWrite(gatt, auth, 140)
 
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        verify(provisioning).recordUnavailable(
-            eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
-            eq(140),
-            eq(CHAR_AUTH.toString()),
-            eq("V05.00.52"),
-            any()
+        verify(provisioning).failCandidateOrRecord(
+            any(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+            eq(CHAR_AUTH.toString()), any(), eq("V05.00.52"), eq(140)
         )
     }
 
@@ -768,6 +804,11 @@ class YpsoBleManagerTest {
             override fun commit(state: PumpSession.State) { saved = state }
         }).apply { provisionReadBaseline(installed.mac, installedKey, 8, 0) }
         manager.setSharedKey("01".repeat(32))
+        whenever(provisioning.connectionSession()).thenReturn(
+            YpsoProvisioningService.ConnectionSession(
+                manager.session!!.activeRecord()!!.generation, null, installed.serial, installed.mac, installedKey.copyOf(), false
+            )
+        )
         whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
         whenever(bluetooth.adapter).thenReturn(adapter)
         whenever(adapter.isEnabled).thenReturn(true)
