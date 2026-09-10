@@ -696,8 +696,11 @@ class YpsoPumpPlugin @Inject constructor(
             rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
             return
         }
-        val operatorCauses = (availability.causes - PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)
-            .ifEmpty { availability.causes }
+        val operatorCauses = availability.causes.operatorCauses()
+        if (operatorCauses.isEmpty()) {
+            rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+            return
+        }
         uiInteraction.addNotification(
             Notification.YPSOPUMP_UNAVAILABLE,
             rh.gs(

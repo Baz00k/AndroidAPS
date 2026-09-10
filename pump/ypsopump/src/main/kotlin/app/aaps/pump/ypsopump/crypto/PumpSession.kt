@@ -92,19 +92,20 @@ class PumpSession(private val store: Store) {
         val current = state ?: throw SecurityException("Session storage unavailable")
         val records = if (plan.previous == null) current.records + plan.installed else
             current.records.map { if (it.generation == plan.previous.generation) plan.installed else it }
-        val retainedCauses = current.availability.causes - AvailabilityCause.UNCONFIGURED
-        val nextCauses = retainedCauses + AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE + AvailabilityCause.COUNTER_UNCERTAIN
+        // A fresh bundle starts a fresh verification cycle. Only a suspected re-key survives until a
+        // verified read clears it; stale transport/auth/identity failures and their backoff must never
+        // cross into the new identity. Failures/retry reset so the new bundle can verify immediately.
+        val retainedRekey = current.availability.causes.intersect(setOf(AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
+        val nextCauses = retainedRekey + AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE + AvailabilityCause.COUNTER_UNCERTAIN
         persist(
             current.copy(
                 records = records,
                 activeGeneration = plan.installed.generation,
                 availability = current.availability.copy(
                     causes = nextCauses,
-                    since = current.availability.since.takeIf { retainedCauses.isNotEmpty() } ?: provisioning.importedAt,
-                    failures = current.availability.failures.takeIf { retainedCauses.isNotEmpty() } ?: 0,
-                    retryAt = current.availability.retryAt.takeIf {
-                        retainedCauses.isNotEmpty() && AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in nextCauses
-                    }
+                    since = current.availability.since.takeIf { retainedRekey.isNotEmpty() } ?: provisioning.importedAt,
+                    failures = 0,
+                    retryAt = null
                 )
             )
         )

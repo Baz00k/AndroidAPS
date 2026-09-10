@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.operatorCauses
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import java.io.ByteArrayInputStream
 import java.time.Instant
@@ -377,12 +378,69 @@ class YpsoProvisioningServiceTest {
 
         assertTrue(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in service.availability().causes)
         assertEquals(140, service.availability().code)
+        assertEquals(0, service.availability().failures)
+        assertNull(service.availability().retryAt)
         service.requestVerificationAttempt()
         assertTrue(service.retryAllowed(4_000))
         assertFalse(service.retryAllowed(Long.MAX_VALUE))
 
         service.markVerified(serial, 5_000)
         assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
+    }
+
+    @Test
+    fun `fresh install does not inherit prior transport failures or backoff`() {
+        val (service) = service()
+        install(service)
+        repeat(4) {
+            service.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "poll", now = 2_000L + it)
+        }
+        assertTrue(service.availability().failures > 0)
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(9_000))
+
+        assertEquals(0, service.availability().failures)
+        assertNull(service.availability().retryAt)
+        assertFalse(PumpSession.AvailabilityCause.TRANSPORT in service.availability().causes)
+        assertTrue(service.retryAllowed(9_001))
+    }
+
+    @Test
+    fun `re-saving the identical rejected key is refused while rekey is sticky`() {
+        val (service) = service()
+        install(service)
+        service.recordUnavailable(
+            setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED),
+            code = 140,
+            operation = "status-characteristic",
+            firmware = "V05.00.52",
+            now = 2_000
+        )
+
+        val sameKey = assertThrows(YpsoProvisioningService.ManualValidationException::class.java) {
+            service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(3_000))
+        }
+        assertEquals(YpsoProvisioningService.ManualField.KEY, sameKey.field)
+
+        val blankKey = assertThrows(YpsoProvisioningService.ManualValidationException::class.java) {
+            service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, null), Instant.ofEpochMilli(3_001))
+        }
+        assertEquals(YpsoProvisioningService.ManualField.KEY, blankKey.field)
+
+        // A genuinely different current key is still accepted as the replacement session.
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_002))
+        assertTrue(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in service.availability().causes)
+    }
+
+    @Test
+    fun `write-counter state alone never demands an operator notification`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 2_000)
+
+        assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
+        assertEquals(emptySet<PumpSession.AvailabilityCause>(), service.availability().causes.operatorCauses())
+        assertFalse(service.notificationRequired())
     }
 
     private fun validDocument() = """

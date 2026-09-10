@@ -89,6 +89,14 @@ class YpsoProvisioningService internal constructor(
                 ?.takeIf { legacy.mac?.let { value -> runCatching { PumpIdentity.normalizeMac(value) }.getOrNull() } == mac }
                 ?.let { validateField(ManualField.KEY) { normalizeKey(it) } }
             ?: throw ManualValidationException(ManualField.KEY, "A 32-byte session key is required")
+        // A suspected re-key blocks re-saving the identical rejected key: that would grant another
+        // verification read without new key material and defeat the anti-retry safeguard.
+        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
+            val currentHex = current?.keyHex
+            if (explicitKey == null || (currentHex != null && explicitKey.toHex().equals(currentHex, ignoreCase = true))) {
+                throw ManualValidationException(ManualField.KEY, "Replacement key required after rejection")
+            }
+        }
         val preservesCurrentKey = explicitKey == null || current?.keyHex?.equals(key.toHex(), ignoreCase = true) == true
         return install(
             serial,
@@ -117,6 +125,13 @@ class YpsoProvisioningService internal constructor(
     fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation {
         val serial = PumpIdentity.normalizeSerial(document.serial)
         PumpIdentity.validatePair(serial, document.mac)
+        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
+            val currentHex = owner.activeRecord()?.keyHex
+            if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
+                document.sharedKey.fill(0)
+                throw SecurityException("Replacement key required after rejection")
+            }
+        }
         return try {
             install(
                 serial,
@@ -237,6 +252,7 @@ class YpsoProvisioningService internal constructor(
         val provisioning = PumpSession.Provisioning(mac, serial, key, createdAt, importedAt, source)
         owner.preflight(provisioning)
         quiesceConnection()
+        verificationAttemptRequested = false
         owner.install(provisioning).also {
             pumpState.invalidateStatus()
             pumpState.claimedSerialNumber = serial

@@ -17,3 +17,10 @@ internal fun PumpSession.AvailabilityCause.labelResource(): Int = when (this) {
 
 internal fun Set<PumpSession.AvailabilityCause>.localizedSummary(resolve: (Int) -> String): String =
     joinToString { resolve(it.labelResource()) }
+
+/** Operator-visible causes only. COUNTER_UNCERTAIN is internal replay state, never an operator action. */
+internal fun Set<PumpSession.AvailabilityCause>.operatorCauses(): Set<PumpSession.AvailabilityCause> =
+    this - PumpSession.AvailabilityCause.COUNTER_UNCERTAIN
+
+internal fun Set<PumpSession.AvailabilityCause>.operatorSummary(resolve: (Int) -> String): String =
+    operatorCauses().localizedSummary(resolve)

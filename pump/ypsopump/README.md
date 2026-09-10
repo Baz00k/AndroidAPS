@@ -53,6 +53,12 @@ migrate when the same MAC is already bonded and its recognized pump name indepen
 serial; otherwise they wait for explicit real serial entry. Migration preserves an existing generation and
 replay floor. Build-compiled credentials are unsupported.
 
+Pump serial identity is always the physical 8-digit serial printed on the pump and shown in the bonded
+pump name (for example `YpsoPump_10054912` or `mylife YpsoPump 054912`). It always starts with `10`.
+AAPS enforces `10[0-9]{6}` on every manual, import and migration path and never synthesizes a serial from
+the MAC: the MAC only selects which bonded device may supply the independently observed serial, and the
+pair must still satisfy the serial↔MAC derivation check.
+
 These remain separate security layers:
 
 - the Android BLE bond permits link access;
@@ -64,6 +70,10 @@ These remain separate security layers:
 
 Availability causes are persisted separately: unconfigured, bond/permission, transport, authentication,
 encrypted-status unavailable, suspected re-key required, counter uncertain and identity mismatch.
+Write-counter uncertainty (`COUNTER_UNCERTAIN`) is internal replay protection, not an operator action: it
+is excluded from notifications, the status-screen availability row and the setup verification error. A
+verified status-only session normally retains it because no write floor exists; the operator surfaces show
+nothing in that case.
 Transport retries back off at 5 s, 15 s, 30 s, 60 s and 5 min; a durable alert is raised after the third
 consecutive transport failure, while actionable non-transport failures alert immediately. Dismissing an
 alert does not clear the condition. Only a verified current-pump encrypted status clears status-related
@@ -71,7 +81,9 @@ causes; status-only write-counter uncertainty remains explicit.
 
 Code 140 is reported as **suspected re-key/session loss**, preserving the code, operation and observed
 firmware. Its exact pump semantics and lifetime trigger remain unproven. Automatic retries stop until an
-operator saves a replacement session and requests its one controlled verification read.
+operator saves a replacement session and requests its one controlled verification read. Re-saving the
+identical rejected key is refused: the setup screen requires the pump’s current (different) key before
+another verification attempt is allowed.
 
 ## Current limitations
 

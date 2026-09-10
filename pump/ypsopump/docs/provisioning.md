@@ -29,20 +29,26 @@ no-backup copy and never silently deletes the selected document.
 2. On the source device, use the pinned `ypso-keys` workflow to extract the existing session. Record the
    source profile, genuine-app version, tool commit and source OS for the evidence log. Do not record the
    plaintext key in logs or screenshots.
-3. Privately transfer the canonical `.session.json` to the AAPS target, or display the real serial, BLE MAC
-   and 64 hexadecimal key for manual entry.
+3. Privately transfer the canonical `.session.json` to the AAPS target, or display the 8-digit pump
+   serial (always starts with `10`, as printed on the pump), BLE MAC and 64 hexadecimal key for manual
+   entry. The serial is never derived from the MAC.
 4. Ensure Android on the AAPS target is bonded to that physical pump.
 5. Open **YpsoPump → Pump connection setup**.
 6. Choose one supported path:
-   - **Manual:** enter the real eight-digit serial beginning with `10`, matching colon-separated MAC and
-     key. When later editing identity metadata, leave the key blank to retain the installed key.
-   - **Import:** choose **Import session file** in the system picker. Review serial, MAC, key fingerprint,
-     source provenance and key creation time/age; the plaintext key is not displayed.
+   - **Manual:** enter the 8-digit serial beginning with `10` exactly as printed on the pump (for
+     example `10054912` from `YpsoPump_10054912`), the matching
+     colon-separated Bluetooth address and key. When later editing identity metadata, leave the key blank
+     to retain the installed key — except after a suspected re-key, which requires the pump’s current
+     (different) key.
+   - **Import:** choose **Import session file** in the system picker. Review serial number, Bluetooth
+     address, key check code and key creation time/age; the plaintext key is not displayed.
 7. Select **Save and verify status** / **Apply and verify status**. The old BLE connection is quiesced,
-   status invalidated and the complete identity/key bundle committed atomically before use.
-8. Confirm that the screen moves from **configured, unverified** through **verifying** to a timestamped
-   verified state. Verification requires an independent serial match plus an accepted encrypted status.
-   AUTH success, reconnect or key save alone must not clear unavailability.
+   status invalidated and the complete identity/key bundle committed atomically before use. A fresh bundle
+   always starts a fresh verification cycle: prior transport/auth/identity failures and their backoff are
+   not inherited.
+8. Confirm that the screen moves from **saved, awaiting verification** through **checking the nearby pump**
+   to a timestamped verified state. Verification requires an independent serial match plus an accepted
+   encrypted status. AUTH success, reconnect or key save alone must not clear unavailability.
 9. Restart AAPS and re-open setup/status. Confirm fingerprint, real serial, verified state and durable
    availability survive. Delete the temporary target transfer copy only after confirming the protected
    copy and fallback procedure.

@@ -89,7 +89,10 @@ internal fun buildPumpStatusState(
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
         }
         if (pumpState.availability.causes.isNotEmpty()) {
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_availability), pumpState.availability.causes.localizedSummary { rh.gs(it) }))
+            val operator = pumpState.availability.causes.operatorCauses()
+            if (operator.isNotEmpty()) {
+                add(PumpStatusRow(rh.gs(R.string.ypsopump_availability), operator.localizedSummary { rh.gs(it) }))
+            }
         }
     }
     val queue = buildList {
