@@ -46,6 +46,7 @@ class YpsoProvisioningService internal constructor(
         Thread(runnable, "ypso-session-restore").apply { isDaemon = true }
     }
     internal var dispatchSessionRestore: ((() -> Unit) -> Unit) = { task -> restoreExecutor.execute(task) }
+    private val restoreSequence = AtomicLong()
     @Volatile private var sessionRestorePending = false
 
     /** True between scheduling a retained-session restore and its execution. */
@@ -131,7 +132,9 @@ class YpsoProvisioningService internal constructor(
     /** UI/API seam: discard an unverified candidate and return to the last verified/active bundle. */
     fun cancelCandidate() {
         synchronized(provisioningLock) {
-            mutationEpoch.incrementAndGet()
+            // The epoch transition must be atomic with promotion's even-epoch check; both take the
+            // service monitor so cancellation cannot start between that check and the commit.
+            synchronized(this) { mutationEpoch.incrementAndGet() }
             try {
                 quiesceConnection()
                 val cancelled = synchronized(this) {
@@ -202,16 +205,20 @@ class YpsoProvisioningService internal constructor(
         startVerification({ installManual(draft, now) }, enqueue)
     }
 
-    @Synchronized
     fun reviewDocument(stream: InputStream, now: Instant = Instant.now()): YpsoSessionDocument {
-        val document = YpsoSessionDocumentParser.parse(boundedRead(stream), now)
+        val data = boundedRead(stream)
         return try {
-            val serial = PumpIdentity.normalizeSerial(document.serial)
-            PumpIdentity.validatePair(serial, document.mac)
-            document
-        } catch (e: Exception) {
-            document.sharedKey.fill(0)
-            throw e
+            val document = YpsoSessionDocumentParser.parse(data, now)
+            try {
+                val serial = PumpIdentity.normalizeSerial(document.serial)
+                PumpIdentity.validatePair(serial, document.mac)
+                document
+            } catch (e: Exception) {
+                document.sharedKey.fill(0)
+                throw e
+            }
+        } finally {
+            data.fill(0)
         }
     }
 
@@ -263,7 +270,7 @@ class YpsoProvisioningService internal constructor(
             if (!enqueue()) throw IllegalStateException("Verification status read was not accepted")
             return installation
         } catch (error: Throwable) {
-            mutationEpoch.incrementAndGet()
+            synchronized(this) { mutationEpoch.incrementAndGet() }
             try {
                 quiesceConnection()
                 val cancelled = synchronized(this) {
@@ -371,10 +378,7 @@ class YpsoProvisioningService internal constructor(
             publishAvailability()
             true
         }
-        if (rejected) {
-            sessionRestorePending = true
-            dispatchSessionRestore { restoreRetainedLegacySession() }
-        }
+        if (rejected) scheduleRetainedSessionRestore(owner.availability())
         return rejected
     }
 
@@ -402,11 +406,15 @@ class YpsoProvisioningService internal constructor(
                 true to null
             }
         }
-        if (restoreAvailability != null) {
-            sessionRestorePending = true
-            dispatchSessionRestore { restoreRetainedLegacySession(restoreAvailability) }
-        }
+        if (restoreAvailability != null) scheduleRetainedSessionRestore(restoreAvailability)
         return handled
+    }
+
+    /** Only the latest scheduled restore may activate credentials; older queued restores are stale. */
+    private fun scheduleRetainedSessionRestore(availability: PumpSession.Availability) {
+        val sequence = restoreSequence.incrementAndGet()
+        sessionRestorePending = true
+        dispatchSessionRestore { restoreRetainedLegacySession(availability, sequence) }
     }
 
     /**
@@ -440,38 +448,44 @@ class YpsoProvisioningService internal constructor(
      * [capturedAvailability] is the failure state that triggered the restore when the restore was
      * dispatched asynchronously: normal polling may record an unconfigured condition in the window
      * before this task runs, and that must not replace the candidate's recorded failure.
+     * [sequence] scopes deferred restores: once a newer restore has been scheduled, an older queued
+     * task must not activate credentials or publish stale evidence.
      */
-    private fun restoreRetainedLegacySession(capturedAvailability: PumpSession.Availability? = null) {
+    private fun restoreRetainedLegacySession(capturedAvailability: PumpSession.Availability? = null, sequence: Long? = null) {
         synchronized(provisioningLock) {
-            sessionRestorePending = false
-            if (owner.activeRecord() != null) return
-            val legacy = legacyStore.load()
-            val mac = legacy.mac?.takeIf(String::isNotBlank) ?: return
-            val key = legacy.key?.takeIf(String::isNotBlank) ?: return
-            runCatching {
-                val normalizedMac = PumpIdentity.normalizeMac(mac)
-                val serial = legacy.serial?.takeIf(String::isNotBlank) ?: bondedSerialForMac(normalizedMac) ?: return
-                val normalizedSerial = PumpIdentity.normalizeSerial(serial)
-                PumpIdentity.validatePair(normalizedSerial, normalizedMac)
-                val normalizedKey = normalizeKey(key)
-                try {
-                    val provisioning = PumpSession.Provisioning(
-                        normalizedMac, normalizedSerial, normalizedKey, null, System.currentTimeMillis(), mapOf("profile" to "legacy-preferences")
-                    )
-                    synchronized(this) {
-                        val availability = (capturedAvailability ?: owner.availability()).let { value ->
-                            // A cancelled first attempt leaves the journal's default UNCONFIGURED cause, but the
-                            // restored bundle is present and merely unverified.
-                            if (value.causes == setOf(PumpSession.AvailabilityCause.UNCONFIGURED)) PumpSession.Availability(emptySet(), value.since)
-                            else value
+            if (sequence != null && sequence != restoreSequence.get()) return
+            try {
+                if (owner.activeRecord() != null) return
+                val legacy = legacyStore.load()
+                val mac = legacy.mac?.takeIf(String::isNotBlank) ?: return
+                val key = legacy.key?.takeIf(String::isNotBlank) ?: return
+                runCatching {
+                    val normalizedMac = PumpIdentity.normalizeMac(mac)
+                    val serial = legacy.serial?.takeIf(String::isNotBlank) ?: bondedSerialForMac(normalizedMac) ?: return
+                    val normalizedSerial = PumpIdentity.normalizeSerial(serial)
+                    PumpIdentity.validatePair(normalizedSerial, normalizedMac)
+                    val normalizedKey = normalizeKey(key)
+                    try {
+                        val provisioning = PumpSession.Provisioning(
+                            normalizedMac, normalizedSerial, normalizedKey, null, System.currentTimeMillis(), mapOf("profile" to "legacy-preferences")
+                        )
+                        synchronized(this) {
+                            val availability = (capturedAvailability ?: owner.availability()).let { value ->
+                                // A cancelled first attempt leaves the journal's default UNCONFIGURED cause, but the
+                                // restored bundle is present and merely unverified.
+                                if (value.causes == setOf(PumpSession.AvailabilityCause.UNCONFIGURED)) PumpSession.Availability(emptySet(), value.since)
+                                else value
+                            }
+                            owner.activateUnverified(provisioning, availability)
+                            refreshState()
+                            publishAvailability()
                         }
-                        owner.activateUnverified(provisioning, availability)
-                        refreshState()
-                        publishAvailability()
+                    } finally {
+                        normalizedKey.fill(0)
                     }
-                } finally {
-                    normalizedKey.fill(0)
                 }
+            } finally {
+                if (sequence == null || sequence == restoreSequence.get()) sessionRestorePending = false
             }
         }
     }
@@ -657,6 +671,8 @@ class YpsoProvisioningService internal constructor(
         )
 
         override fun clear() {
+            // The protected journal is already committed; remove the plaintext legacy copy durably in the
+            // same recovery generation rather than leaving an asynchronous apply() window behind.
             preferences.edit()
                 .remove(YpsoPumpConst.PREF_SHARED_KEY)
                 .remove(YpsoPumpConst.PREF_PRIVATE_KEY)
@@ -667,7 +683,7 @@ class YpsoProvisioningService internal constructor(
                 .remove(YpsoPumpConst.PREF_REBOOT_COUNTER)
                 .remove(YpsoPumpConst.PREF_READ_COUNTER)
                 .remove(YpsoPumpConst.PREF_WRITE_COUNTER)
-                .apply()
+                .commit()
         }
     }
 

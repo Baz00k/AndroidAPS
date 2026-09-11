@@ -126,7 +126,7 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 173 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+Final module run: 177 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
 `git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
 were silently skipped by JUnit 5; they now run and are included in that count.
 
@@ -195,6 +195,26 @@ fixed further regressions in the first fix set (recorded after the first list).
   tombstones.
 - Open item (documented, not solved): tombstone retention has no compaction/destructive-reset policy;
   arbitrary eviction would weaken replay protection, so this needs a deliberate operational policy.
+
+### Third review round (verification of the second fixes)
+
+- **Cancellation/promotion atomicity:** the mutation-epoch transition now happens under the service
+  monitor in `cancelCandidate()` and the verification rollback, so it is atomic with promotion's
+  even-epoch check. Regression test added.
+- **Exactly-once teardown reporting:** a `teardownReporting` marker suppresses duplicate reporting from
+  callbacks drained during a fail/disconnect/cancel, and a remote disconnect records transport even when
+  an operation was drained. Tests cover cancellation and remote disconnect during an active read.
+- **Deferred restore scoping:** restores are sequenced; only the latest scheduled restore may activate
+  credentials or publish captured evidence, and the pending flag is cleared in a `finally`. A superseded
+  restore can no longer replace newer sticky evidence. Test added.
+- **Import I/O no longer holds the service monitor**; the parsed document byte buffer is wiped after
+  parsing. Legacy plaintext preference removal now uses a synchronous `commit()` instead of `apply()`.
+- **Owner API hardening:** `open()` selects only the currently selected generation; the unscoped
+  `markVerified(serial, at)` rejects while a candidate exists; journal validation checks candidate
+  availability failures and requires candidate/replacement records to share a key identity.
+- Recorded open items outside this module: `Pump.isInitialized()` still means "monitoring ready" rather
+  than "command ready" (core gate semantics); Android system-notification cancellation and tombstone
+  compaction policy remain as previously recorded.
 
 ## Adversarial blocker disposition (earlier round)
 

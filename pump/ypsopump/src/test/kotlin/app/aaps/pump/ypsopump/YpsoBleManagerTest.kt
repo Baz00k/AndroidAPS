@@ -713,6 +713,38 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `cancelling an active status read records one transport failure`() {
+        val fixture = connectedGatt()
+        val results = mutableListOf<Boolean>()
+
+        val attempt = manager.readStatus(results::add)
+        attempt.cancel()
+
+        assertEquals(listOf(false), results)
+        verify(provisioning, times(1)).recordCandidateOrUnavailable(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+        verify(provisioning, never()).failCandidateOrRecord(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
+    fun `remote disconnect during an active read records one transport failure`() {
+        val fixture = connectedGatt()
+
+        manager.readStatus { }
+        manager.gattCallback.onConnectionStateChange(fixture.gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_DISCONNECTED)
+
+        verify(provisioning, times(1)).recordCandidateOrUnavailable(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            eq("gatt-disconnected"), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
     fun `missing discovery and authentication callbacks close their owned handshake`() {
         for (phase in listOf(ConnectionState.CONNECTING, ConnectionState.DISCOVERING)) {
             val gatt: BluetoothGatt = mock()

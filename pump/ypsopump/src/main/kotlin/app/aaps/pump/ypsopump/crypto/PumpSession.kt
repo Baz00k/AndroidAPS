@@ -88,10 +88,8 @@ class PumpSession(private val store: Store) {
         quiesce()
         val id = fingerprint(sharedKey)
         val current = state
-        val saved = current?.records?.singleOrNull {
-            it.pump == pump && it.keyId == id &&
-                (it.generation == current.activeGeneration || it.generation == current.candidateGeneration)
-        }
+        val selected = current?.candidateGeneration ?: current?.activeGeneration
+        val saved = current?.records?.singleOrNull { it.pump == pump && it.keyId == id && it.generation == selected }
             ?: throw SecurityException("Session recovery required: no durable replay baseline")
         check(saved.keyHex == null || saved.keyHex.equals(sharedKey.toHex(), ignoreCase = true)) { "Protected key does not match session record" }
         record = saved
@@ -229,7 +227,8 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun markVerified(serial: String, at: Long): Boolean {
         val current = state ?: throw SecurityException("Session storage unavailable")
-        val generation = current.candidateGeneration ?: current.activeGeneration
+        check(current.candidateGeneration == null) { "Stale verification callback" }
+        val generation = current.activeGeneration
         val active = current.records.singleOrNull { it.generation == generation }
             ?: throw SecurityException("No active session")
         check(active.serial == serial) { "Verified pump serial does not match configured identity" }
@@ -576,7 +575,12 @@ class PumpSession(private val store: Store) {
             require(state.candidateAttemptId == null || state.candidateAttemptId.isNotBlank())
             require(state.lastAttempt == null || state.lastAttempt.id.isNotBlank() && state.lastAttempt.status != AttemptStatus.PENDING)
             require(state.candidateReplacesGeneration == null || state.records.count { it.generation == state.candidateReplacesGeneration } == 1)
+            require(state.candidateReplacesGeneration == null || state.candidateGeneration != null)
+            val candidateRecord = state.records.singleOrNull { it.generation == state.candidateGeneration }
+            val replacedRecord = state.records.singleOrNull { it.generation == state.candidateReplacesGeneration }
+            require(candidateRecord == null || replacedRecord == null || candidateRecord.keyId == replacedRecord.keyId)
             require(state.availability.failures >= 0)
+            require((state.candidateAvailability?.failures ?: 0) >= 0)
         }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

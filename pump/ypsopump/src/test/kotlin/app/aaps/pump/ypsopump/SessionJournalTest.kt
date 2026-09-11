@@ -103,7 +103,7 @@ class SessionJournalTest {
         assertNull(upgraded.lastAttempt)
 
         val candidateHex = "02".repeat(32)
-        val candidate = PumpSession.Record("pump", PumpSession.fingerprint(ByteArray(32) { 2 }), "candidate", null, null, null, serial = "serial", keyHex = candidateHex)
+        val candidate = PumpSession.Record("pump", keyId, "candidate", null, null, null, serial = "serial", keyHex = keyHex)
         val pending = upgraded.copy(
             records = upgraded.records + candidate,
             candidateGeneration = candidate.generation,

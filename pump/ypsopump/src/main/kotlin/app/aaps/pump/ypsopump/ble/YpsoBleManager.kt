@@ -432,6 +432,9 @@ class YpsoBleManager @Inject constructor(
         val onResult: (BluetoothGatt?, ByteArray?, Int) -> Unit
     )
     private val opLock = Any()
+    // Set while a teardown drains pending operation callbacks: the teardown already recorded the
+    // durable failure, so drained reads must not report a second one.
+    @Volatile private var teardownReporting = false
     private val queue = ArrayDeque<Op>()
     private var current: Op? = null
     private var currentGatt: BluetoothGatt? = null
@@ -578,26 +581,28 @@ class YpsoBleManager @Inject constructor(
                 else
                     "read $now failed (status=$s, got ${frames.size} frames)"
                 fail(originGatt, message, cause = null)
-                val causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)
-                else setOf(PumpSession.AvailabilityCause.TRANSPORT)
-                val owner = failureOwner
-                if (owner != null) {
-                    if (s == ERR_NO_SHARED_KEY) {
-                        provisioning.failCandidateOrRecord(
-                            owner.generation, owner.attemptId, causes, operation = now.toString(),
-                            code = s, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-                        )
+                if (!teardownReporting) {
+                    val causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)
+                    else setOf(PumpSession.AvailabilityCause.TRANSPORT)
+                    val owner = failureOwner
+                    if (owner != null) {
+                        if (s == ERR_NO_SHARED_KEY) {
+                            provisioning.failCandidateOrRecord(
+                                owner.generation, owner.attemptId, causes, operation = now.toString(),
+                                code = s, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                            )
+                        } else {
+                            provisioning.recordCandidateOrUnavailable(
+                                owner.generation, owner.attemptId, causes, operation = now.toString(),
+                                code = s.takeIf { it >= 0 }, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                            )
+                        }
                     } else {
-                        provisioning.recordCandidateOrUnavailable(
-                            owner.generation, owner.attemptId, causes, operation = now.toString(),
-                            code = s.takeIf { it >= 0 }, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                        provisioning.recordUnavailable(
+                            causes = causes, code = s.takeIf { it >= 0 }, operation = now.toString(),
+                            firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
                         )
                     }
-                } else {
-                    provisioning.recordUnavailable(
-                        causes = causes, code = s.takeIf { it >= 0 }, operation = now.toString(),
-                        firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-                    )
                 }
                 onFailure()
                 return@readOp
@@ -1228,14 +1233,18 @@ class YpsoBleManager @Inject constructor(
                         drainPendingOperationsLocked() to owned
                     }
                     failOperations(failed)
-                    // An in-flight operation reports its own failure; only an idle connection needs the
-                    // disconnect itself recorded, so one physical disconnect is one durable transition.
-                    if (failed.isEmpty()) {
-                        provisioning.recordCandidateOrUnavailable(
-                            ownership.generation, ownership.attemptId,
-                            setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "gatt-disconnected"
-                        )
+                    teardownReporting = true
+                    try {
+                        failOperations(failed)
+                    } finally {
+                        teardownReporting = false
                     }
+                    // Remote teardown records exactly one transport failure; drained callbacks are
+                    // suppressed by the teardown marker so a cancellation/disconnect cannot count twice.
+                    provisioning.recordCandidateOrUnavailable(
+                        ownership.generation, ownership.attemptId,
+                        setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "gatt-disconnected"
+                    )
                     runCatching { g.close() }
                 }
             }
@@ -1411,7 +1420,12 @@ class YpsoBleManager @Inject constructor(
                 }
             }
         }
-        failOperations(failed)
+        teardownReporting = true
+        try {
+            failOperations(failed)
+        } finally {
+            teardownReporting = false
+        }
         runCatching { g.disconnect() }
         runCatching { g.close() }
     }

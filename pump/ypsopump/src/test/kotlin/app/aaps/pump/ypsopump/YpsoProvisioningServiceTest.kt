@@ -790,6 +790,58 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `promotion is rejected once cancellation has started`() {
+        val (service) = service()
+        install(service)
+        val candidate = service.connectionSession()!!
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        service.quiesceConnection = {
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val canceller = Executors.newSingleThreadExecutor()
+        try {
+            canceller.submit { service.cancelCandidate() }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertThrows(IllegalStateException::class.java) {
+                service.markVerified(candidate.generation, candidate.attemptId, serial, 3_000)
+            }
+        } finally {
+            release.countDown()
+            canceller.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `a superseded deferred restore cannot replace newer failure evidence`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+        val pending = mutableListOf<() -> Unit>()
+        service.dispatchSessionRestore = { pending.add(it) }
+
+        val firstCandidate = service.connectionSession()!!
+        assertTrue(service.failCandidateOrRecord(
+            firstCandidate.generation, firstCandidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
+        ))
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_000))
+        val secondCandidate = service.connectionSession()!!
+        assertTrue(service.failCandidateOrRecord(
+            secondCandidate.generation, secondCandidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), "auth", now = 4_000, code = 140
+        ))
+
+        pending.forEach { it() }
+
+        assertEquals(2, pending.size)
+        assertTrue(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in service.availability().causes)
+        assertFalse(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in service.availability().causes)
+        assertEquals(140, service.availability().code)
+    }
+
+    @Test
     fun `candidate failure never blocks on a held provisioning transaction`() {
         val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), Legacy())
         install(service)
