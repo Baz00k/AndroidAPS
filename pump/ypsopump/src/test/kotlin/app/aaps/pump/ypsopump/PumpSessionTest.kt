@@ -137,6 +137,26 @@ class PumpSessionTest {
     }
 
     @Test
+    fun `bench write baseline is one-time epoch-bound and cannot erase uncertainty`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+
+        owner.provisionBenchWriteBaseline(pump, key, 8, 42)
+        assertEquals(42L, store.saved.records.single().write)
+        owner.provisionBenchWriteBaseline(pump, key, 8, 42)
+        assertThrows(IllegalStateException::class.java) { owner.provisionBenchWriteBaseline(pump, key, 8, 41) }
+        assertThrows(IllegalStateException::class.java) { owner.provisionBenchWriteBaseline(pump, key, 9, 42) }
+
+        val active = PumpSession(store)
+        val token = active.open(pump, key)
+        val transaction = active.begin(token)
+        active.reserve(token, transaction)
+        active.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        active.finish(token, transaction)
+        assertThrows(IllegalStateException::class.java) { active.provisionBenchWriteBaseline(pump, key, 8, 43) }
+    }
+
+    @Test
     fun `new key isolates generation and quiesces outstanding transactions`() {
         val store = MemoryStore()
         val owner = initialized(store)
@@ -233,5 +253,119 @@ class PumpSessionTest {
         assertThrows(SecurityException::class.java) { accept(owner, token, Long.MAX_VALUE) }
         assertThrows(IllegalStateException::class.java) { owner.reserve(token, owner.begin(token)) }
         assertNull(store.saved.records.single().reservation)
+    }
+
+    @Test
+    fun `proven local not sent restores counter and permits a new reservation`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        assertEquals(43, owner.reserve(token, transaction).counter)
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+
+        owner.markNotSent(token, transaction)
+
+        assertEquals(42, owner.snapshot()!!.write)
+        assertNull(owner.snapshot()!!.reservation)
+        owner.finish(token, transaction)
+        val next = owner.begin(token)
+        assertEquals(43, owner.reserve(token, next).counter)
+    }
+
+    @Test
+    fun `restart can roll back only a durable pre-dispatch reservation`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val intent = PumpSession.WriteIntent("operation", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+        owner.reserve(token, transaction, intent)
+        owner.quiesce()
+
+        val restarted = PumpSession(store)
+        val next = restarted.open(pump, key)
+        restarted.recoverReservedNotSent(next, "operation", "cd".repeat(32), "journal remained at RESERVED")
+
+        assertEquals(42, restarted.snapshot()!!.write)
+        assertNull(restarted.snapshot()!!.reservation)
+        assertEquals("cd".repeat(32), restarted.snapshot()!!.writeEvidence.single().evidenceHash)
+    }
+
+    @Test
+    fun `acknowledged or verified writes cannot be rolled back as not sent`() {
+        for (phase in listOf(PumpSession.Phase.ACKED, PumpSession.Phase.VERIFIED)) {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val transaction = owner.begin(token)
+            owner.reserve(token, transaction)
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.advance(token, transaction, PumpSession.Phase.ACKED)
+            if (phase == PumpSession.Phase.VERIFIED) owner.advance(token, transaction, PumpSession.Phase.VERIFIED)
+
+            assertThrows(IllegalStateException::class.java) { owner.markNotSent(token, transaction) }
+            assertEquals(43, owner.snapshot()!!.write)
+            assertEquals(phase, owner.snapshot()!!.reservation!!.phase)
+        }
+    }
+
+    @Test
+    fun `semantic reconciliation must explicitly state counter consumption`() {
+        for (resolution in PumpSession.WriteResolution.entries) {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("operation-$resolution", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+            )
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            if (resolution == PumpSession.WriteResolution.ACCEPTED)
+                owner.advance(token, transaction, PumpSession.Phase.ACKED)
+            owner.finish(token, transaction)
+
+            owner.resolveWrite(token, reservation.id, resolution, "cd".repeat(32), "measured target evidence")
+
+            val saved = owner.snapshot()!!
+            assertEquals("cd".repeat(32), saved.writeEvidence.single().evidenceHash)
+            assertEquals(resolution, saved.writeEvidence.single().resolution)
+            if (resolution == PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED) {
+                assertEquals(42, saved.write)
+                assertNull(saved.reservation)
+            } else {
+                assertEquals(43, saved.write)
+                assertEquals(PumpSession.Phase.VERIFIED, saved.reservation!!.phase)
+            }
+        }
+    }
+
+    @Test
+    fun `write reservation durably identifies characteristic purpose and plaintext hash`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val intent = PumpSession.WriteIntent("operation", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+
+        val reserved = owner.reserve(token, transaction, intent)
+
+        assertEquals("operation", reserved.operationId)
+        assertEquals("characteristic", reserved.characteristic)
+        assertEquals("HISTORY_SELECTOR", reserved.purpose)
+        assertEquals("ab".repeat(32), reserved.payloadHash)
+        assertEquals(reserved, store.saved.records.single().reservation)
     }
 }

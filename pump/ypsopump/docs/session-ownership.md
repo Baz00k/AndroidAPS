@@ -2,7 +2,7 @@
 
 ## Supported contract
 
-The status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCrypto` is
+The distributed status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCrypto` is
 a stateless XChaCha20-Poly1305 codec: ciphertext/tag followed by a 24-byte nonce, with
 a mandatory authenticated 12-byte little-endian reboot/read-counter tail. `PumpSession`
 owns acceptance. AEAD failure, incomplete tails, unsupported signed counter ranges,
@@ -89,11 +89,33 @@ Reservations have four distinct durable phases: RESERVED → POSSIBLY_SENT → A
 Reservation increments with overflow checking and commits before any payload could be
 dispatched; POSSIBLY_SENT must commit before the transport call. GATT ACK is not pump-effect
 verification. Unresolved reservations survive restart and prevent another reservation.
-Storage failure poisons the current owner. Write provisioning is unavailable: production
-records have an uncertain (`null`) write floor and legacy write dispatch helpers reject.
+Each Step 07 reservation additionally binds a caller operation ID, destination characteristic,
+typed purpose and SHA-256 of the exact plaintext command. Exact-counter encryption checks that
+identity before producing ciphertext. A proven first-frame local dispatch refusal may roll the
+reservation back; every callback failure, later-frame dispatch refusal, lost callback/deadline,
+disconnect after dispatch or duplicate same-UUID callback remains durable uncertainty. All expected
+fragment callbacks establish only `AcceptedUnverified`; measured semantic read-back and explicit
+counter-consumption evidence are required to reach `VERIFIED`. A duplicate same-UUID callback cannot
+be promoted to `Verified` by the same live transport because its frame ownership is unknowable;
+external evidence may still classify the durable reservation for operator recovery. No possibly
+effective operation is automatically retried.
 
-The write-transport implementation must update this contract and wire the journal into its
-serialized dispatch before enabling any encrypted writes. Required bench measurements:
+Reviewed reconciliation is durably bound to the original operation/reservation/counter by the
+SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving `RESERVED` phase is
+the only offline state that proves the dispatch boundary was never committed; it may be rolled back
+only as rejected/counter-not-consumed, with the same evidence binding. `POSSIBLY_SENT` and `ACKED`
+remain uncertain until measured semantic and counter evidence resolves them.
+
+Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
+write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at
+`tests/write-transport-bench/` can import a one-time independently measured write floor for the same
+pump/key/reboot epoch. It permits only exact GLB event/alarm/system/settings selectors plus AUTH and
+the required control-notification CCCD setup; it exposes no therapy/configuration write API and
+persists redacted JSONL behavior evidence. Complaint selectors remain excluded because no
+target-verified UUID resolves the conflicting references.
+
+Software now wires the durable journal into serialized whole-write dispatch, but target behavior is
+still unqualified. Required bench measurements before this contract can claim supported writes:
 
 - strict-next versus forward-gap acceptance;
 - whether each rejection consumes a counter, including malformed commands;
@@ -103,7 +125,9 @@ serialized dispatch before enabling any encrypted writes. Required bench measure
 - validated fresh-session recovery after storage loss.
 
 Neither scanning, decrement, read-counter substitution nor `max(seed, persisted)` may establish
-write readiness. No existing gated canary implementation is acceptance evidence.
+write readiness. Bare numeric errors 134/138/139 never select a retry/cancel/recovery action. The
+old normal-AAPS counter-canary/scan paths are inert status-only stubs and are not acceptance evidence;
+all Step 07 selector measurements use the dedicated artifact and explicit reconciliation procedure.
 
 ## Software evidence scope
 

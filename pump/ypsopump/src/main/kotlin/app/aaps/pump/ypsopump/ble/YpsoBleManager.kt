@@ -13,12 +13,10 @@ import android.content.Context
 import android.os.Build
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.pump.ypsopump.YpsoPumpConst
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
-import app.aaps.pump.ypsopump.comm.commands.TbrCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
@@ -26,7 +24,6 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -68,7 +65,6 @@ class YpsoBleManager @Inject constructor(
     companion object {
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
-        private const val READ_ONLY_BLOCKED_STATUS = -3
         private val SUPPORTED_CONTROL_SERVICE_VERSION = "1.3\u0000".toByteArray(Charsets.US_ASCII)
         private val SERVICE_CONTROL: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         private val SERVICE_EXTREAD: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
@@ -77,50 +73,14 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
         // History (events) — used for the zero-therapy write-transport validation.
         private val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
-        private val CHAR_EVENT_INDEX: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecc3b7bc5")
-        private val CHAR_EVENT_VALUE: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
-        // Provisional control UUIDs. Therapy remains blocked pending independent target validation.
-        private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
-        private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
         private val CHAR_CONTROL_VERSION: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
         // Provisional control-notification UUID. Non-auth write transport is unsupported in this artifact.
-        private val CHAR_CTRL_NOTIFY: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
-        private val AUTH_SALT = byteArrayOf(
-            0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
-        )
-        // ATT application-error 0x8A the pump returns on a rejected WRITE — a GENERIC "command invalid".
-        // On-device testing disproved both earlier theories: it is NOT a write-counter mismatch (every
-        // counter probed gave 0x8A) and NOT a missing notification subscription (writes still got 0x8A
-        // with CHAR_CTRL_NOTIFY enabled). The actual cause was a MALFORMED command — a CRC wrongly
-        // appended to the 8-byte GLB index command (fixed: index writes now send bare glbEncode). Whether
-        // a wrong write-counter also surfaces as 0x8A vs a distinct code is still TBD on the pump.
-        private const val ERR_WRITE_REJECTED = 138
-        // App-error 0x8B (139) = the write counter is BEHIND the pump's (the pump advanced on a write whose
-        // BLE ack we never saw — a dropped Write-Response or a transient disconnect — so our persisted
-        // counter is off by >=1 and the pump requires strictly-greater). Recover by scanning the counter
-        // FORWARD (benign zero-therapy canary) until accepted; see [COUNTER_RESYNC_SCAN].
-        private const val ERR_COUNTER_BEHIND = 139
         // App-error 0x8C (140) is documented as NO_SHARED_KEY / key exchange required. It was observed
         // after prolonged access on V05.00.52, but the exact invalidating event and lifetime remain
         // unresolved. Treat it as suspected re-key/session loss and preserve target evidence rather than
         // claiming a fixed 28-day expiry.
         private const val ERR_NO_SHARED_KEY = 140
-        // How far to scan the write counter forward when it is behind (each step = one benign canary write).
-        // Desync is normally +1/+2; a wide-ish bound covers multiple lost acks without unbounded runaway.
-        private const val COUNTER_RESYNC_SCAN = 32
-        // App-error 0x86 (134) on a TBR write = the pump already has an ACTIVE temp basal and refuses to
-        // START a new one until the current one is STOPped (CHAR_TBR_START_STOP is a start/stop char; a
-        // 0%/suspend TBR triggers this too). Recover by cancelling (100%/0) then re-sending. [confirmed
-        // on-device 2026-07-02: 333% and 0% both rejected 0x86 while a prior 0% TBR was active]
-        private const val ERR_TBR_ACTIVE = 134
-
-        // Event-history entry types (tech-doc §10.6). Fast-bolus events carry the units in v1 (hundredths U);
-        // a CANCELLED event additionally carries the requested amount in v2. Used by [readLastFastBolusEvent]
-        // to reconcile a delivered dose against the pump's OWN record when the live confirm-by-read is lost.
-        const val EVT_FAST_BOLUS_STARTED = 1
-        const val EVT_FAST_BOLUS_COMPLETED = 2
-        const val EVT_FAST_BOLUS_CANCELLED = 3
     }
 
     /** Test/bench seam; normal builds load the key only through [configureInstalledSession]. */
@@ -164,7 +124,6 @@ class YpsoBleManager @Inject constructor(
     }
 
     private val ypsoPrefs by lazy { context.getSharedPreferences("ypso_ble_state", Context.MODE_PRIVATE) }
-    private fun persistWriteCounter() = Unit // Legacy gated callers cannot establish counter certainty.
 
     /** Debug/test migration seam retained for independently captured replay evidence. */
     internal fun importReadBaseline(mac: String, hex: String, reboot: Int, read: Long) = synchronized(opLock) {
@@ -640,55 +599,6 @@ class YpsoBleManager @Inject constructor(
         return out.toByteArray()
     }
 
-    // ---- write transport (proven on real hardware via the history-index write) ----
-    @SuppressLint("MissingPermission")
-    private fun writeOp(uuid: UUID, value: ByteArray, onResult: (ByteArray?, Int) -> Unit) {
-        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked characteristic write to $uuid")
-            onResult(null, READ_ONLY_BLOCKED_STATUS)
-            return
-        }
-        val gatt = synchronized(opLock) { bluetoothGatt }
-        if (gatt == null) {
-            onResult(null, -1)
-            return
-        }
-        enqueue(Op(gatt, uuid, { g, op ->
-            val characteristic = findChar(g, uuid)
-            if (characteristic == null || !writeCharacteristic(g, characteristic, value, YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
-                complete(op, g, uuid, null, -1)
-            }
-        }, { _, value, status -> onResult(value, status) }))
-    }
-
-    /** Write every frame of [payload]; report the LAST frame's status (0 = ok, 138 = counter mismatch). */
-    private fun writeFrames(uuid: UUID, payload: ByteArray, onComplete: (Int) -> Unit) {
-        val frames = YpsoFraming.chunkPayload(payload)
-        fun step(i: Int) {
-            if (i >= frames.size) { onComplete(0); return }
-            writeOp(uuid, frames[i]) { _, s -> if (s != BluetoothGatt.GATT_SUCCESS) onComplete(s) else step(i + 1) }
-        }
-        step(0)
-    }
-
-    /**
-     * Encrypt [command] (already CRC-wrapped or complement-protected by the caller) and write it ONCE at
-     * the cryptor's current (pre-incremented) writeCounter. The pump's write check is forward-gap tolerant,
-     * so we must NOT retry/scan on rejection — a higher counter would be accepted but corrupt the shared
-     * counter space and break mylife. The caller is responsible for having locked the exact write counter
-     * first (e.g. via [establishCounter]). [onResult] true on accept, false on reject.
-     */
-    private fun writeEncrypted(uuid: UUID, command: ByteArray, onResult: (Boolean) -> Unit) {
-        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked encrypted write to $uuid")
-            onResult(false)
-            return
-        }
-        if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump writeEncrypted: not connected"); onResult(false); return }
-        // Transport must adopt the reservation journal and measured acceptance contract before use.
-        onResult(false)
-    }
-
     private fun findChar(g: BluetoothGatt, uuid: UUID): BluetoothGattCharacteristic? {
         val observedService = when (uuid) {
             CHAR_STATUS, CHAR_BOLUS_STATUS, CHAR_CONTROL_VERSION -> SERVICE_CONTROL
@@ -733,10 +643,7 @@ class YpsoBleManager @Inject constructor(
         aapsLogger.info(LTag.PUMP, "YpsoPump independently captured read baseline imported")
     }
 
-    private fun authPassword(mac: String): ByteArray {
-        val macBytes = mac.replace(":", "").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        return MessageDigest.getInstance("MD5").digest(macBytes + AUTH_SALT)
-    }
+    private fun authPassword(mac: String): ByteArray = YpsoAuthentication.password(mac)
 
     private fun readStatusInternal(originGatt: BluetoothGatt, ownership: ReadOwnership, attempt: StatusReadAttempt, onDone: (Boolean) -> Unit) {
         readMultiframe(CHAR_STATUS, expectedGatt = originGatt, failureOwner = ownership, onFailure = { if (attempt.tryComplete()) onDone(false) }) { gatt, frame ->
@@ -831,88 +738,16 @@ class YpsoBleManager @Inject constructor(
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    // ---- GLB safe variable: value(u32 LE) || ~value(u32 LE) ----
-    private fun glbEncode(value: Int): ByteArray {
-        val b = ByteArray(8)
-        le32(value, b, 0); le32(value.inv(), b, 4); return b
-    }
-
-    private fun glbFind(data: ByteArray): Int? {
-        if (data.size < 8) return null
-        for (s in 0..data.size - 8) {
-            val v = u32le(data, s); val c = u32le(data, s + 4)
-            if (v == c.inv()) return v
-        }
-        return null
-    }
-
-    private fun le32(v: Int, b: ByteArray, o: Int) {
-        b[o] = v.toByte(); b[o + 1] = (v shr 8).toByte(); b[o + 2] = (v shr 16).toByte(); b[o + 3] = (v shr 24).toByte()
-    }
-    private fun u32le(b: ByteArray, o: Int): Int =
-        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
-            ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
-    private fun u16le(b: ByteArray, o: Int): Int = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
-
-    /**
-     * ZERO-THERAPY validation of the encrypted WRITE path against the real pump: read the event
-     * history COUNT, write the event INDEX of the newest entry (a read-selection write that does NOT
-     * change therapy), then read that entry back. Proves encrypt + multiframe-write + counter
-     * auto-sync work end-to-end before any dosing command is built. Requires counters seeded.
-     */
+    /** Normal AAPS has no selector-write diagnostic; use the separate non-therapy bench artifact. */
     fun validateWriteTransport(onResult: (String) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult("write transport unavailable in status-only mode"); return }
-        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
-        readMultiframe(CHAR_EVENT_COUNT) { _, fc ->
-            val count = runCatching { glbFind(decryptOwned(fc)) }.getOrNull()
-            aapsLogger.debug(LTag.PUMP, "YpsoPump event history count = $count (pump readCounter=$readCounter)")
-            if (count == null || count <= 0) { onResult("count read failed ($count)"); return@readMultiframe }
-            if (writeCounter <= 0) {
-                onResult("no write counter seeded — set CAPTURED_WRITE_COUNTER to the pump's CURRENT write counter")
-                return@readMultiframe
-            }
-            // Unsupported diagnostic path retained behind compile-time gates. Counter behavior and safe
-            // ownership are not established here.
-            val base = writeCounter
-            // Selector encoding and transport are not qualified for use.
-            val payload = glbEncode(count - 1)
-            aapsLogger.debug(LTag.PUMP, "YpsoPump write-validate: single index write at writeCounter=${base + 1} (readCounter=$readCounter is NOT used for writes)")
-            writeOnceAt(CHAR_EVENT_INDEX, payload, base + 1) { st ->
-                when (st) {
-                    BluetoothGatt.GATT_SUCCESS -> onResult("WRITE ACCEPTED at writeCounter=${base + 1}")
-                    ERR_WRITE_REJECTED         -> onResult("write rejected (138) at writeCounter=${base + 1} — seed stale; reseed CAPTURED_WRITE_COUNTER from the pump's current write counter (NOT scanning, would corrupt the counter)")
-                    else                       -> onResult("write failed status=$st at writeCounter=${base + 1}")
-                }
-            }
-        }
-    }
-
-    /**
-     * Lock the write counter on the SAFE history-index characteristic (zero-therapy) with ONE write at
-     * writeCounter+1, so the dosing write that follows pre-increments to exactly +2 and hits the bolus
-     * char once. The write counter MUST be seeded accurately (the pump's current write counter): the
-     * forward-gap-tolerant check means a too-high value would be accepted but corrupt the shared counter
-     * space and break mylife — so on reject we ABORT rather than scan. [see validateWriteTransport]
-     */
-    private fun establishCounter(onResult: (Boolean) -> Unit) {
-        readMultiframe(CHAR_EVENT_COUNT) { _, fc ->
-            val count = runCatching { glbFind(decryptOwned(fc)) }.getOrNull()
-            if (count == null || count <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: count read failed ($count)"); onResult(false); return@readMultiframe }
-            if (writeCounter <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: no write counter seeded"); onResult(false); return@readMultiframe }
-            val base = writeCounter
-            aapsLogger.debug(LTag.PUMP, "YpsoPump establishCounter: single index write at writeCounter=${base + 1}")
-            writeOnceAt(CHAR_EVENT_INDEX, glbEncode(count - 1), base + 1) { st ->   // GLB command: no CRC
-                if (st == BluetoothGatt.GATT_SUCCESS) onResult(true)                // cryptor.writeCounter now = base+1
-                else { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter rejected (status=$st) — reseed write counter; NOT scanning"); onResult(false) }
-            }
-        }
+        onResult("write transport unavailable in status-only AAPS; use the dedicated non-therapy bench artifact")
     }
 
     /** Single-frame read (event count) — isolates KEY validity from multi-frame reliability. */
     fun readEventCount(onResult: (Int?) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(null); return }
         readMultiframe(CHAR_EVENT_COUNT, onFailure = { onResult(null) }) { _, fc ->
-            val count = runCatching { glbFind(decryptOwned(fc)) }.getOrElse {
+            val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.find(decryptOwned(fc)) }.getOrElse {
                 aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
             }
             aapsLogger.debug(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
@@ -934,110 +769,17 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
-    /**
-     * RECONCILIATION — the pump's OWN record of the most recent FAST bolus (history event types
-     * 1=started / 2=completed / 3=cancelled; delivered units in v1, hundredths U). This is ground
-     * truth for recovering a bolus whose live confirm-by-read was lost (dropped ack / BLE blip):
-     * the pump advanced and delivered, but AAPS never saw the confirmation.
-     *
-     * Reads the event COUNT, then scans at most [maxScan] NEWEST entries (each entry = one BENIGN
-     * event-index write, forward-only at writeCounter+1 exactly like the dosing canary, + one value
-     * read), returning the newest COMPLETED/CANCELLED fast-bolus entry. Stops at the first match.
-     *
-     * SAFETY: purely ADDITIVE and read-only w.r.t. therapy — it only ever *reads* the pump's history.
-     * On ANY failure (not connected, no seeded counter, count read fails, a rejected index write, a
-     * decrypt/parse error, or no fast-bolus entry in range) it returns null and the caller keeps its
-     * existing behaviour. It NEVER scans the write counter (a rejected index write aborts), so it can
-     * neither double-dose nor corrupt the shared counter.
-     */
+    /** Status-only compatibility stub. History selection exists only in the separate bench app. */
     fun readLastFastBolusEvent(maxScan: Int = 4, onResult: (YpsoHistoryEntry?) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult(null); return }
-        if (!isConnected || bluetoothGatt == null) { onResult(null); return }
-        if (writeCounter <= 0) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: no write counter seeded"); onResult(null); return }
-        readMultiframe(CHAR_EVENT_COUNT) { _, fc ->
-            val count = runCatching { glbFind(decryptOwned(fc)) }.getOrNull()
-            if (count == null || count <= 0) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: event count read failed ($count)"); onResult(null); return@readMultiframe }
-            val newest = count - 1
-            val floor = maxOf(0, count - maxScan)
-            fun scan(idx: Int) {
-                if (idx < floor) { aapsLogger.debug(LTag.PUMP, "YpsoPump reconcile: no fast-bolus event in newest ${count - floor} entries"); onResult(null); return }
-                // Select entry [idx] with ONE benign forward-only index write at writeCounter+1 (the pump's
-                // check is forward-gap tolerant; persist on accept so AAPS stays in sync). Reject → abort.
-                val c = writeCounter + 1
-                writeOnceAt(CHAR_EVENT_INDEX, glbEncode(idx), c) { st ->
-                    if (st != BluetoothGatt.GATT_SUCCESS) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: index write @$c rejected (status=$st) — abort"); onResult(null); return@writeOnceAt }
-                    persistWriteCounter()
-                    readMultiframe(CHAR_EVENT_VALUE) { _, vf ->
-                        val entry = runCatching {
-                            val body = decryptOwned(vf)
-                            val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
-                            parseHistoryEntry(p)
-                        }.getOrNull()
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump reconcile: entry idx=$idx type=${entry?.eventType} v1=${entry?.v1} v2=${entry?.v2} ts=${entry?.timestamp}")
-                        if (entry != null && (entry.eventType == EVT_FAST_BOLUS_COMPLETED || entry.eventType == EVT_FAST_BOLUS_CANCELLED)) onResult(entry)
-                        else scan(idx - 1)
-                    }
-                }
-            }
-            scan(newest)
-        }
+        onResult(null)
     }
 
-    /** Parse a 17-byte history entry (tech-doc §10.6). Returns null if too short. */
-    private fun parseHistoryEntry(p: ByteArray): YpsoHistoryEntry? {
-        if (p.size < 17) return null
-        return YpsoHistoryEntry(
-            timestamp = u32le(p, 0).toLong() and 0xFFFFFFFFL,
-            eventType = p[4].toInt() and 0xFF,
-            v1 = u16le(p, 5), v2 = u16le(p, 7), v3 = u16le(p, 9),
-            sequence = u32le(p, 11).toLong() and 0xFFFFFFFFL,
-            index = u16le(p, 15)
-        )
-    }
-
-    /**
-     * SAFETY-CRITICAL — deliver a real bolus. Establishes the write counter on the safe index char
-     * first (so the bolus char is written EXACTLY ONCE, never scanned), sends one encrypted
-     * START_STOP_BOLUS, then reads the bolus status to confirm. Only ever called behind an explicit
-     * test flag + capture-verify + user consent. [units] standard if [durationMinutes]==0, else
-     * extended over that duration with [immediateUnits] up front.
-     */
+    /** Status-only compatibility stub; normal AAPS cannot deliver therapy. */
     fun deliverBolus(units: Double, durationMinutes: Int, immediateUnits: Double, onResult: (String) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult("bolus unavailable in status-only mode"); return }
-        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
-        val cmd = BolusCommand(units, durationMinutes, immediateUnits)
-        val payload = YpsoCrc.appendCrc(cmd.encode())
-        aapsLogger.debug(LTag.PUMP, "YpsoPump BOLUS request ${units}U dur=$durationMinutes imm=$immediateUnits raw=${cmd.encode().joinToString("") { "%02x".format(it) }}")
-        establishCounter { ok ->
-            if (!ok) { onResult("counter discovery failed — BOLUS NOT SENT"); return@establishCounter }
-            aapsLogger.debug(LTag.PUMP, "YpsoPump SENDING BOLUS to control char at wc=${writeCounter + 1}")
-            writeEncrypted(CHAR_BOLUS_START_STOP, payload) { accepted ->
-                if (!accepted) { onResult("bolus write rejected"); return@writeEncrypted }
-                readBolusStatus { st ->
-                    pumpState.lastConnectionTime = System.currentTimeMillis()
-                    onResult("BOLUS ACCEPTED status=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
-                }
-            }
-        }
+        onResult("bolus unavailable in status-only mode")
     }
 
-    /** One encrypted write at EXACTLY [counter] (no auto-sync). onStatus gets the raw GATT status. */
-    private fun writeOnceAt(uuid: UUID, command: ByteArray, counter: Long, onStatus: (Int) -> Unit) {
-        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.COMMAND_CHARACTERISTIC)) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked counter write to $uuid")
-            onStatus(READ_ONLY_BLOCKED_STATUS)
-            return
-        }
-        onStatus(READ_ONLY_BLOCKED_STATUS)
-    }
-
-    /**
-     * SAFE bolus (production + test). Locks the write counter on the BENIGN event-index char first
-     * (canary: tries seed+1, seed, seed+2 — a wrong counter is rejected with NO pump effect), then sends
-     * the bolus EXACTLY ONCE at the confirmed next counter. No auto-sync, no scanning. If the canary
-     * can't be confirmed it ABORTS and the bolus char is never written. The write counter is persisted
-     * after each accepted write so AAPS owns it across reconnects. [onResult] = (accepted, message).
-     */
+    /** Status-only compatibility stub; no canary or therapy write is attempted. */
     fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) =
         startBolus(units, seedW) { outcome, msg -> onResult(outcome == BolusStart.SENT, msg) }
 
@@ -1058,54 +800,9 @@ class YpsoBleManager @Inject constructor(
         UNCERTAIN
     }
 
-    /** [testBolusCanary] with the outcome distinguished — see [BolusStart]. */
+    /** Status-only compatibility stub with a typed certain-not-sent result. */
     fun startBolus(units: Double, seedW: Long, onResult: (BolusStart, String) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult(BolusStart.NOT_SENT, "bolus unavailable in status-only mode"); return }
-        if (!isConnected || bluetoothGatt == null) { onResult(BolusStart.NOT_SENT, "not connected"); return }
-        val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
-        // SAFETY: unlike the TBR path, the BOLUS canary does NOT scan the counter forward. A dropped ack on a
-        // bolus write can mean the pump ALREADY DELIVERED; self-healing the counter would let a retry double
-        // dose. So on a counter error we FAIL CLOSED (abort). Proper fix (TODO): on ambiguous counter, read
-        // CHAR_BOLUS_STATUS to confirm whether the prior bolus landed before allowing another.
-        val candidates = listOf(seedW + 1, seedW, seedW + 2)
-        fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(BolusStart.NOT_SENT, "canary failed (tried $candidates) — counter off, NO BOLUS sent (fail-closed; reseed after confirming no bolus was delivered)"); return }
-            val c = candidates[i]
-            aapsLogger.debug(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
-            writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
-                when (status) {
-                    BluetoothGatt.GATT_SUCCESS -> {
-                        persistWriteCounter()
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
-                        sendBolus(units, c, onResult)
-                    }
-                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
-                    else                       -> onResult(BolusStart.NOT_SENT, "canary write status=$status — ABORT, NO BOLUS")
-                }
-            }
-        }
-        tryCanary(0)
-    }
-
-    private fun sendBolus(units: Double, lockedCounter: Long, onResult: (BolusStart, String) -> Unit) {
-        val cmd = BolusCommand(units)                          // standard/immediate bolus
-        val boIns = cmd.encode()
-        aapsLogger.debug(LTag.PUMP, "YpsoPump >>> SENDING BOLUS ${units}U @counter=${lockedCounter + 1} raw=${boIns.joinToString("") { "%02x".format(it) }}")
-        writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(boIns), lockedCounter + 1) { status ->
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                // The bolus char WAS written. An app-level rejection (138/139/…) means the pump refused
-                // it outright, but a link-level failure can also be a dropped ack on a delivered dose —
-                // so this is UNCERTAIN, never "didn't happen". The caller confirms by reading the pump.
-                onResult(BolusStart.UNCERTAIN, "bolus write not acked (status=$status) @${lockedCounter + 1} — confirming against the pump")
-                return@writeOnceAt
-            }
-            persistWriteCounter()
-            aapsLogger.debug(LTag.PUMP, "YpsoPump >>> BOLUS ACCEPTED @${lockedCounter + 1}")
-            readBolusStatus { st ->
-                pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult(BolusStart.SENT, "bolus accepted ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
-            }
-        }
+        onResult(BolusStart.NOT_SENT, "bolus unavailable in status-only mode")
     }
 
     /**
@@ -1114,28 +811,7 @@ class YpsoBleManager @Inject constructor(
      * bolus is harmless), so — unlike delivery — a dropped ack here is not dangerous. [onResult]=(sent, msg).
      */
     fun cancelBolus(seedW: Long, extended: Boolean, onResult: (Boolean, String) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult(false, "bolus cancellation unavailable in status-only mode"); return }
-        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
-        val canary = glbEncode(0)
-        val candidates = listOf(seedW + 1, seedW, seedW + 2)
-        fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(false, "cancel canary failed (tried $candidates)"); return }
-            val c = candidates[i]
-            writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
-                when (status) {
-                    BluetoothGatt.GATT_SUCCESS -> {
-                        persistWriteCounter()
-                        writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(BolusCommand.cancelPayload(extended)), c + 1) { st ->
-                            if (st == BluetoothGatt.GATT_SUCCESS) { persistWriteCounter(); onResult(true, "bolus cancel sent @${c + 1}") }
-                            else onResult(false, "cancel write status=$st @${c + 1}")
-                        }
-                    }
-                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
-                    else                       -> onResult(false, "cancel canary status=$status")
-                }
-            }
-        }
-        tryCanary(0)
+        onResult(false, "bolus cancellation unavailable in status-only mode")
     }
 
     /**
@@ -1145,78 +821,7 @@ class YpsoBleManager @Inject constructor(
      * MUST be a 15-min step (15/30/…). Counter persisted after each accepted write. [onResult]=(accepted,msg).
      */
     fun testTbrCanary(percent: Int, durationMinutes: Int, seedW: Long, onResult: (Boolean, String) -> Unit) {
-        if (YpsoPumpConst.READ_ONLY_MODE) { onResult(false, "TBR unavailable in status-only mode"); return }
-        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
-        val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
-        // Scan the counter FORWARD from seedW+1 to self-heal a dropped-ack desync (see testBolusCanary /
-        // ERR_COUNTER_BEHIND). Benign zero-therapy writes; the TBR is still sent ONCE at the confirmed counter.
-        val candidates = (1..COUNTER_RESYNC_SCAN).map { seedW + it }
-        fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(false, "canary failed (scanned +1..+$COUNTER_RESYNC_SCAN from $seedW) — NO TBR sent"); return }
-            val c = candidates[i]
-            aapsLogger.debug(LTag.PUMP, "YpsoPump TBR canary index-write @counter=$c")
-            writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
-                when (status) {
-                    BluetoothGatt.GATT_SUCCESS -> {
-                        persistWriteCounter()
-                        if (i > 0) aapsLogger.warn(LTag.PUMP, "YpsoPump counter was BEHIND by $i (dropped ack) — resynced to $c")
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump TBR CANARY ACCEPTED @$c — counter locked; TBR will be @${c + 1}")
-                        sendTestTbr(percent, durationMinutes, c, onResult)
-                    }
-                    ERR_WRITE_REJECTED, ERR_COUNTER_BEHIND -> tryCanary(i + 1)   // 0x8A/0x8B: counter off → scan forward
-                    else                       -> onResult(false, "TBR canary write status=$status — ABORT, NO TBR")
-                }
-            }
-        }
-        // Read the event count once before the canary so the TBR path is read-before-write CONSISTENT with
-        // the bolus path (deliverBolus -> establishCounter reads EVENT_COUNT first). Ypsomed doc 18 advises a
-        // pump read before writing after (re)connect; this makes the behaviour uniform and is a harmless
-        // benign read (no therapy, does not touch the write counter). NOTE: this is defensive, not the cure
-        // for app-error 0x8B (139) seen 2026-07-01 — that was the write counter being BEHIND the pump (the
-        // check is forward-gap tolerant, so 0x8B = counter too low). Recovery for 0x8B is to re-seed the
-        // persisted writeCounter WELL ABOVE the pump's current value (a forward jump), not a code change.
-        readMultiframe(CHAR_EVENT_COUNT) { _, fc ->
-            val count = runCatching { glbFind(decryptOwned(fc)) }.getOrNull()
-            aapsLogger.debug(LTag.PUMP, "YpsoPump TBR prime-read event count=$count (readCounter=$readCounter) — session primed, sending canary")
-            tryCanary(0)
-        }
-    }
-
-    private fun sendTestTbr(percent: Int, durationMinutes: Int, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
-        fun writeTbrAt(pct: Int, dur: Int, counter: Long, label: String, cb: (Int) -> Unit) {
-            val payload = TbrCommand(pct, dur).encode()          // complement-protected fields — NO CRC (unlike bolus)
-            aapsLogger.debug(LTag.PUMP, "YpsoPump >>> $label TBR ${pct}% for ${dur}min @counter=$counter raw=${payload.joinToString("") { "%02x".format(it) }}")
-            writeOnceAt(CHAR_TBR_START_STOP, payload, counter, cb)
-        }
-        fun finish(c: Long, note: String) {
-            persistWriteCounter()
-            aapsLogger.debug(LTag.PUMP, "YpsoPump >>> TBR ACCEPTED @$c$note")
-            readStatus { statusRead ->
-                pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult(true, "TBR accepted ${percent}% ${durationMinutes}min$note; statusRead=$statusRead pump activeTbrPercent=${pumpState.activeTbrPercent}")
-            }
-        }
-        // Try to START the requested TBR directly.
-        writeTbrAt(percent, durationMinutes, lockedCounter + 1, "SENDING") { status ->
-            when {
-                status == BluetoothGatt.GATT_SUCCESS -> finish(lockedCounter + 1, "")
-                // 0x86 = a TBR is already active; the pump won't START a new one until the current is STOPped.
-                // Cancel it (100%/0 — the STOP; can never itself be blocked) then re-send. The rejected write
-                // consumes one counter on the pump, so cancel/re-send go at +2/+3 (all forward-gap safe).
-                status == ERR_TBR_ACTIVE && percent != 100 -> {
-                    aapsLogger.warn(LTag.PUMP, "YpsoPump TBR rejected 0x86 (active TBR blocks a new one) — cancelling prior TBR then re-sending")
-                    writeTbrAt(100, 0, lockedCounter + 2, "CANCEL-PRIOR") { cancelStatus ->
-                        if (cancelStatus != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR pre-cancel rejected status=$cancelStatus @${lockedCounter + 2} — NO TBR"); return@writeTbrAt }
-                        persistWriteCounter()
-                        writeTbrAt(percent, durationMinutes, lockedCounter + 3, "RE-SENDING") { retry ->
-                            if (retry != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR re-send rejected status=$retry @${lockedCounter + 3} — NO TBR"); return@writeTbrAt }
-                            finish(lockedCounter + 3, " (after cancelling prior TBR)")
-                        }
-                    }
-                }
-                else -> onResult(false, "TBR REJECTED status=$status @${lockedCounter + 1}")
-            }
-        }
+        onResult(false, "TBR unavailable in status-only mode")
     }
 
     @SuppressLint("MissingPermission")
@@ -1281,7 +886,7 @@ class YpsoBleManager @Inject constructor(
                         aapsLogger.info(LTag.PUMP, "YpsoPump discovered service $serviceUuid custom characteristics=$characteristicUuids")
                     }
                 val auth = findChar(g, CHAR_AUTH) ?: return@synchronized "AUTH characteristic not found"
-                if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
+                if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION, YpsoArtifactPolicy.STATUS_ONLY)) {
                     cause = null
                     return@synchronized "authentication write blocked by safety policy"
                 }
@@ -1305,15 +910,10 @@ class YpsoBleManager @Inject constructor(
                     if (pumpState.connectionState != ConnectionState.READY) return
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
-                    // The MD5 auth characteristic is the sole remote write permitted in read-only mode; it is
-                    // required before encrypted status reads. Control notifications are command-only setup.
-                    if (YpsoPumpConst.READ_ONLY_MODE) {
-                        aapsLogger.info(LTag.PUMP, "YpsoPump authenticated in read-only mode; control notifications disabled")
-                        markConnected(controlNotificationsEnabled = false)
-                    } else {
-                        aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; enabling control notifications")
-                        enableCtrlNotify(g)
-                    }
+                    // The MD5 auth characteristic is the sole remote write compiled into normal AAPS.
+                    // Control notifications and selector writes exist only in the separate bench app.
+                    aapsLogger.info(LTag.PUMP, "YpsoPump authenticated in read-only mode; control notifications disabled")
+                    markConnected(controlNotificationsEnabled = false)
                     null
                 }
                 failure?.let {
@@ -1329,23 +929,7 @@ class YpsoBleManager @Inject constructor(
                         )
                     }
                 }
-            } else {
-                completeCurrent(g, ch.uuid, null, status)
-            }
-        }
-
-        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            synchronized(opLock) {
-                if (!ownsGattLocked(g)) return
-                if (descriptor.characteristic?.uuid == CHAR_CTRL_NOTIFY) {
-                    if (pumpState.connectionState != ConnectionState.READY) return
-                    if (status != BluetoothGatt.GATT_SUCCESS)
-                        aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY CCCD write failed ($status) — proceeding, writes may be rejected")
-                    else
-                        aapsLogger.info(LTag.PUMP, "YpsoPump CTRL_NOTIFY subscription active")
-                    markConnected(controlNotificationsEnabled = true)
-                }
-            }
+            } else completeCurrent(g, ch.uuid, null, status)
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
@@ -1467,31 +1051,6 @@ class YpsoBleManager @Inject constructor(
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump failed-operation callback threw: ${it.message}") }
     }
 
-    /**
-     * Enable the control-notification subscription (write CCCD 0x0001 to [CHAR_CTRL_NOTIFY]) — the
-     * pump's write-handshake precondition. Defensive: if the char/CCCD is somehow absent we still go
-     * CONNECTED so the (notification-independent) read path keeps working.
-     */
-    @SuppressLint("MissingPermission")
-    private fun enableCtrlNotify(g: BluetoothGatt) {
-        if (!YpsoWritePolicy.allows(YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR)) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked control-notification descriptor write")
-            markConnected(controlNotificationsEnabled = false)
-            return
-        }
-        val ch = findChar(g, CHAR_CTRL_NOTIFY)
-        val cccd = ch?.getDescriptor(YpsoPumpConst.CCCD_UUID)
-        if (ch == null || cccd == null) {
-            aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY char/CCCD not found — proceeding without it (writes may be rejected)")
-            markConnected(controlNotificationsEnabled = false); return
-        }
-        g.setCharacteristicNotification(ch, true)
-        val dispatched = writeDescriptor(g, cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR)
-        aapsLogger.info(LTag.PUMP, "YpsoPump CTRL_NOTIFY CCCD write dispatched=$dispatched")
-        if (!dispatched) markConnected(controlNotificationsEnabled = false)
-        // CONNECTED is set in onDescriptorWrite once the write completes.
-    }
-
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission", "NewApi") // sdkInt is the injectable Build.VERSION.SDK_INT adapter seam.
     @YpsoGuardedWrite
@@ -1503,7 +1062,7 @@ class YpsoBleManager @Inject constructor(
     ): Boolean {
         val authorized = synchronized(opLock) {
             bluetoothGatt === g && YpsoWritePolicy.allowsCharacteristic(
-                remoteWrite, characteristic.uuid, value,
+                YpsoArtifactPolicy.STATUS_ONLY, remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),
                 pumpState.connectionState == ConnectionState.READY
             )
@@ -1513,7 +1072,11 @@ class YpsoBleManager @Inject constructor(
             return false
         }
         return if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
-        g.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+            g.writeCharacteristic(
+                characteristic,
+                value,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            ) == BluetoothStatusCodes.SUCCESS
         } else {
             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             characteristic.value = value
@@ -1532,7 +1095,13 @@ class YpsoBleManager @Inject constructor(
     ): Boolean {
         // AUTH is a characteristic, never a descriptor. No descriptor destination is authorized
         // in this artifact, including a caller deliberately labelling its payload AUTHENTICATION.
-        if (YpsoPumpConst.READ_ONLY_MODE || remoteWrite != YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR) {
+        if (!YpsoWritePolicy.allowsDescriptor(
+                YpsoArtifactPolicy.STATUS_ONLY,
+                remoteWrite,
+                descriptor.characteristic?.uuid,
+                descriptor.uuid,
+                value
+            )) {
             aapsLogger.error(LTag.PUMP, "YpsoPump READ_ONLY_MODE blocked $remoteWrite descriptor write")
             return false
         }
@@ -1550,6 +1119,7 @@ class YpsoBleManager @Inject constructor(
         pumpState.connectionState = ConnectionState.CONNECTED
         aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled=$controlNotificationsEnabled)")
     }
+
 }
 
 /**

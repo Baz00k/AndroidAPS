@@ -69,6 +69,33 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `version five roundtrip preserves durable write evidence`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val evidence = PumpSession.WriteEvidence(
+            operationId = "selector-9",
+            reservationId = "reservation-43",
+            counter = 43,
+            resolution = PumpSession.WriteResolution.ACCEPTED,
+            evidenceHash = "cd".repeat(32),
+            detail = "reviewed target trace and readback matched selector 9"
+        )
+        val unresolvedEvidence = evidence.copy(
+            resolution = null,
+            evidenceHash = "ef".repeat(32),
+            detail = "bounded probe could not classify counter consumption"
+        )
+        val state = old.copy(records = old.records.map { it.copy(writeEvidence = listOf(evidence, unresolvedEvidence)) })
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
+        val body = storage.open(storage.anchors().single(), sealed)
+        assertEquals(5, org.json.JSONObject(body).getInt("version"))
+    }
+
+    @Test
     fun `legacy version one journal selects its sole generation without inventing protected credentials`() {
         val storage = Storage()
         val alias = "ypso.session.revision.legacy"

@@ -52,10 +52,8 @@ object YpsoPumpConst {
     // Legacy credential names are retained solely for one-time protected migration. Normal setup never
     // reads credentials directly from preferences, build constants, ADB or configuration exports.
 
-    // -- Write path (counters). Needed only for WRITEs (history index, dosing); reads need none.
-    // Seed CAPTURED_WRITE_COUNTER with mylife's CURRENT numericWriteAppCounter (frida ml-readprefs,
-    // captured while mylife is IDLE so it's stable); the cryptor uses seed+1 and auto-syncs on err 138.
-    // REBOOT_COUNTER must match the pump's (mylife's stored rebootCounter, currently 8).
+    // Legacy disabled constants retained for compatibility with status-only diagnostic call sites.
+    // Normal AAPS has no selector, counter-probing, therapy or configuration write implementation.
     const val CAPTURED_WRITE_COUNTER = -1L   // <0 = writes disabled (read-only)
     const val CAPTURED_REBOOT_COUNTER = 8
 
@@ -63,24 +61,18 @@ object YpsoPumpConst {
     // are explicitly approved; unlike the diagnostic flags below, this also blocks production dosing paths.
     const val READ_ONLY_MODE = true
 
-    // -- Test flag: run the ZERO-THERAPY write-transport validation (history index write + entry read)
-    // once after connect, instead of a status read. Set false for normal status reads. Never dosing.
+    // Legacy disabled flag. Write-transport validation exists only in the separate bench APK.
     const val RUN_WRITE_VALIDATION = false
 
     // -- READ-ONLY test flag: read SYSTEM_STATUS + BOLUS_STATUS once and log them (no writes). Safe to
     // run while a bolus is being delivered — validates the bolus-status decoder against live data.
     const val RUN_READ_BOLUS_STATUS = false
 
-    // -- SAFETY-CRITICAL test flag: deliver ONE real bolus of TEST_BOLUS_UNITS once after connect.
-    // This DELIVERS INSULIN. Only ever set true with explicit user consent + after capture-verify,
-    // with the pump observed. Leave false otherwise.
+    // Legacy disabled compatibility flag; normal AAPS therapy methods are certain-not-sent stubs.
     const val RUN_TEST_BOLUS = false
     const val TEST_BOLUS_UNITS = 0.1
 
-    // -- Test flag: set ONE temporary basal rate once after connect (canary-gated, like the bolus).
-    // TEST_TBR_PERCENT 0 = SUSPEND basal (REDUCES insulin — the safe first TBR test); 100 = cancel.
-    // The pump auto-reverts after TEST_TBR_DURATION_MIN. Writes the pump (advances the counter →
-    // recover mylife after). Leave false otherwise.
+    // Legacy disabled compatibility flag; normal AAPS TBR methods are certain-not-sent stubs.
     const val RUN_TEST_TBR = false
     const val TEST_TBR_PERCENT = 0
     const val TEST_TBR_DURATION_MIN = 15

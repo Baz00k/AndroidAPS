@@ -58,12 +58,20 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..3)
+        check(version in 1..5)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
             val reservation = r.optJSONObject("reservation")?.let {
-                PumpSession.Reservation(it.getString("id"), it.getLong("counter"), PumpSession.Phase.valueOf(it.getString("phase")))
+                PumpSession.Reservation(
+                    it.getString("id"),
+                    it.getLong("counter"),
+                    PumpSession.Phase.valueOf(it.getString("phase")),
+                    it.stringOrNull("operationId"),
+                    it.stringOrNull("characteristic"),
+                    it.stringOrNull("purpose"),
+                    it.stringOrNull("payloadHash")
+                )
             }
             PumpSession.Record(
                 r.getString("pump"), r.getString("key"), r.getString("generation"), if (r.isNull("reboot")) null else r.getInt("reboot"),
@@ -74,7 +82,20 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 importedAt = r.optLongOrNull("importedAt"),
                 source = r.optJSONObject("source")?.toStringMap().orEmpty(),
                 verifiedAt = r.optLongOrNull("verifiedAt"),
-                verifiedSerial = r.stringOrNull("verifiedSerial")
+                verifiedSerial = r.stringOrNull("verifiedSerial"),
+                writeEvidence = r.optJSONArray("writeEvidence")?.let { values ->
+                    (0 until values.length()).map { evidenceIndex ->
+                        val evidence = values.getJSONObject(evidenceIndex)
+                        PumpSession.WriteEvidence(
+                            evidence.getString("operationId"),
+                            evidence.getString("reservationId"),
+                            evidence.getLong("counter"),
+                            evidence.stringOrNull("resolution")?.let(PumpSession.WriteResolution::valueOf),
+                            evidence.getString("evidenceHash"),
+                            evidence.getString("detail")
+                        )
+                    }
+                }.orEmpty()
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -124,11 +145,24 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("reboot", r.reboot ?: JSONObject.NULL).put("read", r.read ?: JSONObject.NULL).put("write", r.write ?: JSONObject.NULL)
                 .put("reservation", r.reservation?.let {
                     JSONObject().put("id", it.id).put("counter", it.counter).put("phase", it.phase.name)
+                        .put("operationId", it.operationId ?: JSONObject.NULL)
+                        .put("characteristic", it.characteristic ?: JSONObject.NULL)
+                        .put("purpose", it.purpose ?: JSONObject.NULL)
+                        .put("payloadHash", it.payloadHash ?: JSONObject.NULL)
                 } ?: JSONObject.NULL)
                 .put("serial", r.serial).put("keyHex", r.keyHex ?: JSONObject.NULL)
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
                 .put("source", JSONObject(r.source)).put("verifiedAt", r.verifiedAt ?: JSONObject.NULL)
-                .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL))
+                .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL)
+                .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
+                    JSONObject()
+                        .put("operationId", evidence.operationId)
+                        .put("reservationId", evidence.reservationId)
+                        .put("counter", evidence.counter)
+                        .put("resolution", evidence.resolution?.name ?: JSONObject.NULL)
+                        .put("evidenceHash", evidence.evidenceHash)
+                        .put("detail", evidence.detail)
+                })))
         }
         val availability = JSONObject()
             .put("causes", JSONArray(state.availability.causes.map { it.name }))
@@ -140,7 +174,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 3).put("records", records)
+        val body = JSONObject().put("version", 5).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

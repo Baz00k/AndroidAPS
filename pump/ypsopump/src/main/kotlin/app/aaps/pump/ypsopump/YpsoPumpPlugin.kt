@@ -105,7 +105,7 @@ class YpsoPumpPlugin @Inject constructor(
     // ---- state (read-only) ----
     override fun isInitialized(): Boolean = pumpState.hasVerifiedStatus
     // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
-    // mode byte. Write-enabled builds treat an empty cartridge as suspended to stop further dose requests.
+    // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
     override fun isBusy(): Boolean = false
     override fun isConnected(): Boolean = pumpState.isConnected
@@ -169,13 +169,11 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // These test ops BLOCK the queue-worker thread until done — otherwise AAPS sees the command as
-        // finished and disconnects (5s idle) mid-write. The GATT callbacks run on the BLE binder
-        // thread, so blocking here is safe. Real dosing (deliverTreatment) must block the same way.
+        // Normal operation always takes the status-only branch. The remaining disabled diagnostic
+        // branches call certain-not-sent compatibility stubs and cannot dispatch therapy or selectors.
         when {
             YpsoPumpConst.READ_ONLY_MODE                    -> readStatusBlocking()
-            // SAFETY-CRITICAL: deliver one real bolus via the canary-gated safe path (no scan, no
-            // auto-sync; aborts before the bolus char if the seeded write counter is wrong).
+            // Legacy disabled compatibility branch; the manager returns certain-not-sent.
             YpsoPumpConst.RUN_TEST_BOLUS && !testBolusDone -> {
                 testBolusDone = true
                 val latch = java.util.concurrent.CountDownLatch(1)
@@ -184,7 +182,7 @@ class YpsoPumpPlugin @Inject constructor(
                 }
                 latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
             }
-            // Set ONE TBR via the canary-gated safe path (0% = suspend basal, reduces insulin).
+            // Legacy disabled compatibility branch; the manager returns certain-not-sent.
             YpsoPumpConst.RUN_TEST_TBR && !testTbrDone -> {
                 testTbrDone = true
                 val latch = java.util.concurrent.CountDownLatch(1)
@@ -217,14 +215,14 @@ class YpsoPumpPlugin @Inject constructor(
                 }
                 latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
             }
-            // ZERO-THERAPY write-transport validation (history index write + entry read).
+            // Legacy disabled compatibility branch; use the separate bench APK instead.
             YpsoPumpConst.RUN_WRITE_VALIDATION && YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0 && !writeValidationDone -> {
                 writeValidationDone = true
                 val latch = java.util.concurrent.CountDownLatch(1)
                 bleManager.validateWriteTransport { r ->
                     aapsLogger.info(LTag.PUMP, "YpsoPump WRITE-VALIDATION: $r"); latch.countDown()
                 }
-                latch.await(20, java.util.concurrent.TimeUnit.MINUTES)   // counter discovery can take minutes
+                latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
             }
 
             else                                            -> bleManager.readStatus { if (it) onStatusRead() }
@@ -234,8 +232,7 @@ class YpsoPumpPlugin @Inject constructor(
     override val lastDataTime: Long get() = pumpState.lastStatusTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump. A
-    // write-enabled build derives basal from the AAPS profile because the status payload does not expose it.
+    // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump.
     override val baseBasalRate: Double get() =
         if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
@@ -243,7 +240,7 @@ class YpsoPumpPlugin @Inject constructor(
     // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
     override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
 
-    // ---- dosing (wired to the proven canary-gated BLE writes; AAPS owns the write counter) ----
+    // ---- legacy dosing interface (blocked by READ_ONLY_MODE; BLE mutation methods are stubs) ----
 
     /** Block the queue-worker thread until the pump is connected, connecting if needed. */
     private fun ensureConnected(timeoutMs: Long = 40_000): Boolean {
@@ -305,9 +302,8 @@ class YpsoPumpPlugin @Inject constructor(
         // 'delivering', so a lingering prior reading alone can never be mistaken for this dose.
         val baseInjected = readBolusStatusBlocking()?.deliveredUnits ?: 0.0
 
-        // 1) START via the canary-gated write. The ACK is droppable while the pump still delivers, so it is
-        //    NEVER used to decide what to record — the pump status is truth. What the outcome DOES decide is
-        //    how hard to look: only [BolusStart.NOT_SENT] proves the bolus characteristic was never written.
+        // 1) START through the legacy manager API, which is a certain-not-sent stub in this artifact. The
+        //    unreachable confirm-by-read code remains quarantined behind the compile-time read-only gate.
         var startOutcome = YpsoBleManager.BolusStart.NOT_SENT; var startMsg = "no response from pump"
         val startLatch = java.util.concurrent.CountDownLatch(1)
         bleManager.startBolus(requested, bleManager.writeCounter) { o, m -> startOutcome = o; startMsg = m; startLatch.countDown() }

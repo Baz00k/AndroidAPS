@@ -13,6 +13,7 @@ class PumpSession(private val store: Store) {
     }
 
     enum class Phase { RESERVED, POSSIBLY_SENT, ACKED, VERIFIED }
+    enum class WriteResolution { ACCEPTED, REJECTED_COUNTER_CONSUMED, REJECTED_COUNTER_NOT_CONSUMED }
     enum class AvailabilityCause {
         UNCONFIGURED,
         BOND_OR_PERMISSION,
@@ -33,7 +34,24 @@ class PumpSession(private val store: Store) {
         val failures: Int = 0,
         val retryAt: Long? = null
     )
-    data class Reservation(val id: String, val counter: Long, val phase: Phase)
+    data class Reservation(
+        val id: String,
+        val counter: Long,
+        val phase: Phase,
+        val operationId: String? = null,
+        val characteristic: String? = null,
+        val purpose: String? = null,
+        val payloadHash: String? = null
+    )
+    data class WriteEvidence(
+        val operationId: String,
+        val reservationId: String,
+        val counter: Long,
+        val resolution: WriteResolution?,
+        val evidenceHash: String,
+        val detail: String
+    )
+    data class WriteIntent(val operationId: String, val characteristic: String, val purpose: String, val payloadHash: String)
     enum class AttemptStatus { PENDING, SUCCEEDED, FAILED, CANCELLED }
     data class AttemptResult(val id: String, val status: AttemptStatus)
     data class Record(
@@ -50,7 +68,8 @@ class PumpSession(private val store: Store) {
         val importedAt: Long? = null,
         val source: Map<String, String> = emptyMap(),
         val verifiedAt: Long? = null,
-        val verifiedSerial: String? = null
+        val verifiedSerial: String? = null,
+        val writeEvidence: List<WriteEvidence> = emptyList()
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -440,6 +459,24 @@ class PumpSession(private val store: Store) {
         quiesce()
     }
 
+    /**
+     * Dedicated bench import of an independently measured write floor. This cannot alter an existing
+     * write floor or bypass unresolved accounting; normal provisioning never calls it.
+     */
+    @Synchronized
+    internal fun provisionBenchWriteBaseline(pump: String, sharedKey: ByteArray, reboot: Int, write: Long) {
+        require(pump.isNotBlank() && sharedKey.size == SessionCrypto.KEY_SIZE && reboot >= 0 && write >= 0)
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        val id = fingerprint(sharedKey)
+        val previous = current.records.singleOrNull { it.keyId == id }
+            ?: throw SecurityException("Read baseline must be established before write baseline")
+        check(previous.pump == pump && previous.reboot == reboot) { "Write baseline belongs to another pump epoch" }
+        check(previous.reservation == null) { "Cannot seed over unresolved pump accounting" }
+        check(previous.write == null || previous.write == write) { "Cannot replace an established write floor" }
+        persist(current.copy(records = current.records.map { if (it == previous) it.copy(write = write) else it }))
+        quiesce()
+    }
+
     @Synchronized
     fun quiesce() {
         token = null
@@ -499,13 +536,25 @@ class PumpSession(private val store: Store) {
 
     /** No production caller can establish write certainty in the status-only contract. */
     @Synchronized
-    fun reserve(origin: Token, id: String): Reservation {
+    fun reserve(origin: Token, id: String, intent: WriteIntent? = null): Reservation {
         val old = owned(origin)
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
         val last = old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
         check(last < Long.MAX_VALUE) { "Write counter exhausted" }
-        val reserved = Reservation(id, last + 1, Phase.RESERVED)
+        intent?.let {
+            require(it.operationId.isNotBlank() && it.characteristic.isNotBlank() && it.purpose.isNotBlank())
+            require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+        }
+        val reserved = Reservation(
+            id,
+            last + 1,
+            Phase.RESERVED,
+            intent?.operationId,
+            intent?.characteristic,
+            intent?.purpose,
+            intent?.payloadHash
+        )
         update(old.copy(write = reserved.counter, reservation = reserved))
         return reserved
     }
@@ -517,6 +566,125 @@ class PumpSession(private val store: Store) {
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == id && phase.ordinal == reserved.phase.ordinal + 1) { "Invalid write transition" }
         update(old.copy(reservation = reserved.copy(phase = phase)))
+    }
+
+    /**
+     * Release a reservation only when local dispatch was proven not to have started. Persistence of
+     * POSSIBLY_SENT must precede the platform dispatch call; a false/throwing dispatch result may then
+     * safely restore the prior counter. A crash between those steps remains uncertain by design.
+     */
+    @Synchronized
+    fun markNotSent(origin: Token, id: String) {
+        val old = owned(origin)
+        check(transaction == id) { "Stale transaction" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.id == id && reserved.phase in setOf(Phase.RESERVED, Phase.POSSIBLY_SENT)) { "Write already acknowledged" }
+        check(old.write == reserved.counter && reserved.counter > 0) { "Invalid write reservation" }
+        update(old.copy(write = reserved.counter - 1, reservation = null))
+    }
+
+    /** A persisted RESERVED phase proves the dispatch boundary was never committed and is safe to roll back after restart. */
+    @Synchronized
+    fun recoverReservedNotSent(origin: Token, operationId: String, evidenceHash: String, detail: String) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.operationId == operationId && reserved.phase == Phase.RESERVED) { "Write is not proven undispatched" }
+        check(old.write == reserved.counter && reserved.counter > 0) { "Invalid write reservation" }
+        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        val evidence = WriteEvidence(
+            operationId,
+            reserved.id,
+            reserved.counter,
+            WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
+            evidenceHash,
+            detail
+        )
+        update(old.copy(write = reserved.counter - 1, reservation = null, writeEvidence = old.writeEvidence + evidence))
+    }
+
+    /** Persist reviewed evidence that does not yet classify counter consumption; the reservation remains blocking. */
+    @Synchronized
+    fun recordUnresolvedWriteEvidence(
+        origin: Token,
+        reservationId: String,
+        evidenceHash: String,
+        detail: String
+    ) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) {
+            "Write is not awaiting reconciliation"
+        }
+        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        val evidence = WriteEvidence(
+            checkNotNull(reserved.operationId),
+            reserved.id,
+            reserved.counter,
+            null,
+            evidenceHash,
+            detail
+        )
+        check(old.writeEvidence.none { it.reservationId == reserved.id && it.evidenceHash == evidenceHash }) {
+            "Evidence already recorded"
+        }
+        update(old.copy(writeEvidence = old.writeEvidence + evidence))
+    }
+
+    /** Encrypt exactly the already-persisted reservation; encryption itself cannot choose a counter. */
+    @Synchronized
+    fun encryptReserved(origin: Token, id: String, command: ByteArray, crypto: SessionCrypto): ByteArray {
+        val old = owned(origin)
+        check(transaction == id) { "Stale transaction" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.id == id && reserved.phase == Phase.RESERVED) { "Write is not reserved for encryption" }
+        reserved.payloadHash?.let { expected ->
+            check(MessageDigest.getInstance("SHA-256").digest(command).joinToString("") { "%02x".format(it) } == expected) {
+                "Reserved plaintext does not match write intent"
+            }
+        }
+        return crypto.encrypt(command, checkNotNull(key), checkNotNull(old.reboot), reserved.counter)
+    }
+
+    /**
+     * Apply measured semantic and counter evidence after the transport transaction has released its
+     * live lock. Until this succeeds the durable reservation continues to block every later write.
+     */
+    @Synchronized
+    fun resolveWrite(
+        origin: Token,
+        reservationId: String,
+        resolution: WriteResolution,
+        evidenceHash: String,
+        detail: String
+    ) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) { "Write is not awaiting reconciliation" }
+        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        val evidence = WriteEvidence(
+            checkNotNull(reserved.operationId),
+            reserved.id,
+            reserved.counter,
+            resolution,
+            evidenceHash,
+            detail
+        )
+        val next = when (resolution) {
+            WriteResolution.ACCEPTED,
+            WriteResolution.REJECTED_COUNTER_CONSUMED -> old.copy(
+                reservation = reserved.copy(phase = Phase.VERIFIED),
+                writeEvidence = old.writeEvidence + evidence
+            )
+            WriteResolution.REJECTED_COUNTER_NOT_CONSUMED -> old.copy(
+                write = reserved.counter - 1,
+                reservation = null,
+                writeEvidence = old.writeEvidence + evidence
+            )
+        }
+        update(next)
     }
 
     @Synchronized
@@ -564,6 +732,15 @@ class PumpSession(private val store: Store) {
                 require(r.verifiedSerial == null || r.verifiedSerial == r.serial && r.verifiedAt != null)
                 r.reservation?.let {
                     require(it.id.isNotBlank() && it.counter > 0 && it.counter == r.write)
+                    require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
+                    require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
+                }
+                require(
+                    r.writeEvidence.map { it.reservationId to it.evidenceHash }.distinct().size == r.writeEvidence.size
+                )
+                r.writeEvidence.forEach {
+                    require(it.operationId.isNotBlank() && it.reservationId.isNotBlank() && it.counter > 0)
+                    require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
                 }
             }
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)
