@@ -860,7 +860,7 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `failed dispatch cannot clear a newer restore reservation`() {
+    fun `failed dispatch does not disarm a newer restore reservation already in place`() {
         val store = MemoryStore()
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
         val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
@@ -869,8 +869,10 @@ class YpsoProvisioningServiceTest {
         service.dispatchSessionRestore = { task ->
             if (firstDispatch) {
                 firstDispatch = false
-                // Reserve a newer restore while the older dispatch is failing: the stale clear in the
-                // failing dispatch must not disarm the newer reservation's pending marker.
+                // A newer reservation is already current when the older dispatch fails. The check and
+                // clear share the service monitor, so the failing dispatch must not disarm it. (The
+                // instruction-level read/write interleaving itself has no injectable point in the
+                // previous implementation; the monitor closes that window structurally.)
                 service.installManual(
                     YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
                     Instant.ofEpochMilli(3_000)

@@ -263,8 +263,12 @@ fixed further regressions in the first fix set (recorded after the first list).
 - **Dispatch-failure pending clear is monitor-atomic:** the exception path in
   `dispatchRetainedSessionRestore()` now checks the sequence and clears `sessionRestorePending`
   inside `synchronized(this)`, so a newer reservation cannot be disarmed by an older failed dispatch.
-  Regression test: a failed dispatch that overlaps a newer reservation leaves the newer restore armed
-  and applies the newer failure evidence.
+  Sequential regression test: when a newer reservation is already current, a failed dispatch for the
+  older reservation leaves the newer marker armed and applies the newer failure evidence. The
+  instruction-level interleaving between the sequence read and the marker write has no injectable
+  point in the previous implementation, so it is closed structurally rather than by a red/green test;
+  the test would fail against any implementation that clears the marker unconditionally or outside
+  the monitor after the newer reservation.
 
 ## Adversarial blocker disposition (earlier round)
 
