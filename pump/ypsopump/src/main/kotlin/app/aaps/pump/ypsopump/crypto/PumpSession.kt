@@ -87,7 +87,11 @@ class PumpSession(private val store: Store) {
         require(sharedKey.size == SessionCrypto.KEY_SIZE)
         quiesce()
         val id = fingerprint(sharedKey)
-        val saved = state?.records?.singleOrNull { it.pump == pump && it.keyId == id }
+        val current = state
+        val saved = current?.records?.singleOrNull {
+            it.pump == pump && it.keyId == id &&
+                (it.generation == current.activeGeneration || it.generation == current.candidateGeneration)
+        }
             ?: throw SecurityException("Session recovery required: no durable replay baseline")
         check(saved.keyHex == null || saved.keyHex.equals(sharedKey.toHex(), ignoreCase = true)) { "Protected key does not match session record" }
         record = saved
@@ -165,7 +169,10 @@ class PumpSession(private val store: Store) {
             currentBundle.pump == provisioning.pump -> Installation.ROTATED_KEY
             else -> Installation.SWITCHED_PUMP
         }
-        val baseline = previous ?: oldCandidate?.takeIf { it.keyId == id }
+        // The freshest authenticated state for the submitted key wins as the staging baseline: when the
+        // current candidate already carries this key, its learned floor must not be replaced by an older
+        // predecessor snapshot.
+        val baseline = oldCandidate?.takeIf { it.keyId == id } ?: previous
         val installed = baseline?.copy(
             serial = provisioning.serial,
             keyHex = provisioning.sharedKey.toHex(),
@@ -240,7 +247,7 @@ class PumpSession(private val store: Store) {
         if (current.candidateGeneration != null)
             check(current.candidateGeneration == generation && current.candidateAttemptId == attemptId) { "Stale verification callback" }
         else
-            check(current.activeGeneration == generation) { "Stale verification callback" }
+            check(attemptId == null && current.activeGeneration == generation) { "Stale verification callback" }
         val active = current.records.singleOrNull { it.generation == generation }
             ?: throw SecurityException("No active session")
         check(active.serial == serial) { "Verified pump serial does not match configured identity" }
@@ -371,25 +378,36 @@ class PumpSession(private val store: Store) {
         return Token(saved.generation, UUID.randomUUID().toString()).also { token = it }
     }
 
-    private fun retireCandidate(current: State, retainLearnedFloor: Boolean = true): State {
+    private fun retireCandidate(current: State): State {
         val candidate = current.records.singleOrNull { it.generation == current.candidateGeneration } ?: return current.copy(
             candidateGeneration = null, candidateReplacesGeneration = null, candidateAvailability = null, candidateAttemptId = null
         )
         val replaced = current.records.singleOrNull { it.generation == current.candidateReplacesGeneration }
         val records = if (replaced != null && replaced.keyId == candidate.keyId) {
-            val merged = replaced.copy(
-                reboot = candidate.reboot ?: replaced.reboot,
-                read = listOfNotNull(replaced.read, candidate.read).maxOrNull(),
-                write = candidate.write ?: replaced.write,
-                reservation = candidate.reservation ?: replaced.reservation
-            )
+            // Replay state is epoch-coupled: a validated reboot transition replaces the whole tuple.
+            // Merging a numeric max across reboot generations would mix floors and resurrect counters.
+            val merged = if (candidate.reboot != null && candidate.reboot != replaced.reboot) {
+                replaced.copy(
+                    reboot = candidate.reboot,
+                    read = candidate.read,
+                    write = candidate.write,
+                    reservation = candidate.reservation
+                )
+            } else {
+                replaced.copy(
+                    reboot = candidate.reboot ?: replaced.reboot,
+                    read = listOfNotNull(replaced.read, candidate.read).maxOrNull(),
+                    write = candidate.write ?: replaced.write,
+                    reservation = candidate.reservation ?: replaced.reservation
+                )
+            }
             current.records.filterNot { it.generation == candidate.generation || it.generation == replaced.generation } + merged
         } else if (replaced == null && current.records.none { it.generation != candidate.generation && it.keyId == candidate.keyId }) {
             // An authenticated read may already have advanced this candidate's replay floor before a later
             // CRC/schema/identity rejection. Retaining the learned floor as an inactive tombstone keeps a
             // re-import of the same key from accepting the same counter again; without a floor it is
             // discarded rather than accumulating dead records.
-            if (retainLearnedFloor && (candidate.reboot != null || candidate.read != null || candidate.write != null || candidate.reservation != null))
+            if (candidate.reboot != null || candidate.read != null || candidate.write != null || candidate.reservation != null)
                 current.records
             else current.records - candidate
         } else current.records // A different key remains an inactive replay tombstone.
@@ -552,6 +570,7 @@ class PumpSession(private val store: Store) {
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)
             require(state.candidateGeneration == null || state.records.count { it.generation == state.candidateGeneration } == 1)
             require(state.candidateGeneration == null || state.candidateGeneration != state.activeGeneration)
+            require(state.candidateGeneration == null || state.candidateGeneration != state.candidateReplacesGeneration)
             require((state.candidateGeneration == null) == (state.candidateAvailability == null))
             require((state.candidateGeneration == null) == (state.candidateAttemptId == null))
             require(state.candidateAttemptId == null || state.candidateAttemptId.isNotBlank())

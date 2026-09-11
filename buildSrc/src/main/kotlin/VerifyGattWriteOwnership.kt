@@ -14,9 +14,11 @@ import org.objectweb.asm.Opcodes
 import java.util.zip.ZipFile
 
 /**
- * Checks resolved JVM call targets, including generated classes and method-reference handles.
- * A call to [BluetoothGatt] write APIs is allowed only from an annotated guarded dispatch method in
- * [YpsoBleManager], so a similarly named helper cannot impersonate the dispatch boundary.
+ * Checks resolved JVM call targets, including generated classes. A direct call to a [BluetoothGatt]
+ * write API is allowed only inside the correspondingly named `writeCharacteristic`/`writeDescriptor`
+ * dispatch method of [YpsoBleManager], and only when that method carries [YpsoGuardedWrite]. Method
+ * references/handles to those APIs are rejected entirely: the guard cannot prove they are invoked
+ * inside the guarded boundary, so they must not escape it.
  */
 abstract class VerifyGattWriteOwnership : DefaultTask() {
     @get:Classpath abstract val jars: ListProperty<RegularFile>
@@ -37,20 +39,23 @@ abstract class VerifyGattWriteOwnership : DefaultTask() {
                             return null
                         }
 
-                        fun checkCall(owner: String, target: String) {
+                        fun checkCall(owner: String, target: String, viaHandle: Boolean) {
                             if (owner != "android/bluetooth/BluetoothGatt" || target !in setOf("writeCharacteristic", "writeDescriptor")) return
-                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoBleManager" || !guarded) {
-                                violations.add("${reader.className}.$name calls BluetoothGatt.$target outside an annotated guarded dispatch method")
+                            if (viaHandle) {
+                                violations.add("${reader.className}.$name creates a method reference to BluetoothGatt.$target, which can escape the guarded dispatch boundary")
+                                return
+                            }
+                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoBleManager" || !guarded || name.substringBefore('$') != target) {
+                                violations.add("${reader.className}.$name calls BluetoothGatt.$target outside its guarded dispatch method")
                             }
                         }
 
-                        override fun visitMethodInsn(opcode: Int, owner: String, name: String, descriptor: String, isInterface: Boolean) = checkCall(owner, name)
+                        override fun visitMethodInsn(opcode: Int, owner: String, name: String, descriptor: String, isInterface: Boolean) = checkCall(owner, name, false)
                         override fun visitLdcInsn(value: Any?) {
-                            if (value is Handle) checkCall(value.owner, value.name)
+                            if (value is Handle) checkCall(value.owner, value.name, true)
                         }
                         override fun visitInvokeDynamicInsn(name: String, descriptor: String, bootstrapMethodHandle: Handle, vararg bootstrapMethodArguments: Any) {
-                            checkCall(bootstrapMethodHandle.owner, bootstrapMethodHandle.name)
-                            bootstrapMethodArguments.filterIsInstance<Handle>().forEach { checkCall(it.owner, it.name) }
+                            bootstrapMethodArguments.filterIsInstance<Handle>().forEach { checkCall(it.owner, it.name, true) }
                         }
                     }
             }, ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)

@@ -40,11 +40,16 @@ class YpsoProvisioningService internal constructor(
     // A failed candidate whose only fallback is the retained legacy bundle must never make the BLE
     // callback thread wait for [provisioningLock]: BLE callbacks run under the manager's opLock, while
     // install/cancel hold [provisioningLock] and take opLock to quiesce. Scheduling the restore breaks
-    // that cycle; tests may run it inline through this seam.
+    // that cycle; tests may capture the scheduled task through this seam, but production dispatch must
+    // stay asynchronous.
     private val restoreExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "ypso-session-restore").apply { isDaemon = true }
     }
     internal var dispatchSessionRestore: ((() -> Unit) -> Unit) = { task -> restoreExecutor.execute(task) }
+    @Volatile private var sessionRestorePending = false
+
+    /** True between scheduling a retained-session restore and its execution. */
+    internal fun isSessionRestorePending(): Boolean = sessionRestorePending
 
     /** Test seam: wait until every scheduled retained-session restore has run. */
     internal fun awaitPendingSessionRestore() {
@@ -337,6 +342,9 @@ class YpsoProvisioningService internal constructor(
             throw SecurityException("Configured serial does not match the connected pump")
         }
         synchronized(this) {
+            // A session mutation (install/cancel) increments the epoch before it quiesces the transport.
+            // Promotion must not slip through a check-to-commit gap once cancellation has started.
+            check(mutationEpoch.get() % 2L == 0L) { "Verification superseded by a session mutation" }
             owner.markVerified(generation, attemptId, configured.serial, now)
             if (owner.candidateRecord() == null) clearLegacyCredentials()
             pumpState.claimedSerialNumber = configured.serial
@@ -348,8 +356,11 @@ class YpsoProvisioningService internal constructor(
 
     /** Compatibility/test seam; production BLE supplies the connection generation. */
     fun markVerified(serialObserved: String?, now: Long = System.currentTimeMillis()): Boolean {
-        val generation = synchronized(this) { owner.activeRecord()?.generation ?: throw SecurityException("No configured pump") }
-        return markVerified(generation, owner.verificationAttempt()?.id, serialObserved, now)
+        val (generation, attemptId) = synchronized(this) {
+            val candidate = owner.candidateRecord() != null
+            (owner.activeRecord()?.generation ?: throw SecurityException("No configured pump")) to owner.verificationAttempt()?.id.takeIf { candidate }
+        }
+        return markVerified(generation, attemptId, serialObserved, now)
     }
 
     fun rejectCandidate(generation: String, attemptId: String?): Boolean {
@@ -360,7 +371,10 @@ class YpsoProvisioningService internal constructor(
             publishAvailability()
             true
         }
-        if (rejected) dispatchSessionRestore { restoreRetainedLegacySession() }
+        if (rejected) {
+            sessionRestorePending = true
+            dispatchSessionRestore { restoreRetainedLegacySession() }
+        }
         return rejected
     }
 
@@ -369,25 +383,52 @@ class YpsoProvisioningService internal constructor(
         generation: String?, attemptId: String?, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long = System.currentTimeMillis(),
         firmware: String? = null, code: Int? = null
     ): Boolean {
-        val (handled, restore) = synchronized(this) {
+        val (handled, restoreAvailability) = synchronized(this) {
             if (generation != null && owner.candidateRecord()?.generation == generation) {
                 if (owner.verificationAttempt()?.id != attemptId) return false
-                val availability = unavailable(owner.availability(), causes, operation, now, firmware).copy(code = code)
+                val availability = unavailable(owner.availability(), causes, operation, now, firmware, code)
                 val failed = owner.failCandidate(generation, attemptId, availability)
                 if (failed) {
                     refreshState()
                     publishAvailability()
                 }
-                failed to (failed && owner.activeRecord() == null)
+                failed to availability.takeIf { failed && owner.activeRecord() == null }
             } else {
-                // A callback for a replaced/cancelled candidate is stale. It must not modify its successor.
+                // A callback carrying a completed candidate attempt is stale once no matching candidate
+                // remains; it must not mutate a promoted successor.
+                if (attemptId != null) return false
                 if (generation != null && owner.activeRecord()?.generation != generation) return false
                 recordUnavailable(causes, code = code, operation = operation, firmware = firmware, now = now)
-                true to false
+                true to null
             }
         }
-        if (restore) dispatchSessionRestore { restoreRetainedLegacySession() }
+        if (restoreAvailability != null) {
+            sessionRestorePending = true
+            dispatchSessionRestore { restoreRetainedLegacySession(restoreAvailability) }
+        }
         return handled
+    }
+
+    /**
+     * Record a retryable failure against the exact verification attempt without retiring it, so the
+     * candidate stays selected and uses bounded backoff. A stale attempt has no side effects.
+     */
+    fun recordCandidateOrUnavailable(
+        generation: String?, attemptId: String?, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long = System.currentTimeMillis(),
+        firmware: String? = null, code: Int? = null
+    ): Boolean = synchronized(this) {
+        if (generation != null && owner.candidateRecord()?.generation == generation) {
+            if (owner.verificationAttempt()?.id != attemptId) return false
+            owner.setAvailability(unavailable(owner.availability(), causes, operation, now, firmware, code))
+            refreshState()
+            publishAvailability()
+            true
+        } else {
+            if (attemptId != null) return false
+            if (generation != null && owner.activeRecord()?.generation != generation) return false
+            recordUnavailable(causes, code = code, operation = operation, firmware = firmware, now = now)
+            true
+        }
     }
 
     /**
@@ -395,9 +436,14 @@ class YpsoProvisioningService internal constructor(
      * survived, the retained legacy credentials become the active, still-unverified session again,
      * preserving a recorded failure's availability and retry backoff, so the next connection attempt
      * uses the same protected credentials a process restart would have migrated.
+     *
+     * [capturedAvailability] is the failure state that triggered the restore when the restore was
+     * dispatched asynchronously: normal polling may record an unconfigured condition in the window
+     * before this task runs, and that must not replace the candidate's recorded failure.
      */
-    private fun restoreRetainedLegacySession() {
+    private fun restoreRetainedLegacySession(capturedAvailability: PumpSession.Availability? = null) {
         synchronized(provisioningLock) {
+            sessionRestorePending = false
             if (owner.activeRecord() != null) return
             val legacy = legacyStore.load()
             val mac = legacy.mac?.takeIf(String::isNotBlank) ?: return
@@ -413,7 +459,7 @@ class YpsoProvisioningService internal constructor(
                         normalizedMac, normalizedSerial, normalizedKey, null, System.currentTimeMillis(), mapOf("profile" to "legacy-preferences")
                     )
                     synchronized(this) {
-                        val availability = owner.availability().let { value ->
+                        val availability = (capturedAvailability ?: owner.availability()).let { value ->
                             // A cancelled first attempt leaves the journal's default UNCONFIGURED cause, but the
                             // restored bundle is present and merely unverified.
                             if (value.causes == setOf(PumpSession.AvailabilityCause.UNCONFIGURED)) PumpSession.Availability(emptySet(), value.since)
@@ -534,12 +580,27 @@ class YpsoProvisioningService internal constructor(
         if (mutationEpoch.get() % 2L != 0L) mutationEpoch.incrementAndGet()
     }
 
-    private fun unavailable(prior: PumpSession.Availability, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long, firmware: String?): PumpSession.Availability {
+    private fun unavailable(
+        prior: PumpSession.Availability,
+        causes: Set<PumpSession.AvailabilityCause>,
+        operation: String?,
+        now: Long,
+        firmware: String?,
+        code: Int? = null
+    ): PumpSession.Availability {
         val retained = prior.causes.intersect(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN, PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED))
         val next = causes + retained
         val failures = if (prior.causes == next) (prior.failures + 1).coerceAtMost(MAX_RECORDED_FAILURES) else 1
         val sticky = PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in retained && PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in causes
-        return PumpSession.Availability(next, if (sticky) prior.since else now, if (sticky) prior.code else null, if (sticky) prior.operation else operation, if (sticky) prior.firmware else firmware, failures, if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in next) null else now + RETRY_DELAYS_MS[(failures - 1).coerceAtMost(RETRY_DELAYS_MS.lastIndex)])
+        return PumpSession.Availability(
+            next,
+            if (sticky) prior.since else now,
+            if (sticky) prior.code else code,
+            if (sticky) prior.operation else operation,
+            if (sticky) prior.firmware else firmware,
+            failures,
+            if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in next) null else now + RETRY_DELAYS_MS[(failures - 1).coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
+        )
     }
 
     private fun clearLegacyCredentials() = legacyStore.clear()
@@ -553,7 +614,12 @@ class YpsoProvisioningService internal constructor(
     private fun normalizeKey(value: String): ByteArray {
         val normalized = value.filterNot(Char::isWhitespace).uppercase()
         require(normalized.matches(Regex("[0-9A-F]{64}"))) { "Session key must contain 64 hexadecimal characters" }
-        return decodeKey(normalized).also { require(it.any { byte -> byte.toInt() != 0 }) { "Session key must not be all zero" } }
+        val decoded = decodeKey(normalized)
+        if (decoded.all { it.toInt() == 0 }) {
+            decoded.fill(0)
+            throw IllegalArgumentException("Session key must not be all zero")
+        }
+        return decoded
     }
 
     private fun decodeKey(value: String): ByteArray = value.chunked(2).map { it.toInt(16).toByte() }.toByteArray()

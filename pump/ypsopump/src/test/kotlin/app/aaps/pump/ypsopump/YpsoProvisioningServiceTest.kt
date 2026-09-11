@@ -62,6 +62,16 @@ class YpsoProvisioningServiceTest {
         }
     }
 
+    private fun advanceFloor(service: YpsoProvisioningService, generation: String, key: ByteArray, reboot: Int, counter: Long) {
+        val token = service.owner.openGeneration(generation, mac, key)
+        val transaction = service.owner.begin(token)
+        try {
+            service.owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), reboot, counter))
+        } finally {
+            service.owner.finish(token, transaction)
+        }
+    }
+
     @Test
     fun `invalid or cancelled document review does not mutate the active session`() {
         val (service, store) = service()
@@ -275,6 +285,186 @@ class YpsoProvisioningServiceTest {
         }
         service.owner.markVerified(second.generation, second.attemptId, serial, 2_500)
         assertEquals(serial, service.owner.committedRecord()!!.verifiedSerial)
+    }
+
+    @Test
+    fun `restaging the same pending key preserves its advanced replay floor`() {
+        val (service) = service()
+        install(service)
+        acceptFirst(service.owner, mac, key)
+        service.markVerified(serial, 1_500)
+        val committed = service.owner.committedRecord()!!
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000))
+        val first = service.connectionSession()!!
+        advanceFloor(service, first.generation, key, reboot = 8, counter = 120)
+
+        install(service)
+
+        val second = service.connectionSession()!!
+        assertEquals(first.generation, second.generation)
+        assertEquals(120L, service.owner.recordForGeneration(second.generation)!!.read)
+
+        service.markVerified(second.generation, second.attemptId, serial, 3_000)
+
+        val promoted = service.owner.committedRecord()!!
+        assertEquals(committed.generation, promoted.generation)
+        assertEquals(120L, promoted.read)
+    }
+
+    @Test
+    fun `stale attempt cannot mutate a promoted same-generation session`() {
+        val (service) = service()
+        install(service)
+        val first = service.connectionSession()!!
+
+        install(service)
+
+        val second = service.connectionSession()!!
+        service.markVerified(second.generation, second.attemptId, serial, 2_500)
+
+        assertThrows(IllegalStateException::class.java) {
+            service.owner.markVerified(first.generation, first.attemptId, serial, 3_000)
+        }
+        assertFalse(
+            service.failCandidateOrRecord(
+                first.generation, first.attemptId,
+                setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 3_100
+            )
+        )
+    }
+
+    @Test
+    fun `failure after a validated reboot keeps the new epoch replay tuple`() {
+        val (service) = service()
+        install(service)
+        acceptFirst(service.owner, mac, key)
+        service.markVerified(serial, 1_500)
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000))
+        val candidate = service.connectionSession()!!
+        val token = service.owner.openGeneration(candidate.generation, mac, key)
+        val transaction = service.owner.begin(token)
+        try {
+            assertThrows(PumpSession.RebootAdoptedException::class.java) {
+                service.owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 9, 1), allowObservedReboot = true)
+            }
+        } finally {
+            service.owner.finish(token, transaction)
+        }
+
+        assertTrue(
+            service.failCandidateOrRecord(
+                candidate.generation, candidate.attemptId,
+                setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 3_000
+            )
+        )
+
+        val record = service.owner.committedRecord()!!
+        assertEquals(9, record.reboot)
+        assertEquals(1L, record.read)
+        assertNull(record.write)
+    }
+
+    @Test
+    fun `promotion is rejected once a session mutation has started`() {
+        val (service) = service()
+        install(service)
+        val candidate = service.connectionSession()!!
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        service.quiesceConnection = {
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val installer = Executors.newSingleThreadExecutor()
+        try {
+            installer.submit {
+                runCatching {
+                    service.installManual(
+                        YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+                        Instant.ofEpochMilli(2_000)
+                    )
+                }
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertThrows(IllegalStateException::class.java) {
+                service.markVerified(candidate.generation, candidate.attemptId, serial, 3_000)
+            }
+        } finally {
+            release.countDown()
+            installer.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `retryable candidate failure keeps the candidate selected with backoff`() {
+        val (service) = service()
+        install(service)
+        val candidate = service.connectionSession()!!
+
+        assertTrue(service.recordCandidateOrUnavailable(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 2_000
+        ))
+
+        val selected = service.connectionSession()!!
+        assertTrue(selected.candidate)
+        assertEquals(candidate.generation, selected.generation)
+        assertEquals(PumpSession.AttemptStatus.PENDING, service.verificationState()!!.status)
+        assertEquals(1, service.availability().failures)
+        assertEquals(7_000L, service.availability().retryAt)
+    }
+
+    @Test
+    fun `code 140 retires the candidate and preserves the sticky condition`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+        val candidate = service.connectionSession()!!
+
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), "auth", now = 3_000, code = 140
+        ))
+
+        assertNull(service.pending())
+        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
+        assertTrue(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in service.availability().causes)
+        assertFalse(service.retryAllowed(Long.MAX_VALUE))
+        assertArrayEquals(key, service.keyBytes())
+    }
+
+    @Test
+    fun `sticky rekey keeps code and operation when a later replacement fails`() {
+        val (service) = service()
+        install(service)
+        acceptFirst(service.owner, mac, key)
+        service.markVerified(serial, 1_500)
+        val thirdKey = ByteArray(32) { (it + 97).toByte() }
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(2_000))
+        val first = service.connectionSession()!!
+        assertTrue(
+            service.failCandidateOrRecord(
+                first.generation, first.attemptId, setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED),
+                "auth", now = 3_000, firmware = "V05.00.52", code = 140
+            )
+        )
+        assertEquals(140, service.availability().code)
+
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, thirdKey.hex()), Instant.ofEpochMilli(4_000))
+        val second = service.connectionSession()!!
+        assertTrue(
+            service.failCandidateOrRecord(
+                second.generation, second.attemptId, setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 5_000
+            )
+        )
+
+        assertEquals(140, service.availability().code)
+        assertEquals("auth", service.availability().operation)
+        assertEquals("V05.00.52", service.availability().firmware)
     }
 
     @Test
@@ -573,6 +763,30 @@ class YpsoProvisioningServiceTest {
         assertFalse(restored.candidate)
         assertEquals(1, service.availability().failures)
         assertEquals(7_000L, service.availability().retryAt)
+    }
+
+    @Test
+    fun `delayed retained restore keeps the failure recorded before scheduling`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+        val candidate = service.connectionSession()!!
+        val pending = mutableListOf<() -> Unit>()
+        service.dispatchSessionRestore = { pending.add(it) }
+
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
+        ))
+        val failure = service.availability()
+        // Normal polling can observe an unconfigured session before the deferred restore runs.
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect", now = 2_500)
+        assertTrue(PumpSession.AvailabilityCause.UNCONFIGURED in service.availability().causes)
+
+        pending.forEach { it() }
+
+        assertEquals(failure, service.availability())
+        assertFalse(service.isSessionRestorePending())
     }
 
     @Test

@@ -126,14 +126,15 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 164 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+Final module run: 173 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
 `git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
 were silently skipped by JUnit 5; they now run and are included in that count.
 
 ## Adversarial review follow-up (2026-09-11)
 
 A fresh-context adversarial review of the full branch diff against issue #5 found the findings below.
-All confirmed items were fixed on the branch.
+All confirmed items were fixed on the branch, and a second verification-targeted review round found and
+fixed further regressions in the first fix set (recorded after the first list).
 
 - **BLOCKER — lock-order inversion:** `install()`/`cancelCandidate()` held `provisioningLock` and
   entered BLE `disconnect()` (`opLock`), while BLE callbacks run under `opLock` and, for a candidate
@@ -158,13 +159,42 @@ All confirmed items were fixed on the branch.
   `installDocument`/`installManual` throws now zeroize decoded key material.
 - **MEDIUM — typed failure classification:** `fail()` takes an explicit cause/code instead of parsing
   log text.
-- **LOW — bytecode guard:** write dispatch is allowed only from methods carrying
-  `@YpsoGuardedWrite`; prefix-impersonation negative test added.
+- **LOW — bytecode guard:** write dispatch is allowed only from the same-named guarded method carrying
+  `@YpsoGuardedWrite`; method-reference escapes are rejected.
 - **Test integrity:** the two silently skipped tests now execute; fixtures use synthetic
   `10000001`/`EC:2A:F0:00:00:01` identities instead of the earlier values.
 - Cross-module notification cancellation (`NotificationStore` not calling `NotificationManager.cancel`)
   remains out of scope for this module; the plugin now dismisses its availability notification on
   `onStop`, and the outstanding OS-level items stay recorded below.
+
+### Second review round (verification of the first fixes)
+
+- **Repeated same-key restaging** could roll back an advanced replay floor and, with a committed
+  predecessor, produce an invalid state that poisons the in-memory owner. Fixed by making the current
+  candidate the staging baseline for its own key and adding the
+  `candidateGeneration != candidateReplacesGeneration` invariant. Regression test added.
+- **Cross-epoch floor merge:** retiring a candidate that had adopted a validated reboot mixed the old
+  epoch's `max(read)` and write state into the new epoch. The merge now replaces the whole epoch tuple
+  when the reboot generation changed. Regression test added.
+- **Cancellation/promotion race:** promotion is now rejected while a session mutation's epoch is odd.
+  Regression test added.
+- **Stale attempts after promotion:** the no-candidate branches now reject any non-null candidate
+  attempt id, in both `PumpSession.markVerified` and the service failure reporters. Regression test added.
+- **Stale configured snapshot:** a stale lease no longer records `UNCONFIGURED` into its successor.
+- **Restore evidence window:** a deferred retained-legacy restore carries the failure availability it
+  was scheduled with, so unconfigured polling in the window cannot erase the recorded cause. Test added.
+- **Sticky code 140 evidence:** `unavailable()` selects the code together with operation/firmware; a
+  later transport failure cannot blank `code=140`. Test added.
+- **Retryable vs terminal policy:** identity mismatch, key rejection and code 140 retire the attempt;
+  transport/bond/handshake/authentication/encrypted-status/decode failures keep it selected with
+  bounded backoff. `recordCandidateOrUnavailable` is the non-terminal ownership-gated reporter; tests
+  cover both outcomes.
+- **Write guard:** method references to GATT writes are rejected outright and the allowing method must
+  also be the same-named dispatch method; the annotation alone is insufficient.
+- **All-zero key decode** is wiped before the rejection is thrown; `open()` no longer selects inactive
+  tombstones.
+- Open item (documented, not solved): tombstone retention has no compaction/destructive-reset policy;
+  arbitrary eviction would weaken replay protection, so this needs a deliberate operational policy.
 
 ## Adversarial blocker disposition (earlier round)
 

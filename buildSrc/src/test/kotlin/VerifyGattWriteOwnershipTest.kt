@@ -13,21 +13,26 @@ class VerifyGattWriteOwnershipTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
-    fun `only the annotated dispatch method may call BluetoothGatt writes`() {
+    fun `only the annotated same-name dispatch method may call BluetoothGatt writes`() {
         for (target in listOf("writeCharacteristic", "writeDescriptor")) {
-            checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "writeCharacteristic\$ypsopump_fullDebug", target, guarded = true)
+            // The real Kotlin internal dispatch method carries the guard annotation and a module suffix.
+            checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$ypsopump_fullDebug", target, guarded = true)
             // A similarly named helper without the guard annotation fails, even in the owner class.
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "writeCharacteristic\$unsafe", target)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$unsafe", target)
+            }
+            // An annotated method with a different name is not a dispatch boundary.
+            assertThrows(GradleException::class.java) {
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "dispatch", target, guarded = true)
             }
             assertThrows(GradleException::class.java) {
                 checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", target, target)
             }
             assertThrows(GradleException::class.java) { checkClass("driver/Other", "dispatch", target, guarded = true) }
             assertThrows(GradleException::class.java) { checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "bypass", target) }
-            checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "dispatch", target, reference = true, guarded = true)
+            // Method references to GATT writes are rejected even inside the guarded dispatch method.
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "dispatch", target, reference = true)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$ypsopump_fullDebug", target, reference = true, guarded = true)
             }
             assertThrows(GradleException::class.java) { checkClass("driver/GeneratedReference", "invoke", target, reference = true) }
         }

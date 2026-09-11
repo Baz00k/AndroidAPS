@@ -202,8 +202,11 @@ class YpsoBleManager @Inject constructor(
     private fun connect(macAddress: String, configured: YpsoProvisioningService.ConnectionSession?) {
         // The null branch is retained exclusively for the internal test/bench setSharedKey seam.
         val directTestSession = configured == null && configuredKey != null && configuredGeneration != null
-        if ((!directTestSession && (configured == null || configured.mac != macAddress || !provisioning.isCurrentConnection(configured)))) {
-            provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
+        // A stale or mismatched immutable snapshot must have no side effects: recording here would write
+        // an unconfigured condition into whatever session superseded it. Record only a genuinely absent
+        // configured session.
+        if (!directTestSession && (configured == null || configured.mac != macAddress || !provisioning.isCurrentConnection(configured))) {
+            if (configured == null) provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
             return
         }
         var independentlyObservedSerial: String? = null
@@ -223,7 +226,7 @@ class YpsoBleManager @Inject constructor(
             val cause = if (it.message == "Bonded pump name does not match configured serial")
                 PumpSession.AvailabilityCause.IDENTITY_MISMATCH
             else PumpSession.AvailabilityCause.BOND_OR_PERMISSION
-            reportConnectionFailure(configured, setOf(cause), operation = "connect")
+            reportConnectionFailure(configured, setOf(cause), operation = "connect", terminal = cause == PumpSession.AvailabilityCause.IDENTITY_MISMATCH)
             aapsLogger.error(LTag.PUMP, "YpsoPump connection unavailable: ${it.message}")
             return
         }
@@ -267,7 +270,7 @@ class YpsoBleManager @Inject constructor(
             if (openedGatt == null) {
                 pumpState.connectionState = ConnectionState.DISCONNECTED
                 pumpState.invalidateStatus()
-                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "connect-gatt")
+                reportConnectionFailure(configured, setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "connect-gatt")
             } else if (pumpState.connectionState != ConnectionState.DISCONNECTED) {
                 bluetoothGatt = openedGatt
                 armHandshakeTimeout(openedGatt, ConnectionState.CONNECTING)
@@ -287,7 +290,8 @@ class YpsoBleManager @Inject constructor(
         val originGatt = ownership.gatt
         attempt.onCancel = {
             synchronized(opLock) {
-                if (originGatt != null && bluetoothGatt === originGatt) fail(originGatt, "status read cancelled", cause = null)
+                if (originGatt != null && bluetoothGatt === originGatt)
+                    fail(originGatt, "status read cancelled", cause = PumpSession.AvailabilityCause.TRANSPORT, ownership = ownership)
             }
             runCatching { onDone(false) }
         }
@@ -578,10 +582,17 @@ class YpsoBleManager @Inject constructor(
                 else setOf(PumpSession.AvailabilityCause.TRANSPORT)
                 val owner = failureOwner
                 if (owner != null) {
-                    provisioning.failCandidateOrRecord(
-                        owner.generation, owner.attemptId, causes, operation = now.toString(),
-                        code = s.takeIf { it >= 0 }, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-                    )
+                    if (s == ERR_NO_SHARED_KEY) {
+                        provisioning.failCandidateOrRecord(
+                            owner.generation, owner.attemptId, causes, operation = now.toString(),
+                            code = s, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                        )
+                    } else {
+                        provisioning.recordCandidateOrUnavailable(
+                            owner.generation, owner.attemptId, causes, operation = now.toString(),
+                            code = s.takeIf { it >= 0 }, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                        )
+                    }
                 } else {
                     provisioning.recordUnavailable(
                         causes = causes, code = s.takeIf { it >= 0 }, operation = now.toString(),
@@ -770,16 +781,22 @@ class YpsoBleManager @Inject constructor(
             } ?: false
             if (!completionClaimed) return@readMultiframe
             // Identity failures record their own specific cause inside markVerified; only a decode
-            // failure is an unattributed encrypted-status failure.
+            // failure is an unattributed encrypted-status failure. Key rejection is terminal; other
+            // decode failures keep the candidate with bounded retry.
             decodeFailure?.let {
-                provisioning.failCandidateOrRecord(
-                    ownership.generation, ownership.attemptId,
-                    setOf(
-                        if (it is SessionCrypto.AuthenticationFailedException) PumpSession.AvailabilityCause.KEY_REJECTED
-                        else PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE
-                    ),
-                    operation = "encrypted-status", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-                )
+                if (it is SessionCrypto.AuthenticationFailedException) {
+                    provisioning.failCandidateOrRecord(
+                        ownership.generation, ownership.attemptId,
+                        setOf(PumpSession.AvailabilityCause.KEY_REJECTED),
+                        operation = "encrypted-status", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    )
+                } else {
+                    provisioning.recordCandidateOrUnavailable(
+                        ownership.generation, ownership.attemptId,
+                        setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE),
+                        operation = "encrypted-status", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    )
+                }
             }
             val failure = decodeFailure ?: publicationFailure
             failure?.let {
@@ -1211,10 +1228,14 @@ class YpsoBleManager @Inject constructor(
                         drainPendingOperationsLocked() to owned
                     }
                     failOperations(failed)
-                    provisioning.failCandidateOrRecord(
-                        ownership.generation, ownership.attemptId,
-                        setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "gatt-disconnected"
-                    )
+                    // An in-flight operation reports its own failure; only an idle connection needs the
+                    // disconnect itself recorded, so one physical disconnect is one durable transition.
+                    if (failed.isEmpty()) {
+                        provisioning.recordCandidateOrUnavailable(
+                            ownership.generation, ownership.attemptId,
+                            setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "gatt-disconnected"
+                        )
+                    }
                     runCatching { g.close() }
                 }
             }
@@ -1329,19 +1350,25 @@ class YpsoBleManager @Inject constructor(
 
     /**
      * Route a connection failure to the exact verification attempt when one is configured. A stale
-     * snapshot records nothing: it must not mutate whatever session superseded it.
+     * snapshot records nothing: it must not mutate whatever session superseded it. Identity failures
+     * are terminal for the attempt; transport/session-open failures keep it for bounded retry.
      */
     private fun reportConnectionFailure(
         configured: YpsoProvisioningService.ConnectionSession?,
         causes: Set<PumpSession.AvailabilityCause>,
         operation: String,
-        code: Int? = null
+        code: Int? = null,
+        terminal: Boolean = false
     ) {
         val firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-        if (configured != null) {
+        if (configured == null) {
+            provisioning.recordUnavailable(causes, code = code, operation = operation, firmware = firmware)
+            return
+        }
+        if (terminal) {
             provisioning.failCandidateOrRecord(configured.generation, configured.attemptId, causes, operation, firmware = firmware, code = code)
         } else {
-            provisioning.recordUnavailable(causes, code = code, operation = operation, firmware = firmware)
+            provisioning.recordCandidateOrUnavailable(configured.generation, configured.attemptId, causes, operation, firmware = firmware, code = code)
         }
     }
 
@@ -1369,11 +1396,19 @@ class YpsoBleManager @Inject constructor(
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump: $message")
         if (cause != null) {
+            val terminal = cause == PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED
             runCatching {
-                provisioning.failCandidateOrRecord(
-                    owned.generation, owned.attemptId, setOf(cause), operation = operation,
-                    firmware = pumpState.masterVersion.takeIf(String::isNotBlank), code = code
-                )
+                if (terminal) {
+                    provisioning.failCandidateOrRecord(
+                        owned.generation, owned.attemptId, setOf(cause), operation = operation,
+                        firmware = pumpState.masterVersion.takeIf(String::isNotBlank), code = code
+                    )
+                } else {
+                    provisioning.recordCandidateOrUnavailable(
+                        owned.generation, owned.attemptId, setOf(cause), operation = operation,
+                        firmware = pumpState.masterVersion.takeIf(String::isNotBlank), code = code
+                    )
+                }
             }
         }
         failOperations(failed)

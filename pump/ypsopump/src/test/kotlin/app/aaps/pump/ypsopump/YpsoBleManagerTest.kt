@@ -268,6 +268,10 @@ class YpsoBleManagerTest {
             any(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
             anyOrNull(), any(), anyOrNull(), anyOrNull()
         )
+        verify(provisioning, never()).recordCandidateOrUnavailable(
+            any(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
     }
 
     @Test
@@ -850,32 +854,38 @@ class YpsoBleManagerTest {
         )
         whenever(provisioning.installed()).thenReturn(installed)
         val installedKey = ByteArray(32) { 1 }
-        manager.session = PumpSession(object : PumpSession.Store {
+        val ownerSession = PumpSession(object : PumpSession.Store {
             var saved = PumpSession.State()
             override fun load() = saved
             override fun commit(state: PumpSession.State) { saved = state }
         }).apply { provisionReadBaseline(installed.mac, installedKey, 8, 0) }
+        manager.session = ownerSession
+        whenever(provisioning.owner).thenReturn(ownerSession)
         manager.setSharedKey("01".repeat(32))
         whenever(provisioning.connectionSession()).thenReturn(
             YpsoProvisioningService.ConnectionSession(
                 manager.session!!.activeRecord()!!.generation, null, installed.serial, installed.mac, installedKey.copyOf(), false
             )
         )
+        whenever(provisioning.isCurrentConnection(any())).thenReturn(true)
         whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
         whenever(bluetooth.adapter).thenReturn(adapter)
         whenever(adapter.isEnabled).thenReturn(true)
         whenever(adapter.getRemoteDevice(installed.mac)).thenReturn(device)
         whenever(device.bondState).thenReturn(BluetoothDevice.BOND_BONDED)
         whenever(device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
+        manager.configureInstalledSession()
 
         whenever(device.name).thenReturn("mylife YpsoPump 000002")
         manager.connect(installed.mac)
-        verify(provisioning).recordUnavailable(
+        verify(provisioning).failCandidateOrRecord(
+            any(),
+            isNull(),
             eq(setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH)),
-            isNull(),
             eq("connect"),
-            isNull(),
-            any()
+            any(),
+            anyOrNull(),
+            isNull()
         )
         verify(device, never()).connectGatt(any(), any(), any(), any())
 

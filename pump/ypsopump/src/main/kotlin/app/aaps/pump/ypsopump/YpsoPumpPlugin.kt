@@ -144,7 +144,10 @@ class YpsoPumpPlugin @Inject constructor(
             bleManager.disconnect()
             pumpState.invalidateStatus()
             aapsLogger.info(LTag.PUMP, "YpsoPump: no protected pump session configured — skipping connect")
-            provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
+            // A failed replacement whose only fallback is the retained legacy bundle is being restored
+            // asynchronously; do not overwrite its recorded failure with an unconfigured condition.
+            if (!provisioning.isSessionRestorePending())
+                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
             return
         }
         seedAndConnect()
