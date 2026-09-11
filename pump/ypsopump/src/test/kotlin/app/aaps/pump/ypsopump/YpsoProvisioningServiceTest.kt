@@ -860,6 +860,51 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `failed dispatch cannot clear a newer restore reservation`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+        val captured = mutableListOf<() -> Unit>()
+        var firstDispatch = true
+        service.dispatchSessionRestore = { task ->
+            if (firstDispatch) {
+                firstDispatch = false
+                // Reserve a newer restore while the older dispatch is failing: the stale clear in the
+                // failing dispatch must not disarm the newer reservation's pending marker.
+                service.installManual(
+                    YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+                    Instant.ofEpochMilli(3_000)
+                )
+                val newer = service.connectionSession()!!
+                assertTrue(
+                    service.failCandidateOrRecord(
+                        newer.generation, newer.attemptId,
+                        setOf(PumpSession.AvailabilityCause.TRANSPORT), "connect", now = 3_500
+                    )
+                )
+                throw IllegalStateException("dispatch rejected")
+            }
+            captured.add(task)
+        }
+
+        val first = service.connectionSession()!!
+        assertTrue(
+            service.failCandidateOrRecord(
+                first.generation, first.attemptId,
+                setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
+            )
+        )
+
+        assertTrue(service.isSessionRestorePending(), "the newer reservation must stay armed")
+        assertEquals(1, captured.size)
+        captured.forEach { it() }
+        assertFalse(service.isSessionRestorePending())
+        val restored = service.availability().causes
+        assertTrue(PumpSession.AvailabilityCause.TRANSPORT in restored, "newer evidence must survive the stale dispatch failure")
+        assertFalse(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in restored)
+    }
+
+    @Test
     fun `candidate failure never blocks on a held provisioning transaction`() {
         val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), Legacy())
         install(service)

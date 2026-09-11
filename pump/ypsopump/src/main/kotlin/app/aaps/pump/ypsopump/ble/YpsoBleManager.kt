@@ -507,17 +507,25 @@ class YpsoBleManager @Inject constructor(
         }
     }
     private fun complete(op: Op, gatt: BluetoothGatt, uuid: UUID, value: ByteArray?, status: Int) {
-        val timeout = synchronized(opLock) {
+        var timeout: Runnable? = null
+        var callbackFailure: Throwable? = null
+        synchronized(opLock) {
             if (current !== op || currentGatt !== gatt || bluetoothGatt !== gatt || op.uuid != uuid) return
             current = null
             currentGatt = null
-            currentTimeout.also { currentTimeout = null }
+            timeout = currentTimeout
+            currentTimeout = null
+            // Detach and deliver in one critical section. If the callback ran after releasing the lock,
+            // a teardown could drain (and record) in between, and this already-detached callback would
+            // then record the same failure again — or turn a deliberate local teardown into a failure.
+            try {
+                op.onResult(gatt, value, status)
+            } catch (t: Throwable) {
+                callbackFailure = t
+            }
         }
         timeout?.let { runCatching { cancelOpTimeout(it) } }
-        runCatching { synchronized(opLock) {
-            if (bluetoothGatt === gatt) op.onResult(gatt, value, status) else op.onResult(null, null, -1)
-        } }
-            .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump operation callback threw: ${it.message}") }
+        callbackFailure?.let { aapsLogger.error(LTag.PUMP, "YpsoPump operation callback threw: ${it.message}") }
         pumpOps()
     }
 

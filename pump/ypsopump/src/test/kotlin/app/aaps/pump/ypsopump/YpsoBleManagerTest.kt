@@ -774,6 +774,33 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `teardown during callback delivery cannot detach a read into a spurious report`() {
+        val fixture = connectedGatt()
+        stubStatus()
+        manager.readStatus { }
+        var tornDown = false
+        manager.cancelOpTimeout = {
+            // The timeout cancel used to run between detaching a completed operation and delivering
+            // its result; a teardown landing there must not turn the detached delivery into a failure.
+            if (!tornDown) {
+                tornDown = true
+                manager.disconnect()
+            }
+        }
+
+        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        assertTrue(tornDown, "the teardown seam never ran")
+
+        verify(provisioning, never()).recordCandidateOrUnavailable(
+            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+        verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
+        verify(provisioning, never()).failCandidateOrRecord(
+            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
     fun `missing discovery and authentication callbacks close their owned handshake`() {
         for (phase in listOf(ConnectionState.CONNECTING, ConnectionState.DISCOVERING)) {
             val gatt: BluetoothGatt = mock()

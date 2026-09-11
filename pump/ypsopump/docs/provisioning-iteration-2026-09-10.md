@@ -126,7 +126,7 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 180 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+Final module run: 182 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
 `git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
 were silently skipped by JUnit 5; they now run and are included in that count.
 
@@ -248,6 +248,23 @@ fixed further regressions in the first fix set (recorded after the first list).
 - Known limitation recorded: `diagnosticLoggingEnabled()` may read a preference on the callback thread
   in debuggable builds only; the supported non-debuggable artifact short-circuits before any
   preference access.
+
+### Second post-delta verification fixes
+
+- **Operation detach and callback delivery are one critical section:** `complete()` previously cleared
+  the active operation under `opLock`, released the lock to cancel the timeout, and delivered the
+  result afterwards. A teardown that finished in that gap left the callback observing a null
+  connection with the suppression counter already back at zero, recording a spurious `TRANSPORT`
+  failure for an intentional local disconnect or a second report for a remote one. Detach and delivery
+  now happen under the same `opLock` section; the timeout cancel runs afterwards.
+- **Deterministic regression test:** the injectable `cancelOpTimeout` seam tears the connection down
+  exactly in the former window. The test fails (spurious `TRANSPORT` recorded) against the previous
+  implementation and passes now; it asserts that neither a drained nor a detached delivery reports.
+- **Dispatch-failure pending clear is monitor-atomic:** the exception path in
+  `dispatchRetainedSessionRestore()` now checks the sequence and clears `sessionRestorePending`
+  inside `synchronized(this)`, so a newer reservation cannot be disarmed by an older failed dispatch.
+  Regression test: a failed dispatch that overlaps a newer reservation leaves the newer restore armed
+  and applies the newer failure evidence.
 
 ## Adversarial blocker disposition (earlier round)
 

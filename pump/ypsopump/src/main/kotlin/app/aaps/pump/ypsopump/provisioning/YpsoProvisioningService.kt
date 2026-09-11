@@ -430,8 +430,12 @@ class YpsoProvisioningService internal constructor(
         try {
             dispatchSessionRestore { restoreRetainedLegacySession(reserved.availability, reserved.sequence) }
         } catch (e: RuntimeException) {
-            // Dispatch failure must not leave the unconfigured-polling suppression armed.
-            if (reserved.sequence == restoreSequence.get()) sessionRestorePending = false
+            // Dispatch failure must not leave the unconfigured-polling suppression armed, but only the
+            // reservation that is still current may clear the marker. The check and clear share the
+            // service monitor so a newer reservation cannot be disarmed mid-transaction.
+            synchronized(this) {
+                if (reserved.sequence == restoreSequence.get()) sessionRestorePending = false
+            }
         }
     }
 
