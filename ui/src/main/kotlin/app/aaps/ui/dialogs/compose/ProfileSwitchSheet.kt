@@ -26,11 +26,25 @@ import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.Stepper
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.data.configuration.Constants
+
+/** Duration is selectable in the same 10-minute steps the legacy number picker offered. */
+private const val DURATION_STEP_MIN = 10
+private val MAX_PROFILE_SWITCH_DURATION_MIN = Constants.MAX_PROFILE_SWITCH_DURATION.toInt()
+
+/** 0 means "until I change"; whole hours are shown as hours so the stepper matches the quick chips. */
+private fun durationLabel(minutes: Int): String {
+    return when {
+        minutes <= 0 -> "0 min"
+        minutes % 60 == 0 -> "${minutes / 60} h"
+        else -> "$minutes min"
+    }
+}
 
 /**
  * Redesigned Profile switch sheet (handoff Section 3): profile chips, percentage stepper+chips,
- * timeshift, duration chips, and an "effect at N%" preview. [onApply] runs the SAME validity check +
- * confirmation + `profileFunction.createProfileSwitch` path as the legacy dialog.
+ * timeshift, duration stepper + chips, and an "effect at N%" preview. [onApply] runs the SAME validity
+ * check + confirmation + `profileFunction.createProfileSwitch` path as the legacy dialog.
  */
 @Composable
 fun ProfileSwitchSheet(
@@ -77,12 +91,20 @@ fun ProfileSwitchSheet(
 
             Text("TIMESHIFT & DURATION", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Stepper(
                         value = "${if (timeshift > 0) "+" else ""}$timeshift h",
                         caption = "timeshift",
                         onMinus = { timeshift -= 1 },
                         onPlus = { timeshift += 1 }
+                    )
+                    // Free duration in 10-minute steps (0 = until I change), so any value the legacy
+                    // profile switch accepted — including the objective's 10 min — is reachable.
+                    Stepper(
+                        value = durationLabel(durationMin),
+                        caption = "duration",
+                        onMinus = { durationMin = (durationMin - DURATION_STEP_MIN).coerceAtLeast(0) },
+                        onPlus = { durationMin = (durationMin + DURATION_STEP_MIN).coerceAtMost(MAX_PROFILE_SWITCH_DURATION_MIN) },
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Chip("1h", { durationMin = 60 }, Modifier.weight(1f), selected = durationMin == 60)
