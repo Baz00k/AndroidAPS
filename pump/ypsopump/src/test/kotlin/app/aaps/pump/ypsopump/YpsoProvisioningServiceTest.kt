@@ -4,6 +4,7 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import org.junit.jupiter.api.Assertions.assertArrayEquals
@@ -18,10 +19,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class YpsoProvisioningServiceTest {
-    private val serial = "10175983"
-    private val mac = "EC:2A:F0:02:AF:6F"
-    private val otherSerial = "10175984"
-    private val otherMac = "EC:2A:F0:02:AF:70"
+    private val serial = "10000001"
+    private val mac = "EC:2A:F0:00:00:01"
+    private val otherSerial = "10000002"
+    private val otherMac = "EC:2A:F0:00:00:02"
     private val key = ByteArray(32) { (it + 1).toByte() }
     private val rotatedKey = ByteArray(32) { (it + 33).toByte() }
 
@@ -232,6 +233,51 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `failed fresh candidate retains its authenticated replay floor for reimport`() {
+        val (service) = service()
+        install(service, key = rotatedKey)
+        val candidate = service.connectionSession()!!
+
+        val token = service.owner.openGeneration(candidate.generation, mac, rotatedKey)
+        val transaction = service.owner.begin(token)
+        try {
+            service.owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 8, 100))
+        } finally {
+            service.owner.finish(token, transaction)
+        }
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "encrypted-status", now = 2_000
+        ))
+        assertNull(service.connectionSession())
+
+        install(service, key = rotatedKey)
+
+        val reimported = service.connectionSession()!!
+        val record = service.owner.recordForGeneration(reimported.generation)!!
+        assertEquals(8, record.reboot)
+        assertEquals(100L, record.read)
+    }
+
+    @Test
+    fun `same-generation restage rejects a stale attempt at the promotion boundary`() {
+        val (service) = service()
+        install(service)
+        val first = service.connectionSession()!!
+
+        install(service)
+
+        val second = service.connectionSession()!!
+        assertEquals(first.generation, second.generation)
+        assertTrue(first.attemptId != second.attemptId)
+        assertThrows(IllegalStateException::class.java) {
+            service.owner.markVerified(first.generation, first.attemptId, serial, 2_000)
+        }
+        service.owner.markVerified(second.generation, second.attemptId, serial, 2_500)
+        assertEquals(serial, service.owner.committedRecord()!!.verifiedSerial)
+    }
+
+    @Test
     fun `document review rejects future creation within capture skew before install`() {
         val (service) = service()
         val text = validDocument()
@@ -286,9 +332,12 @@ class YpsoProvisioningServiceTest {
             PumpSession.Installation.SWITCHED_PUMP,
             service.installManual(YpsoProvisioningService.ManualDraft(otherSerial, otherMac, switchedKey.hex()), Instant.ofEpochMilli(3_000))
         )
-        assertEquals(2, store.saved.records.size)
+        // The authenticated rotation source and the verified rotation both remain as replay
+        // tombstones; switching pumps adds the new identity without dropping learned floors.
+        assertEquals(3, store.saved.records.size)
         assertEquals(otherMac, service.pending()!!.mac)
         assertEquals(setOf(mac, otherMac), store.saved.records.map { it.pump }.toSet())
+        assertEquals(100L, store.saved.records.single { it.generation == oldGeneration }.read)
     }
 
     @Test
@@ -475,6 +524,7 @@ class YpsoProvisioningServiceTest {
             firstCandidate.generation, firstCandidate.attemptId,
             setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "identity", now = 2_000
         ))
+        service.awaitPendingSessionRestore()
 
         val restored = service.connectionSession()!!
         assertFalse(restored.candidate)
@@ -504,6 +554,76 @@ class YpsoProvisioningServiceTest {
         assertFalse(PumpSession.AvailabilityCause.UNCONFIGURED in service.availability().causes)
         assertTrue(service.isCurrentConnection(restored))
         assertEquals(0, legacy.clears)
+    }
+
+    @Test
+    fun `failed legacy candidate restores with its recorded backoff`() {
+        val store = MemoryStore()
+        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+        val candidate = service.connectionSession()!!
+
+        assertTrue(service.failCandidateOrRecord(
+            candidate.generation, candidate.attemptId,
+            setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 2_000
+        ))
+        service.awaitPendingSessionRestore()
+
+        val restored = service.connectionSession()!!
+        assertFalse(restored.candidate)
+        assertEquals(1, service.availability().failures)
+        assertEquals(7_000L, service.availability().retryAt)
+    }
+
+    @Test
+    fun `candidate failure never blocks on a held provisioning transaction`() {
+        val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), Legacy())
+        install(service)
+        val candidate = service.connectionSession()!!
+
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        service.quiesceConnection = {
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        val installer = Executors.newSingleThreadExecutor()
+        val failing = Executors.newSingleThreadExecutor()
+        try {
+            installer.submit {
+                runCatching {
+                    service.installManual(
+                        YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
+                        Instant.ofEpochMilli(2_000)
+                    )
+                }
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            val result = failing.submit<Boolean> {
+                service.failCandidateOrRecord(
+                    candidate.generation, candidate.attemptId,
+                    setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "read", now = 3_000
+                )
+            }
+            assertTrue(result.get(2, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            installer.shutdownNow()
+            failing.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `failed document install wipes the provided key`() {
+        val (service) = service()
+        val document = YpsoSessionDocument(
+            serial = "12345678", mac = mac, sharedKey = ByteArray(32) { 7 },
+            createdAt = Instant.EPOCH, capturedAt = Instant.EPOCH, rebootCounter = null, source = emptyMap<String, String>()
+        )
+
+        assertThrows(IllegalArgumentException::class.java) { service.installDocument(document, Instant.ofEpochMilli(2_000)) }
+
+        assertArrayEquals(ByteArray(32), document.sharedKey)
     }
 
     @Test

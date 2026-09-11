@@ -671,6 +671,11 @@ class YpsoPumpPlugin @Inject constructor(
         publishAvailabilityNotification()
     }
 
+    override fun onStop() {
+        super.onStop()
+        dismissAvailabilityNotification()
+    }
+
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
         if (requiredKey != null) return
         val category = PreferenceCategory(context).apply {
@@ -725,6 +730,7 @@ class YpsoPumpPlugin @Inject constructor(
         availabilityNotificationSynchronized = true
     }
 
+    @Synchronized
     private fun dismissAvailabilityNotification() {
         if (publishedAvailabilityPresentation == null && availabilityNotificationSynchronized) return
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))

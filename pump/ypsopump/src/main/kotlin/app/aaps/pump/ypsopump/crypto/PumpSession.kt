@@ -109,7 +109,10 @@ class PumpSession(private val store: Store) {
             }
                 ?: UUID.randomUUID().toString()
         )
-        val records = withoutOldCandidate.records + staged
+        // A staged bundle that reuses the superseded candidate's generation replaces it in place;
+        // otherwise the superseded candidate is retained as an inactive tombstone when it already
+        // learned an authenticated replay floor.
+        val records = withoutOldCandidate.records.filterNot { it.generation == staged.generation } + staged
         // A fresh bundle starts a fresh verification cycle. Only a suspected re-key survives until a
         // verified read clears it; stale transport/auth/identity failures and their backoff must never
         // cross into the new identity. Failures/retry reset so the new bundle can verify immediately.
@@ -223,6 +226,28 @@ class PumpSession(private val store: Store) {
         val active = current.records.singleOrNull { it.generation == generation }
             ?: throw SecurityException("No active session")
         check(active.serial == serial) { "Verified pump serial does not match configured identity" }
+        return promote(current, active, serial, at)
+    }
+
+    /**
+     * Promote only the candidate attempt used by this connection. Generation and attempt identity are
+     * checked in the same synchronized transaction as the promotion, so an old callback cannot slip
+     * through a same-generation restage and promote the newer attempt.
+     */
+    @Synchronized
+    fun markVerified(generation: String, attemptId: String?, serial: String, at: Long): Boolean {
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        if (current.candidateGeneration != null)
+            check(current.candidateGeneration == generation && current.candidateAttemptId == attemptId) { "Stale verification callback" }
+        else
+            check(current.activeGeneration == generation) { "Stale verification callback" }
+        val active = current.records.singleOrNull { it.generation == generation }
+            ?: throw SecurityException("No active session")
+        check(active.serial == serial) { "Verified pump serial does not match configured identity" }
+        return promote(current, active, serial, at)
+    }
+
+    private fun promote(current: State, active: Record, serial: String, at: Long): Boolean {
         val next = active.copy(verifiedAt = at, verifiedSerial = serial)
         val promoted = current.candidateGeneration?.let {
             val final = current.candidateReplacesGeneration?.let { replaced -> next.copy(generation = replaced) } ?: next
@@ -252,16 +277,6 @@ class PumpSession(private val store: Store) {
         return promotedCandidate
     }
 
-    /** Promote only the candidate used by this connection; stale callbacks cannot promote a replacement. */
-    @Synchronized
-    fun markVerified(generation: String, serial: String, at: Long): Boolean {
-        val current = state ?: throw SecurityException("Session storage unavailable")
-        check(current.candidateGeneration == generation || current.candidateGeneration == null && current.activeGeneration == generation) {
-            "Stale verification callback"
-        }
-        return markVerified(serial, at)
-    }
-
     /** Cancel a staged bundle while preserving any authenticated floor learned with an existing key. */
     @Synchronized
     fun cancelCandidate(status: AttemptStatus = AttemptStatus.CANCELLED) {
@@ -286,8 +301,9 @@ class PumpSession(private val store: Store) {
 
     /**
      * Re-establish a retained bundle as the active, still-unverified session after a replacement
-     * failed. The recorded availability (including retry backoff) is preserved; promotion still
-     * requires an independent read. Never call while a candidate or committed session remains.
+     * failed. The supplied availability (including a failure's retry backoff when present) is
+     * preserved; promotion still requires an independent read. Never call while a candidate or
+     * committed session remains.
      */
     @Synchronized
     fun activateUnverified(provisioning: Provisioning, availability: Availability) {
@@ -355,7 +371,7 @@ class PumpSession(private val store: Store) {
         return Token(saved.generation, UUID.randomUUID().toString()).also { token = it }
     }
 
-    private fun retireCandidate(current: State): State {
+    private fun retireCandidate(current: State, retainLearnedFloor: Boolean = true): State {
         val candidate = current.records.singleOrNull { it.generation == current.candidateGeneration } ?: return current.copy(
             candidateGeneration = null, candidateReplacesGeneration = null, candidateAvailability = null, candidateAttemptId = null
         )
@@ -369,7 +385,13 @@ class PumpSession(private val store: Store) {
             )
             current.records.filterNot { it.generation == candidate.generation || it.generation == replaced.generation } + merged
         } else if (replaced == null && current.records.none { it.generation != candidate.generation && it.keyId == candidate.keyId }) {
-            current.records - candidate
+            // An authenticated read may already have advanced this candidate's replay floor before a later
+            // CRC/schema/identity rejection. Retaining the learned floor as an inactive tombstone keeps a
+            // re-import of the same key from accepting the same counter again; without a floor it is
+            // discarded rather than accumulating dead records.
+            if (retainLearnedFloor && (candidate.reboot != null || candidate.read != null || candidate.write != null || candidate.reservation != null))
+                current.records
+            else current.records - candidate
         } else current.records // A different key remains an inactive replay tombstone.
         return current.copy(
             records = records,

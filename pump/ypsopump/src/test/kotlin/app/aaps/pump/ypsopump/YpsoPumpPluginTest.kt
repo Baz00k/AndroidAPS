@@ -35,7 +35,7 @@ class YpsoPumpPluginTest {
     private val preferences: Preferences = mock()
     private val provisioning: YpsoProvisioningService = mock()
     private val installed = YpsoProvisioningService.InstalledSession(
-        "10175983", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
+        "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val plugin = YpsoPumpPlugin(
@@ -141,6 +141,22 @@ class YpsoPumpPluginTest {
 
         verify(rxBus, times(1)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
         verifyNoInteractions(ui)
+    }
+
+    @Test
+    fun `plugin stop dismisses a published availability notification once`() {
+        whenever(provisioning.notificationRequired()).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
+        )
+
+        plugin.publishAvailabilityNotification()
+        plugin.onStop()
+        plugin.onStop()
+
+        verify(rxBus, times(2)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+        verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }
 
 }

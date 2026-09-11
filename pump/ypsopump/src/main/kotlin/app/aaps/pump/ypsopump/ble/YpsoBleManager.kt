@@ -223,7 +223,7 @@ class YpsoBleManager @Inject constructor(
             val cause = if (it.message == "Bonded pump name does not match configured serial")
                 PumpSession.AvailabilityCause.IDENTITY_MISMATCH
             else PumpSession.AvailabilityCause.BOND_OR_PERMISSION
-            provisioning.recordUnavailable(setOf(cause), operation = "connect")
+            reportConnectionFailure(configured, setOf(cause), operation = "connect")
             aapsLogger.error(LTag.PUMP, "YpsoPump connection unavailable: ${it.message}")
             return
         }
@@ -239,7 +239,7 @@ class YpsoBleManager @Inject constructor(
                 sessionToken = owner.openGeneration(generation, macAddress.uppercase(java.util.Locale.ROOT), key)
             } catch (e: Exception) {
                 pumpState.invalidateStatus()
-                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), operation = "session-open")
+                reportConnectionFailure(configured, setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), operation = "session-open")
                 aapsLogger.error(LTag.PUMP, "YpsoPump session unavailable: ${e.message}")
                 return
             }
@@ -287,7 +287,7 @@ class YpsoBleManager @Inject constructor(
         val originGatt = ownership.gatt
         attempt.onCancel = {
             synchronized(opLock) {
-                if (originGatt != null && bluetoothGatt === originGatt) fail(originGatt, "status read cancelled")
+                if (originGatt != null && bluetoothGatt === originGatt) fail(originGatt, "status read cancelled", cause = null)
             }
             runCatching { onDone(false) }
         }
@@ -450,7 +450,7 @@ class YpsoBleManager @Inject constructor(
         val timeout = Runnable {
             synchronized(opLock) {
                 if (bluetoothGatt !== gatt || pumpState.connectionState != phase) return@Runnable
-                fail(gatt, "$phase timed out")
+                fail(gatt, "$phase timed out", cause = PumpSession.AvailabilityCause.TRANSPORT)
             }
         }
         handshakeTimeout = timeout
@@ -531,7 +531,13 @@ class YpsoBleManager @Inject constructor(
     // guard rejects (rather than silently corrupting) an overlapping read; all internal flows chain
     // sequentially via callbacks.
     private var multiframeOwner: Any? = null
-    private fun readMultiframe(uuid: UUID, expectedGatt: BluetoothGatt? = bluetoothGatt, onFailure: () -> Unit = {}, done: (BluetoothGatt, ByteArray) -> Unit) {
+    private fun readMultiframe(
+        uuid: UUID,
+        expectedGatt: BluetoothGatt? = bluetoothGatt,
+        failureOwner: ReadOwnership? = null,
+        onFailure: () -> Unit = {},
+        done: (BluetoothGatt, ByteArray) -> Unit
+    ) {
         val token = Any()
         val originGatt = synchronized(opLock) {
             if (multiframeOwner != null || bluetoothGatt !== expectedGatt) null else expectedGatt?.also { multiframeOwner = token }
@@ -567,13 +573,21 @@ class YpsoBleManager @Inject constructor(
                     "read $now returned an invalid frame; expected frame $expectedFrame${if (totalFrames == 0) "" else "/$totalFrames"}"
                 else
                     "read $now failed (status=$s, got ${frames.size} frames)"
-                fail(originGatt, message)
-                provisioning.recordUnavailable(
-                    causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED) else setOf(PumpSession.AvailabilityCause.TRANSPORT),
-                    code = s.takeIf { it >= 0 },
-                    operation = now.toString(),
-                    firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
-                )
+                fail(originGatt, message, cause = null)
+                val causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)
+                else setOf(PumpSession.AvailabilityCause.TRANSPORT)
+                val owner = failureOwner
+                if (owner != null) {
+                    provisioning.failCandidateOrRecord(
+                        owner.generation, owner.attemptId, causes, operation = now.toString(),
+                        code = s.takeIf { it >= 0 }, firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    )
+                } else {
+                    provisioning.recordUnavailable(
+                        causes = causes, code = s.takeIf { it >= 0 }, operation = now.toString(),
+                        firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    )
+                }
                 onFailure()
                 return@readOp
             }
@@ -694,8 +708,9 @@ class YpsoBleManager @Inject constructor(
     }
 
     private fun readStatusInternal(originGatt: BluetoothGatt, ownership: ReadOwnership, attempt: StatusReadAttempt, onDone: (Boolean) -> Unit) {
-        readMultiframe(CHAR_STATUS, expectedGatt = originGatt, onFailure = { if (attempt.tryComplete()) onDone(false) }) { gatt, frame ->
-            var failure: Throwable? = null
+        readMultiframe(CHAR_STATUS, expectedGatt = originGatt, failureOwner = ownership, onFailure = { if (attempt.tryComplete()) onDone(false) }) { gatt, frame ->
+            var decodeFailure: Throwable? = null
+            var publicationFailure: Throwable? = null
             var completionClaimed = false
             val decoded = synchronized(opLock) {
                 if (bluetoothGatt !== gatt) {
@@ -717,7 +732,7 @@ class YpsoBleManager @Inject constructor(
                     if (!hasCompatibleStatusProtocol())
                         throw IllegalArgumentException("Unknown or unsupported pump firmware/control protocol")
                     status to payload
-                }.onFailure { failure = it }.getOrNull()
+                }.onFailure { decodeFailure = it }.getOrNull()
                 completionClaimed = attempt.tryComplete()
                 if (!completionClaimed || decoded == null) return@synchronized null
                 decoded
@@ -751,10 +766,12 @@ class YpsoBleManager @Inject constructor(
                     }
                     if (promotedCandidate) disconnect(preserveStatus = true)
                     true
-                }.onFailure { failure = it }.isSuccess
+                }.onFailure { publicationFailure = it }.isSuccess
             } ?: false
             if (!completionClaimed) return@readMultiframe
-            failure?.let {
+            // Identity failures record their own specific cause inside markVerified; only a decode
+            // failure is an unattributed encrypted-status failure.
+            decodeFailure?.let {
                 provisioning.failCandidateOrRecord(
                     ownership.generation, ownership.attemptId,
                     setOf(
@@ -763,8 +780,11 @@ class YpsoBleManager @Inject constructor(
                     ),
                     operation = "encrypted-status", firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
                 )
+            }
+            val failure = decodeFailure ?: publicationFailure
+            failure?.let {
                 aapsLogger.error(LTag.PUMP, "YpsoPump status rejected: ${it.message}")
-                fail(gatt, "status rejected: ${it.message}")
+                fail(gatt, "status rejected: ${it.message}", cause = null)
             }
             // Stay connected — the AAPS command queue disconnects when idle.
             runCatching { onDone(success) }
@@ -1179,7 +1199,7 @@ class YpsoBleManager @Inject constructor(
                                 onFailure = { "service discovery dispatch failed: ${it.message}" }
                             )
                     }
-                    failure?.let { fail(g, it) }
+                    failure?.let { fail(g, it, cause = PumpSession.AvailabilityCause.TRANSPORT) }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     val (failed, ownership) = synchronized(opLock) {
@@ -1201,6 +1221,7 @@ class YpsoBleManager @Inject constructor(
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            var cause: PumpSession.AvailabilityCause? = PumpSession.AvailabilityCause.TRANSPORT
             val failure = runCatching { synchronized(opLock) {
                 if (!ownsGattLocked(g)) return
                 if (pumpState.connectionState != ConnectionState.DISCOVERING) return
@@ -1217,6 +1238,7 @@ class YpsoBleManager @Inject constructor(
                     }
                 val auth = findChar(g, CHAR_AUTH) ?: return@synchronized "AUTH characteristic not found"
                 if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
+                    cause = null
                     return@synchronized "authentication write blocked by safety policy"
                 }
                 pumpState.connectionState = ConnectionState.READY
@@ -1227,13 +1249,15 @@ class YpsoBleManager @Inject constructor(
                 }
                 null
             } }.getOrElse { "authentication dispatch failed: ${it.message}" }
-            failure?.let { fail(g, it) }
+            failure?.let { fail(g, it, cause = cause) }
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
             if (ch.uuid == CHAR_AUTH) {
+                var ownership: ReadOwnership? = null
                 val failure = synchronized(opLock) {
                     if (!ownsGattLocked(g)) return
+                    ownership = ReadOwnership(g, sessionToken?.generation ?: configuredGeneration, configuredAttemptId)
                     if (pumpState.connectionState != ConnectionState.READY) return
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
@@ -1249,8 +1273,17 @@ class YpsoBleManager @Inject constructor(
                     null
                 }
                 failure?.let {
-                    fail(g, it)
-                    if (status == ERR_NO_SHARED_KEY) recordSuspectedRekey(CHAR_AUTH)
+                    if (status == ERR_NO_SHARED_KEY) {
+                        fail(
+                            g, it, cause = PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED,
+                            code = ERR_NO_SHARED_KEY, operation = CHAR_AUTH.toString(), ownership = ownership
+                        )
+                    } else {
+                        fail(
+                            g, it, cause = PumpSession.AvailabilityCause.AUTHENTICATION,
+                            code = status.takeIf { value -> value >= 0 }, ownership = ownership
+                        )
+                    }
                 }
             } else {
                 completeCurrent(g, ch.uuid, null, status)
@@ -1294,37 +1327,58 @@ class YpsoBleManager @Inject constructor(
         return false
     }
 
+    /**
+     * Route a connection failure to the exact verification attempt when one is configured. A stale
+     * snapshot records nothing: it must not mutate whatever session superseded it.
+     */
+    private fun reportConnectionFailure(
+        configured: YpsoProvisioningService.ConnectionSession?,
+        causes: Set<PumpSession.AvailabilityCause>,
+        operation: String,
+        code: Int? = null
+    ) {
+        val firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+        if (configured != null) {
+            provisioning.failCandidateOrRecord(configured.generation, configured.attemptId, causes, operation, firmware = firmware, code = code)
+        } else {
+            provisioning.recordUnavailable(causes, code = code, operation = operation, firmware = firmware)
+        }
+    }
+
+    /**
+     * Tear down a connection and, when [cause] is non-null, record exactly one durable availability
+     * failure against the connection ownership captured with the teardown. [ownership] may be passed
+     * when the caller captured it before the failure could race a reconfigure.
+     */
     @SuppressLint("MissingPermission")
-    private fun fail(g: BluetoothGatt, message: String) {
-        val (failed, ownership) = synchronized(opLock) {
+    private fun fail(
+        g: BluetoothGatt,
+        message: String,
+        cause: PumpSession.AvailabilityCause? = null,
+        code: Int? = null,
+        operation: String = "ble",
+        ownership: ReadOwnership? = null
+    ) {
+        val (failed, owned) = synchronized(opLock) {
             if (bluetoothGatt !== g) return
-            val owned = ReadOwnership(g, sessionToken?.generation ?: configuredGeneration, configuredAttemptId)
+            val captured = ownership ?: ReadOwnership(g, sessionToken?.generation ?: configuredGeneration, configuredAttemptId)
             bluetoothGatt = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
             pumpState.invalidateStatus()
-            drainPendingOperationsLocked() to owned
+            drainPendingOperationsLocked() to captured
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump: $message")
-        if (!message.contains("status rejected") && !message.startsWith("read ") && !message.contains("code 140") && !message.contains("failed (140)")) {
-            val cause = if (message.contains("auth", ignoreCase = true)) PumpSession.AvailabilityCause.AUTHENTICATION else PumpSession.AvailabilityCause.TRANSPORT
+        if (cause != null) {
             runCatching {
                 provisioning.failCandidateOrRecord(
-                    ownership.generation, ownership.attemptId, setOf(cause), operation = "ble",
-                    firmware = pumpState.masterVersion.takeIf(String::isNotBlank)
+                    owned.generation, owned.attemptId, setOf(cause), operation = operation,
+                    firmware = pumpState.masterVersion.takeIf(String::isNotBlank), code = code
                 )
             }
         }
         failOperations(failed)
         runCatching { g.disconnect() }
         runCatching { g.close() }
-    }
-
-    private fun recordSuspectedRekey(operation: UUID) {
-        provisioning.failCandidateOrRecord(
-            configuredGeneration, configuredAttemptId,
-            setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), operation.toString(),
-            firmware = pumpState.masterVersion.takeIf(String::isNotBlank), code = ERR_NO_SHARED_KEY
-        )
     }
 
     private fun drainPendingOperationsLocked(): List<Op> {
@@ -1377,6 +1431,7 @@ class YpsoBleManager @Inject constructor(
 
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission", "NewApi") // sdkInt is the injectable Build.VERSION.SDK_INT adapter seam.
+    @YpsoGuardedWrite
     internal fun writeCharacteristic(
         g: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
@@ -1405,6 +1460,7 @@ class YpsoBleManager @Inject constructor(
 
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission", "NewApi") // Same runtime SDK guard as characteristic dispatch.
+    @YpsoGuardedWrite
     internal fun writeDescriptor(
         g: BluetoothGatt,
         descriptor: BluetoothGattDescriptor,

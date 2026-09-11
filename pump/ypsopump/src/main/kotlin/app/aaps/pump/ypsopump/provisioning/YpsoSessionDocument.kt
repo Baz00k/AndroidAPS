@@ -42,25 +42,30 @@ object YpsoSessionDocumentParser {
         val keyHex = root.string("shared_key")
         require(keyHex.matches(Regex("[0-9A-Fa-f]{64}"))) { "Session key must contain 64 hexadecimal characters" }
         val key = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        require(key.any { it.toInt() != 0 }) { "Session key must not be all zero" }
-        val created = timestamp(root.string("created_at"))
-        val captured = timestamp(root.string("captured_at"))
-        require(!created.isAfter(captured.plusSeconds(5 * 60))) { "Key creation time is after capture time" }
-        require(!captured.isAfter(now.plusSeconds(5 * 60))) { "Capture time is in the future" }
-        require(!created.isAfter(now)) { "Key creation time is in the future" }
-        val reboot = when (val value = root["reboot_counter"]) {
-            null -> null
-            is JsonNumber -> value.value.also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()
-            else -> throw IllegalArgumentException("Reboot counter must be an integer or null")
+        return try {
+            require(key.any { it.toInt() != 0 }) { "Session key must not be all zero" }
+            val created = timestamp(root.string("created_at"))
+            val captured = timestamp(root.string("captured_at"))
+            require(!created.isAfter(captured.plusSeconds(5 * 60))) { "Key creation time is after capture time" }
+            require(!captured.isAfter(now.plusSeconds(5 * 60))) { "Capture time is in the future" }
+            require(!created.isAfter(now)) { "Key creation time is in the future" }
+            val reboot = when (val value = root["reboot_counter"]) {
+                null -> null
+                is JsonNumber -> value.value.also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()
+                else -> throw IllegalArgumentException("Reboot counter must be an integer or null")
+            }
+            val sourceObject = root.obj("source")
+            require(sourceObject.keys == currentSource || sourceObject.keys == legacySource) { "Session source fields do not match schema version 1" }
+            val source = sourceObject.entries.associate { (name, value) ->
+                val text = (value as? String) ?: throw IllegalArgumentException("Session source values must be strings")
+                require(sourceValue.matches(text)) { "Session source value is malformed" }
+                name to text
+            }.filterKeys { it != "donor" }
+            YpsoSessionDocument(serial, mac, key, created, captured, reboot, source)
+        } catch (e: Exception) {
+            key.fill(0)
+            throw e
         }
-        val sourceObject = root.obj("source")
-        require(sourceObject.keys == currentSource || sourceObject.keys == legacySource) { "Session source fields do not match schema version 1" }
-        val source = sourceObject.entries.associate { (name, value) ->
-            val text = (value as? String) ?: throw IllegalArgumentException("Session source values must be strings")
-            require(sourceValue.matches(text)) { "Session source value is malformed" }
-            name to text
-        }.filterKeys { it != "donor" }
-        return YpsoSessionDocument(serial, mac, key, created, captured, reboot, source)
     }
 
     private fun timestamp(value: String): Instant = try {

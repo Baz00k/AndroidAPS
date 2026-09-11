@@ -49,7 +49,7 @@ class YpsoStatusIntegrationTest {
             val provisioning: app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService = mock()
             whenever(provisioning.installed()).thenReturn(
                 YpsoProvisioningService.InstalledSession(
-                    "10175983", "12:34:56:78:9A:BC", "fingerprint", null, null, emptyMap(), null,
+                    "10000001", "12:34:56:78:9A:BC", "fingerprint", null, null, emptyMap(), null,
                     PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN))
                 )
             )
@@ -67,7 +67,7 @@ class YpsoStatusIntegrationTest {
             }).apply { provisionReadBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0) }
             whenever(provisioning.connectionSession()).thenReturn(
                 YpsoProvisioningService.ConnectionSession(
-                    manager.session!!.activeRecord()!!.generation, null, "10175983", state.pumpAddress, ByteArray(32) { 1 }, false
+                    manager.session!!.activeRecord()!!.generation, null, "10000001", state.pumpAddress, ByteArray(32) { 1 }, false
                 )
             )
             whenever(rh.gs(any())).thenReturn("localized")

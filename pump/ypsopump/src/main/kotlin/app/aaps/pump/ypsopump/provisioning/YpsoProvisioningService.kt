@@ -37,6 +37,20 @@ class YpsoProvisioningService internal constructor(
     private val mutationEpoch = AtomicLong()
     private val provisioningLock = Any()
 
+    // A failed candidate whose only fallback is the retained legacy bundle must never make the BLE
+    // callback thread wait for [provisioningLock]: BLE callbacks run under the manager's opLock, while
+    // install/cancel hold [provisioningLock] and take opLock to quiesce. Scheduling the restore breaks
+    // that cycle; tests may run it inline through this seam.
+    private val restoreExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ypso-session-restore").apply { isDaemon = true }
+    }
+    internal var dispatchSessionRestore: ((() -> Unit) -> Unit) = { task -> restoreExecutor.execute(task) }
+
+    /** Test seam: wait until every scheduled retained-session restore has run. */
+    internal fun awaitPendingSessionRestore() {
+        restoreExecutor.submit {}.get()
+    }
+
     init {
         migrateCompleteLegacyCredentials()
         refreshState()
@@ -118,6 +132,7 @@ class YpsoProvisioningService internal constructor(
                 val cancelled = synchronized(this) {
                     val hadCandidate = owner.candidateRecord() != null
                     owner.cancelCandidate(PumpSession.AttemptStatus.CANCELLED)
+                    verificationAttemptRequested = false
                     pumpState.invalidateStatus()
                     refreshState()
                     publishAvailability()
@@ -139,28 +154,38 @@ class YpsoProvisioningService internal constructor(
         val explicitKey = draft.replacementKey?.takeIf(String::isNotBlank)?.let {
             validateField(ManualField.KEY) { normalizeKey(it) }
         }
-        val key = explicitKey ?: current?.keyHex?.let(::decodeKey)
-            ?: legacy.key
-                ?.takeIf { legacy.mac?.let { value -> runCatching { PumpIdentity.normalizeMac(value) }.getOrNull() } == mac }
-                ?.let { validateField(ManualField.KEY) { normalizeKey(it) } }
-            ?: throw ManualValidationException(ManualField.KEY, "A 32-byte session key is required")
-        // A suspected re-key blocks re-saving the identical rejected key: that would grant another
-        // verification read without new key material and defeat the anti-retry safeguard.
-        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
-            val currentHex = current?.keyHex
-            if (explicitKey == null || (currentHex != null && explicitKey.toHex().equals(currentHex, ignoreCase = true))) {
-                throw ManualValidationException(ManualField.KEY, "Replacement key required after rejection")
+        var decodedFallback: ByteArray? = null
+        try {
+            val fallback = if (explicitKey != null) null else (
+                current?.keyHex?.let(::decodeKey)
+                    ?: legacy.key
+                        ?.takeIf { legacy.mac?.let { value -> runCatching { PumpIdentity.normalizeMac(value) }.getOrNull() } == mac }
+                        ?.let { validateField(ManualField.KEY) { normalizeKey(it) } }
+                )
+            decodedFallback = fallback
+            val key = explicitKey ?: fallback
+                ?: throw ManualValidationException(ManualField.KEY, "A 32-byte session key is required")
+            // A suspected re-key blocks re-saving the identical rejected key: that would grant another
+            // verification read without new key material and defeat the anti-retry safeguard.
+            if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
+                val currentHex = current?.keyHex
+                if (explicitKey == null || (currentHex != null && explicitKey.toHex().equals(currentHex, ignoreCase = true))) {
+                    throw ManualValidationException(ManualField.KEY, "Replacement key required after rejection")
+                }
             }
+            val preservesCurrentKey = explicitKey == null || current?.keyHex?.equals(key.toHex(), ignoreCase = true) == true
+            install(
+                serial,
+                mac,
+                key,
+                createdAt = current?.createdAt.takeIf { preservesCurrentKey },
+                importedAt = now.toEpochMilli(),
+                source = mapOf("profile" to "manual")
+            ).also { if (owner.candidateRecord() == null) clearLegacyCredentials() }
+        } finally {
+            explicitKey?.fill(0)
+            decodedFallback?.fill(0)
         }
-        val preservesCurrentKey = explicitKey == null || current?.keyHex?.equals(key.toHex(), ignoreCase = true) == true
-        install(
-            serial,
-            mac,
-            key,
-            createdAt = current?.createdAt.takeIf { preservesCurrentKey },
-            importedAt = now.toEpochMilli(),
-            source = mapOf("profile" to "manual")
-        ).also { if (owner.candidateRecord() == null) clearLegacyCredentials() }
     }
 
     /** Stage, allow one immediate poll, and either enqueue it or roll back this exact candidate. */
@@ -186,16 +211,15 @@ class YpsoProvisioningService internal constructor(
     }
 
     fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
-        val serial = PumpIdentity.normalizeSerial(document.serial)
-        PumpIdentity.validatePair(serial, document.mac)
-        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
-            val currentHex = owner.activeRecord()?.keyHex
-            if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
-                document.sharedKey.fill(0)
-                throw SecurityException("Replacement key required after rejection")
+        try {
+            val serial = PumpIdentity.normalizeSerial(document.serial)
+            PumpIdentity.validatePair(serial, document.mac)
+            if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
+                val currentHex = owner.activeRecord()?.keyHex
+                if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
+                    throw SecurityException("Replacement key required after rejection")
+                }
             }
-        }
-        return try {
             install(
                 serial,
                 document.mac,
@@ -313,7 +337,7 @@ class YpsoProvisioningService internal constructor(
             throw SecurityException("Configured serial does not match the connected pump")
         }
         synchronized(this) {
-            owner.markVerified(generation, configured.serial, now)
+            owner.markVerified(generation, attemptId, configured.serial, now)
             if (owner.candidateRecord() == null) clearLegacyCredentials()
             pumpState.claimedSerialNumber = configured.serial
             pumpState.serialNumber = configured.serial
@@ -336,7 +360,7 @@ class YpsoProvisioningService internal constructor(
             publishAvailability()
             true
         }
-        if (rejected) restoreRetainedLegacySession()
+        if (rejected) dispatchSessionRestore { restoreRetainedLegacySession() }
         return rejected
     }
 
@@ -362,15 +386,15 @@ class YpsoProvisioningService internal constructor(
                 true to false
             }
         }
-        if (restore) restoreRetainedLegacySession()
+        if (restore) dispatchSessionRestore { restoreRetainedLegacySession() }
         return handled
     }
 
     /**
      * A failed or cancelled replacement must not leave the pump unreachable. If no committed session
      * survived, the retained legacy credentials become the active, still-unverified session again,
-     * with their previous availability and retry backoff, so the next connection attempt uses the
-     * same protected credentials a process restart would have migrated.
+     * preserving a recorded failure's availability and retry backoff, so the next connection attempt
+     * uses the same protected credentials a process restart would have migrated.
      */
     private fun restoreRetainedLegacySession() {
         synchronized(provisioningLock) {

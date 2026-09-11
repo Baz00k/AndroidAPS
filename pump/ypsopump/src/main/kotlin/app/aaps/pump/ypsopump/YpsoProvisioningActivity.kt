@@ -186,6 +186,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     override fun onDestroy() {
+        selectedDocument?.sharedKey?.fill(0)
         selectedDocument = null
         super.onDestroy()
     }

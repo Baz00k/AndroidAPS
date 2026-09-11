@@ -308,46 +308,50 @@ class AvailabilityTextTest {
     }
 
     @Test
-    fun `verification start completes after activity coroutine cancellation`() = runBlocking {
-        val service = mock<YpsoProvisioningService>()
-        val queue = mock<CommandQueue>()
-        val enteredInstall = CountDownLatch(1)
-        val releaseInstall = CountDownLatch(1)
-        whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenAnswer {
-            enteredInstall.countDown()
-            check(releaseInstall.await(2, TimeUnit.SECONDS))
-            (it.arguments[2] as () -> Boolean).invoke()
-            PumpSession.Installation.FIRST_PUMP
+    fun `verification start completes after activity coroutine cancellation`() {
+        runBlocking {
+            val service = mock<YpsoProvisioningService>()
+            val queue = mock<CommandQueue>()
+            val enteredInstall = CountDownLatch(1)
+            val releaseInstall = CountDownLatch(1)
+            whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenAnswer {
+                enteredInstall.countDown()
+                check(releaseInstall.await(2, TimeUnit.SECONDS))
+                (it.arguments[2] as () -> Boolean).invoke()
+                PumpSession.Installation.FIRST_PUMP
+            }
+            whenever(queue.readStatus("verification", null)).thenReturn(true)
+            val starter = ProvisioningVerificationStarter(service, queue, "verification")
+
+            val job = launch(kotlinx.coroutines.Dispatchers.IO) { starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key")) }
+            assertThat(enteredInstall.await(2, TimeUnit.SECONDS)).isTrue()
+            job.cancel()
+            releaseInstall.countDown()
+            job.join()
+
+            verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
+            verify(queue).readStatus("verification", null)
         }
-        whenever(queue.readStatus("verification", null)).thenReturn(true)
-        val starter = ProvisioningVerificationStarter(service, queue, "verification")
-
-        val job = launch { starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key")) }
-        assertThat(enteredInstall.await(2, TimeUnit.SECONDS)).isTrue()
-        job.cancel()
-        releaseInstall.countDown()
-        job.join()
-
-        verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
-        verify(queue).readStatus("verification", null)
     }
 
     @Test
-    fun `rejected verification enqueue cancels the just staged candidate`() = runBlocking {
-        val service = mock<YpsoProvisioningService>()
-        val queue = mock<CommandQueue>()
-        whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenThrow(VerificationStartException())
-        whenever(queue.readStatus("verification", null)).thenReturn(false)
-        val starter = ProvisioningVerificationStarter(service, queue, "verification")
+    fun `rejected verification enqueue cancels the just staged candidate`() {
+        runBlocking {
+            val service = mock<YpsoProvisioningService>()
+            val queue = mock<CommandQueue>()
+            whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenThrow(VerificationStartException())
+            whenever(queue.readStatus("verification", null)).thenReturn(false)
+            val starter = ProvisioningVerificationStarter(service, queue, "verification")
 
-        val error = try {
-            starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key"))
-            null
-        } catch (error: VerificationStartException) {
-            error
+            val error = try {
+                starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key"))
+                null
+            } catch (error: VerificationStartException) {
+                error
+            }
+
+            assertThat(error).isInstanceOf(VerificationStartException::class.java)
+            verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
         }
-
-        assertThat(error).isInstanceOf(VerificationStartException::class.java)
-        verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
     }
 }

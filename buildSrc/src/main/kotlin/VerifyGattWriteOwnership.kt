@@ -5,6 +5,7 @@ import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.TaskAction
+import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Handle
@@ -12,7 +13,11 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import java.util.zip.ZipFile
 
-/** Checks resolved JVM call targets, including generated classes and method-reference handles. */
+/**
+ * Checks resolved JVM call targets, including generated classes and method-reference handles.
+ * A call to [BluetoothGatt] write APIs is allowed only from an annotated guarded dispatch method in
+ * [YpsoBleManager], so a similarly named helper cannot impersonate the dispatch boundary.
+ */
 abstract class VerifyGattWriteOwnership : DefaultTask() {
     @get:Classpath abstract val jars: ListProperty<RegularFile>
     @get:Classpath abstract val directories: ListProperty<Directory>
@@ -25,10 +30,17 @@ abstract class VerifyGattWriteOwnership : DefaultTask() {
             reader.accept(object : ClassVisitor(Opcodes.ASM9) {
                 override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<out String>?): MethodVisitor =
                     object : MethodVisitor(Opcodes.ASM9) {
+                        private var guarded = false
+
+                        override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
+                            if (descriptor == GUARD_ANNOTATION) guarded = true
+                            return null
+                        }
+
                         fun checkCall(owner: String, target: String) {
                             if (owner != "android/bluetooth/BluetoothGatt" || target !in setOf("writeCharacteristic", "writeDescriptor")) return
-                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoBleManager" || name.substringBefore('$') != target) {
-                                violations.add("${reader.className}.$name calls BluetoothGatt.$target outside its guarded dispatch method")
+                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoBleManager" || !guarded) {
+                                violations.add("${reader.className}.$name calls BluetoothGatt.$target outside an annotated guarded dispatch method")
                             }
                         }
 
@@ -54,5 +66,9 @@ abstract class VerifyGattWriteOwnership : DefaultTask() {
             }
         }
         if (violations.isNotEmpty()) throw GradleException(violations.joinToString("\n"))
+    }
+
+    companion object {
+        private const val GUARD_ANNOTATION = "Lapp/aaps/pump/ypsopump/ble/YpsoGuardedWrite;"
     }
 }

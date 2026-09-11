@@ -43,10 +43,10 @@ No real pump identity or session key is included.
 
 Availability is stored with the protected session rather than inferred from the current process. Distinct
 causes cover unconfigured state, bond/permission, transport, authentication, encrypted-status unavailable,
-suspected re-key required, counter uncertainty and identity mismatch. Transport failures use bounded
-5 s / 15 s / 30 s / 60 s / 5 min backoff and become notification-actionable on the third consecutive
-failure; non-transport causes alert immediately. Dismissal changes only notification presentation, not the
-condition. A verified current-pump encrypted read clears status-related causes but leaves status-only
-write-counter uncertainty explicit. Suspected re-key/session loss preserves code/operation/firmware and
-blocks automatic retries. An explicit replacement save authorizes one verification attempt without clearing
-that condition; only the verified encrypted read clears it.
+a rejected/expired key, suspected re-key required, counter uncertainty and identity mismatch. Transport
+failures use bounded 5 s / 15 s / 30 s / 60 s / 5 min backoff and become notification-actionable on the
+third consecutive failure; non-transport causes alert immediately. Dismissal changes only notification
+presentation, not the condition. A verified current-pump encrypted read clears status-related causes but
+leaves status-only write-counter uncertainty explicit. Suspected re-key/session loss preserves
+code/operation/firmware and blocks automatic retries. An explicit replacement save authorizes one
+verification attempt without clearing that condition; only the verified encrypted read clears it.

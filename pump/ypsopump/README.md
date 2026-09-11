@@ -40,8 +40,10 @@ preference editing. Configuration requires all of:
 
 The key, identity, provenance, replay floor and availability state are installed atomically in the
 no-backup session journal. The journal body is AES-GCM encrypted with a non-exportable Android Keystore
-key. AAPS shows only a truncated SHA-256 fingerprint. The setup activity blocks screenshots and does not
-save the plaintext key in UI state. A selected import document is never deleted by AAPS.
+key. The setup screen deliberately shows only the serial and Bluetooth address (the import review shows
+the file's claimed serial and address); the key fingerprint, source and key age are not displayed, which
+is a recorded deviation from the issue's review-disclosure list. The setup activity blocks screenshots
+and does not save the plaintext key in UI state. A selected import document is never deleted by AAPS.
 
 Obtaining the key is an external operation involving the genuine app and a separate rooted source device.
 That extractor-side requirement does not apply to the AAPS target. See the complete
@@ -58,7 +60,9 @@ on the pump against the bonded pump name (`YpsoPump_10XXXXXX` or `mylife YpsoPum
 This is the driver's supported identity format, not evidence that every YpsoPump model uses that format.
 AAPS enforces `10[0-9]{6}` on every manual, import and migration path and never synthesizes a serial from
 the MAC: the MAC only selects which bonded device may supply the independently observed serial, and the
-pair must still satisfy the serial↔MAC derivation check.
+pair must still satisfy the serial↔MAC derivation check. The importer is deliberately narrower than the
+canonical schema: a syntactically valid file outside this supported identity domain, or with a
+`created_at` timestamp in the future, is rejected rather than guessed.
 
 These remain separate security layers:
 

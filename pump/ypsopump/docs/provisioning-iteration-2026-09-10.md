@@ -61,9 +61,11 @@ The replacement test cases must distinguish:
 4. Authenticated data from a different identity rejected without promotion.
 5. Successful identity/status verification atomically promoting the candidate.
 6. Late callbacks from a cancelled or superseded attempt unable to promote any candidate.
-7. Restart preserving the saved session and an explicit pending/terminal attempt state, without making
-   unverified credentials the saved session.
-8. Replay floors surviving candidate cancellation and same-key re-import.
+7. Restart preserving the saved session and a pending candidate; final attempt results are
+   process-local feedback for the interaction that produced them and are not replayed after restart,
+   without making unverified credentials the saved session.
+8. Replay floors surviving candidate cancellation and same-key re-import, including a fresh candidate
+   that learned an authenticated floor before a later decode/identity rejection.
 
 ## Cross-device UI verification matrix
 
@@ -124,14 +126,48 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 146 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
-`git diff --check` passes.
+Final module run: 164 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+`git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
+were silently skipped by JUnit 5; they now run and are included in that count.
 
-## Adversarial blocker disposition
+## Adversarial review follow-up (2026-09-11)
 
-- Save/cancel vs BLE completion lock ordering: provisioning calls in `YpsoBleManager` run outside
-  `opLock`; `cancelCandidate`/install quiesce outside the service monitor. Covered by
-  `installation quiesce never holds the service monitor` and the connection-epoch lease test.
+A fresh-context adversarial review of the full branch diff against issue #5 found the findings below.
+All confirmed items were fixed on the branch.
+
+- **BLOCKER — lock-order inversion:** `install()`/`cancelCandidate()` held `provisioningLock` and
+  entered BLE `disconnect()` (`opLock`), while BLE callbacks run under `opLock` and, for a candidate
+  failure with no committed session, entered `provisioningLock` through the retained-legacy restore.
+  The restore is now dispatched off the callback thread through `dispatchSessionRestore`, and
+  `candidate failure never blocks on a held provisioning transaction` constructs the two-thread cycle.
+  The previous disposition claiming this was resolved by running provisioning calls "outside opLock"
+  was wrong: `complete()` delivers callbacks under `opLock`.
+- **HIGH — fresh-candidate replay floor:** an authenticated counter committed before a later
+  CRC/schema/identity rejection was deleted with the candidate. `retireCandidate` now retains a
+  candidate that learned a floor as an inactive tombstone; covered by the reimport test.
+- **HIGH — code-140 ownership race:** the AUTH callback captured `configuredGeneration`/attempt
+  before teardown and records code 140 in the same ownership-gated transaction.
+- **MEDIUM — identity cause overwritten:** only decode failures now attribute a generic
+  encrypted-status cause; `markVerified` identity failures keep their specific cause.
+- **MEDIUM — same-generation promotion race:** promotion validates generation and attempt id inside
+  one `PumpSession` transaction.
+- **MEDIUM — cancellation retry grant / terminal failures:** UI cancellation clears the one-shot
+  retry grant; code-140 and identity failures on a candidate route through ownership-gated failure
+  instead of leaving the candidate selected as pending.
+- **MEDIUM — secret buffer lifetime:** `onDestroy`, parser validation failures and
+  `installDocument`/`installManual` throws now zeroize decoded key material.
+- **MEDIUM — typed failure classification:** `fail()` takes an explicit cause/code instead of parsing
+  log text.
+- **LOW — bytecode guard:** write dispatch is allowed only from methods carrying
+  `@YpsoGuardedWrite`; prefix-impersonation negative test added.
+- **Test integrity:** the two silently skipped tests now execute; fixtures use synthetic
+  `10000001`/`EC:2A:F0:00:00:01` identities instead of the earlier values.
+- Cross-module notification cancellation (`NotificationStore` not calling `NotificationManager.cancel`)
+  remains out of scope for this module; the plugin now dismisses its availability notification on
+  `onStop`, and the outstanding OS-level items stay recorded below.
+
+## Adversarial blocker disposition (earlier round)
+
 - Stale read failures: `ReadOwnership` (GATT, generation, attempt) is captured at read start and
   threaded through verification, rejection, and failure paths. Covered by stale-callback tests.
 - Returning to the saved key while a replacement is pending: covered by revert and retained-key
@@ -149,9 +185,9 @@ Final module run: 146 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug
 
 ## Device-independent hygiene
 
-`YpsoSessionDocumentTest.kt:58-59` still uses an observed pump serial as fixture data. Replace it with
-a synthetic supported-format serial once test ownership is free; no real pump identity belongs in
-fixtures, code, or docs.
+Test fixtures use the synthetic identity pair `10000001`/`EC:2A:F0:00:00:01` (and
+`10000002`/`EC:2A:F0:00:00:02`); the earlier `10175983` values were replaced so no possibly observed
+pump identity remains in fixtures, code or docs.
 
 ## Stable notification findings
 
