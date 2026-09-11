@@ -417,7 +417,13 @@ class YpsoBleManager @Inject constructor(
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
         }
-        failOperations(failed)
+        // A deliberate local teardown is not a pump failure: suppress callback reports while draining.
+        teardownReporting.incrementAndGet()
+        try {
+            failOperations(failed)
+        } finally {
+            teardownReporting.decrementAndGet()
+        }
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
     }

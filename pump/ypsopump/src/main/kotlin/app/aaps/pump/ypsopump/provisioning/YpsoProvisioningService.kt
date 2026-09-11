@@ -471,7 +471,6 @@ class YpsoProvisioningService internal constructor(
      */
     private fun restoreRetainedLegacySession(capturedAvailability: PumpSession.Availability? = null, sequence: Long? = null) {
         synchronized(provisioningLock) {
-            if (sequence != null && sequence != restoreSequence.get()) return
             try {
                 if (owner.activeRecord() != null) return
                 val legacy = legacyStore.load()
@@ -487,7 +486,10 @@ class YpsoProvisioningService internal constructor(
                         val provisioning = PumpSession.Provisioning(
                             normalizedMac, normalizedSerial, normalizedKey, null, System.currentTimeMillis(), mapOf("profile" to "legacy-preferences")
                         )
+                        // Sequence validation and activation share the reservation's monitor, so a newer
+                        // failure cannot reserve after the check and leave this task applying stale evidence.
                         synchronized(this) {
+                            if (sequence != null && sequence != restoreSequence.get()) return
                             val availability = (capturedAvailability ?: owner.availability()).let { value ->
                                 // A cancelled first attempt leaves the journal's default UNCONFIGURED cause, but the
                                 // restored bundle is present and merely unverified.
@@ -503,7 +505,10 @@ class YpsoProvisioningService internal constructor(
                     }
                 }
             } finally {
-                if (sequence == null || sequence == restoreSequence.get()) sessionRestorePending = false
+                // Conditional clearing must be atomic with reservations; only the current restore may clear.
+                synchronized(this) {
+                    if (sequence == null || sequence == restoreSequence.get()) sessionRestorePending = false
+                }
             }
         }
     }

@@ -126,7 +126,7 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 179 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+Final module run: 180 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
 `git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
 were silently skipped by JUnit 5; they now run and are included in that count.
 
@@ -235,6 +235,19 @@ fixed further regressions in the first fix set (recorded after the first list).
 - Focused tests added for the new owner validation invariants, unscoped promotion rejection, and
   non-selected `open()` rejection; the cancellation test now joins the canceller and asserts the
   terminal state.
+
+### Post-delta verification fixes
+
+- **Intentional local disconnects** (`disconnect()`/queue-idle) now suppress callback reports while
+  draining, so a deliberate teardown records no transport failure even with an active read; test added.
+- **Restore activation is atomic with the sequence check** under the service monitor, so a newer
+  failure reservation cannot interleave after the check and let a stale restore publish older
+  evidence. Conditional pending clearing is atomic with reservations too.
+- The remote-disconnect test now asserts both the total transport reporter count and the explicit
+  `gatt-disconnected` operation; the non-selected-open test asserts the committed generation survives.
+- Known limitation recorded: `diagnosticLoggingEnabled()` may read a preference on the callback thread
+  in debuggable builds only; the supported non-debuggable artifact short-circuits before any
+  preference access.
 
 ## Adversarial blocker disposition (earlier round)
 

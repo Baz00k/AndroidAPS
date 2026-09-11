@@ -738,10 +738,15 @@ class YpsoBleManagerTest {
         manager.readStatus { }
         manager.gattCallback.onConnectionStateChange(fixture.gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_DISCONNECTED)
 
-        // One physical disconnect is exactly one retryable transport report, whichever path emits it.
+        // One physical disconnect is exactly one retryable transport report, and it must be the
+        // teardown-owned one rather than a drained-read report.
         verify(provisioning, times(1)).recordCandidateOrUnavailable(
             anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
             anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+        verify(provisioning, times(1)).recordCandidateOrUnavailable(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            eq("gatt-disconnected"), any(), anyOrNull(), anyOrNull()
         )
         verify(provisioning, never()).recordUnavailable(
             eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)), anyOrNull(), anyOrNull(), anyOrNull(), any()
@@ -749,6 +754,22 @@ class YpsoBleManagerTest {
         verify(provisioning, never()).failCandidateOrRecord(
             anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
             anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
+    fun `intentional local disconnect during an active read records no failure`() {
+        connectedGatt()
+
+        manager.readStatus { }
+        manager.disconnect()
+
+        verify(provisioning, never()).recordCandidateOrUnavailable(
+            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+        verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
+        verify(provisioning, never()).failCandidateOrRecord(
+            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
         )
     }
 

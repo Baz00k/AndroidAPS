@@ -771,9 +771,11 @@ class YpsoProvisioningServiceTest {
         install(service)
         assertThrows(IllegalStateException::class.java) { service.owner.markVerified(serial, 2_000) }
 
-        service.markVerified(serial, 2_100)
+        assertTrue(service.markVerified(serial, 2_100))
+        val committed = service.owner.committedRecord()!!
         service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_000))
 
+        assertEquals(committed.generation, service.owner.committedRecord()!!.generation)
         assertThrows(SecurityException::class.java) { service.owner.open(mac, key) }
     }
 
