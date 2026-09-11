@@ -8,9 +8,11 @@ a mandatory authenticated 12-byte little-endian reboot/read-counter tail. `PumpS
 owns acceptance. AEAD failure, incomplete tails, unsupported signed counter ranges,
 replay, lower reboot generations and unsupported generation transitions cannot update the record.
 
-Each record binds a normalized pump MAC, SHA-256 key identity, random local key
-generation, reboot generation, read floor, optional write floor and reservation. Serial
-identity is unavailable on the validated target; MAC binding is therefore explicit.
+Each record binds a normalized pump MAC, real claimed serial, protected key material,
+SHA-256 key identity, random local key generation, optional reboot/read floor, optional write
+floor and reservation. The target firmware may omit the standard GATT serial characteristic;
+verification therefore accepts either that characteristic or a matching supported bonded pump
+name as the independent identity source. Key decryption alone never verifies the claimed serial.
 Old key identities remain as tombstones/replay floors. Same-key import cannot reset or
 reassign them. Connection tokens and transaction IDs reject old owners. BLE callback
 delivery and session changes are serialized under the manager lock; disconnect drains
@@ -20,14 +22,19 @@ Authenticated fresh messages commit their read floor before their body is return
 CRC, schema and firmware rejection after that commit suppresses publication without
 rolling back replay protection. Ordinary reconnect and process restart preserve the floor.
 
-## Explicit initial migration
+## Provisioning and legacy migration
 
-An imported key and write/reboot seed contain no read-replay evidence. Legacy preferences
-and build-time write seeds never initialize command readiness. Before connecting an existing
-key, explicitly call `YpsoBleManager.importReadBaseline(mac, keyHex, reboot, read)` with an
-independently captured current pump read floor. This is an internal migration seam, not
-a normal-build provisioning UI. Provisioning must also persist the matching key/MAC through
-the existing setup mechanism. Real keys and identifying captures must remain private.
+Normal builds install manual serial/MAC/key input and canonical `ypso-keys` schema-v1 files through
+one transactional provisioning service. Imported reboot metadata remains a hint; it is not used as
+proof of the current read/write floor or command readiness. A new generation starts without a read
+floor and adopts the first positive authenticated current-pump read before publishing status.
+
+Legacy `ypso_ble_state` credentials migrate only into the protected journal. A validated complete
+serial/MAC/key triple migrates automatically. For older MAC/key-only state, a recognized bonded-pump name
+for that exact MAC may independently supply the real serial; the serial is never derived from the MAC. If
+no such observation is available, migration waits for explicit real serial entry. Both paths upgrade the
+matching existing key generation and preserve its replay floor. Raw credentials are removed only after a
+successful protected install. Compiled credentials and direct preference editing are unsupported.
 
 For debug/ADB migration only, place `files/ypso-read-baseline.json` in the app-private
 directory while the app is force-stopped. Fields are `pump` (MAC), `keyId` (SHA-256 of
@@ -37,11 +44,10 @@ success. Failed imports remain for diagnosis and block that connection. Non-debu
 artifacts never consume this input. Remove rejected test inputs before resuming normal
 reads. The JSON contains no raw key but still contains private pump identity.
 
-A fresh key needs its own independently validated baseline. Re-importing an existing key
-can only retain/raise its floor within the same reboot generation. A mismatched, missing,
+A fresh key establishes its initial authenticated floor from the selected current pump. Re-importing an
+existing key retains its established floor. A mismatched, missing,
 corrupt or restored established journal blocks import and connection; deleting state or
-substituting a high seed is not recovery. Protected operator-facing provisioning and recovery
-are separate work.
+substituting a high seed is not recovery. See [protected provisioning and renewal](provisioning.md).
 
 ## Reboot and recovery decision
 
@@ -71,8 +77,8 @@ key-lifetime assertions are source interpretations, not target pump acceptance e
 
 ## Durability and write reservations
 
-The no-backup journal stores no shared key. Each revision is MAC-authenticated using a unique
-non-exportable Android Keystore HMAC key. Commit generates the new anchor, destroys old
+The no-backup journal stores the shared key only inside an AES-GCM sealed body using a unique,
+non-exportable Android Keystore key. Commit generates the new anchor, destroys old
 anchors, then writes and fsyncs the new revision. A crash in the replacement interval makes
 the journal unavailable rather than exposing an older replay floor. Restored files cannot
 authenticate against deleted anchors. This assumes Android Keystore deletion survives process
@@ -105,7 +111,7 @@ write readiness. No existing gated canary implementation is acceptance evidence.
 rejection, same/new-key import, wrong pump, storage unavailability, overflow, schema-invalid
 authenticated messages, and injected failures before/after each reservation phase commit.
 Injected store tests establish owner behavior, not Android Keystore crash durability.
-`SessionJournalTest` additionally executes the actual journal serialization, HMAC and
+`SessionJournalTest` additionally executes the actual journal serialization, authenticated sealing and
 replacement ordering with injected key/file storage, including crashes before/after anchor
 creation/deletion, truncation, partial write and sync, stale-file restoration, loss and
 record-invariant rejection. It does not emulate secure hardware persistence.

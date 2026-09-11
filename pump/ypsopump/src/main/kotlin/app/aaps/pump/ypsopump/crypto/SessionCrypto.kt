@@ -14,6 +14,9 @@ class SessionCrypto @Inject constructor() {
     private val lazySodium = LazySodiumAndroid(SodiumAndroid())
     data class Message(val body: ByteArray, val reboot: Int, val counter: Long)
 
+    /** The key did not authenticate the pump's ciphertext; the key is wrong or no longer valid. */
+    class AuthenticationFailedException : SecurityException("Invalid key or tampered data")
+
     fun encrypt(commandData: ByteArray, key: ByteArray, reboot: Int, counter: Long): ByteArray {
         require(key.size == KEY_SIZE && reboot >= 0 && counter >= 0)
         val plaintext = commandData + ByteBuffer.allocate(COUNTER_DATA_SIZE).order(ByteOrder.LITTLE_ENDIAN)
@@ -36,7 +39,7 @@ class SessionCrypto @Inject constructor() {
         val length = longArrayOf(0)
         if (!lazySodium.cryptoAeadXChaCha20Poly1305IetfDecrypt(
                 plaintext, length, null, ciphertext, ciphertext.size.toLong(), null, 0, nonce, key
-            )) throw SecurityException("Invalid key or tampered data")
+            )) throw AuthenticationFailedException()
         check(length[0] == plaintext.size.toLong())
         val counters = ByteBuffer.wrap(plaintext, plaintext.size - COUNTER_DATA_SIZE, COUNTER_DATA_SIZE).order(ByteOrder.LITTLE_ENDIAN)
         return Message(plaintext.copyOfRange(0, plaintext.size - COUNTER_DATA_SIZE), counters.int, counters.long)

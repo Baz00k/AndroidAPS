@@ -4,7 +4,6 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.content.Context
-import android.content.SharedPreferences
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -17,6 +16,7 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -25,9 +25,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyVararg
 import org.mockito.kotlin.doAnswer
-import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.isNull
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -37,15 +35,10 @@ import javax.inject.Provider
 
 /** Real plugin, manager, framing, CRC, decode and state; mock only Android and AEAD transport. */
 class YpsoStatusIntegrationTest {
-    @Suppress("DEPRECATION")
     @Test
     fun `authenticated polling preserves counter and idle acquisition across expiry and recovery`() {
         for (sdk in listOf(31, 32, 33)) {
             val context: Context = mock()
-            val prefs: SharedPreferences = mock()
-            whenever(context.getSharedPreferences(any(), any())).thenReturn(prefs)
-            whenever(prefs.getString(eq(YpsoPumpConst.PREF_SHARED_KEY), isNull())).thenReturn("01".repeat(32))
-            whenever(prefs.getString(eq(YpsoPumpConst.PREF_PUMP_MAC), isNull())).thenReturn("12:34:56:78:9A:BC")
             val crypto: SessionCrypto = mock()
             var counter = 0L
             // Synthetic running status: reservoir 550 centi-units, 2 battery bars, basal 0.85 U/h.
@@ -53,7 +46,15 @@ class YpsoStatusIntegrationTest {
             whenever(crypto.decrypt(any(), any())).thenAnswer { SessionCrypto.Message(hex("0a2602000002550000006400000000000000a9d1"), 8, ++counter) }
             var elapsed = 1_000L
             val state = YpsoPumpState().apply { elapsedRealtime = { elapsed }; pumpAddress = "12:34:56:78:9A:BC" }
-            val manager = YpsoBleManager(context, AAPSLoggerTest(), crypto, state).apply {
+            val provisioning: app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService = mock()
+            whenever(provisioning.installed()).thenReturn(
+                YpsoProvisioningService.InstalledSession(
+                    "10000001", "12:34:56:78:9A:BC", "fingerprint", null, null, emptyMap(), null,
+                    PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN))
+                )
+            )
+            whenever(provisioning.isConfigured()).thenReturn(true)
+            val manager = YpsoBleManager(context, AAPSLoggerTest(), crypto, state, provisioning).apply {
                 sdkInt = sdk
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
@@ -64,6 +65,11 @@ class YpsoStatusIntegrationTest {
                 override fun load() = saved
                 override fun commit(state: PumpSession.State) { saved = state }
             }).apply { provisionReadBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0) }
+            whenever(provisioning.connectionSession()).thenReturn(
+                YpsoProvisioningService.ConnectionSession(
+                    manager.session!!.activeRecord()!!.generation, null, "10000001", state.pumpAddress, ByteArray(32) { 1 }, false
+                )
+            )
             whenever(rh.gs(any())).thenReturn("localized")
             whenever(rh.gs(any(), anyVararg())).thenReturn("localized")
             val preferences: Preferences = mock()
@@ -71,7 +77,7 @@ class YpsoStatusIntegrationTest {
             val sync: PumpSync = mock()
             val ui: UiInteraction = mock()
             val plugin = YpsoPumpPlugin(AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), mock(), mock(), ui,
-                                        Provider { PumpEnactResultObject(rh) })
+                                        Provider { PumpEnactResultObject(rh) }, provisioning)
             val writes = mutableListOf<Pair<UUID, List<Byte>>>()
             var readSucceeds = true
             fun authenticate() {
@@ -137,7 +143,7 @@ class YpsoStatusIntegrationTest {
             val acquired = plugin.lastDataTime
             assertTrue(acquired > 0)
             val date: DateUtil = mock()
-            whenever(date.minOrSecAgo(eq(rh), any())).thenReturn("reading age")
+            whenever(date.minOrSecAgo(org.mockito.kotlin.eq(rh), any())).thenReturn("reading age")
             fun display() = buildPumpStatusState(state, mock(), date, rh)
             assertEquals(5.5, display().reservoir)
             assertEquals(40, display().battery)
@@ -161,7 +167,7 @@ class YpsoStatusIntegrationTest {
             plugin.getPumpStatus("failed poll")
             assertTrue(plugin.reservoirLevel.isNaN())
             assertEquals(0L, plugin.lastDataTime)
-            verify(ui, times(2)).addNotification(eq(Notification.PUMP_RESERVOIR_LOW), any(), eq(Notification.URGENT))
+            verify(ui, times(2)).addNotification(org.mockito.kotlin.eq(Notification.PUMP_RESERVOIR_LOW), any(), org.mockito.kotlin.eq(Notification.URGENT))
             verifyNoInteractions(sync)
             assertEquals(0L, manager.writeCounter)
             val expectedAuth = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5") to hex("04319d09e5ba61be2acf95ebebffe38a").toList()

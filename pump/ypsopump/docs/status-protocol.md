@@ -50,7 +50,7 @@ Research references are pinned to
 
 ## Initial observations
 
-The existing AAPS app on a Samsung SM-S918B, Android 16, reads system status from
+The observed AAPS status-read sequence reads system status from
 `669a0c20-0008-969e-e211-fcbee48b7bc5`, then reads successive frames from
 `669a0c20-0008-969e-e211-fcff000000ff`. Observed headers are `14 24 34 44`, with
 19, 19, 19 and 15 payload bytes respectively (72 bytes after reassembly).

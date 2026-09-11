@@ -6,11 +6,16 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.notifications.Notification
+import app.aaps.core.interfaces.rx.events.EventDismissNotification
+import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.crypto.PumpSession
+import java.time.Instant
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -26,10 +31,16 @@ class YpsoPumpPluginTest {
     private val manager: YpsoBleManager = mock()
     private val sync: PumpSync = mock()
     private val ui: UiInteraction = mock()
+    private val rxBus: RxBus = mock()
     private val preferences: Preferences = mock()
+    private val provisioning: YpsoProvisioningService = mock()
+    private val installed = YpsoProvisioningService.InstalledSession(
+        "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
+        PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+    )
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), mock(), mock(), ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }
+        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), rxBus, mock(), ui,
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
     )
 
     @Test
@@ -70,8 +81,9 @@ class YpsoPumpPluginTest {
 
     @Test
     fun `polling alarms use verified measurements and failed reads cannot fabricate empty reservoir`() {
-        whenever(manager.resolveSharedKey(any())).thenReturn("01".repeat(32))
-        whenever(manager.resolvePumpMac(any())).thenReturn("12:34:56:78:9A:BC")
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
         whenever(manager.isConnected).thenReturn(true)
         whenever(preferences.get(IntKey.OverviewResCritical)).thenReturn(10)
         var sample: Double? = 0.0
@@ -96,4 +108,55 @@ class YpsoPumpPluginTest {
         assertEquals(8.0, plugin.reservoirLevel)
         verifyNoInteractions(sync)
     }
+
+    @Test
+    fun `availability notification replaces stale or changed text but does not churn identical state`() {
+        whenever(provisioning.notificationRequired()).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+        )
+
+        plugin.publishAvailabilityNotification() // first publication replaces a possible pre-start notification
+        plugin.publishAvailabilityNotification() // changed presentation replaces the first text
+        plugin.publishAvailabilityNotification() // unchanged presentation is a no-op
+
+        inOrder(ui, rxBus) {
+            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+        }
+        verifyNoMoreInteractions(rxBus)
+        verifyNoMoreInteractions(ui)
+    }
+
+    @Test
+    fun `repeated unavailable absence dismisses a possible stale notification once`() {
+        whenever(provisioning.notificationRequired()).thenReturn(false)
+
+        plugin.publishAvailabilityNotification()
+        plugin.publishAvailabilityNotification()
+
+        verify(rxBus, times(1)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+        verifyNoInteractions(ui)
+    }
+
+    @Test
+    fun `plugin stop dismisses a published availability notification once`() {
+        whenever(provisioning.notificationRequired()).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
+        )
+
+        plugin.publishAvailabilityNotification()
+        plugin.onStop()
+        plugin.onStop()
+
+        verify(rxBus, times(2)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+        verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+    }
+
 }

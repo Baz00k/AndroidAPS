@@ -31,6 +31,14 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import android.content.Context
+import android.content.Intent
+import androidx.preference.Preference
+import androidx.preference.PreferenceCategory
+import androidx.preference.PreferenceManager
+import androidx.preference.PreferenceScreen
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
@@ -57,7 +65,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val rxBus: RxBus,
     private val profileFunction: ProfileFunction,
     private val uiInteraction: UiInteraction,
-    private val pumpEnactResultProvider: Provider<PumpEnactResult>
+    private val pumpEnactResultProvider: Provider<PumpEnactResult>,
+    private val provisioning: YpsoProvisioningService
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -65,11 +74,19 @@ class YpsoPumpPlugin @Inject constructor(
         .pluginIcon(app.aaps.core.ui.R.drawable.ic_generic_icon)
         .pluginName(R.string.ypsopump_name)
         .shortName(R.string.ypsopump_name_short)
-        .preferencesId(PluginDescription.PREFERENCE_NONE)
+        .preferencesId(PluginDescription.PREFERENCE_SCREEN)
         .description(R.string.ypsopump_description),
     ownPreferences = emptyList(),
     aapsLogger, rh, preferences, commandQueue
 ), Pump {
+
+    private var publishedAvailabilityPresentation: PumpSetupPresentation? = null
+    /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
+    private var availabilityNotificationSynchronized = false
+
+    init {
+        provisioning.availabilityChanged = { publishAvailabilityNotification() }
+    }
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
         if (YpsoPumpConst.READ_ONLY_MODE) {
@@ -101,21 +118,22 @@ class YpsoPumpPlugin @Inject constructor(
     private var testTbrDone = false
     private var bolusStatusReadDone = false
 
-    /** Session key / pump MAC resolved at runtime: persisted prefs win over the build const (see YpsoBleManager). */
-    private fun resolvedKey(): String = bleManager.resolveSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
-    private fun resolvedMac(): String = bleManager.resolvePumpMac(YpsoPumpConst.PUMP_MAC)
-    /** Both the session key and the pump MAC are per-user; without either we can't connect. */
-    private fun configured(): Boolean = resolvedKey().isNotEmpty() && resolvedMac().isNotEmpty()
+    private fun resolvedMac(): String = bleManager.installedPumpMac()
+    /** A legacy replay tombstone without protected credentials is intentionally not connectable. */
+    private fun configured(): Boolean = provisioning.isConfigured() && resolvedMac().isNotEmpty()
 
     private fun seedAndConnect() {
         try {
-            bleManager.setSharedKey(resolvedKey())
-            // Reboot counter and key are provisioned externally; reconnect does not refresh a sample.
-            bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, bleManager.resolveRebootCounter(YpsoPumpConst.CAPTURED_REBOOT_COUNTER))
-            bleManager.connect(resolvedMac())
-        } catch (exception: IllegalArgumentException) {
+            if (!provisioning.retryAllowed()) {
+                aapsLogger.info(LTag.PUMP, "YpsoPump retry deferred by durable backoff")
+                return
+            }
+            check(bleManager.configureInstalledSession()) { "No protected session" }
+            bleManager.connectConfiguredSession()
+        } catch (exception: RuntimeException) {
             bleManager.disconnect()
             pumpState.invalidateStatus()
+            provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), operation = "configure-session")
             aapsLogger.error(LTag.PUMP, "YpsoPump configuration is invalid")
         }
     }
@@ -125,7 +143,11 @@ class YpsoPumpPlugin @Inject constructor(
         if (!configured()) {
             bleManager.disconnect()
             pumpState.invalidateStatus()
-            aapsLogger.info(LTag.PUMP, "YpsoPump: session key and/or pump MAC not set (prefs ypso_shared_key / ypso_pump_mac or build consts) — skipping connect")
+            aapsLogger.info(LTag.PUMP, "YpsoPump: no protected pump session configured — skipping connect")
+            // A failed replacement whose only fallback is the retained legacy bundle is being restored
+            // asynchronously; do not overwrite its recorded failure with an unconfigured condition.
+            if (!provisioning.isSessionRestorePending())
+                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
             return
         }
         seedAndConnect()
@@ -467,10 +489,8 @@ class YpsoPumpPlugin @Inject constructor(
      */
     private fun checkReservoir() {
         val units = pumpState.reservoirUnitsIfFresh() ?: return
-        // Thresholds come from the app's OWN reservoir preferences (Overview → status lights), which
-        // already exist, are already translated and are already on a settings screen. They were left
-        // unread when the redesign dropped the status-lights row; this puts them back to work rather
-        // than inventing a second set of numbers nobody can find.
+        // Reuse the app's existing reservoir thresholds rather than inventing a second set of numbers
+        // nobody can find.
         //
         // Only CRITICAL raises a notification. "Warning" is the level the status lights always meant —
         // a colour, not a nag — and it stays a colour, on the Home reservoir pill.
@@ -647,6 +667,79 @@ class YpsoPumpPlugin @Inject constructor(
     override fun manufacturer(): ManufacturerType = ManufacturerType.Ypsomed
     override fun model(): PumpType = PumpType.YPSOPUMP
     override fun serialNumber(): String = pumpState.serialNumber
+
+    override fun onStart() {
+        super.onStart()
+        provisioning.refreshState()
+        publishAvailabilityNotification()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        dismissAvailabilityNotification()
+    }
+
+    override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
+        if (requiredKey != null) return
+        val category = PreferenceCategory(context).apply {
+            key = "ypsopump_connection_setup"
+            title = rh.gs(R.string.ypsopump_connection_setup)
+        }
+        // PreferenceGroup needs the host PreferenceManager before children can receive stable IDs.
+        parent.addPreference(category)
+        category.apply {
+            addPreference(Preference(context).apply {
+                title = rh.gs(R.string.ypsopump_connection_setup)
+                summary = provisioning.installed()?.let { rh.gs(R.string.ypsopump_configured_summary, it.serial) }
+                    ?: rh.gs(R.string.ypsopump_not_configured)
+                setOnPreferenceClickListener {
+                    context.startActivity(Intent(context, YpsoProvisioningActivity::class.java))
+                    true
+                }
+            })
+        }
+    }
+
+    @Synchronized
+    internal fun publishAvailabilityNotification() {
+        if (!provisioning.notificationRequired()) {
+            dismissAvailabilityNotification()
+            return
+        }
+        val availability = provisioning.availability()
+        val presentation = pumpSetupPresentation(
+            causes = availability.causes,
+            hasSavedDetails = provisioning.installed() != null,
+            verified = provisioning.installed()?.verifiedAt != null,
+        )
+        if (presentation == PumpSetupPresentation.READY) {
+            dismissAvailabilityNotification()
+            return
+        }
+        if (presentation == publishedAvailabilityPresentation) return
+        // NotificationStore preserves existing text for a repeated ID. A plugin can also start
+        // after a prior process left this ID in the store, so replace the first publication of
+        // this plugin lifetime and every later changed instruction.
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        uiInteraction.addNotification(
+            Notification.YPSOPUMP_UNAVAILABLE,
+            rh.gs(
+                R.string.ypsopump_unavailable_notification,
+                rh.gs(presentation.message)
+            ),
+            Notification.URGENT
+        )
+        publishedAvailabilityPresentation = presentation
+        availabilityNotificationSynchronized = true
+    }
+
+    @Synchronized
+    private fun dismissAvailabilityNotification() {
+        if (publishedAvailabilityPresentation == null && availabilityNotificationSynchronized) return
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        publishedAvailabilityPresentation = null
+        availabilityNotificationSynchronized = true
+    }
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false
     override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}

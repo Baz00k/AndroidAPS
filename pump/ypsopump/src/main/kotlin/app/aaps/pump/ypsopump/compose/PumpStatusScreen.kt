@@ -20,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.AapsCard
@@ -29,9 +28,8 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Redesigned pump status screen (handoff Section 7): connection pill, Reservoir + Battery gauge tiles,
- * status rows, and the command-queue list. Read-only view over the pump state + CommandQueue. The card
- * layout is generic enough to reuse for any driver.
+ * Pump status screen: connection pill with at most one instruction, Reservoir + Battery gauge
+ * tiles, confirmed status rows, and the command queue while it is busy. Read-only view.
  */
 @Composable
 fun PumpStatusScreen(state: PumpStatusState) {
@@ -42,9 +40,15 @@ fun PumpStatusScreen(state: PumpStatusState) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
-                label = state.connection.ifBlank { "Disconnected" },
+                label = state.connectionSummary,
                 dotColor = if (state.connectionHealthy) colors.inRange else colors.low
             )
+        }
+
+        state.connectionAction?.let { action ->
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Text(action, style = AapsTheme.type.body, color = colors.textPrimary)
+            }
         }
 
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
@@ -66,24 +70,22 @@ fun PumpStatusScreen(state: PumpStatusState) {
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(r.label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         }
                     }
                 }
             }
         }
 
-        Text("COMMAND QUEUE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
-        AapsCard(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            Column {
-                if (state.queue.isEmpty()) {
-                    Text("Idle", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
-                } else state.queue.forEachIndexed { i, q ->
-                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
-                        Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                        if (q.running) Text("running", style = AapsTheme.type.caption, color = colors.inRange)
+        if (state.queue.isNotEmpty()) {
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Column {
+                    state.queue.forEachIndexed { i, q ->
+                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
+                            Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                        }
                     }
                 }
             }

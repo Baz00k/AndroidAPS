@@ -23,8 +23,7 @@ import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
 /**
- * YpsoPump driver tab — redesigned as a Compose status screen (connection pill, Reservoir/Battery
- * gauges, status rows, command-queue). Read-only view over [YpsoPumpState] + [CommandQueue].
+ * YpsoPump driver tab: read-only Compose status view over [YpsoPumpState] + [CommandQueue].
  */
 class YpsoPumpFragment : DaggerFragment() {
 
@@ -83,9 +82,6 @@ internal fun buildPumpStatusState(
         if (snapshot != null) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
         }
-        if (pumpState.lastErrorCode != 0) {
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_last_error), "${pumpState.lastErrorCode} — ${pumpState.lastErrorMessage}"))
-        }
     }
     val queue = buildList {
         val running = commandQueue.performing()
@@ -93,11 +89,23 @@ internal fun buildPumpStatusState(
         val queued = commandQueue.size()
         if (queued > 0) add(QueueItem("$queued command${if (queued == 1) "" else "s"} queued", false))
     }
+    val presentation = pumpSetupPresentation(
+        causes = pumpState.availability.causes,
+        hasSavedDetails = pumpState.claimedSerialNumber.isNotBlank(),
+        verified = pumpState.serialNumber.isNotBlank(),
+    )
+    val connectionSummary = when {
+        pumpState.connectionState == ConnectionState.CONNECTED -> rh.gs(R.string.ypsopump_connected)
+        pumpState.connectionState == ConnectionState.DISCONNECTED -> rh.gs(R.string.ypsopump_disconnected)
+        else -> rh.gs(R.string.ypsopump_connecting)
+    }
     return PumpStatusState(
         title = "YpsoPump",
-        connection = when {
-            pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null   -> rh.gs(R.string.ypsopump_authenticated_no_status)
-            else                                                                                     -> pumpState.connectionState.name.lowercase().replaceFirstChar { it.uppercase() }
+        connectionSummary = connectionSummary,
+        connectionAction = when {
+            presentation != PumpSetupPresentation.READY -> rh.gs(presentation.message)
+            pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null -> rh.gs(R.string.ypsopump_authenticated_no_status)
+            else -> null
         },
         connectionHealthy = pumpState.isConnected && snapshot != null,
         reservoir = snapshot?.reservoirUnits,
@@ -106,9 +114,6 @@ internal fun buildPumpStatusState(
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,
-        note = buildList {
-            if (snapshot != null) add(rh.gs(R.string.ypsopump_provisional_status_note))
-            if (YpsoPumpConst.READ_ONLY_MODE) add(rh.gs(R.string.ypsopump_status_only_note))
-        }.joinToString(" ")
+        note = if (YpsoPumpConst.READ_ONLY_MODE) rh.gs(R.string.ypsopump_status_only_note) else ""
     )
 }

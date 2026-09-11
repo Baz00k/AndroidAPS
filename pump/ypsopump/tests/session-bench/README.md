@@ -60,7 +60,7 @@ Unlock the phone before invoking the activity. Always specify the intended devic
 | `before-sync` | `READ:101` or `UNAVAILABLE:...`; never `READ:100` |
 | `after-sync` | `READ:101` |
 
-On the tested SM-S918B / Android 16, both before-sync and after-sync recovered 101.
+In the recorded bench run, both before-sync and after-sync recovered 101.
 This establishes observed process-death behavior, not sudden-power-loss durability.
 The checkpoint signal is synced before killing the process; that can affect timing and
 does not emulate an uncontrolled power failure. No claim about physical pump effects
