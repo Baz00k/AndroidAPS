@@ -127,6 +127,35 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `journal validation rejects negative candidate failures and mismatched replacement identity`() {
+        val keyHex = "01".repeat(32)
+        val keyId = PumpSession.fingerprint(ByteArray(32) { 1 })
+        val otherKeyId = PumpSession.fingerprint(ByteArray(32) { 2 })
+        val active = PumpSession.Record("pump", keyId, "active", 8, 100, null, serial = "serial", keyHex = keyHex)
+        val candidate = PumpSession.Record("pump", keyId, "candidate", null, null, null, serial = "serial", keyHex = keyHex)
+        val state = PumpSession.State(
+            records = listOf(active, candidate),
+            activeGeneration = "active",
+            candidateGeneration = "candidate",
+            candidateReplacesGeneration = "active",
+            candidateAttemptId = "attempt",
+            candidateAvailability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+        )
+        PumpSession.validate(state)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(state.copy(candidateAvailability = state.candidateAvailability!!.copy(failures = -1)))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(state.copy(candidateGeneration = null, candidateAttemptId = null, candidateAvailability = null))
+        }
+        val foreign = candidate.copy(keyId = otherKeyId)
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(state.copy(records = listOf(active, foreign)))
+        }
+    }
+
+    @Test
     fun `failed seal removes its uncommitted anchor and preserves the prior revision`() {
         val storage = Storage()
         val journal = SessionJournal(storage)

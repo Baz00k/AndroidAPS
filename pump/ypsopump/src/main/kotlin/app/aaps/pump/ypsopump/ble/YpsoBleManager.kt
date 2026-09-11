@@ -432,9 +432,10 @@ class YpsoBleManager @Inject constructor(
         val onResult: (BluetoothGatt?, ByteArray?, Int) -> Unit
     )
     private val opLock = Any()
-    // Set while a teardown drains pending operation callbacks: the teardown already recorded the
-    // durable failure, so drained reads must not report a second one.
-    @Volatile private var teardownReporting = false
+    // Depth of active teardown drains: the teardown already recorded the durable failure, so callbacks
+    // forced out by the drain must not report a second one. A counter keeps nested/overlapping teardowns
+    // from re-enabling reporting while another drain is still running.
+    private val teardownReporting = java.util.concurrent.atomic.AtomicInteger()
     private val queue = ArrayDeque<Op>()
     private var current: Op? = null
     private var currentGatt: BluetoothGatt? = null
@@ -581,7 +582,7 @@ class YpsoBleManager @Inject constructor(
                 else
                     "read $now failed (status=$s, got ${frames.size} frames)"
                 fail(originGatt, message, cause = null)
-                if (!teardownReporting) {
+                if (teardownReporting.get() == 0) {
                     val causes = if (s == ERR_NO_SHARED_KEY) setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)
                     else setOf(PumpSession.AvailabilityCause.TRANSPORT)
                     val owner = failureOwner
@@ -1232,12 +1233,11 @@ class YpsoBleManager @Inject constructor(
                         pumpState.invalidateStatus()
                         drainPendingOperationsLocked() to owned
                     }
-                    failOperations(failed)
-                    teardownReporting = true
+                    teardownReporting.incrementAndGet()
                     try {
                         failOperations(failed)
                     } finally {
-                        teardownReporting = false
+                        teardownReporting.decrementAndGet()
                     }
                     // Remote teardown records exactly one transport failure; drained callbacks are
                     // suppressed by the teardown marker so a cancellation/disconnect cannot count twice.
@@ -1420,11 +1420,11 @@ class YpsoBleManager @Inject constructor(
                 }
             }
         }
-        teardownReporting = true
+        teardownReporting.incrementAndGet()
         try {
             failOperations(failed)
         } finally {
-            teardownReporting = false
+            teardownReporting.decrementAndGet()
         }
         runCatching { g.disconnect() }
         runCatching { g.close() }

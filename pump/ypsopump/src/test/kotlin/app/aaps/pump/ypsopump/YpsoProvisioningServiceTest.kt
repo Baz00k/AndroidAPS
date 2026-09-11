@@ -39,7 +39,7 @@ class YpsoProvisioningServiceTest {
     ) : YpsoProvisioningService.LegacyStore {
         var clears = 0
         override fun load() = credentials
-        override fun clear() { clears++; credentials = YpsoProvisioningService.LegacyCredentials(null, null, null) }
+        override fun clear(): Boolean { clears++; credentials = YpsoProvisioningService.LegacyCredentials(null, null, null); return true }
     }
 
     private fun service(
@@ -766,6 +766,18 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `unscoped owner promotion and non-selected open are rejected`() {
+        val (service) = service()
+        install(service)
+        assertThrows(IllegalStateException::class.java) { service.owner.markVerified(serial, 2_000) }
+
+        service.markVerified(serial, 2_100)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_000))
+
+        assertThrows(SecurityException::class.java) { service.owner.open(mac, key) }
+    }
+
+    @Test
     fun `delayed retained restore keeps the failure recorded before scheduling`() {
         val store = MemoryStore()
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
@@ -802,11 +814,15 @@ class YpsoProvisioningServiceTest {
         }
         val canceller = Executors.newSingleThreadExecutor()
         try {
-            canceller.submit { service.cancelCandidate() }
+            val job = canceller.submit { service.cancelCandidate() }
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             assertThrows(IllegalStateException::class.java) {
                 service.markVerified(candidate.generation, candidate.attemptId, serial, 3_000)
             }
+            release.countDown()
+            job.get(2, TimeUnit.SECONDS)
+            assertNull(service.connectionSession())
+            assertEquals(PumpSession.AttemptStatus.CANCELLED, service.verificationState()!!.status)
         } finally {
             release.countDown()
             canceller.shutdownNow()

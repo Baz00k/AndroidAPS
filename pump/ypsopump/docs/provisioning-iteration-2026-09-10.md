@@ -126,7 +126,7 @@ legacy migration/immediate-install assumptions, BLE/status integration, and pres
 Focused candidate tests passing is insufficient: the complete suite must be reconciled with the new
 contract without weakening replay, migration, identity, or stale-callback assertions.
 
-Final module run: 177 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
+Final module run: 179 tests, 0 failures, 0 errors. `:pump:ypsopump:lintFullDebug` passes.
 `git diff --check` passes. Two tests that previously returned a non-`Unit` value from `runBlocking`
 were silently skipped by JUnit 5; they now run and are included in that count.
 
@@ -215,6 +215,26 @@ fixed further regressions in the first fix set (recorded after the first list).
 - Recorded open items outside this module: `Pump.isInitialized()` still means "monitoring ready" rather
   than "command ready" (core gate semantics); Android system-notification cancellation and tombstone
   compaction policy remain as previously recorded.
+
+### Final review round (verification of the third fixes)
+
+- **Duplicate disconnect drain removed:** the remote-disconnect handler accidentally invoked
+  `failOperations` twice, causing duplicate callback delivery and a second transport report for an
+  active status/event read. The unguarded drain is gone; the test now asserts the total transport
+  reporter count, not just the `gatt-disconnected` operation.
+- **Restore reservation is atomic with the failure:** the restore sequence and pending marker are
+  reserved inside the same service-monitor transaction that retires the candidate, so sequence order
+  always matches owner-mutation order; a stale queued restore cannot win, and pending cannot be
+  re-armed after a newer restore completed. Dispatch failure clears the marker.
+- **Teardown suppression is reference-counted** so nested/overlapping drains cannot re-enable
+  reporting mid-drain.
+- **Legacy plaintext removal** now runs off the BLE callback thread and its `commit()` result is
+  returned by `LegacyStore.clear()`; a failed removal is retried on the next process start.
+- **Import reads use a zeroizable accumulator**: oversized-input failures wipe all mutable buffers,
+  and the returned document buffer is wiped after parsing.
+- Focused tests added for the new owner validation invariants, unscoped promotion rejection, and
+  non-selected `open()` rejection; the cancellation test now joins the canceller and asserts the
+  terminal state.
 
 ## Adversarial blocker disposition (earlier round)
 

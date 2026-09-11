@@ -738,9 +738,17 @@ class YpsoBleManagerTest {
         manager.readStatus { }
         manager.gattCallback.onConnectionStateChange(fixture.gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_DISCONNECTED)
 
+        // One physical disconnect is exactly one retryable transport report, whichever path emits it.
         verify(provisioning, times(1)).recordCandidateOrUnavailable(
             anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
-            eq("gatt-disconnected"), any(), anyOrNull(), anyOrNull()
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+        verify(provisioning, never()).recordUnavailable(
+            eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)), anyOrNull(), anyOrNull(), anyOrNull(), any()
+        )
+        verify(provisioning, never()).failCandidateOrRecord(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
         )
     }
 

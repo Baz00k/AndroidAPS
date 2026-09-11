@@ -95,7 +95,7 @@ class YpsoProvisioningService internal constructor(
     internal data class LegacyCredentials(val serial: String?, val mac: String?, val key: String?)
     internal interface LegacyStore {
         fun load(): LegacyCredentials
-        fun clear()
+        fun clear(): Boolean
     }
 
     @Synchronized
@@ -348,16 +348,19 @@ class YpsoProvisioningService internal constructor(
             failCandidateOrRecord(generation, attemptId, setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now)
             throw SecurityException("Configured serial does not match the connected pump")
         }
-        synchronized(this) {
+        val cleanupLegacy = synchronized(this) {
             // A session mutation (install/cancel) increments the epoch before it quiesces the transport.
             // Promotion must not slip through a check-to-commit gap once cancellation has started.
             check(mutationEpoch.get() % 2L == 0L) { "Verification superseded by a session mutation" }
             owner.markVerified(generation, attemptId, configured.serial, now)
-            if (owner.candidateRecord() == null) clearLegacyCredentials()
             pumpState.claimedSerialNumber = configured.serial
             pumpState.serialNumber = configured.serial
             publishAvailability()
+            owner.candidateRecord() == null
         }
+        // Plaintext legacy removal is confirmed off the BLE callback thread; a failed commit is retried
+        // on the next process start, which repeats cleanup while a protected session exists.
+        if (cleanupLegacy) runCatching { restoreExecutor.execute { clearLegacyCredentials() } }
         return promotingCandidate
     }
 
@@ -371,15 +374,15 @@ class YpsoProvisioningService internal constructor(
     }
 
     fun rejectCandidate(generation: String, attemptId: String?): Boolean {
-        val rejected = synchronized(this) {
+        val reserved = synchronized(this) {
             if (owner.candidateRecord()?.generation != generation || owner.verificationAttempt()?.id != attemptId) return false
             owner.cancelCandidate(PumpSession.AttemptStatus.FAILED)
             refreshState()
             publishAvailability()
-            true
+            reserveRetainedSessionRestore(owner.availability())
         }
-        if (rejected) scheduleRetainedSessionRestore(owner.availability())
-        return rejected
+        dispatchRetainedSessionRestore(reserved)
+        return true
     }
 
     /** One ownership-gated failure transaction. A stale callback has no availability side effects. */
@@ -387,7 +390,7 @@ class YpsoProvisioningService internal constructor(
         generation: String?, attemptId: String?, causes: Set<PumpSession.AvailabilityCause>, operation: String?, now: Long = System.currentTimeMillis(),
         firmware: String? = null, code: Int? = null
     ): Boolean {
-        val (handled, restoreAvailability) = synchronized(this) {
+        val (handled, reserved) = synchronized(this) {
             if (generation != null && owner.candidateRecord()?.generation == generation) {
                 if (owner.verificationAttempt()?.id != attemptId) return false
                 val availability = unavailable(owner.availability(), causes, operation, now, firmware, code)
@@ -396,7 +399,7 @@ class YpsoProvisioningService internal constructor(
                     refreshState()
                     publishAvailability()
                 }
-                failed to availability.takeIf { failed && owner.activeRecord() == null }
+                failed to availability.takeIf { failed && owner.activeRecord() == null }?.let(::reserveRetainedSessionRestore)
             } else {
                 // A callback carrying a completed candidate attempt is stale once no matching candidate
                 // remains; it must not mutate a promoted successor.
@@ -406,15 +409,30 @@ class YpsoProvisioningService internal constructor(
                 true to null
             }
         }
-        if (restoreAvailability != null) scheduleRetainedSessionRestore(restoreAvailability)
+        if (reserved != null) dispatchRetainedSessionRestore(reserved)
         return handled
     }
 
-    /** Only the latest scheduled restore may activate credentials; older queued restores are stale. */
-    private fun scheduleRetainedSessionRestore(availability: PumpSession.Availability) {
+    private data class ReservedRestore(val availability: PumpSession.Availability, val sequence: Long)
+
+    /**
+     * Reserve the restore version and publish the pending marker inside the same service-monitor
+     * transaction that produced the failure, so sequence order always matches owner-mutation order.
+     * Caller must hold the service monitor.
+     */
+    private fun reserveRetainedSessionRestore(availability: PumpSession.Availability): ReservedRestore {
         val sequence = restoreSequence.incrementAndGet()
         sessionRestorePending = true
-        dispatchSessionRestore { restoreRetainedLegacySession(availability, sequence) }
+        return ReservedRestore(availability, sequence)
+    }
+
+    private fun dispatchRetainedSessionRestore(reserved: ReservedRestore) {
+        try {
+            dispatchSessionRestore { restoreRetainedLegacySession(reserved.availability, reserved.sequence) }
+        } catch (e: RuntimeException) {
+            // Dispatch failure must not leave the unconfigured-polling suppression armed.
+            if (reserved.sequence == restoreSequence.get()) sessionRestorePending = false
+        }
     }
 
     /**
@@ -641,15 +659,28 @@ class YpsoProvisioningService internal constructor(
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun boundedRead(stream: InputStream): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(4096)
-        while (true) {
-            val read = stream.read(buffer)
-            if (read < 0) break
-            require(out.size() + read <= YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES) { "Session file is larger than 64 KiB" }
-            out.write(buffer, 0, read)
+        var data = ByteArray(0)
+        var size = 0
+        try {
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                require(size + read <= YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES) { "Session file is larger than 64 KiB" }
+                if (size + read > data.size) {
+                    val grown = ByteArray(minOf(YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES, maxOf(4096, size + read)))
+                    data.copyInto(grown, 0, 0, size)
+                    data.fill(0)
+                    data = grown
+                }
+                buffer.copyInto(data, size, 0, read)
+                size += read
+            }
+            return data.copyOf(size)
+        } finally {
+            buffer.fill(0)
+            data.fill(0)
         }
-        return out.toByteArray()
     }
 
     private fun PumpSession.Record.toInstalled(availability: PumpSession.Availability) = InstalledSession(
@@ -670,10 +701,10 @@ class YpsoProvisioningService internal constructor(
             preferences.getString(YpsoPumpConst.PREF_SHARED_KEY, null)?.trim()
         )
 
-        override fun clear() {
-            // The protected journal is already committed; remove the plaintext legacy copy durably in the
-            // same recovery generation rather than leaving an asynchronous apply() window behind.
-            preferences.edit()
+        override fun clear(): Boolean {
+            // The protected journal is already committed; remove the plaintext legacy copy durably and
+            // return the commit result so callers can retry on a later process start.
+            return preferences.edit()
                 .remove(YpsoPumpConst.PREF_SHARED_KEY)
                 .remove(YpsoPumpConst.PREF_PRIVATE_KEY)
                 .remove(YpsoPumpConst.PREF_PUMP_PUBLIC_KEY)
