@@ -104,8 +104,9 @@ be promoted to `Verified` by the same live transport because its frame ownership
 external evidence may still classify the durable reservation for operator recovery. No possibly
 effective operation is automatically retried.
 
-Reviewed reconciliation is durably bound to the original operation/reservation/counter by the
-SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving `RESERVED` phase is
+Reviewed reconciliation durably copies the original operation, reservation, counter, characteristic,
+purpose, plaintext SHA-256, exact prior floor and candidate mode into immutable evidence, together
+with the SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving `RESERVED` phase is
 the only offline state that proves the dispatch boundary was never committed; it may be rolled back
 only as rejected/counter-not-consumed, with the same evidence binding. `POSSIBLY_SENT` and `ACKED`
 remain uncertain until measured semantic and counter evidence resolves them.
@@ -115,8 +116,11 @@ The Step 07 physical harness permits one bounded forward-gap candidate only: eit
 floor. Proven not-sent or measured rejected/counter-not-consumed recovery restores that exact floor;
 it does not assume `candidate - 1`. An accepted strict-next reconciliation is a durable prerequisite,
 and the epoch's gap-attempt marker is committed with reservation before dispatch. It survives every
-outcome, restart, reinstall and same-epoch baseline import. Authenticated reboot adoption alone clears
-both epoch markers. Larger offsets, repeated advancement and scanning are unavailable.
+outcome, restart, in-place reinstall/upgrade that preserves app data, and same-epoch baseline import.
+Uninstall removes the sealed journal and its Android Keystore anchor; it is not a supported recovery
+operation and cannot establish that the epoch's gap attempt is still unused. Authenticated reboot
+adoption alone clears both epoch markers. Larger offsets, repeated advancement and scanning are
+unavailable.
 
 Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
 write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at

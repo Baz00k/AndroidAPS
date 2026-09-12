@@ -155,8 +155,10 @@ The durable reservation stores the exact prior floor. Only reviewed evidence tha
 rejected and the counter was not consumed may restore that floor. Any other result remains blocked or
 advances only according to explicit reconciliation. The gap-attempt marker is persisted before any
 platform dispatch and cannot be cleared by not-sent or rejected reconciliation, process restart,
-reinstall or a new measured baseline in the same epoch. Only authenticated reboot adoption starts a
-new epoch. There is no loop, decrement probe or scan.
+in-place reinstall/upgrade that preserves app data or a new measured baseline in the same epoch. An
+uninstall removes the sealed journal and Android Keystore anchor, so it cannot prove the gap marker is
+unused and is not a supported recovery path. Only authenticated reboot adoption starts a new epoch.
+There is no loop, decrement probe or scan.
 
 ### Read-only observation while unresolved
 
@@ -170,6 +172,10 @@ adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
 
 The action verifies the pending reservation's destination, purpose and plaintext hash before reading.
 It performs no selector write and does not reconcile automatically.
+
+Resolved and unresolved evidence retains the exact operation, reservation, counter, selector
+characteristic, purpose, plaintext SHA-256, prior write floor and candidate mode even if a
+rejected/not-consumed reconciliation clears the live reservation.
 
 ### Reboot observation
 

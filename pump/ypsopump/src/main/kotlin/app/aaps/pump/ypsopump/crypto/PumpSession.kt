@@ -51,6 +51,11 @@ class PumpSession(private val store: Store) {
         val operationId: String,
         val reservationId: String,
         val counter: Long,
+        val characteristic: String,
+        val purpose: String,
+        val payloadHash: String,
+        val priorWrite: Long,
+        val candidate: WriteCandidate,
         val resolution: WriteResolution?,
         val evidenceHash: String,
         val detail: String
@@ -650,14 +655,7 @@ class PumpSession(private val store: Store) {
         val priorWrite = priorWrite(reserved)
         check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
-        val evidence = WriteEvidence(
-            operationId,
-            reserved.id,
-            reserved.counter,
-            WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
-            evidenceHash,
-            detail
-        )
+        val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
         update(old.copy(write = priorWrite, reservation = null, writeEvidence = old.writeEvidence + evidence))
     }
 
@@ -676,14 +674,7 @@ class PumpSession(private val store: Store) {
             "Write is not awaiting reconciliation"
         }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
-        val evidence = WriteEvidence(
-            checkNotNull(reserved.operationId),
-            reserved.id,
-            reserved.counter,
-            null,
-            evidenceHash,
-            detail
-        )
+        val evidence = writeEvidence(reserved, null, evidenceHash, detail)
         check(old.writeEvidence.none { it.reservationId == reserved.id && it.evidenceHash == evidenceHash }) {
             "Evidence already recorded"
         }
@@ -722,14 +713,7 @@ class PumpSession(private val store: Store) {
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) { "Write is not awaiting reconciliation" }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
-        val evidence = WriteEvidence(
-            checkNotNull(reserved.operationId),
-            reserved.id,
-            reserved.counter,
-            resolution,
-            evidenceHash,
-            detail
-        )
+        val evidence = writeEvidence(reserved, resolution, evidenceHash, detail)
         val next = when (resolution) {
             WriteResolution.ACCEPTED ->
                 old.copy(
@@ -754,6 +738,26 @@ class PumpSession(private val store: Store) {
 
     @Synchronized
     fun snapshot(): Record? = record
+
+    private fun writeEvidence(
+        reservation: Reservation,
+        resolution: WriteResolution?,
+        evidenceHash: String,
+        detail: String,
+    ) =
+        WriteEvidence(
+            operationId = checkNotNull(reservation.operationId),
+            reservationId = reservation.id,
+            counter = reservation.counter,
+            characteristic = checkNotNull(reservation.characteristic),
+            purpose = checkNotNull(reservation.purpose),
+            payloadHash = checkNotNull(reservation.payloadHash),
+            priorWrite = priorWrite(reservation),
+            candidate = reservation.candidate,
+            resolution = resolution,
+            evidenceHash = evidenceHash,
+            detail = detail,
+        )
 
     private fun priorWrite(reservation: Reservation): Long = reservation.priorWrite ?: reservation.counter - 1
 
@@ -823,7 +827,34 @@ class PumpSession(private val store: Store) {
                     r.writeEvidence.map { it.reservationId to it.evidenceHash }.distinct().size == r.writeEvidence.size
                 )
                 r.writeEvidence.forEach {
-                    require(it.operationId.isNotBlank() && it.reservationId.isNotBlank() && it.counter > 0)
+                    require(
+                        it.operationId.isNotBlank() &&
+                            it.reservationId.isNotBlank() &&
+                            it.counter > 0 &&
+                            it.characteristic.isNotBlank() &&
+                            it.purpose.isNotBlank() &&
+                            it.payloadHash.matches(Regex("[0-9a-f]{64}")) &&
+                            it.priorWrite >= 0 &&
+                            it.priorWrite < it.counter,
+                    )
+                    require(it.counter - it.priorWrite in 1..2)
+                    when (it.candidate) {
+                        WriteCandidate.STANDARD, WriteCandidate.BENCH_STRICT_NEXT_SELECTOR ->
+                            require(it.counter - it.priorWrite == 1L)
+                        WriteCandidate.BENCH_FORWARD_GAP_SELECTOR ->
+                            require(it.counter - it.priorWrite == 2L)
+                    }
+                    r.reservation?.takeIf { reservation -> reservation.id == it.reservationId }?.let { reservation ->
+                        require(
+                            reservation.operationId == it.operationId &&
+                                reservation.counter == it.counter &&
+                                reservation.characteristic == it.characteristic &&
+                                reservation.purpose == it.purpose &&
+                                reservation.payloadHash == it.payloadHash &&
+                                reservation.priorWrite == it.priorWrite &&
+                                reservation.candidate == it.candidate,
+                        )
+                    }
                     require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
                 }
             }

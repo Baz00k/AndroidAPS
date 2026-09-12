@@ -69,7 +69,7 @@ class BenchActivity : Activity() {
     private var gatt: BluetoothGatt? = null
     private var connectionId = ""
     private var pendingRead: ReadTransaction? = null
-    private var pendingFirmwareRead: BluetoothGatt? = null
+    private var pendingCapabilityRead: CapabilityRead? = null
     private var pendingCapabilityIndex = 0
     private var firmware: String? = null
     private var supervisorFirmware: String? = null
@@ -84,6 +84,9 @@ class BenchActivity : Activity() {
     private var injectedDuplicateCallbackAfterFrame: Int? = null
     private var dispatchedFrames = 0
     private var observedWriteCallbacks = 0
+    private var expectedAuthCharacteristic: BluetoothGattCharacteristic? = null
+    private var expectedSelectorCharacteristic: BluetoothGattCharacteristic? = null
+    private var controlNotificationCharacteristic: BluetoothGattCharacteristic? = null
     private var expectedDescriptor: BluetoothGattDescriptor? = null
     private var runLeaseHeld = false
     private var handshakePhase = HandshakePhase.IDLE
@@ -356,8 +359,9 @@ class BenchActivity : Activity() {
                 status: Int,
             ) {
                 if (owner !== gatt) return
-                if (characteristic.uuid == YpsoWritePolicy.AUTH_UUID) {
+                if (characteristic === expectedAuthCharacteristic) {
                     if (handshakePhase != HandshakePhase.AUTHENTICATING) return
+                    expectedAuthCharacteristic = null
                     if (status != BluetoothGatt.GATT_SUCCESS) {
                         fail(
                             "AUTH status=$status",
@@ -370,11 +374,22 @@ class BenchActivity : Activity() {
                         return
                     }
                     readiness.authenticated(readinessOwner(owner))
+                    recorder.fact(
+                        "AuthenticationVerified",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("service", characteristic.service?.uuid?.toString() ?: JSONObject.NULL)
+                            .put("characteristic", characteristic.uuid.toString()),
+                    )
                     handshakePhase = HandshakePhase.READING_CAPABILITIES
                     readFirmware(owner)
                     return
                 }
-                if (!transport.owns(owner, characteristic.uuid, checkNotNull(selector).category)) return
+                if (characteristic !== expectedSelectorCharacteristic ||
+                    !transport.owns(owner, characteristic.uuid, checkNotNull(selector).category)
+                ) {
+                    return
+                }
                 observedWriteCallbacks++
                 if (injectedIgnoredCallbackFrame == observedWriteCallbacks) {
                     recorder.fact(
@@ -446,6 +461,14 @@ class BenchActivity : Activity() {
                     return
                 }
                 readiness.requiredSetupVerified(readinessOwner(owner))
+                recorder.fact(
+                    "RequiredCccdVerified",
+                    JSONObject()
+                        .put("write_id", writeId)
+                        .put("service", descriptor.characteristic?.service?.uuid?.toString() ?: JSONObject.NULL)
+                        .put("characteristic", descriptor.characteristic?.uuid?.toString() ?: JSONObject.NULL)
+                        .put("descriptor", descriptor.uuid.toString()),
+                )
                 if (runKind == RunKind.READINESS_PROBE && omittedReadinessStage == "read") {
                     handshakePhase = HandshakePhase.READY
                     startSelector(owner)
@@ -461,8 +484,8 @@ class BenchActivity : Activity() {
                 value: ByteArray,
                 status: Int,
             ) {
-                if (consumeFirmwareRead(owner, characteristic.uuid, value.copyOf(), status)) return
-                consumeRead(owner, characteristic.uuid, value.copyOf(), status)
+                if (consumeCapabilityRead(owner, characteristic, value.copyOf(), status)) return
+                consumeRead(owner, characteristic, value.copyOf(), status)
             }
 
             @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
@@ -471,8 +494,8 @@ class BenchActivity : Activity() {
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
             ) {
-                if (consumeFirmwareRead(owner, characteristic.uuid, characteristic.value?.copyOf(), status)) return
-                consumeRead(owner, characteristic.uuid, characteristic.value?.copyOf(), status)
+                if (consumeCapabilityRead(owner, characteristic, characteristic.value?.copyOf(), status)) return
+                consumeRead(owner, characteristic, characteristic.value?.copyOf(), status)
             }
 
             override fun onCharacteristicChanged(
@@ -480,7 +503,7 @@ class BenchActivity : Activity() {
                 characteristic: BluetoothGattCharacteristic,
                 value: ByteArray,
             ) {
-                recordControlNotification(owner, characteristic.uuid, value.copyOf())
+                recordControlNotification(owner, characteristic, value.copyOf())
             }
 
             @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
@@ -488,21 +511,22 @@ class BenchActivity : Activity() {
                 owner: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
             ) {
-                recordControlNotification(owner, characteristic.uuid, characteristic.value?.copyOf() ?: byteArrayOf())
+                recordControlNotification(owner, characteristic, characteristic.value?.copyOf() ?: byteArrayOf())
             }
         }
 
     private fun recordControlNotification(
         owner: BluetoothGatt,
-        uuid: UUID,
+        characteristic: BluetoothGattCharacteristic,
         value: ByteArray,
     ) {
-        if (owner !== gatt || uuid != YpsoWritePolicy.CONTROL_NOTIFY_UUID) return
+        if (owner !== gatt || characteristic !== controlNotificationCharacteristic) return
         recorder.fact(
             "ControlNotificationReceived",
             JSONObject()
                 .put("write_id", writeId.ifBlank { JSONObject.NULL })
-                .put("characteristic", uuid.toString())
+                .put("service", characteristic.service?.uuid?.toString() ?: JSONObject.NULL)
+                .put("characteristic", characteristic.uuid.toString())
                 .put("firmware", firmware ?: JSONObject.NULL)
                 .put("length", value.size)
                 .put("sha256", hash(value))
@@ -549,7 +573,9 @@ class BenchActivity : Activity() {
             ),
         )
         handshakePhase = HandshakePhase.AUTHENTICATING
+        expectedAuthCharacteristic = auth
         if (!writeCharacteristic(owner, auth, password)) {
+            expectedAuthCharacteristic = null
             fail(
                 "AUTH dispatch refused",
                 YpsoWriteFailure.Layer.DISPATCH,
@@ -574,24 +600,29 @@ class BenchActivity : Activity() {
                 failCapability("${capability.label} characteristic missing", capability, YpsoWriteFailure.Layer.CAPABILITY)
                 return
             }
-        pendingFirmwareRead = owner
+        pendingCapabilityRead = CapabilityRead(owner, capability, characteristic)
         if (!owner.readCharacteristic(characteristic)) {
-            pendingFirmwareRead = null
+            pendingCapabilityRead = null
             failCapability("${capability.label} read dispatch refused", capability, YpsoWriteFailure.Layer.DISPATCH)
         }
     }
 
-    private fun consumeFirmwareRead(
+    private fun consumeCapabilityRead(
         owner: BluetoothGatt,
-        uuid: UUID,
+        characteristic: BluetoothGattCharacteristic,
         value: ByteArray?,
         status: Int,
     ): Boolean {
-        if (pendingFirmwareRead !== owner) return false
-        check(pendingCapabilityIndex in CAPABILITY_READS.indices) { "Capability read state is invalid" }
-        val capability = CAPABILITY_READS[pendingCapabilityIndex]
-        if (uuid != capability.uuid) return false
-        pendingFirmwareRead = null
+        val pending = pendingCapabilityRead ?: return false
+        if (pending.owner !== owner || pending.characteristic !== characteristic) return false
+        val capability = pending.capability
+        check(pendingCapabilityIndex in CAPABILITY_READS.indices && CAPABILITY_READS[pendingCapabilityIndex] == capability) {
+            "Capability read state is invalid"
+        }
+        check(characteristic.service?.uuid == capability.service && characteristic.uuid == capability.uuid) {
+            "Capability callback identity changed"
+        }
+        pendingCapabilityRead = null
         if (status != BluetoothGatt.GATT_SUCCESS || value == null) {
             failCapability(
                 "${capability.label} read status=$status",
@@ -690,6 +721,7 @@ class BenchActivity : Activity() {
                 )
                 return
             }
+        controlNotificationCharacteristic = characteristic
         val enableNotification = byteArrayOf(1, 0)
         check(
             YpsoWritePolicy.allowsDescriptor(
@@ -726,8 +758,18 @@ class BenchActivity : Activity() {
         }
     }
 
-    private fun primeRead(owner: BluetoothGatt) =
-        readEncrypted(owner, EVENT_COUNT_UUID, allowObservedReboot = runKind == RunKind.OBSERVE_REBOOT) { result ->
+    private fun primeRead(owner: BluetoothGatt) {
+        val eventCount = findUnique(owner, EVENT_COUNT_UUID)
+        if (eventCount == null) {
+            fail(
+                "event count characteristic missing or ambiguous",
+                YpsoWriteFailure.Layer.READINESS,
+                EVENT_COUNT_UUID,
+                stage = "PRIME_READ",
+            )
+            return
+        }
+        readEncrypted(owner, eventCount, allowObservedReboot = runKind == RunKind.OBSERVE_REBOOT) { result ->
             result.fold(
                 onSuccess = { body ->
                     val count = YpsoGlb.find(body)
@@ -778,9 +820,21 @@ class BenchActivity : Activity() {
                 },
             )
         }
+    }
 
     private fun startSelector(owner: BluetoothGatt) {
         val selected = checkNotNull(selector)
+        val binding = resolveSelector(owner, selected) ?: return
+        expectedSelectorCharacteristic = binding.index
+        recorder.fact(
+            "SelectorServiceBound",
+            JSONObject()
+                .put("write_id", writeId)
+                .put("selector_type", selected.name)
+                .put("service", binding.service.toString())
+                .put("index_characteristic", binding.index.uuid.toString())
+                .put("value_characteristic", binding.value.uuid.toString()),
+        )
         val operationOwner = YpsoBenchWriteCoordinator.Owner(owner, connectionId, checkNotNull(token))
         val started =
             coordinator.writeSelector(
@@ -794,7 +848,7 @@ class BenchActivity : Activity() {
                 forwardGap = forwardGap,
                 dispatch = { frame ->
                     dispatchedFrames++
-                    val accepted = find(owner, selected.indexUuid)?.let { writeCharacteristic(owner, it, frame) } == true
+                    val accepted = writeCharacteristic(owner, binding.index, frame)
                     if (accepted && injectedDisconnectAfterFrame == dispatchedFrames) {
                         recorder.fact(
                             "InjectedDisconnectAfterDispatch",
@@ -806,7 +860,7 @@ class BenchActivity : Activity() {
                 },
                 onOutcome = { outcome ->
                     when (outcome) {
-                        is YpsoWriteOutcome.AcceptedUnverified -> readBack(owner, selected)
+                        is YpsoWriteOutcome.AcceptedUnverified -> readBack(owner, selected, binding.value)
                         is YpsoWriteOutcome.NotSent -> {
                             close(owner)
                             report("OUTCOME:NotSent")
@@ -831,6 +885,7 @@ class BenchActivity : Activity() {
 
     private fun observeSelector(owner: BluetoothGatt) {
         val selected = checkNotNull(selector)
+        val binding = resolveSelector(owner, selected) ?: return
         val reservation = session.snapshot()?.reservation ?: error("No unresolved write to observe")
         require(reservation.phase in setOf(PumpSession.Phase.POSSIBLY_SENT, PumpSession.Phase.ACKED)) {
             "Write is not awaiting reconciliation"
@@ -839,7 +894,7 @@ class BenchActivity : Activity() {
         require(reservation.characteristic == selected.indexUuid.toString()) { "selector characteristic does not match unresolved write" }
         require(reservation.purpose == selected.category.name) { "selector purpose does not match unresolved write" }
         require(reservation.payloadHash == hash(YpsoGlb.encode(selected.value))) { "selector value does not match unresolved write" }
-        readEncrypted(owner, selected.valueUuid) { result ->
+        readEncrypted(owner, binding.value) { result ->
             result.fold(
                 onSuccess = { body ->
                     recorder.fact(
@@ -874,7 +929,8 @@ class BenchActivity : Activity() {
     private fun readBack(
         owner: BluetoothGatt,
         selected: Selector,
-    ) = readEncrypted(owner, selected.valueUuid) { result ->
+        valueCharacteristic: BluetoothGattCharacteristic,
+    ) = readEncrypted(owner, valueCharacteristic) { result ->
         result.fold(
             onSuccess = { body ->
                 recorder.fact(
@@ -903,38 +959,38 @@ class BenchActivity : Activity() {
     @SuppressLint("MissingPermission")
     private fun readEncrypted(
         owner: BluetoothGatt,
-        uuid: UUID,
+        characteristic: BluetoothGattCharacteristic,
         allowObservedReboot: Boolean = false,
         done: (Result<ByteArray>) -> Unit,
     ) {
         check(pendingRead == null) { "Overlapping EXTREAD transaction" }
-        pendingRead = ReadTransaction(owner, uuid, allowObservedReboot, done)
-        val characteristic = find(owner, uuid)
-        if (characteristic == null || !owner.readCharacteristic(characteristic)) {
-            finishRead(Result.failure(IllegalStateException("read dispatch refused for $uuid")))
+        pendingRead = ReadTransaction(owner, characteristic, allowObservedReboot, done)
+        if (!owner.readCharacteristic(characteristic)) {
+            finishRead(Result.failure(IllegalStateException("read dispatch refused for ${characteristic.uuid}")))
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun consumeRead(
         owner: BluetoothGatt,
-        uuid: UUID,
+        characteristic: BluetoothGattCharacteristic,
         value: ByteArray?,
         status: Int,
     ) {
         val read = pendingRead ?: return
-        if (read.owner !== owner || uuid != read.expectedUuid) return
+        if (read.owner !== owner || characteristic !== read.expectedCharacteristic) return
         if (status != BluetoothGatt.GATT_SUCCESS || value == null) {
             recorder.fact(
                 "EncryptedReadFailed",
                 JSONObject()
                     .put("write_id", writeId)
                     .put("layer", YpsoWriteFailure.Layer.GATT_CALLBACK.name)
-                    .put("characteristic", uuid.toString())
+                    .put("service", characteristic.service?.uuid?.toString() ?: JSONObject.NULL)
+                    .put("characteristic", characteristic.uuid.toString())
                     .put("firmware", firmware ?: JSONObject.NULL)
                     .put("code", status),
             )
-            finishRead(Result.failure(IllegalStateException("read $uuid status=$status")))
+            finishRead(Result.failure(IllegalStateException("read ${characteristic.uuid} status=$status")))
             return
         }
         val total =
@@ -946,10 +1002,11 @@ class BenchActivity : Activity() {
         read.frames += value
         if (read.total == 0) read.total = total
         if (read.frames.size < read.total) {
-            read.expectedUuid = EXTENDED_READ_UUID
-            val next = find(owner, EXTENDED_READ_UUID)
+            val next = find(owner, EXTENDED_READ_SERVICE_UUID, EXTENDED_READ_UUID)
             if (next == null || !owner.readCharacteristic(next)) {
                 finishRead(Result.failure(IllegalStateException("EXTREAD dispatch refused")))
+            } else {
+                read.expectedCharacteristic = next
             }
             return
         }
@@ -1032,11 +1089,14 @@ class BenchActivity : Activity() {
         if (gatt !== owner) return
         gatt = null
         pendingRead = null
-        pendingFirmwareRead = null
+        pendingCapabilityRead = null
         pendingCapabilityIndex = 0
         firmware = null
         supervisorFirmware = null
         controlVersion = null
+        expectedAuthCharacteristic = null
+        expectedSelectorCharacteristic = null
+        controlNotificationCharacteristic = null
         expectedDescriptor = null
         handshakePhase = HandshakePhase.IDLE
         readiness.disconnected(owner)
@@ -1059,11 +1119,14 @@ class BenchActivity : Activity() {
             return
         }
         pendingRead = null
-        pendingFirmwareRead = null
+        pendingCapabilityRead = null
         pendingCapabilityIndex = 0
         firmware = null
         supervisorFirmware = null
         controlVersion = null
+        expectedAuthCharacteristic = null
+        expectedSelectorCharacteristic = null
+        controlNotificationCharacteristic = null
         expectedDescriptor = null
         handshakePhase = HandshakePhase.IDLE
         session.quiesce()
@@ -1081,10 +1144,39 @@ class BenchActivity : Activity() {
 
     private fun readinessOwner(owner: BluetoothGatt) = YpsoCommandReadiness.Owner(owner, connectionId, checkNotNull(token).generation)
 
-    private fun find(
+    private fun resolveSelector(
+        owner: BluetoothGatt,
+        selector: Selector,
+    ): SelectorBinding? {
+        val bindings =
+            owner.services.mapNotNull { service ->
+                val index = service.getCharacteristic(selector.indexUuid)
+                val value = service.getCharacteristic(selector.valueUuid)
+                if (index != null && value != null) SelectorBinding(service.uuid, index, value) else null
+            }
+        if (bindings.size == 1) return bindings.single()
+        recorder.fact(
+            "SelectorServiceBindingRejected",
+            JSONObject()
+                .put("write_id", writeId)
+                .put("selector_type", selector.name)
+                .put("index_characteristic", selector.indexUuid.toString())
+                .put("value_characteristic", selector.valueUuid.toString())
+                .put("matching_services", org.json.JSONArray(bindings.map { it.service.toString() })),
+        )
+        fail(
+            "selector service binding missing or ambiguous",
+            YpsoWriteFailure.Layer.READINESS,
+            selector.indexUuid,
+            stage = "SELECTOR_SERVICE_BINDING",
+        )
+        return null
+    }
+
+    private fun findUnique(
         owner: BluetoothGatt,
         uuid: UUID,
-    ): BluetoothGattCharacteristic? = owner.services.firstNotNullOfOrNull { it.getCharacteristic(uuid) }
+    ): BluetoothGattCharacteristic? = owner.services.mapNotNull { it.getCharacteristic(uuid) }.singleOrNull()
 
     private fun find(
         owner: BluetoothGatt,
@@ -1158,11 +1250,23 @@ class BenchActivity : Activity() {
 
     private data class ReadTransaction(
         val owner: BluetoothGatt,
-        var expectedUuid: UUID,
+        var expectedCharacteristic: BluetoothGattCharacteristic,
         val allowObservedReboot: Boolean,
         val done: (Result<ByteArray>) -> Unit,
         val frames: MutableList<ByteArray> = mutableListOf(),
         var total: Int = 0,
+    )
+
+    private data class CapabilityRead(
+        val owner: BluetoothGatt,
+        val capability: Capability,
+        val characteristic: BluetoothGattCharacteristic,
+    )
+
+    private data class SelectorBinding(
+        val service: UUID,
+        val index: BluetoothGattCharacteristic,
+        val value: BluetoothGattCharacteristic,
     )
 
     private enum class HandshakePhase {
@@ -1260,6 +1364,7 @@ class BenchActivity : Activity() {
     private companion object {
         val IDENTITY_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000")
         val CONTROL_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
+        val EXTENDED_READ_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
         val EVENT_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
         val EVENT_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
         val ALARM_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeca3b7bc5")

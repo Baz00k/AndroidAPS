@@ -495,6 +495,11 @@ class PumpSessionTest {
             val saved = owner.snapshot()!!
             assertEquals("cd".repeat(32), saved.writeEvidence.single().evidenceHash)
             assertEquals(resolution, saved.writeEvidence.single().resolution)
+            assertEquals("characteristic", saved.writeEvidence.single().characteristic)
+            assertEquals("HISTORY_SELECTOR", saved.writeEvidence.single().purpose)
+            assertEquals("ab".repeat(32), saved.writeEvidence.single().payloadHash)
+            assertEquals(42, saved.writeEvidence.single().priorWrite)
+            assertEquals(PumpSession.WriteCandidate.STANDARD, saved.writeEvidence.single().candidate)
             if (resolution == PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED) {
                 assertEquals(42, saved.write)
                 assertNull(saved.reservation)

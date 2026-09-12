@@ -69,13 +69,18 @@ class SessionJournalTest {
     }
 
     @Test
-    fun `version eight roundtrip preserves durable write evidence`() {
+    fun `version nine roundtrip preserves exact durable write evidence`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
         val evidence = PumpSession.WriteEvidence(
             operationId = "selector-9",
             reservationId = "reservation-43",
             counter = 43,
+            characteristic = "characteristic",
+            purpose = "HISTORY_SELECTOR",
+            payloadHash = "ab".repeat(32),
+            priorWrite = 42,
+            candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
             resolution = PumpSession.WriteResolution.ACCEPTED,
             evidenceHash = "cd".repeat(32),
             detail = "reviewed target trace and readback matched selector 9"
@@ -92,7 +97,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(8, org.json.JSONObject(body).getInt("version"))
+        assertEquals(9, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -173,6 +178,82 @@ class SessionJournalTest {
             replaceBody(storage, body)
             assertThrows(IllegalArgumentException::class.java) { journal.load() }
         }
+    }
+
+    @Test
+    fun `version nine rejects missing evidence binding fields`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "selector-9",
+                reservationId = "reservation-43",
+                counter = 43,
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "reviewed target evidence",
+            )
+        journal.commit(old.copy(records = old.records.map { it.copy(writeEvidence = listOf(evidence)) }))
+        val body = committedBody(storage)
+        body.getJSONArray("records").getJSONObject(0).getJSONArray("writeEvidence").getJSONObject(0).remove("purpose")
+        replaceBody(storage, body)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
+    }
+
+    @Test
+    fun `version eight evidence recovers binding only from its retained reservation`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "reservation-43",
+                counter = 43,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "selector-9",
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "selector-9",
+                reservationId = reservation.id,
+                counter = reservation.counter,
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "reviewed target evidence",
+            )
+        journal.commit(
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(write = 43, reservation = reservation, writeEvidence = listOf(evidence))
+                    },
+            ),
+        )
+        val body = committedBody(storage).put("version", 8)
+        val evidenceJson = body.getJSONArray("records").getJSONObject(0).getJSONArray("writeEvidence").getJSONObject(0)
+        listOf("characteristic", "purpose", "payloadHash", "priorWrite", "candidate").forEach(evidenceJson::remove)
+        replaceBody(storage, body)
+
+        assertEquals(evidence, journal.load().records.single().writeEvidence.single())
+
+        body.getJSONArray("records").getJSONObject(0).put("reservation", org.json.JSONObject.NULL)
+        replaceBody(storage, body)
+        assertThrows(IllegalStateException::class.java) { journal.load() }
     }
 
     @Test
