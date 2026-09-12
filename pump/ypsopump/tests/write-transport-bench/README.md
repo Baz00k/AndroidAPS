@@ -63,6 +63,9 @@ adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
 
 The baseline is epoch-bound and one-time: it cannot replace an established write floor or erase an
 unresolved reservation. Protect both input files; `ypso-keys.json` contains the real shared key.
+After a validated pump reboot, `observe-reboot` deliberately makes the write floor uncertain; a new
+independently measured baseline for that adopted epoch may then establish it. This is not a reset of
+an existing floor.
 
 ## Run one selector transaction
 
@@ -82,6 +85,11 @@ reservation → exact-counter encryption → fragmented serialized write → val
 contains the reviewed selector intent, callback-visible facts and redacted response-body hashes, not
 keys, ciphertext or decrypted pump-response bodies.
 
+After successful AUTH and before required CCCD or selector dispatch, every applicable connection
+reads master firmware, supervisor firmware and control protocol. Master and supervisor are accepted
+by the inclusive minimum rule `>= V05.00.52`; there is no exact-firmware allowlist. The observed
+control protocol must be canonical ASCII `1.3\0`.
+
 Injected transport faults are available for software-only evidence and must be labelled injected:
 
 ```sh
@@ -90,10 +98,94 @@ Injected transport faults are available for software-only evidence and must be l
 
 # Ignore callback 1 to emulate a lost Android callback; the whole-write deadline leaves uncertainty.
 --ei ignore_callback_frame 1 --el deadline_ms 8000
+
+# Delay a labelled duplicate of callback 1 until immediately before callback 2 is processed.
+# This reproduces the same-UUID ambiguity sequence without inventing a frame identifier.
+--ei duplicate_callback_after_frame 1
+
+# Deliver one labelled synthetic duplicate after the final real callback (legacy alias).
+--ez duplicate_final_callback true
 ```
 
 Use external Android Bluetooth/HCI capture for real transport traces. Hash and protect identifying
-captures separately.
+captures separately. Inbound control notifications are also recorded as raw unsigned bytes plus
+length/hash, characteristic and observed firmware; they are evidence, not an automatic error
+classifier.
+
+## Bounded target actions
+
+These actions exist only to execute the required matrix without editing the journal or scanning
+counters. Run one case, preserve evidence, and reconcile before any later write.
+
+### Required readiness stages
+
+`readiness-probe` omits exactly one local readiness fact, then asks the real coordinator to start the
+selector. For the AUTH omission only, the other two local facts are explicitly injected and labelled
+without claiming corresponding pump behavior; the probe performs no AUTH, CCCD or encrypted read.
+The CCCD omission performs real AUTH and a real encrypted read but no descriptor write. Expected
+result is `OUTCOME:NotSent`, with no reservation and no selector dispatch:
+
+```sh
+for STAGE in auth cccd read; do
+  WRITE_ID="$(uuidgen)"
+  adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+    --es action readiness-probe --es write_id "$WRITE_ID" \
+    --es omit_stage "$STAGE" --es selector_type event --ei selector 17
+done
+```
+
+This proves the artifact's fail-closed readiness boundary. A real AUTH or CCCD callback failure, if
+observed naturally, is separately recorded with layer, characteristic, firmware and raw status; do
+not induce it by changing the pump identity or sending an unreviewed AUTH payload.
+
+### One forward-gap candidate
+
+After one reconciled **accepted** strict-next selector, `--ei forward_gap 1` reserves exactly the
+candidate two above the established floor (`floor + 2`), skipping one value. Larger offsets are
+rejected locally.
+
+```sh
+WRITE_ID="$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action run-selector --es write_id "$WRITE_ID" --es selector_type event --ei selector 17 \
+  --ei forward_gap 1
+```
+
+The durable reservation stores the exact prior floor. Only reviewed evidence that the candidate was
+rejected and the counter was not consumed may restore that floor. Any other result remains blocked or
+advances only according to explicit reconciliation. The gap-attempt marker is persisted before any
+platform dispatch and cannot be cleared by not-sent or rejected reconciliation, process restart,
+reinstall or a new measured baseline in the same epoch. Only authenticated reboot adoption starts a
+new epoch. There is no loop, decrement probe or scan.
+
+### Read-only observation while unresolved
+
+An unresolved selector prevents every later selector write, but its value can be read on a new
+authenticated connection for semantic evidence. Supply the exact pending write ID/type/value:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action observe-selector --es write_id "$WRITE_ID" --es selector_type event --ei selector 17
+```
+
+The action verifies the pending reservation's destination, purpose and plaintext hash before reading.
+It performs no selector write and does not reconcile automatically.
+
+### Reboot observation
+
+With no unresolved write, place the disconnected bench pump through the reviewed reboot procedure,
+then run one observation:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action observe-reboot --es write_id "reboot-$(uuidgen)"
+```
+
+Only an authenticated next generation (`old + 1`) with a positive read counter is adopted, under the
+same `>= V05.00.52` and control `1.3` capability policy. The response is discarded, the connection is
+closed, and the write floor becomes uncertain. Lower generations, jumps, zero counters, unsupported
+capability identity, or any unresolved write fail closed. Independently measure the new epoch's write
+floor before installing a new `write-baseline.json`; never infer that it reset to zero.
 
 ## Explicit reconciliation
 
@@ -131,6 +223,17 @@ versus gaps, each rejection's counter consumption, reboot, interruption at every
 duplicate callback and error-layer classification. Record expected/observed pump and app effects,
 initial/final counters, trace hashes, cleanup and hand-back. Injected cases do not substitute for
 unobserved physical cases.
+
+Suggested order minimizes irreversible uncertainty: metadata/capture preflight → readiness omission
+probes → one strict-next event → remaining selector families → bounded +2 candidate → fragment/lost
+ACK/duplicate/disconnect cases one at a time → reboot last. At every physical-state or semantic
+decision, stop and obtain the operator's explicit confirmation before recording the conclusion or
+reconciling.
+
+The candidate intentionally has no control that fabricates a pump-originated AUTH/CCCD rejection or a
+physical radio/link failure. If external capture and the target setup cannot safely produce a required
+physical row, record it as **unobserved/blocking** and stop closure; never relabel an injected callback
+or app-requested disconnect as physical target evidence.
 
 ## Cleanup
 

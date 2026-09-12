@@ -22,6 +22,27 @@ the measured semantic and counter result explicitly. Unknown evidence leaves the
 blocked. Restart recovery uses persisted operation ID, counter, characteristic, purpose and plaintext
 hash and never resends the write.
 
+The standalone candidate reads master and supervisor firmware numerically and accepts every
+well-formed version `>= V05.00.52`; it does not hardcode an exact accepted firmware. It additionally
+requires the observed canonical control protocol `1.3\0`. Setup failures therefore retain capability
+identity in evidence before CCCD and selector dispatch. AUTH retains its raw failure provenance and is
+correlated with the exact-candidate run's independently recorded pump firmware rather than assuming
+identity characteristics can be read before authentication.
+
+The physical-test build exposes only bounded measurement seams: omission of one readiness fact to
+prove local blocking, one `floor + 2` candidate to distinguish strict-next from a single forward gap,
+read-only value observation bound to an unresolved selector's durable hash, and authenticated
+next-reboot observation. The +2 reservation durably stores its exact prior floor; rejected/not-consumed
+reconciliation restores that floor rather than decrementing the candidate. Larger gaps and all scans
+are rejected. Reboot adoption makes write state uncertain until a separately measured epoch baseline
+is installed.
+
+The exact candidate provides labelled application-level interruption, callback suppression and
+duplicate-callback injections. Those validate durable uncertainty behavior but are not substitutes for
+independently captured physical link/callback observations. Rows that cannot be induced safely on the
+provided phone/pump remain explicit blockers; the operator must not manufacture AUTH/CCCD failures,
+counter errors or callbacks merely to complete the table.
+
 ## Software evidence
 
 The following checks execute real `SessionCrypto` encryption/decryption and real journal transitions;
@@ -43,11 +64,13 @@ ANDROID_HOME=/home/jbuzuk/Android/Sdk \
   ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
 ```
 
-Final local candidate results: 224 YpsoPump unit tests, 0 failures/errors/skips; module lint and
+The previously published candidate results were 224 YpsoPump unit tests, 0 failures/errors/skips; module lint and
 GATT ownership guard passed; normal `assembleFullDebug` passed. The standalone debug APK is
 5,979,678 bytes with SHA-256
 `b986be20aa5555f42bebc0669b498adab7268a60580bd0ba52656286088f79d2`.
 This hash is software-build evidence only and is not a target-pump acceptance claim.
+Firmware-gate and bounded-matrix preparation after that published revision requires a new exact
+candidate commit/APK hash before physical testing; the old hash must not be reused.
 
 The module ownership guard rejects unguarded Android GATT writes. Focused tests cover exact selector
 encoding, policy relabelling, CCCD allowlisting, readiness owner changes, whole-write ownership,

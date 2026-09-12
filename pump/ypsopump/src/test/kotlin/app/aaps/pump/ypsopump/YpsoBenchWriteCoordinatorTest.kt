@@ -105,6 +105,51 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `single bounded forward gap encrypts plus two and restores exact floor when proven not consumed`() {
+        makeReady()
+        assertTrue(write(YpsoGlb.encode(16)))
+        while (callbacks.isEmpty()) {
+            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        coordinator.reconcile(
+            "selector-1",
+            owner,
+            YpsoBenchWriteCoordinator.Reconciliation(
+                YpsoSemanticEvidence.ACCEPTED,
+                PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash,
+                "strict-next selector accepted before bounded gap measurement",
+            ),
+        )
+        frames.clear()
+        callbacks.clear()
+        assertTrue(write(YpsoGlb.encode(17), forwardGap = 1))
+        while (frames.size < (frames.first()[0].toInt() and 0x0f)) {
+            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        val encrypted = YpsoFraming.parseMultiFrameRead(frames)
+        val message = crypto.decrypt(encrypted, key)
+        assertEquals(45, message.counter)
+        assertEquals(43, session.snapshot()!!.reservation!!.priorWrite)
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 138)
+
+        coordinator.reconcile(
+            "selector-1",
+            owner,
+            YpsoBenchWriteCoordinator.Reconciliation(
+                YpsoSemanticEvidence.REJECTED,
+                PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
+                evidenceHash,
+                "bounded target evidence proved the +2 candidate was not consumed",
+            ),
+        )
+
+        assertEquals(43, session.snapshot()!!.write)
+        assertNull(session.snapshot()!!.reservation)
+        assertTrue(session.snapshot()!!.benchForwardGapAttempted)
+    }
+
+    @Test
     fun `live reconciliation requires the original GATT connection and generation owner`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))
@@ -435,6 +480,7 @@ class YpsoBenchWriteCoordinatorTest {
 
     private fun write(
         payload: ByteArray,
+        forwardGap: Int = 0,
         dispatch: (ByteArray) -> Boolean = { true },
     ): Boolean =
         coordinator.writeSelector(
@@ -445,6 +491,7 @@ class YpsoBenchWriteCoordinatorTest {
             plaintext = payload,
             firmware = "V05.00.52",
             deadlineMs = 8_000,
+            forwardGap = forwardGap,
             dispatch = { frame ->
                 frames += frame.copyOf()
                 dispatch(frame)

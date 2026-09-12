@@ -58,21 +58,42 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..5)
+        check(version in 1..6 || version == 8)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
+            if (version == 8) {
+                require(r.has("benchStrictNextAccepted") && !r.isNull("benchStrictNextAccepted"))
+                require(r.has("benchForwardGapAttempted") && !r.isNull("benchForwardGapAttempted"))
+            }
             val reservation = r.optJSONObject("reservation")?.let {
+                if (version == 8) {
+                    require(it.has("priorWrite") && !it.isNull("priorWrite"))
+                    require(it.has("candidate") && !it.isNull("candidate"))
+                }
+                val counter = it.getLong("counter")
+                val priorWrite = it.optLongOrNull("priorWrite") ?: (counter - 1).takeIf { version < 8 }
+                val candidate =
+                    it.stringOrNull("candidate")?.let(PumpSession.WriteCandidate::valueOf)
+                        ?: if (priorWrite != null && counter - priorWrite == 2L) {
+                            PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
+                        } else {
+                            PumpSession.WriteCandidate.STANDARD
+                        }
                 PumpSession.Reservation(
                     it.getString("id"),
-                    it.getLong("counter"),
+                    counter,
                     PumpSession.Phase.valueOf(it.getString("phase")),
                     it.stringOrNull("operationId"),
                     it.stringOrNull("characteristic"),
                     it.stringOrNull("purpose"),
-                    it.stringOrNull("payloadHash")
+                    it.stringOrNull("payloadHash"),
+                    priorWrite,
+                    candidate
                 )
             }
+            val inferredLegacyGap =
+                version < 8 && reservation?.candidate == PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
             PumpSession.Record(
                 r.getString("pump"), r.getString("key"), r.getString("generation"), if (r.isNull("reboot")) null else r.getInt("reboot"),
                 if (r.isNull("read")) null else r.getLong("read"), if (r.isNull("write")) null else r.getLong("write"), reservation,
@@ -95,7 +116,11 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                             evidence.getString("detail")
                         )
                     }
-                }.orEmpty()
+                }.orEmpty(),
+                benchStrictNextAccepted =
+                    if (version == 8) r.getBoolean("benchStrictNextAccepted") else inferredLegacyGap,
+                benchForwardGapAttempted =
+                    if (version == 8) r.getBoolean("benchForwardGapAttempted") else inferredLegacyGap
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -149,11 +174,15 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("characteristic", it.characteristic ?: JSONObject.NULL)
                         .put("purpose", it.purpose ?: JSONObject.NULL)
                         .put("payloadHash", it.payloadHash ?: JSONObject.NULL)
+                        .put("priorWrite", it.priorWrite ?: JSONObject.NULL)
+                        .put("candidate", it.candidate.name)
                 } ?: JSONObject.NULL)
                 .put("serial", r.serial).put("keyHex", r.keyHex ?: JSONObject.NULL)
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
                 .put("source", JSONObject(r.source)).put("verifiedAt", r.verifiedAt ?: JSONObject.NULL)
                 .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL)
+                .put("benchStrictNextAccepted", r.benchStrictNextAccepted)
+                .put("benchForwardGapAttempted", r.benchForwardGapAttempted)
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
                     JSONObject()
                         .put("operationId", evidence.operationId)
@@ -174,7 +203,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 5).put("records", records)
+        val body = JSONObject().put("version", 8).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

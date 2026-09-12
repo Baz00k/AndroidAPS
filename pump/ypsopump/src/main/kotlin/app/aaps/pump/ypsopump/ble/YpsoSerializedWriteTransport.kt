@@ -14,7 +14,7 @@ internal data class YpsoWriteFailure(
     val frame: Int? = null,
     val detail: String,
 ) {
-    enum class Layer { POLICY, READINESS, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, DEADLINE, RECONCILIATION }
+    enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, DEADLINE, RECONCILIATION }
 }
 
 /** Transport and reconciliation states. Only [Verified] closes pump-side uncertainty. */

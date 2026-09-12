@@ -70,6 +70,10 @@ There are **zero speculative counter probes**, no inferred write reset, and no r
 same-key import that erases a replay floor. Write reset/acceptance and re-key reset semantics
 remain separate evidence gaps.
 
+A resolved `VERIFIED` reservation is retained as the current epoch's audit marker, but it is not
+outstanding accounting. Authenticated next-reboot adoption clears that marker together with the old
+write floor. Any `RESERVED`, `POSSIBLY_SENT` or `ACKED` reservation still blocks reboot adoption.
+
 The pinned source reference is
 [`docs/19-key-lifecycle-pump-rotation.md` at de7e867241fafd2fb8061ceeecf42af2883b9eb4](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/docs/19-key-lifecycle-pump-rotation.md).
 Its big-endian description contradicts target captures. Its reset/increment rules and
@@ -105,6 +109,14 @@ SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving
 the only offline state that proves the dispatch boundary was never committed; it may be rolled back
 only as rejected/counter-not-consumed, with the same evidence binding. `POSSIBLY_SENT` and `ACKED`
 remain uncertain until measured semantic and counter evidence resolves them.
+
+The Step 07 physical harness permits one bounded forward-gap candidate only: either strict-next
+(`floor + 1`) or a single skipped value (`floor + 2`). The reservation persists its exact prior write
+floor. Proven not-sent or measured rejected/counter-not-consumed recovery restores that exact floor;
+it does not assume `candidate - 1`. An accepted strict-next reconciliation is a durable prerequisite,
+and the epoch's gap-attempt marker is committed with reservation before dispatch. It survives every
+outcome, restart, reinstall and same-epoch baseline import. Authenticated reboot adoption alone clears
+both epoch markers. Larger offsets, repeated advancement and scanning are unavailable.
 
 Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
 write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at

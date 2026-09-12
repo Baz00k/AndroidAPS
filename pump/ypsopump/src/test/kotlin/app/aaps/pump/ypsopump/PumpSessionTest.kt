@@ -81,7 +81,10 @@ class PumpSessionTest {
             }
         }
         store.saved = store.saved.copy(records = store.saved.records.map {
-            it.copy(write = 42, reservation = PumpSession.Reservation("pending", 42, PumpSession.Phase.POSSIBLY_SENT))
+            it.copy(
+                write = 42,
+                reservation = PumpSession.Reservation("pending", 42, PumpSession.Phase.POSSIBLY_SENT, priorWrite = 41),
+            )
         })
         val restored = PumpSession(store)
         val next = restored.open(pump, key)
@@ -89,6 +92,48 @@ class PumpSessionTest {
             restored.accept(next, restored.begin(next), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
         }
         assertEquals(8, store.saved.records.single().reboot)
+    }
+
+    @Test
+    fun `observed reboot clears a verified audit reservation and makes the new write floor uncertain`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 42,
+                            reservation =
+                                PumpSession.Reservation(
+                                    "verified",
+                                    42,
+                                    PumpSession.Phase.VERIFIED,
+                                    "operation",
+                                    "characteristic",
+                                    "HISTORY_SELECTOR",
+                                    "ab".repeat(32),
+                                    priorWrite = 41,
+                                ),
+                            benchStrictNextAccepted = true,
+                            benchForwardGapAttempted = true,
+                        )
+                    },
+            )
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+
+        val adopted = store.saved.records.single()
+        assertEquals(9, adopted.reboot)
+        assertEquals(1, adopted.read)
+        assertNull(adopted.write)
+        assertNull(adopted.reservation)
+        assertFalse(adopted.benchStrictNextAccepted)
+        assertFalse(adopted.benchForwardGapAttempted)
     }
 
     @Test
@@ -273,6 +318,116 @@ class PumpSessionTest {
         owner.finish(token, transaction)
         val next = owner.begin(token)
         assertEquals(43, owner.reserve(token, next).counter)
+    }
+
+    @Test
+    fun `bounded forward gap retains exact prior floor when proven not consumed`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(benchStrictNextAccepted = true) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val intent = PumpSession.WriteIntent("gap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+
+        val reservation = owner.reserveBenchCandidate(token, transaction, intent, forwardGap = 1)
+
+        assertEquals(44, reservation.counter)
+        assertEquals(42, reservation.priorWrite)
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, transaction)
+        owner.resolveWrite(
+            token,
+            reservation.id,
+            PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
+            "cd".repeat(32),
+            "bounded +2 candidate was rejected without counter consumption",
+        )
+        assertEquals(42, owner.snapshot()!!.write)
+        assertNull(owner.snapshot()!!.reservation)
+        assertTrue(owner.snapshot()!!.benchForwardGapAttempted)
+    }
+
+    @Test
+    fun `bench candidate rejects offsets beyond the single forward gap`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val intent = PumpSession.WriteIntent("gap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            owner.reserveBenchCandidate(token, transaction, intent, forwardGap = 2)
+        }
+        assertEquals(42, owner.snapshot()!!.write)
+        assertNull(owner.snapshot()!!.reservation)
+    }
+
+    @Test
+    fun `forward gap requires accepted strict next and is attempted once per epoch across restart`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        val intent = PumpSession.WriteIntent("gap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(token, owner.begin(token), intent, forwardGap = 1)
+        }
+        owner.quiesce()
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(benchStrictNextAccepted = true) })
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val reservation = owner.reserveBenchCandidate(token, transaction, intent, forwardGap = 1)
+        owner.markNotSent(token, transaction)
+        owner.finish(token, transaction)
+        assertEquals(42, owner.snapshot()!!.write)
+        assertTrue(owner.snapshot()!!.benchForwardGapAttempted)
+
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(token, owner.begin(token), intent.copy(operationId = "gap-again"), forwardGap = 1)
+        }
+        assertEquals(reservation.counter, 44)
+        assertEquals(42, owner.snapshot()!!.write)
+    }
+
+    @Test
+    fun `accepted standard reservation cannot unlock the bench forward gap`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val intent = PumpSession.WriteIntent("standard", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+        val standard = owner.reserve(token, transaction, intent)
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, transaction)
+        owner.resolveWrite(
+            token,
+            standard.id,
+            PumpSession.WriteResolution.ACCEPTED,
+            "cd".repeat(32),
+            "accepted non-bench reservation",
+        )
+
+        assertFalse(owner.snapshot()!!.benchStrictNextAccepted)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                owner.begin(token),
+                intent.copy(operationId = "gap"),
+                forwardGap = 1,
+            )
+        }
     }
 
     @Test

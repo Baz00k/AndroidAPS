@@ -69,7 +69,7 @@ class SessionJournalTest {
     }
 
     @Test
-    fun `version five roundtrip preserves durable write evidence`() {
+    fun `version eight roundtrip preserves durable write evidence`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
         val evidence = PumpSession.WriteEvidence(
@@ -92,7 +92,131 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(5, org.json.JSONObject(body).getInt("version"))
+        assertEquals(8, org.json.JSONObject(body).getInt("version"))
+    }
+
+    @Test
+    fun `version eight roundtrip preserves the exact pre-gap write floor and epoch gates`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "reservation-44",
+                counter = 44,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "selector-gap",
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+            )
+        val state =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 44,
+                            reservation = reservation,
+                            benchStrictNextAccepted = true,
+                            benchForwardGapAttempted = true
+                        )
+                    }
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        assertEquals(42, journal.load().records.single().reservation!!.priorWrite)
+        assertTrue(journal.load().records.single().benchStrictNextAccepted)
+        assertTrue(journal.load().records.single().benchForwardGapAttempted)
+    }
+
+    @Test
+    fun `version eight rejects missing reservation and epoch gate fields`() {
+        val baseState =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 101,
+                            reservation =
+                                PumpSession.Reservation(
+                                    id = "reservation-101",
+                                    counter = 101,
+                                    phase = PumpSession.Phase.RESERVED,
+                                    operationId = "selector",
+                                    characteristic = "characteristic",
+                                    purpose = "HISTORY_SELECTOR",
+                                    payloadHash = "ab".repeat(32),
+                                    priorWrite = 100,
+                                    candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                                ),
+                        )
+                    },
+            )
+        for (field in listOf("benchStrictNextAccepted", "benchForwardGapAttempted")) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(baseState)
+            val body = committedBody(storage)
+            body.getJSONArray("records").getJSONObject(0).remove(field)
+            replaceBody(storage, body)
+            assertThrows(IllegalArgumentException::class.java) { journal.load() }
+        }
+        for (field in listOf("priorWrite", "candidate")) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(baseState)
+            val body = committedBody(storage)
+            body.getJSONArray("records").getJSONObject(0).getJSONObject("reservation").remove(field)
+            replaceBody(storage, body)
+            assertThrows(IllegalArgumentException::class.java) { journal.load() }
+        }
+    }
+
+    @Test
+    fun `version six gap reservation migrates to durable attempted epoch state`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "reservation-44",
+                counter = 44,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "selector-gap",
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+            )
+        journal.commit(
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 44,
+                            reservation = reservation,
+                            benchStrictNextAccepted = true,
+                            benchForwardGapAttempted = true,
+                        )
+                    },
+            ),
+        )
+        val body = committedBody(storage).put("version", 6)
+        body.getJSONArray("records").getJSONObject(0).apply {
+            remove("benchStrictNextAccepted")
+            remove("benchForwardGapAttempted")
+            getJSONObject("reservation").remove("candidate")
+        }
+        replaceBody(storage, body)
+
+        val loaded = journal.load().records.single()
+
+        assertEquals(PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR, loaded.reservation!!.candidate)
+        assertTrue(loaded.benchStrictNextAccepted)
+        assertTrue(loaded.benchForwardGapAttempted)
     }
 
     @Test
@@ -246,5 +370,18 @@ class SessionJournalTest {
         invalid.forEach { assertThrows(IllegalArgumentException::class.java) { journal.commit(it) } }
         assertTrue(storage.keys.isEmpty())
         assertNull(storage.file)
+    }
+
+    private fun committedBody(storage: Storage): org.json.JSONObject {
+        val envelope = org.json.JSONObject(checkNotNull(storage.file))
+        return org.json.JSONObject(storage.open(envelope.getString("anchor"), envelope.getString("sealed")))
+    }
+
+    private fun replaceBody(
+        storage: Storage,
+        body: org.json.JSONObject,
+    ) {
+        val alias = org.json.JSONObject(checkNotNull(storage.file)).getString("anchor")
+        storage.file = org.json.JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body.toString())).toString()
     }
 }

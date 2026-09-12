@@ -70,11 +70,18 @@ class BenchActivity : Activity() {
     private var connectionId = ""
     private var pendingRead: ReadTransaction? = null
     private var pendingFirmwareRead: BluetoothGatt? = null
+    private var pendingCapabilityIndex = 0
     private var firmware: String? = null
+    private var supervisorFirmware: String? = null
+    private var controlVersion: String? = null
     private var selector: Selector? = null
     private var writeId = ""
+    private var runKind = RunKind.SELECTOR
+    private var omittedReadinessStage: String? = null
+    private var forwardGap = 0
     private var injectedDisconnectAfterFrame: Int? = null
     private var injectedIgnoredCallbackFrame: Int? = null
+    private var injectedDuplicateCallbackAfterFrame: Int? = null
     private var dispatchedFrames = 0
     private var observedWriteCallbacks = 0
     private var expectedDescriptor: BluetoothGattDescriptor? = null
@@ -87,7 +94,10 @@ class BenchActivity : Activity() {
             when (intent.getStringExtra("action") ?: "inspect") {
                 "install" -> install()
                 "inspect" -> inspect()
-                "run-selector" -> runSelector()
+                "run-selector" -> runConnection(RunKind.SELECTOR)
+                "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
+                "observe-reboot" -> runConnection(RunKind.OBSERVE_REBOOT)
+                "readiness-probe" -> runConnection(RunKind.READINESS_PROBE)
                 "reconcile" -> reconcile()
                 else -> error("Unknown action")
             }
@@ -119,7 +129,11 @@ class BenchActivity : Activity() {
             require(baseline.getString("pump").equals(doc.mac, true)) { "Baseline pump mismatch" }
             require(baseline.getString("key_id") == PumpSession.fingerprint(doc.sharedKey)) { "Baseline key mismatch" }
             val reboot = baseline.getInt("reboot")
-            doc.rebootCounter?.let { require(it == reboot) { "Document reboot hint conflicts with measured baseline" } }
+            doc.rebootCounter?.let { hint ->
+                val alreadyAdopted =
+                    hint < Int.MAX_VALUE && hint + 1 == reboot && session.activeRecord()?.reboot == reboot
+                require(hint == reboot || alreadyAdopted) { "Document reboot hint conflicts with measured baseline" }
+            }
             val read = baseline.getLong("read")
             val write = baseline.getLong("write")
             require(read >= 0 && write >= 0 && baseline.getString("source").isNotBlank())
@@ -158,33 +172,65 @@ class BenchActivity : Activity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun runSelector() {
+    private fun runConnection(kind: RunKind) {
         check(runLease.compareAndSet(false, true)) { "Another selector run already owns this process" }
         runLeaseHeld = true
+        runKind = kind
         require(checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             "Grant BLUETOOTH_CONNECT before running the bench"
         }
         val doc = loadDocument().also { document = it }
         token = session.open(doc.mac, doc.sharedKey)
-        require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
-            "An earlier write requires reconciliation"
+        if (kind != RunKind.OBSERVE_SELECTOR) {
+            require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
+                "An earlier write requires reconciliation"
+            }
         }
         selector =
-            Selector.parse(
-                intent.getStringExtra("selector_type") ?: error("selector_type required"),
-                intent.getIntExtra("selector", Int.MIN_VALUE),
-            )
+            if (kind == RunKind.OBSERVE_REBOOT) {
+                null
+            } else {
+                Selector.parse(
+                    intent.getStringExtra("selector_type") ?: error("selector_type required"),
+                    intent.getIntExtra("selector", Int.MIN_VALUE),
+                )
+            }
         writeId = intent.getStringExtra("write_id")?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString()
+        omittedReadinessStage = intent.getStringExtra("omit_stage")?.lowercase()
+        if (kind == RunKind.READINESS_PROBE) {
+            require(omittedReadinessStage in setOf("auth", "cccd", "read")) { "omit_stage must be auth, cccd or read" }
+        } else {
+            require(omittedReadinessStage == null) { "omit_stage is valid only for readiness-probe" }
+        }
+        forwardGap = intent.getIntExtra("forward_gap", 0)
+        require(forwardGap in 0..1) { "forward_gap must be exactly 0 or 1" }
+        require(kind == RunKind.SELECTOR || forwardGap == 0) { "forward_gap is valid only for run-selector" }
         injectedDisconnectAfterFrame = intent.intExtraOrNull("disconnect_after_frame")
         injectedIgnoredCallbackFrame = intent.intExtraOrNull("ignore_callback_frame")
+        injectedDuplicateCallbackAfterFrame = intent.intExtraOrNull("duplicate_callback_after_frame")
+        if (intent.getBooleanExtra("duplicate_final_callback", false)) {
+            require(injectedDuplicateCallbackAfterFrame == null) { "choose one duplicate callback injection" }
+            injectedDuplicateCallbackAfterFrame = Int.MAX_VALUE
+        }
+        listOfNotNull(injectedDisconnectAfterFrame, injectedIgnoredCallbackFrame, injectedDuplicateCallbackAfterFrame)
+            .filter { it != Int.MAX_VALUE }
+            .forEach { require(it <= EXPECTED_SELECTOR_FRAME_COUNT) { "injected frame must be within 1..$EXPECTED_SELECTOR_FRAME_COUNT" } }
+        require(kind == RunKind.SELECTOR ||
+            injectedDisconnectAfterFrame == null && injectedIgnoredCallbackFrame == null && injectedDuplicateCallbackAfterFrame == null) {
+            "transport fault injection is valid only for run-selector"
+        }
         recorder.fact(
             "RunRequested",
             JSONObject()
                 .put("write_id", writeId)
-                .put("selector_type", selector!!.name)
-                .put("selector", selector!!.value)
+                .put("run_kind", kind.name)
+                .put("selector_type", selector?.name ?: JSONObject.NULL)
+                .put("selector", selector?.value ?: JSONObject.NULL)
+                .put("omit_stage", omittedReadinessStage ?: JSONObject.NULL)
+                .put("forward_gap", forwardGap)
                 .put("disconnect_after_frame", injectedDisconnectAfterFrame ?: JSONObject.NULL)
-                .put("ignore_callback_frame", injectedIgnoredCallbackFrame ?: JSONObject.NULL),
+                .put("ignore_callback_frame", injectedIgnoredCallbackFrame ?: JSONObject.NULL)
+                .put("duplicate_callback_after_frame", injectedDuplicateCallbackAfterFrame ?: JSONObject.NULL),
         )
         val manager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         check(manager.adapter?.isEnabled == true) { "Bluetooth unavailable" }
@@ -301,24 +347,7 @@ class BenchActivity : Activity() {
                     fail("service discovery status=$status")
                     return
                 }
-                val auth =
-                    find(owner, YpsoWritePolicy.AUTH_UUID) ?: run {
-                        fail("AUTH characteristic missing")
-                        return
-                    }
-                val password = YpsoAuthentication.password(checkNotNull(document).mac)
-                check(
-                    YpsoWritePolicy.allowsCharacteristic(
-                        YpsoArtifactPolicy.NON_THERAPY_BENCH,
-                        YpsoRemoteWrite.AUTHENTICATION,
-                        auth.uuid,
-                        password,
-                        password,
-                        true,
-                    ),
-                )
-                handshakePhase = HandshakePhase.AUTHENTICATING
-                if (!writeCharacteristic(owner, auth, password)) fail("AUTH dispatch refused")
+                startAuthentication(owner)
             }
 
             override fun onCharacteristicWrite(
@@ -330,12 +359,19 @@ class BenchActivity : Activity() {
                 if (characteristic.uuid == YpsoWritePolicy.AUTH_UUID) {
                     if (handshakePhase != HandshakePhase.AUTHENTICATING) return
                     if (status != BluetoothGatt.GATT_SUCCESS) {
-                        fail("AUTH status=$status", YpsoWriteFailure.Layer.GATT_CALLBACK, YpsoWritePolicy.AUTH_UUID, status)
+                        fail(
+                            "AUTH status=$status",
+                            YpsoWriteFailure.Layer.GATT_CALLBACK,
+                            YpsoWritePolicy.AUTH_UUID,
+                            status,
+                            stage = "AUTH",
+                            service = IDENTITY_SERVICE_UUID,
+                        )
                         return
                     }
-                    handshakePhase = HandshakePhase.ENABLING_SETUP
                     readiness.authenticated(readinessOwner(owner))
-                    enableRequiredSetup(owner)
+                    handshakePhase = HandshakePhase.READING_CAPABILITIES
+                    readFirmware(owner)
                     return
                 }
                 if (!transport.owns(owner, characteristic.uuid, checkNotNull(selector).category)) return
@@ -350,7 +386,37 @@ class BenchActivity : Activity() {
                     )
                     return
                 }
+                val delayedDuplicateAfter = injectedDuplicateCallbackAfterFrame
+                if (delayedDuplicateAfter != null &&
+                    delayedDuplicateAfter != Int.MAX_VALUE &&
+                    observedWriteCallbacks == delayedDuplicateAfter + 1
+                ) {
+                    injectedDuplicateCallbackAfterFrame = null
+                    recorder.fact(
+                        "InjectedDelayedDuplicateWriteCallback",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("duplicated_callback", delayedDuplicateAfter)
+                            .put("delivered_before_callback", observedWriteCallbacks)
+                            .put("status", status),
+                    )
+                    transport.onCharacteristicWrite(owner, characteristic.uuid, status)
+                }
                 transport.onCharacteristicWrite(owner, characteristic.uuid, status)
+                val duplicateAfter = injectedDuplicateCallbackAfterFrame
+                val shouldInjectDuplicate =
+                    duplicateAfter == Int.MAX_VALUE && session.snapshot()?.reservation?.phase == PumpSession.Phase.ACKED
+                if (shouldInjectDuplicate) {
+                    injectedDuplicateCallbackAfterFrame = null
+                    recorder.fact(
+                        "InjectedDuplicateWriteCallback",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("after_callback", observedWriteCallbacks)
+                            .put("status", status),
+                    )
+                    transport.onCharacteristicWrite(owner, characteristic.uuid, status)
+                }
             }
 
             override fun onDescriptorWrite(
@@ -373,12 +439,20 @@ class BenchActivity : Activity() {
                         YpsoWriteFailure.Layer.GATT_CALLBACK,
                         YpsoWritePolicy.CONTROL_NOTIFY_UUID,
                         status,
+                        stage = "CONTROL_CCCD",
+                        service = CONTROL_SERVICE_UUID,
+                        descriptor = YpsoWritePolicy.CCCD_UUID,
                     )
                     return
                 }
-                handshakePhase = HandshakePhase.READING_FIRMWARE
                 readiness.requiredSetupVerified(readinessOwner(owner))
-                readFirmware(owner)
+                if (runKind == RunKind.READINESS_PROBE && omittedReadinessStage == "read") {
+                    handshakePhase = HandshakePhase.READY
+                    startSelector(owner)
+                    return
+                }
+                handshakePhase = HandshakePhase.PRIMING_READ
+                primeRead(owner)
             }
 
             override fun onCharacteristicRead(
@@ -400,19 +474,110 @@ class BenchActivity : Activity() {
                 if (consumeFirmwareRead(owner, characteristic.uuid, characteristic.value?.copyOf(), status)) return
                 consumeRead(owner, characteristic.uuid, characteristic.value?.copyOf(), status)
             }
+
+            override fun onCharacteristicChanged(
+                owner: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray,
+            ) {
+                recordControlNotification(owner, characteristic.uuid, value.copyOf())
+            }
+
+            @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+            override fun onCharacteristicChanged(
+                owner: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+            ) {
+                recordControlNotification(owner, characteristic.uuid, characteristic.value?.copyOf() ?: byteArrayOf())
+            }
         }
+
+    private fun recordControlNotification(
+        owner: BluetoothGatt,
+        uuid: UUID,
+        value: ByteArray,
+    ) {
+        if (owner !== gatt || uuid != YpsoWritePolicy.CONTROL_NOTIFY_UUID) return
+        recorder.fact(
+            "ControlNotificationReceived",
+            JSONObject()
+                .put("write_id", writeId.ifBlank { JSONObject.NULL })
+                .put("characteristic", uuid.toString())
+                .put("firmware", firmware ?: JSONObject.NULL)
+                .put("length", value.size)
+                .put("sha256", hash(value))
+                .put("unsigned_bytes", org.json.JSONArray(value.map { it.toInt() and 0xff })),
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startAuthentication(owner: BluetoothGatt) {
+        if (runKind == RunKind.READINESS_PROBE && omittedReadinessStage == "auth") {
+            readiness.requiredSetupVerified(readinessOwner(owner))
+            readiness.readVerified(readinessOwner(owner))
+            recorder.fact(
+                "InjectedReadinessFacts",
+                JSONObject()
+                    .put("write_id", writeId)
+                    .put("omitted", "auth")
+                    .put("injected", org.json.JSONArray(listOf("cccd", "read"))),
+            )
+            handshakePhase = HandshakePhase.READY
+            startSelector(owner)
+            return
+        }
+        val auth =
+            find(owner, IDENTITY_SERVICE_UUID, YpsoWritePolicy.AUTH_UUID) ?: run {
+                fail(
+                    "AUTH characteristic missing",
+                    YpsoWriteFailure.Layer.READINESS,
+                    YpsoWritePolicy.AUTH_UUID,
+                    stage = "AUTH",
+                    service = IDENTITY_SERVICE_UUID,
+                )
+                return
+            }
+        val password = YpsoAuthentication.password(checkNotNull(document).mac)
+        check(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoArtifactPolicy.NON_THERAPY_BENCH,
+                YpsoRemoteWrite.AUTHENTICATION,
+                auth.uuid,
+                password,
+                password,
+                true,
+            ),
+        )
+        handshakePhase = HandshakePhase.AUTHENTICATING
+        if (!writeCharacteristic(owner, auth, password)) {
+            fail(
+                "AUTH dispatch refused",
+                YpsoWriteFailure.Layer.DISPATCH,
+                YpsoWritePolicy.AUTH_UUID,
+                stage = "AUTH",
+                service = IDENTITY_SERVICE_UUID,
+            )
+        }
+    }
 
     @SuppressLint("MissingPermission")
     private fun readFirmware(owner: BluetoothGatt) {
+        pendingCapabilityIndex = 0
+        readNextCapability(owner)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun readNextCapability(owner: BluetoothGatt) {
+        val capability = CAPABILITY_READS[pendingCapabilityIndex]
         val characteristic =
-            find(owner, MASTER_VERSION_UUID) ?: run {
-                fail("master firmware characteristic missing")
+            find(owner, capability.service, capability.uuid) ?: run {
+                failCapability("${capability.label} characteristic missing", capability, YpsoWriteFailure.Layer.CAPABILITY)
                 return
             }
         pendingFirmwareRead = owner
         if (!owner.readCharacteristic(characteristic)) {
             pendingFirmwareRead = null
-            fail("master firmware read dispatch refused")
+            failCapability("${capability.label} read dispatch refused", capability, YpsoWriteFailure.Layer.DISPATCH)
         }
     }
 
@@ -422,37 +587,107 @@ class BenchActivity : Activity() {
         value: ByteArray?,
         status: Int,
     ): Boolean {
-        if (pendingFirmwareRead !== owner || uuid != MASTER_VERSION_UUID) return false
+        if (pendingFirmwareRead !== owner) return false
+        check(pendingCapabilityIndex in CAPABILITY_READS.indices) { "Capability read state is invalid" }
+        val capability = CAPABILITY_READS[pendingCapabilityIndex]
+        if (uuid != capability.uuid) return false
         pendingFirmwareRead = null
         if (status != BluetoothGatt.GATT_SUCCESS || value == null) {
-            fail(
-                "master firmware read status=$status",
+            failCapability(
+                "${capability.label} read status=$status",
+                capability,
                 YpsoWriteFailure.Layer.GATT_CALLBACK,
-                MASTER_VERSION_UUID,
                 status,
+                value,
             )
             return true
         }
-        firmware = YpsoFirmwareVersion.fromWire(value)?.toString() ?: run {
-            fail("master firmware value malformed")
+        when (capability) {
+            Capability.MASTER_FIRMWARE, Capability.SUPERVISOR_FIRMWARE -> {
+                val parsedFirmware = YpsoFirmwareVersion.fromWire(value) ?: run {
+                    failCapability(
+                        "${capability.label} value malformed",
+                        capability,
+                        YpsoWriteFailure.Layer.CAPABILITY,
+                        value = value,
+                    )
+                    return true
+                }
+                if (!parsedFirmware.meetsMinimum) {
+                    failCapability(
+                        "${capability.label} $parsedFirmware is below minimum ${YpsoFirmwareVersion.MINIMUM}",
+                        capability,
+                        YpsoWriteFailure.Layer.CAPABILITY,
+                        value = value,
+                    )
+                    return true
+                }
+                if (capability == Capability.MASTER_FIRMWARE) {
+                    firmware = parsedFirmware.toString()
+                } else {
+                    supervisorFirmware = parsedFirmware.toString()
+                }
+            }
+            Capability.CONTROL_PROTOCOL -> {
+                if (!value.contentEquals(CONTROL_PROTOCOL_VERSION_WIRE)) {
+                    failCapability(
+                        "control protocol value unsupported",
+                        capability,
+                        YpsoWriteFailure.Layer.CAPABILITY,
+                        value = value,
+                    )
+                    return true
+                }
+                controlVersion = "1.3"
+            }
+        }
+        pendingCapabilityIndex++
+        if (pendingCapabilityIndex < CAPABILITY_READS.size) {
+            readNextCapability(owner)
             return true
         }
-        recorder.fact("FirmwareRead", JSONObject().put("write_id", writeId).put("firmware", firmware))
-        handshakePhase = HandshakePhase.PRIMING_READ
-        primeRead(owner)
+        recorder.fact(
+            "CapabilityIdentityRead",
+            JSONObject()
+                .put("write_id", writeId)
+                .put("master_firmware", firmware)
+                .put("supervisor_firmware", supervisorFirmware)
+                .put("control_protocol", controlVersion)
+                .put("minimum_firmware", YpsoFirmwareVersion.MINIMUM.toString()),
+        )
+        if (runKind == RunKind.READINESS_PROBE && omittedReadinessStage == "cccd") {
+            handshakePhase = HandshakePhase.PRIMING_READ
+            primeRead(owner)
+        } else {
+            handshakePhase = HandshakePhase.ENABLING_SETUP
+            enableRequiredSetup(owner)
+        }
         return true
     }
 
     @SuppressLint("MissingPermission")
     private fun enableRequiredSetup(owner: BluetoothGatt) {
         val characteristic =
-            find(owner, YpsoWritePolicy.CONTROL_NOTIFY_UUID) ?: run {
-                fail("control notification characteristic missing")
+            find(owner, CONTROL_SERVICE_UUID, YpsoWritePolicy.CONTROL_NOTIFY_UUID) ?: run {
+                fail(
+                    "control notification characteristic missing",
+                    YpsoWriteFailure.Layer.READINESS,
+                    YpsoWritePolicy.CONTROL_NOTIFY_UUID,
+                    stage = "CONTROL_CCCD",
+                    service = CONTROL_SERVICE_UUID,
+                )
                 return
             }
         val descriptor =
             characteristic.getDescriptor(YpsoWritePolicy.CCCD_UUID) ?: run {
-                fail("control notification CCCD missing")
+                fail(
+                    "control notification CCCD missing",
+                    YpsoWriteFailure.Layer.READINESS,
+                    YpsoWritePolicy.CONTROL_NOTIFY_UUID,
+                    stage = "CONTROL_CCCD",
+                    service = CONTROL_SERVICE_UUID,
+                    descriptor = YpsoWritePolicy.CCCD_UUID,
+                )
                 return
             }
         val enableNotification = byteArrayOf(1, 0)
@@ -466,14 +701,33 @@ class BenchActivity : Activity() {
             ),
         )
         expectedDescriptor = descriptor
-        if (!owner.setCharacteristicNotification(characteristic, true) || !writeDescriptor(owner, descriptor, enableNotification)) {
+        if (!owner.setCharacteristicNotification(characteristic, true)) {
             expectedDescriptor = null
-            fail("required CCCD dispatch refused")
+            fail(
+                "local control notification enable refused",
+                YpsoWriteFailure.Layer.DISPATCH,
+                YpsoWritePolicy.CONTROL_NOTIFY_UUID,
+                stage = "CONTROL_CCCD",
+                service = CONTROL_SERVICE_UUID,
+                descriptor = YpsoWritePolicy.CCCD_UUID,
+            )
+            return
+        }
+        if (!writeDescriptor(owner, descriptor, enableNotification)) {
+            expectedDescriptor = null
+            fail(
+                "required CCCD write dispatch refused",
+                YpsoWriteFailure.Layer.DISPATCH,
+                YpsoWritePolicy.CONTROL_NOTIFY_UUID,
+                stage = "CONTROL_CCCD",
+                service = CONTROL_SERVICE_UUID,
+                descriptor = YpsoWritePolicy.CCCD_UUID,
+            )
         }
     }
 
     private fun primeRead(owner: BluetoothGatt) =
-        readEncrypted(owner, EVENT_COUNT_UUID) { result ->
+        readEncrypted(owner, EVENT_COUNT_UUID, allowObservedReboot = runKind == RunKind.OBSERVE_REBOOT) { result ->
             result.fold(
                 onSuccess = { body ->
                     val count = YpsoGlb.find(body)
@@ -493,9 +747,35 @@ class BenchActivity : Activity() {
                     }
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
-                    startSelector(owner)
+                    when (runKind) {
+                        RunKind.SELECTOR, RunKind.READINESS_PROBE -> startSelector(owner)
+                        RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
+                        RunKind.OBSERVE_REBOOT -> {
+                            close(owner)
+                            report("REBOOT:not-observed; authenticated read remained in current epoch")
+                        }
+                    }
                 },
-                onFailure = { fail("prime read failed: ${it.message}") },
+                onFailure = {
+                    if (runKind == RunKind.OBSERVE_REBOOT && it is PumpSession.RebootAdoptedException) {
+                        val adopted = session.activeRecord()
+                        recorder.fact(
+                            "RebootAdopted",
+                            JSONObject()
+                                .put("write_id", writeId)
+                                .put("reboot", adopted?.reboot ?: JSONObject.NULL)
+                                .put("read", adopted?.read ?: JSONObject.NULL)
+                                .put("write", adopted?.write ?: JSONObject.NULL),
+                        )
+                        close(owner)
+                        report(
+                            "REBOOT:adopted;reboot=${adopted?.reboot};read=${adopted?.read};" +
+                                "write=${adopted?.write ?: "uncertain"}; reconnect and install measured write baseline required",
+                        )
+                    } else {
+                        fail("prime read failed: ${it.message}")
+                    }
+                },
             )
         }
 
@@ -509,8 +789,9 @@ class BenchActivity : Activity() {
                 selected.category,
                 selected.indexUuid,
                 YpsoGlb.encode(selected.value),
-                firmware = checkNotNull(firmware),
+                firmware = firmware,
                 deadlineMs = intent.getLongExtra("deadline_ms", 8_000L),
+                forwardGap = forwardGap,
                 dispatch = { frame ->
                     dispatchedFrames++
                     val accepted = find(owner, selected.indexUuid)?.let { writeCharacteristic(owner, it, frame) } == true
@@ -548,6 +829,48 @@ class BenchActivity : Activity() {
         if (!started) close(owner)
     }
 
+    private fun observeSelector(owner: BluetoothGatt) {
+        val selected = checkNotNull(selector)
+        val reservation = session.snapshot()?.reservation ?: error("No unresolved write to observe")
+        require(reservation.phase in setOf(PumpSession.Phase.POSSIBLY_SENT, PumpSession.Phase.ACKED)) {
+            "Write is not awaiting reconciliation"
+        }
+        require(reservation.operationId == writeId) { "write_id does not match the unresolved write" }
+        require(reservation.characteristic == selected.indexUuid.toString()) { "selector characteristic does not match unresolved write" }
+        require(reservation.purpose == selected.category.name) { "selector purpose does not match unresolved write" }
+        require(reservation.payloadHash == hash(YpsoGlb.encode(selected.value))) { "selector value does not match unresolved write" }
+        readEncrypted(owner, selected.valueUuid) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    recorder.fact(
+                        "UnresolvedSelectorObserved",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("counter", reservation.counter)
+                            .put("phase", reservation.phase.name)
+                            .put("selector_type", selected.name)
+                            .put("selector", selected.value)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("glb", YpsoGlb.find(body) ?: JSONObject.NULL)
+                            .put("crc_valid", YpsoCrc.isValid(body))
+                            .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL),
+                    )
+                    close(owner)
+                    report("OBSERVED:unresolved selector read-back captured; reconciliation still required")
+                },
+                onFailure = {
+                    recorder.fact(
+                        "UnresolvedSelectorObservationFailed",
+                        JSONObject().put("write_id", writeId).put("detail", it.message),
+                    )
+                    close(owner)
+                    report("OBSERVED:read-back failed; reconciliation still required")
+                },
+            )
+        }
+    }
+
     private fun readBack(
         owner: BluetoothGatt,
         selected: Selector,
@@ -581,10 +904,11 @@ class BenchActivity : Activity() {
     private fun readEncrypted(
         owner: BluetoothGatt,
         uuid: UUID,
+        allowObservedReboot: Boolean = false,
         done: (Result<ByteArray>) -> Unit,
     ) {
         check(pendingRead == null) { "Overlapping EXTREAD transaction" }
-        pendingRead = ReadTransaction(owner, uuid, done)
+        pendingRead = ReadTransaction(owner, uuid, allowObservedReboot, done)
         val characteristic = find(owner, uuid)
         if (characteristic == null || !owner.readCharacteristic(characteristic)) {
             finishRead(Result.failure(IllegalStateException("read dispatch refused for $uuid")))
@@ -634,7 +958,7 @@ class BenchActivity : Activity() {
                 val encrypted = YpsoFraming.parseMultiFrameRead(read.frames)
                 val operation = session.begin(checkNotNull(token))
                 try {
-                    session.decrypt(checkNotNull(token), operation, encrypted, crypto)
+                    session.decrypt(checkNotNull(token), operation, encrypted, crypto, read.allowObservedReboot)
                 } finally {
                     session.finish(checkNotNull(token), operation)
                 }
@@ -654,6 +978,11 @@ class BenchActivity : Activity() {
         layer: YpsoWriteFailure.Layer? = null,
         characteristic: UUID? = null,
         code: Int? = null,
+        capability: Capability? = null,
+        observedValue: ByteArray? = null,
+        stage: String? = null,
+        service: UUID? = null,
+        descriptor: UUID? = null,
     ) {
         recorder.fact(
             "BenchFailure",
@@ -661,8 +990,16 @@ class BenchActivity : Activity() {
                 .put("write_id", writeId.ifBlank { JSONObject.NULL })
                 .put("layer", layer?.name ?: JSONObject.NULL)
                 .put("characteristic", characteristic?.toString() ?: JSONObject.NULL)
+                .put("service", service?.toString() ?: JSONObject.NULL)
+                .put("descriptor", descriptor?.toString() ?: JSONObject.NULL)
+                .put("stage", stage ?: JSONObject.NULL)
+                .put("capability", capability?.name ?: JSONObject.NULL)
                 .put("firmware", firmware ?: JSONObject.NULL)
+                .put("supervisor_firmware", supervisorFirmware ?: JSONObject.NULL)
+                .put("control_protocol", controlVersion ?: JSONObject.NULL)
                 .put("code", code ?: JSONObject.NULL)
+                .put("observed_length", observedValue?.size ?: JSONObject.NULL)
+                .put("observed_sha256", observedValue?.let(::hash) ?: JSONObject.NULL)
                 .put("detail", detail),
         )
         gatt?.let {
@@ -672,13 +1009,34 @@ class BenchActivity : Activity() {
         report("ERROR:$detail")
     }
 
+    private fun failCapability(
+        detail: String,
+        capability: Capability,
+        layer: YpsoWriteFailure.Layer,
+        code: Int? = null,
+        value: ByteArray? = null,
+    ) =
+        fail(
+            detail,
+            layer,
+            capability.uuid,
+            code,
+            capability,
+            value,
+            stage = "CAPABILITY_IDENTITY",
+            service = capability.service,
+        )
+
     @SuppressLint("MissingPermission")
     private fun close(owner: BluetoothGatt) {
         if (gatt !== owner) return
         gatt = null
         pendingRead = null
         pendingFirmwareRead = null
+        pendingCapabilityIndex = 0
         firmware = null
+        supervisorFirmware = null
+        controlVersion = null
         expectedDescriptor = null
         handshakePhase = HandshakePhase.IDLE
         readiness.disconnected(owner)
@@ -702,7 +1060,10 @@ class BenchActivity : Activity() {
         }
         pendingRead = null
         pendingFirmwareRead = null
+        pendingCapabilityIndex = 0
         firmware = null
+        supervisorFirmware = null
+        controlVersion = null
         expectedDescriptor = null
         handshakePhase = HandshakePhase.IDLE
         session.quiesce()
@@ -724,6 +1085,12 @@ class BenchActivity : Activity() {
         owner: BluetoothGatt,
         uuid: UUID,
     ): BluetoothGattCharacteristic? = owner.services.firstNotNullOfOrNull { it.getCharacteristic(uuid) }
+
+    private fun find(
+        owner: BluetoothGatt,
+        service: UUID,
+        characteristic: UUID,
+    ): BluetoothGattCharacteristic? = owner.getService(service)?.getCharacteristic(characteristic)
 
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission", "NewApi")
@@ -778,7 +1145,7 @@ class BenchActivity : Activity() {
     }
 
     private fun android.content.Intent.intExtraOrNull(name: String): Int? =
-        takeIf { hasExtra(name) }?.getIntExtra(name, -1)?.takeIf { it > 0 }
+        takeIf { hasExtra(name) }?.getIntExtra(name, -1)?.also { require(it > 0) { "$name must be positive" } }
 
     private fun report(value: String) {
         File(filesDir, "result.txt").outputStream().use { out ->
@@ -792,6 +1159,7 @@ class BenchActivity : Activity() {
     private data class ReadTransaction(
         val owner: BluetoothGatt,
         var expectedUuid: UUID,
+        val allowObservedReboot: Boolean,
         val done: (Result<ByteArray>) -> Unit,
         val frames: MutableList<ByteArray> = mutableListOf(),
         var total: Int = 0,
@@ -803,9 +1171,38 @@ class BenchActivity : Activity() {
         DISCOVERING,
         AUTHENTICATING,
         ENABLING_SETUP,
-        READING_FIRMWARE,
+        READING_CAPABILITIES,
         PRIMING_READ,
         READY,
+    }
+
+    private enum class RunKind {
+        SELECTOR,
+        OBSERVE_SELECTOR,
+        OBSERVE_REBOOT,
+        READINESS_PROBE,
+    }
+
+    private enum class Capability(
+        val label: String,
+        val service: UUID,
+        val uuid: UUID,
+    ) {
+        MASTER_FIRMWARE(
+            "master firmware",
+            IDENTITY_SERVICE_UUID,
+            UUID.fromString("669a0c20-0008-969e-e211-fcbeb0147bc5"),
+        ),
+        SUPERVISOR_FIRMWARE(
+            "supervisor firmware",
+            IDENTITY_SERVICE_UUID,
+            UUID.fromString("669a0c20-0008-969e-e211-fcbeb1147bc5"),
+        ),
+        CONTROL_PROTOCOL(
+            "control protocol",
+            CONTROL_SERVICE_UUID,
+            UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5"),
+        ),
     }
 
     private data class Selector(
@@ -861,13 +1258,18 @@ class BenchActivity : Activity() {
     }
 
     private companion object {
+        val IDENTITY_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000")
+        val CONTROL_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         val EVENT_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
-        val MASTER_VERSION_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb0147bc5")
         val EVENT_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
         val ALARM_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeca3b7bc5")
         val SYSTEM_VALUE_UUID: UUID = UUID.fromString("ae3022af-2ec8-bf88-e64c-da68c9a3891a")
         val SETTING_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb4147bc5")
         val EXTENDED_READ_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
+        val CONTROL_PROTOCOL_VERSION_WIRE = "1.3\u0000".toByteArray(Charsets.US_ASCII)
+        val CAPABILITY_READS = Capability.entries
+        const val EXPECTED_SELECTOR_FRAME_COUNT =
+            (YpsoGlb.SIZE + SessionCrypto.COUNTER_DATA_SIZE + SessionCrypto.TAG_SIZE + SessionCrypto.NONCE_SIZE + 18) / 19
         const val MAX_EVIDENCE_BYTES = 64L * 1024 * 1024
         val runLease = AtomicBoolean(false)
     }

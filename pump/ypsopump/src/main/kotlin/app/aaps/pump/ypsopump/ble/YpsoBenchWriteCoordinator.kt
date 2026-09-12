@@ -50,6 +50,7 @@ internal class YpsoBenchWriteCoordinator(
         plaintext: ByteArray,
         firmware: String?,
         deadlineMs: Long,
+        forwardGap: Int = 0,
         dispatch: (ByteArray) -> Boolean,
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean {
@@ -99,7 +100,7 @@ internal class YpsoBenchWriteCoordinator(
         }
         val reservation =
             runCatching {
-                session.reserve(
+                session.reserveBenchCandidate(
                     owner.token,
                     transaction,
                     PumpSession.WriteIntent(
@@ -108,6 +109,7 @@ internal class YpsoBenchWriteCoordinator(
                         category.name,
                         MessageDigest.getInstance("SHA-256").digest(plaintext).joinToString("") { "%02x".format(it) },
                     ),
+                    forwardGap,
                 )
             }.getOrElse {
                 finish()

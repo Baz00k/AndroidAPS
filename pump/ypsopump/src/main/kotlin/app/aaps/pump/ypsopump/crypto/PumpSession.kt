@@ -14,6 +14,7 @@ class PumpSession(private val store: Store) {
 
     enum class Phase { RESERVED, POSSIBLY_SENT, ACKED, VERIFIED }
     enum class WriteResolution { ACCEPTED, REJECTED_COUNTER_CONSUMED, REJECTED_COUNTER_NOT_CONSUMED }
+    enum class WriteCandidate { STANDARD, BENCH_STRICT_NEXT_SELECTOR, BENCH_FORWARD_GAP_SELECTOR }
     enum class AvailabilityCause {
         UNCONFIGURED,
         BOND_OR_PERMISSION,
@@ -41,7 +42,10 @@ class PumpSession(private val store: Store) {
         val operationId: String? = null,
         val characteristic: String? = null,
         val purpose: String? = null,
-        val payloadHash: String? = null
+        val payloadHash: String? = null,
+        /** Exact durable write floor before this candidate; absent only in legacy journals. */
+        val priorWrite: Long? = null,
+        val candidate: WriteCandidate = WriteCandidate.STANDARD
     )
     data class WriteEvidence(
         val operationId: String,
@@ -69,7 +73,11 @@ class PumpSession(private val store: Store) {
         val source: Map<String, String> = emptyMap(),
         val verifiedAt: Long? = null,
         val verifiedSerial: String? = null,
-        val writeEvidence: List<WriteEvidence> = emptyList()
+        val writeEvidence: List<WriteEvidence> = emptyList(),
+        /** Bench-only epoch evidence; never authorizes production writes. */
+        val benchStrictNextAccepted: Boolean = false,
+        /** Set before the epoch's sole +2 candidate can reach platform dispatch. */
+        val benchForwardGapAttempted: Boolean = false
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -409,14 +417,18 @@ class PumpSession(private val store: Store) {
                     reboot = candidate.reboot,
                     read = candidate.read,
                     write = candidate.write,
-                    reservation = candidate.reservation
+                    reservation = candidate.reservation,
+                    benchStrictNextAccepted = candidate.benchStrictNextAccepted,
+                    benchForwardGapAttempted = candidate.benchForwardGapAttempted
                 )
             } else {
                 replaced.copy(
                     reboot = candidate.reboot ?: replaced.reboot,
                     read = listOfNotNull(replaced.read, candidate.read).maxOrNull(),
                     write = candidate.write ?: replaced.write,
-                    reservation = candidate.reservation ?: replaced.reservation
+                    reservation = candidate.reservation ?: replaced.reservation,
+                    benchStrictNextAccepted = replaced.benchStrictNextAccepted || candidate.benchStrictNextAccepted,
+                    benchForwardGapAttempted = replaced.benchForwardGapAttempted || candidate.benchForwardGapAttempted
                 )
             }
             current.records.filterNot { it.generation == candidate.generation || it.generation == replaced.generation } + merged
@@ -513,8 +525,18 @@ class PumpSession(private val store: Store) {
             // A missed first response is allowed; neither old read nor write floor seeds this epoch.
             if (!allowObservedReboot || old.reboot == Int.MAX_VALUE || message.reboot != old.reboot + 1 || message.counter == 0L)
                 throw SecurityException("Unvalidated reboot transition")
-            check(old.reservation == null) { "Cannot transition with an outstanding write record" }
-            val next = old.copy(reboot = message.reboot, read = message.counter, write = null)
+            check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) {
+                "Cannot transition with an outstanding write record"
+            }
+            val next =
+                old.copy(
+                    reboot = message.reboot,
+                    read = message.counter,
+                    write = null,
+                    reservation = null,
+                    benchStrictNextAccepted = false,
+                    benchForwardGapAttempted = false
+                )
             update(next)
             quiesce()
             throw RebootAdoptedException()
@@ -537,25 +559,59 @@ class PumpSession(private val store: Store) {
     /** No production caller can establish write certainty in the status-only contract. */
     @Synchronized
     fun reserve(origin: Token, id: String, intent: WriteIntent? = null): Reservation {
+        return reserveCandidate(origin, id, intent, forwardGap = 0, candidate = WriteCandidate.STANDARD)
+    }
+
+    /** Dedicated Step 07 seam: zero means strict-next; one means the single bounded +2 candidate. */
+    @Synchronized
+    internal fun reserveBenchCandidate(origin: Token, id: String, intent: WriteIntent, forwardGap: Int): Reservation {
+        require(forwardGap in 0..1) { "forward gap must be exactly 0 or 1" }
+        val old = owned(origin)
+        if (forwardGap == 1) {
+            check(old.benchStrictNextAccepted) { "A reconciled accepted strict-next selector is required before the gap candidate" }
+            check(!old.benchForwardGapAttempted) { "The epoch's single forward-gap candidate was already attempted" }
+        }
+        val candidate =
+            if (forwardGap == 0) WriteCandidate.BENCH_STRICT_NEXT_SELECTOR else WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
+        return reserveCandidate(origin, id, intent, forwardGap, candidate, markForwardGapAttempted = forwardGap == 1)
+    }
+
+    private fun reserveCandidate(
+        origin: Token,
+        id: String,
+        intent: WriteIntent?,
+        forwardGap: Int,
+        candidate: WriteCandidate,
+        markForwardGapAttempted: Boolean = false
+    ): Reservation {
         val old = owned(origin)
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
         val last = old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
-        check(last < Long.MAX_VALUE) { "Write counter exhausted" }
+        val increment = 1L + forwardGap
+        check(last <= Long.MAX_VALUE - increment) { "Write counter exhausted" }
         intent?.let {
             require(it.operationId.isNotBlank() && it.characteristic.isNotBlank() && it.purpose.isNotBlank())
             require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
         }
         val reserved = Reservation(
             id,
-            last + 1,
+            last + increment,
             Phase.RESERVED,
             intent?.operationId,
             intent?.characteristic,
             intent?.purpose,
-            intent?.payloadHash
+            intent?.payloadHash,
+            priorWrite = last,
+            candidate = candidate
         )
-        update(old.copy(write = reserved.counter, reservation = reserved))
+        update(
+            old.copy(
+                write = reserved.counter,
+                reservation = reserved,
+                benchForwardGapAttempted = old.benchForwardGapAttempted || markForwardGapAttempted
+            )
+        )
         return reserved
     }
 
@@ -579,8 +635,9 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == id && reserved.phase in setOf(Phase.RESERVED, Phase.POSSIBLY_SENT)) { "Write already acknowledged" }
-        check(old.write == reserved.counter && reserved.counter > 0) { "Invalid write reservation" }
-        update(old.copy(write = reserved.counter - 1, reservation = null))
+        val priorWrite = priorWrite(reserved)
+        check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
+        update(old.copy(write = priorWrite, reservation = null))
     }
 
     /** A persisted RESERVED phase proves the dispatch boundary was never committed and is safe to roll back after restart. */
@@ -590,7 +647,8 @@ class PumpSession(private val store: Store) {
         check(transaction == null) { "Another session transaction is active" }
         val reserved = checkNotNull(old.reservation)
         check(reserved.operationId == operationId && reserved.phase == Phase.RESERVED) { "Write is not proven undispatched" }
-        check(old.write == reserved.counter && reserved.counter > 0) { "Invalid write reservation" }
+        val priorWrite = priorWrite(reserved)
+        check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = WriteEvidence(
             operationId,
@@ -600,7 +658,7 @@ class PumpSession(private val store: Store) {
             evidenceHash,
             detail
         )
-        update(old.copy(write = reserved.counter - 1, reservation = null, writeEvidence = old.writeEvidence + evidence))
+        update(old.copy(write = priorWrite, reservation = null, writeEvidence = old.writeEvidence + evidence))
     }
 
     /** Persist reviewed evidence that does not yet classify counter consumption; the reservation remains blocking. */
@@ -673,13 +731,20 @@ class PumpSession(private val store: Store) {
             detail
         )
         val next = when (resolution) {
-            WriteResolution.ACCEPTED,
-            WriteResolution.REJECTED_COUNTER_CONSUMED -> old.copy(
-                reservation = reserved.copy(phase = Phase.VERIFIED),
-                writeEvidence = old.writeEvidence + evidence
-            )
+            WriteResolution.ACCEPTED ->
+                old.copy(
+                    reservation = reserved.copy(phase = Phase.VERIFIED),
+                    writeEvidence = old.writeEvidence + evidence,
+                    benchStrictNextAccepted =
+                        old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR
+                )
+            WriteResolution.REJECTED_COUNTER_CONSUMED ->
+                old.copy(
+                    reservation = reserved.copy(phase = Phase.VERIFIED),
+                    writeEvidence = old.writeEvidence + evidence
+                )
             WriteResolution.REJECTED_COUNTER_NOT_CONSUMED -> old.copy(
-                write = reserved.counter - 1,
+                write = priorWrite(reserved),
                 reservation = null,
                 writeEvidence = old.writeEvidence + evidence
             )
@@ -689,6 +754,8 @@ class PumpSession(private val store: Store) {
 
     @Synchronized
     fun snapshot(): Record? = record
+
+    private fun priorWrite(reservation: Reservation): Long = reservation.priorWrite ?: reservation.counter - 1
 
     private fun owned(origin: Token): Record {
         check(token == origin && state != null) { "Stale or unavailable session" }
@@ -730,8 +797,25 @@ class PumpSession(private val store: Store) {
                 require(r.keyHex == null || r.keyHex.matches(Regex("[0-9a-f]{64}")) && fingerprint(r.keyHex.unhex()) == r.keyId)
                 require(r.serial.isNotBlank() || r.keyHex == null)
                 require(r.verifiedSerial == null || r.verifiedSerial == r.serial && r.verifiedAt != null)
+                require(!r.benchForwardGapAttempted || r.benchStrictNextAccepted)
+                require(r.reboot != null || !r.benchStrictNextAccepted && !r.benchForwardGapAttempted)
                 r.reservation?.let {
                     require(it.id.isNotBlank() && it.counter > 0 && it.counter == r.write)
+                    val priorWrite = checkNotNull(it.priorWrite)
+                    require(priorWrite >= 0 && priorWrite < it.counter)
+                    require(it.counter - priorWrite in 1..2)
+                    when (it.candidate) {
+                        WriteCandidate.STANDARD -> require(it.counter - priorWrite == 1L)
+                        WriteCandidate.BENCH_STRICT_NEXT_SELECTOR -> {
+                            require(it.counter - priorWrite == 1L)
+                            require(it.operationId != null)
+                        }
+                        WriteCandidate.BENCH_FORWARD_GAP_SELECTOR -> {
+                            require(it.counter - priorWrite == 2L)
+                            require(r.benchStrictNextAccepted && r.benchForwardGapAttempted)
+                            require(it.operationId != null)
+                        }
+                    }
                     require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
                     require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
                 }
