@@ -64,13 +64,10 @@ ANDROID_HOME=/home/jbuzuk/Android/Sdk \
   ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
 ```
 
-The previously published candidate results were 224 YpsoPump unit tests, 0 failures/errors/skips; module lint and
-GATT ownership guard passed; normal `assembleFullDebug` passed. The standalone debug APK is
-5,979,678 bytes with SHA-256
-`b986be20aa5555f42bebc0669b498adab7268a60580bd0ba52656286088f79d2`.
-This hash is software-build evidence only and is not a target-pump acceptance claim.
-Firmware-gate and bounded-matrix preparation after that published revision requires a new exact
-candidate commit/APK hash before physical testing; the old hash must not be reused.
+Publish the exact candidate commit, test count, lint/ownership/build results, APK byte size, APK
+SHA-256 and signer-certificate SHA-256 together in the issue evidence. Rebuild and republish all of
+those values after any candidate change; no prior APK hash may be reused. Software-build evidence is
+not a target-pump acceptance claim.
 
 The module ownership guard rejects unguarded Android GATT writes. Focused tests cover exact selector
 encoding, policy relabelling, CCCD allowlisting, readiness owner changes, whole-write ownership,
