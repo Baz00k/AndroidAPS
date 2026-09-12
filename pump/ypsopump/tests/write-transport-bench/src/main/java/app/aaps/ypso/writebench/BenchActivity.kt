@@ -287,6 +287,7 @@ class BenchActivity : Activity() {
                     .put("evidence_sha256", evidenceHash)
                     .put("detail", detail),
             )
+            val pendingBefore = session.snapshot()?.reservation
             val outcome =
                 coordinator.reconcilePersisted(
                     YpsoBenchWriteCoordinator.Owner(Any(), "offline-reconciliation", opened),
@@ -301,7 +302,10 @@ class BenchActivity : Activity() {
                     .put("counter_resolution", counter?.name ?: JSONObject.NULL)
                     .put("evidence_sha256", evidenceHash)
                     .put("detail", detail)
-                    .put("outcome", outcome.javaClass.simpleName),
+                    .put("outcome", outcome.javaClass.simpleName)
+                    .put("resolved_prior_write", pendingBefore?.priorWrite ?: JSONObject.NULL)
+                    .put("resolved_candidate", pendingBefore?.candidate?.name ?: JSONObject.NULL)
+                    .putSessionSnapshot(),
             )
             report("RECONCILED:${outcome.javaClass.simpleName}")
         } finally {

@@ -178,6 +178,10 @@ Resolved and unresolved evidence retains the exact operation, reservation, count
 characteristic, purpose, plaintext SHA-256, prior write floor and candidate mode even if a
 rejected/not-consumed reconciliation clears the live reservation.
 
+Each `PersistedReconciliation` row also records the resolved prior floor/candidate mode and the
+post-reconciliation reboot/read/write snapshot. Export and hash the JSONL after reconciliation; for a
+rejected/not-consumed result this row is the final evidence that the exact prior floor was restored.
+
 ### Reboot observation
 
 With no unresolved write, place the disconnected bench pump through the reviewed reboot procedure,
