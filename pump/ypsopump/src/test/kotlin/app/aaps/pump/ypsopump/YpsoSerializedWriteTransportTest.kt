@@ -105,6 +105,27 @@ class YpsoSerializedWriteTransportTest {
     }
 
     @Test
+    fun `detected duplicate sequence is quarantined before either callback can advance`() {
+        start(frames = 3)
+        transport.onCharacteristicWrite(gatt, characteristic, 0)
+        assertEquals(2, dispatches.size)
+
+        assertTrue(
+            transport.markCallbackOwnershipAmbiguous(
+                gatt,
+                characteristic,
+                0,
+                "injected delayed duplicate collided with the next real callback",
+            ),
+        )
+
+        assertEquals(2, dispatches.size)
+        assertTrue(callbacks.single() is YpsoWriteOutcome.PossiblyApplied)
+        assertTrue(transport.hasUnresolvedWrite())
+        assertEquals(1, events.filterIsInstance<YpsoWriteBehavior.Callback>().size)
+    }
+
+    @Test
     fun `same UUID callback before dispatch immediately forces reconciliation`() {
         lateinit var earlyCallbackTransport: YpsoSerializedWriteTransport
         val outcomes = mutableListOf<YpsoWriteOutcome>()

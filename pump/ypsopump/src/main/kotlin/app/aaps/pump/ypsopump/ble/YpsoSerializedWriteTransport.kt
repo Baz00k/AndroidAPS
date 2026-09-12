@@ -306,6 +306,38 @@ internal class YpsoSerializedWriteTransport(
         nextDispatch?.let(::dispatchCurrent)
     }
 
+    /**
+     * Stop a write when an external adapter can prove that a same-UUID callback sequence is
+     * deliberately unassignable. No callback in that sequence is allowed to advance a frame.
+     */
+    fun markCallbackOwnershipAmbiguous(
+        gatt: Any,
+        characteristic: UUID,
+        status: Int,
+        detail: String,
+    ): Boolean {
+        require(detail.isNotBlank())
+        val outcome =
+            synchronized(lock) {
+                val current = active ?: return false
+                if (current.request.owner.gatt !== gatt || current.request.characteristic != characteristic) return false
+                current.ambiguousCallback = true
+                if (current.uncertaintyReported) return true
+                current.uncertaintyReported = true
+                val result =
+                    possiblyApplied(
+                        current,
+                        YpsoWriteFailure.Layer.GATT_CALLBACK,
+                        status,
+                        detail,
+                    )
+                holdForReconciliationLocked(current, uncertaintyReported = true)
+                result
+            }
+        publish(outcome)
+        return true
+    }
+
     fun reconcile(
         writeId: String,
         evidence: YpsoSemanticEvidence,

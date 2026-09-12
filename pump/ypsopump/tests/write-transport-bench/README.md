@@ -100,7 +100,8 @@ Injected transport faults are available for software-only evidence and must be l
 --ei ignore_callback_frame 1 --el deadline_ms 8000
 
 # Delay a labelled duplicate of callback 1 until immediately before callback 2 is processed.
-# This reproduces the same-UUID ambiguity sequence without inventing a frame identifier.
+# The detected collision quarantines both callbacks without advancing either frame and leaves
+# durable uncertainty; it does not invent a frame identifier.
 --ei duplicate_callback_after_frame 1
 
 # Deliver one labelled synthetic duplicate after the final real callback (legacy alias).

@@ -415,7 +415,15 @@ class BenchActivity : Activity() {
                             .put("delivered_before_callback", observedWriteCallbacks)
                             .put("status", status),
                     )
-                    transport.onCharacteristicWrite(owner, characteristic.uuid, status)
+                    check(
+                        transport.markCallbackOwnershipAmbiguous(
+                            owner,
+                            characteristic.uuid,
+                            status,
+                            "injected delayed duplicate collided with callback $observedWriteCallbacks",
+                        ),
+                    ) { "Injected duplicate no longer owns the active write" }
+                    return
                 }
                 transport.onCharacteristicWrite(owner, characteristic.uuid, status)
                 val duplicateAfter = injectedDuplicateCallbackAfterFrame
@@ -909,7 +917,8 @@ class BenchActivity : Activity() {
                             .put("body_sha256", hash(body))
                             .put("glb", YpsoGlb.find(body) ?: JSONObject.NULL)
                             .put("crc_valid", YpsoCrc.isValid(body))
-                            .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL),
+                            .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL)
+                            .putSessionSnapshot(),
                     )
                     close(owner)
                     report("OBSERVED:unresolved selector read-back captured; reconciliation still required")
@@ -943,7 +952,8 @@ class BenchActivity : Activity() {
                         .put("body_sha256", hash(body))
                         .put("glb", YpsoGlb.find(body) ?: JSONObject.NULL)
                         .put("crc_valid", YpsoCrc.isValid(body))
-                        .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL),
+                        .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL)
+                        .putSessionSnapshot(),
                 )
                 close(owner)
                 report("OUTCOME:AcceptedUnverified; read-back captured; explicit reconciliation required")
@@ -1234,6 +1244,17 @@ class BenchActivity : Activity() {
         val payload = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
         if (payload.size < 17) return null
         return (payload[15].toInt() and 0xff) or ((payload[16].toInt() and 0xff) shl 8)
+    }
+
+    private fun JSONObject.putSessionSnapshot(): JSONObject {
+        val record = session.snapshot()
+        val reservation = record?.reservation
+        return put("session_generation", record?.generation ?: JSONObject.NULL)
+            .put("session_reboot", record?.reboot ?: JSONObject.NULL)
+            .put("session_read", record?.read ?: JSONObject.NULL)
+            .put("session_write", record?.write ?: JSONObject.NULL)
+            .put("pending_operation", reservation?.operationId ?: JSONObject.NULL)
+            .put("pending_phase", reservation?.phase?.name ?: JSONObject.NULL)
     }
 
     private fun android.content.Intent.intExtraOrNull(name: String): Int? =
