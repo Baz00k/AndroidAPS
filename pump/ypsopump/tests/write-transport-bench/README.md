@@ -80,7 +80,7 @@ adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/write-eviden
 sha256sum "evidence-$WRITE_ID.jsonl"
 ```
 
-The run performs: bonded connection → AUTH → required CCCD → encrypted prime read → durable
+The run performs: bonded connection → AUTH → required CCCD → encrypted exact-GLB event-count prime read → durable
 reservation → exact-counter encryption → fragmented serialized write → value read-back. Evidence
 contains the reviewed selector intent, callback-visible facts and redacted response-body hashes, not
 keys, ciphertext or decrypted pump-response bodies.

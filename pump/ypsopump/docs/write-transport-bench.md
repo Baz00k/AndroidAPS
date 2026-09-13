@@ -29,6 +29,11 @@ identity in evidence before CCCD and selector dispatch. AUTH retains its raw fai
 correlated with the exact-candidate run's independently recorded pump firmware rather than assuming
 identity characteristics can be read before authentication.
 
+The encrypted event-count characteristic used to prime readiness is an exact 8-byte GLB safe
+variable and carries no CRC. This was confirmed on the target by an authenticated value of `3000`
+with its bitwise complement. The bench rejects any non-exact GLB body before readiness or counter
+reservation; CRC handling remains characteristic-specific for response types that actually carry it.
+
 The physical-test build exposes only bounded measurement seams: omission of one readiness fact to
 prove local blocking, one `floor + 2` candidate to distinguish strict-next from a single forward gap,
 read-only value observation bound to an unresolved selector's durable hash, and authenticated

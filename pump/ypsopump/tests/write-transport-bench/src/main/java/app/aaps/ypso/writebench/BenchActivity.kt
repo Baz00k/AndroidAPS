@@ -784,19 +784,18 @@ class BenchActivity : Activity() {
         readEncrypted(owner, eventCount, allowObservedReboot = runKind == RunKind.OBSERVE_REBOOT) { result ->
             result.fold(
                 onSuccess = { body ->
-                    val count = YpsoGlb.find(body)
-                    val crcValid = YpsoCrc.isValid(body)
+                    val count = BenchEventCount.decode(body)
                     recorder.fact(
-                        if (crcValid) "PrimeReadVerified" else "PrimeReadRejected",
+                        if (count != null) "PrimeReadVerified" else "PrimeReadRejected",
                         JSONObject()
                             .put("write_id", writeId)
                             .put("body_size", body.size)
                             .put("body_sha256", hash(body))
                             .put("glb", count ?: JSONObject.NULL)
-                            .put("crc_valid", crcValid),
+                            .put("integrity", "EXACT_GLB"),
                     )
-                    if (!crcValid) {
-                        fail("prime read CRC invalid")
+                    if (count == null) {
+                        fail("prime read exact GLB invalid")
                         return@fold
                     }
                     handshakePhase = HandshakePhase.READY
@@ -834,6 +833,7 @@ class BenchActivity : Activity() {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun startSelector(owner: BluetoothGatt) {
         val selected = checkNotNull(selector)
         val binding = resolveSelector(owner, selected) ?: return
