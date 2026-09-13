@@ -14,7 +14,13 @@ class PumpSession(private val store: Store) {
 
     enum class Phase { RESERVED, POSSIBLY_SENT, ACKED, VERIFIED }
     enum class WriteResolution { ACCEPTED, REJECTED_COUNTER_CONSUMED, REJECTED_COUNTER_NOT_CONSUMED }
-    enum class WriteCandidate { STANDARD, BENCH_STRICT_NEXT_SELECTOR, BENCH_FORWARD_GAP_SELECTOR }
+    enum class WriteCandidate {
+        STANDARD,
+        BENCH_STRICT_NEXT_SELECTOR,
+        BENCH_FORWARD_GAP_SELECTOR,
+        BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+    }
+    enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, ESTABLISHED }
     enum class AvailabilityCause {
         UNCONFIGURED,
         BOND_OR_PERMISSION,
@@ -61,6 +67,12 @@ class PumpSession(private val store: Store) {
         val detail: String
     )
     data class WriteIntent(val operationId: String, val characteristic: String, val purpose: String, val payloadHash: String)
+    data class BootstrapReference(
+        val reboot: Int,
+        val read: Long,
+        val characteristic: String,
+        val payloadHash: String,
+    )
     enum class AttemptStatus { PENDING, SUCCEEDED, FAILED, CANCELLED }
     data class AttemptResult(val id: String, val status: AttemptStatus)
     data class Record(
@@ -79,6 +91,13 @@ class PumpSession(private val store: Store) {
         val verifiedAt: Long? = null,
         val verifiedSerial: String? = null,
         val writeEvidence: List<WriteEvidence> = emptyList(),
+        /** Authenticated pre-reboot selected value; the counter-1 bootstrap must choose a different payload. */
+        val benchNewEpochBootstrapReference: BootstrapReference? = null,
+        /** Write ownership is explicit: ordinary reads cannot turn an unknown mid-epoch floor into a usable floor. */
+        val writeBootstrapState: WriteBootstrapState =
+            if (write == null) WriteBootstrapState.UNKNOWN_MID_EPOCH else WriteBootstrapState.ESTABLISHED,
+        /** Set before the new epoch's sole counter-1 bootstrap candidate can reach platform dispatch. */
+        val benchNewEpochBootstrapAttempted: Boolean = false,
         /** Bench-only epoch evidence; never authorizes production writes. */
         val benchStrictNextAccepted: Boolean = false,
         /** Set before the epoch's sole +2 candidate can reach platform dispatch. */
@@ -423,6 +442,10 @@ class PumpSession(private val store: Store) {
                     read = candidate.read,
                     write = candidate.write,
                     reservation = candidate.reservation,
+                    writeEvidence = mergeWriteEvidence(replaced.writeEvidence, candidate.writeEvidence),
+                    benchNewEpochBootstrapReference = candidate.benchNewEpochBootstrapReference,
+                    writeBootstrapState = candidate.writeBootstrapState,
+                    benchNewEpochBootstrapAttempted = candidate.benchNewEpochBootstrapAttempted,
                     benchStrictNextAccepted = candidate.benchStrictNextAccepted,
                     benchForwardGapAttempted = candidate.benchForwardGapAttempted
                 )
@@ -432,6 +455,12 @@ class PumpSession(private val store: Store) {
                     read = listOfNotNull(replaced.read, candidate.read).maxOrNull(),
                     write = candidate.write ?: replaced.write,
                     reservation = candidate.reservation ?: replaced.reservation,
+                    writeEvidence = mergeWriteEvidence(replaced.writeEvidence, candidate.writeEvidence),
+                    benchNewEpochBootstrapReference =
+                        candidate.benchNewEpochBootstrapReference ?: replaced.benchNewEpochBootstrapReference,
+                    writeBootstrapState = candidate.writeBootstrapState,
+                    benchNewEpochBootstrapAttempted =
+                        replaced.benchNewEpochBootstrapAttempted || candidate.benchNewEpochBootstrapAttempted,
                     benchStrictNextAccepted = replaced.benchStrictNextAccepted || candidate.benchStrictNextAccepted,
                     benchForwardGapAttempted = replaced.benchForwardGapAttempted || candidate.benchForwardGapAttempted
                 )
@@ -490,7 +519,21 @@ class PumpSession(private val store: Store) {
         check(previous.pump == pump && previous.reboot == reboot) { "Write baseline belongs to another pump epoch" }
         check(previous.reservation == null) { "Cannot seed over unresolved pump accounting" }
         check(previous.write == null || previous.write == write) { "Cannot replace an established write floor" }
-        persist(current.copy(records = current.records.map { if (it == previous) it.copy(write = write) else it }))
+        persist(
+            current.copy(
+                records =
+                    current.records.map {
+                        if (it == previous) {
+                            it.copy(
+                                write = write,
+                                writeBootstrapState = WriteBootstrapState.ESTABLISHED,
+                            )
+                        } else {
+                            it
+                        }
+                    },
+            ),
+        )
         quiesce()
     }
 
@@ -530,8 +573,20 @@ class PumpSession(private val store: Store) {
             // A missed first response is allowed; neither old read nor write floor seeds this epoch.
             if (!allowObservedReboot || old.reboot == Int.MAX_VALUE || message.reboot != old.reboot + 1 || message.counter == 0L)
                 throw SecurityException("Unvalidated reboot transition")
-            check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) {
-                "Cannot transition with an outstanding write record"
+            old.reservation?.takeIf { it.phase != Phase.VERIFIED }?.let { unresolved ->
+                check(
+                    old.writeEvidence.any {
+                        it.reservationId == unresolved.id &&
+                            it.operationId == unresolved.operationId &&
+                            it.counter == unresolved.counter &&
+                            it.characteristic == unresolved.characteristic &&
+                            it.purpose == unresolved.purpose &&
+                            it.payloadHash == unresolved.payloadHash &&
+                            it.priorWrite == unresolved.priorWrite &&
+                            it.candidate == unresolved.candidate &&
+                            it.resolution == null
+                    },
+                ) { "Cannot transition with an unreviewed outstanding write record" }
             }
             val next =
                 old.copy(
@@ -539,6 +594,10 @@ class PumpSession(private val store: Store) {
                     read = message.counter,
                     write = null,
                     reservation = null,
+                    benchNewEpochBootstrapReference =
+                        old.benchNewEpochBootstrapReference?.takeIf { it.reboot == old.reboot },
+                    writeBootstrapState = WriteBootstrapState.OBSERVED_NEW_EPOCH,
+                    benchNewEpochBootstrapAttempted = false,
                     benchStrictNextAccepted = false,
                     benchForwardGapAttempted = false
                 )
@@ -581,18 +640,68 @@ class PumpSession(private val store: Store) {
         return reserveCandidate(origin, id, intent, forwardGap, candidate, markForwardGapAttempted = forwardGap == 1)
     }
 
+    /**
+     * Dedicated fail-closed bootstrap seam. Only an authenticated `old + 1` reboot observation can
+     * expose this epoch's single counter-1 candidate; an ordinary key import remains unknown.
+     */
+    @Synchronized
+    internal fun reserveBenchNewEpochBootstrapCandidate(origin: Token, id: String, intent: WriteIntent): Reservation {
+        val old = owned(origin)
+        check(old.writeBootstrapState == WriteBootstrapState.OBSERVED_NEW_EPOCH) {
+            "New-epoch bootstrap requires an authenticated next reboot"
+        }
+        check(!old.benchNewEpochBootstrapAttempted) { "The epoch's bootstrap candidate was already attempted" }
+        check(old.write == null && old.reservation == null) { "New-epoch bootstrap state is not clean" }
+        val reference = checkNotNull(old.benchNewEpochBootstrapReference) { "Pre-reboot selector reference is missing" }
+        check(reference.reboot < Int.MAX_VALUE && reference.reboot + 1 == old.reboot) {
+            "Pre-reboot selector reference belongs to another epoch"
+        }
+        check(reference.characteristic == intent.characteristic) { "Bootstrap selector differs from the reference family" }
+        check(reference.payloadHash != intent.payloadHash) { "Bootstrap selector must differ from the pre-reboot value" }
+        return reserveCandidate(
+            origin,
+            id,
+            intent,
+            forwardGap = 0,
+            candidate = WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+            bootstrapPriorWrite = 0,
+            markNewEpochBootstrapAttempted = true,
+        )
+    }
+
+    /** Record one authenticated, CRC-validated pre-reboot selector value without changing write state. */
+    @Synchronized
+    internal fun recordBenchNewEpochBootstrapReference(
+        origin: Token,
+        characteristic: String,
+        payloadHash: String,
+    ) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reboot = checkNotNull(old.reboot) { "Authenticated epoch is unavailable" }
+        val read = checkNotNull(old.read) { "Authenticated read floor is unavailable" }
+        require(characteristic.isNotBlank() && payloadHash.matches(Regex("[0-9a-f]{64}")))
+        val reference = BootstrapReference(reboot, read, characteristic, payloadHash)
+        old.benchNewEpochBootstrapReference?.let {
+            check(it.reboot <= reboot) { "Bootstrap reference belongs to a future epoch" }
+        }
+        update(old.copy(benchNewEpochBootstrapReference = reference))
+    }
+
     private fun reserveCandidate(
         origin: Token,
         id: String,
         intent: WriteIntent?,
         forwardGap: Int,
         candidate: WriteCandidate,
-        markForwardGapAttempted: Boolean = false
+        markForwardGapAttempted: Boolean = false,
+        bootstrapPriorWrite: Long? = null,
+        markNewEpochBootstrapAttempted: Boolean = false,
     ): Reservation {
         val old = owned(origin)
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
-        val last = old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
+        val last = bootstrapPriorWrite ?: old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
         val increment = 1L + forwardGap
         check(last <= Long.MAX_VALUE - increment) { "Write counter exhausted" }
         intent?.let {
@@ -614,6 +723,8 @@ class PumpSession(private val store: Store) {
             old.copy(
                 write = reserved.counter,
                 reservation = reserved,
+                benchNewEpochBootstrapAttempted =
+                    old.benchNewEpochBootstrapAttempted || markNewEpochBootstrapAttempted,
                 benchForwardGapAttempted = old.benchForwardGapAttempted || markForwardGapAttempted
             )
         )
@@ -642,7 +753,13 @@ class PumpSession(private val store: Store) {
         check(reserved.id == id && reserved.phase in setOf(Phase.RESERVED, Phase.POSSIBLY_SENT)) { "Write already acknowledged" }
         val priorWrite = priorWrite(reserved)
         check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
-        update(old.copy(write = priorWrite, reservation = null))
+        update(
+            if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                old.copy(write = null, reservation = null)
+            } else {
+                old.copy(write = priorWrite, reservation = null)
+            },
+        )
     }
 
     /** A persisted RESERVED phase proves the dispatch boundary was never committed and is safe to roll back after restart. */
@@ -656,7 +773,13 @@ class PumpSession(private val store: Store) {
         check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
-        update(old.copy(write = priorWrite, reservation = null, writeEvidence = old.writeEvidence + evidence))
+        update(
+            if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                old.copy(write = null, reservation = null, writeEvidence = old.writeEvidence + evidence)
+            } else {
+                old.copy(write = priorWrite, reservation = null, writeEvidence = old.writeEvidence + evidence)
+            },
+        )
     }
 
     /** Persist reviewed evidence that does not yet classify counter consumption; the reservation remains blocking. */
@@ -719,19 +842,40 @@ class PumpSession(private val store: Store) {
                 old.copy(
                     reservation = reserved.copy(phase = Phase.VERIFIED),
                     writeEvidence = old.writeEvidence + evidence,
+                    writeBootstrapState =
+                        if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                            WriteBootstrapState.ESTABLISHED
+                        } else {
+                            old.writeBootstrapState
+                        },
                     benchStrictNextAccepted =
                         old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR
                 )
             WriteResolution.REJECTED_COUNTER_CONSUMED ->
                 old.copy(
                     reservation = reserved.copy(phase = Phase.VERIFIED),
-                    writeEvidence = old.writeEvidence + evidence
+                    writeEvidence = old.writeEvidence + evidence,
+                    writeBootstrapState =
+                        if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                            WriteBootstrapState.ESTABLISHED
+                        } else {
+                            old.writeBootstrapState
+                        },
                 )
-            WriteResolution.REJECTED_COUNTER_NOT_CONSUMED -> old.copy(
-                write = priorWrite(reserved),
-                reservation = null,
-                writeEvidence = old.writeEvidence + evidence
-            )
+            WriteResolution.REJECTED_COUNTER_NOT_CONSUMED ->
+                if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                    old.copy(
+                        write = null,
+                        reservation = null,
+                        writeEvidence = old.writeEvidence + evidence,
+                    )
+                } else {
+                    old.copy(
+                        write = priorWrite(reserved),
+                        reservation = null,
+                        writeEvidence = old.writeEvidence + evidence,
+                    )
+                }
         }
         update(next)
     }
@@ -772,6 +916,12 @@ class PumpSession(private val store: Store) {
         record = next
     }
 
+    private fun mergeWriteEvidence(
+        retained: List<WriteEvidence>,
+        candidate: List<WriteEvidence>,
+    ): List<WriteEvidence> =
+        (retained + candidate).distinctBy { it.reservationId to it.evidenceHash }
+
     private fun persist(next: State) {
         try {
             validate(next)
@@ -801,6 +951,23 @@ class PumpSession(private val store: Store) {
                 require(r.keyHex == null || r.keyHex.matches(Regex("[0-9a-f]{64}")) && fingerprint(r.keyHex.unhex()) == r.keyId)
                 require(r.serial.isNotBlank() || r.keyHex == null)
                 require(r.verifiedSerial == null || r.verifiedSerial == r.serial && r.verifiedAt != null)
+                r.benchNewEpochBootstrapReference?.let {
+                    require(it.reboot >= 0 && it.read > 0 && it.characteristic.isNotBlank())
+                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(r.reboot != null && (it.reboot == r.reboot || it.reboot < Int.MAX_VALUE && it.reboot + 1 == r.reboot))
+                }
+                when (r.writeBootstrapState) {
+                    WriteBootstrapState.UNKNOWN_MID_EPOCH -> require(r.write == null && r.reservation == null)
+                    WriteBootstrapState.OBSERVED_NEW_EPOCH ->
+                        require(
+                            r.write == null && r.reservation == null ||
+                                r.write == 1L &&
+                                r.reservation?.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+                        )
+                    WriteBootstrapState.ESTABLISHED -> require(r.write != null)
+                }
+                require(!r.benchNewEpochBootstrapAttempted || r.writeBootstrapState != WriteBootstrapState.UNKNOWN_MID_EPOCH)
+                require(!r.benchNewEpochBootstrapAttempted || r.benchNewEpochBootstrapReference != null)
                 require(!r.benchForwardGapAttempted || r.benchStrictNextAccepted)
                 require(r.reboot != null || !r.benchStrictNextAccepted && !r.benchForwardGapAttempted)
                 r.reservation?.let {
@@ -817,6 +984,18 @@ class PumpSession(private val store: Store) {
                         WriteCandidate.BENCH_FORWARD_GAP_SELECTOR -> {
                             require(it.counter - priorWrite == 2L)
                             require(r.benchStrictNextAccepted && r.benchForwardGapAttempted)
+                            require(it.operationId != null)
+                        }
+                        WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR -> {
+                            require(it.counter == 1L && priorWrite == 0L)
+                            require(r.benchNewEpochBootstrapAttempted)
+                            require(
+                                if (it.phase == Phase.VERIFIED) {
+                                    r.writeBootstrapState == WriteBootstrapState.ESTABLISHED
+                                } else {
+                                    r.writeBootstrapState == WriteBootstrapState.OBSERVED_NEW_EPOCH
+                                },
+                            )
                             require(it.operationId != null)
                         }
                     }
@@ -843,6 +1022,8 @@ class PumpSession(private val store: Store) {
                             require(it.counter - it.priorWrite == 1L)
                         WriteCandidate.BENCH_FORWARD_GAP_SELECTOR ->
                             require(it.counter - it.priorWrite == 2L)
+                        WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR ->
+                            require(it.counter == 1L && it.priorWrite == 0L)
                     }
                     r.reservation?.takeIf { reservation -> reservation.id == it.reservationId }?.let { reservation ->
                         require(

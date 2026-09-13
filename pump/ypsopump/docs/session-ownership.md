@@ -29,6 +29,16 @@ one transactional provisioning service. Imported reboot metadata remains a hint;
 proof of the current read/write floor or command readiness. A new generation starts without a read
 floor and adopts the first positive authenticated current-pump read before publishing status.
 
+Write bootstrap is explicit. Key-only provisioning is `UNKNOWN_MID_EPOCH`: ordinary authenticated
+reads may establish reboot/read ownership but never invent a write floor. An exact authenticated
+`old + 1` reboot observation may transition the bench to `OBSERVED_NEW_EPOCH`, where exactly one
+counter-1 bootstrap selector can be attempted. A durable authenticated pre-reboot selected-value
+reference requires the candidate to use the same selector family and a different payload, preventing
+retained state from falsely proving acceptance. Its durable marker precedes dispatch and survives
+restart/in-place upgrade. Only reviewed consumed evidence transitions to `ESTABLISHED`; unknown or
+not-consumed evidence remains blocked. External counter files are optional validation evidence, not
+a runtime prerequisite for manual or canonical `ypso-keys` provisioning.
+
 Legacy `ypso_ble_state` credentials migrate only into the protected journal. A validated complete
 serial/MAC/key triple migrates automatically. For older MAC/key-only state, a recognized bonded-pump name
 for that exact MAC may independently supply the real serial; the serial is never derived from the MAC. If
@@ -64,7 +74,10 @@ uncertain. The first observed read need not be 1: earlier responses may have bee
 The transition response is discarded and the connection quiesced; a new connection must
 authenticate a later response before publishing status. CRC/schema-invalid transition bodies
 still consume the authenticated floor. Missing firmware/control eligibility, lower generations,
-generation jumps, zero counters and any outstanding write record reject without adoption.
+generation jumps and zero counters reject without adoption. A verified reservation is retired normally.
+An unresolved old-epoch reservation may be retired only when immutable reviewed evidence already binds
+that exact operation/reservation/counter and explicitly preserves its unknown disposition; unreviewed
+outstanding accounting still rejects adoption.
 
 There are **zero speculative counter probes**, no inferred write reset, and no recovery by
 same-key import that erases a replay floor. Write reset/acceptance and re-key reset semantics
@@ -72,7 +85,9 @@ remain separate evidence gaps.
 
 A resolved `VERIFIED` reservation is retained as the current epoch's audit marker, but it is not
 outstanding accounting. Authenticated next-reboot adoption clears that marker together with the old
-write floor. Any `RESERVED`, `POSSIBLY_SENT` or `ACKED` reservation still blocks reboot adoption.
+write floor. Any `RESERVED`, `POSSIBLY_SENT` or `ACKED` reservation without bound unresolved evidence
+still blocks reboot adoption. Bound old-epoch uncertainty remains in immutable evidence after its live
+reservation is retired by exact next-reboot adoption.
 
 The pinned source reference is
 [`docs/19-key-lifecycle-pump-rotation.md` at de7e867241fafd2fb8061ceeecf42af2883b9eb4](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/docs/19-key-lifecycle-pump-rotation.md).

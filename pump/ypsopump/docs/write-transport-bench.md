@@ -22,6 +22,21 @@ the measured semantic and counter result explicitly. Unknown evidence leaves the
 blocked. Restart recovery uses persisted operation ID, counter, characteristic, purpose and plaintext
 hash and never resends the write.
 
+Write bootstrap is explicit and app-owned. Key-only provisioning starts `UNKNOWN_MID_EPOCH`; ordinary
+authenticated reads cannot enable writes. Exact authenticated `old + 1` adoption transitions to
+`OBSERVED_NEW_EPOCH` and permits one durable counter-1 selector candidate. The marker is persisted
+before dispatch. A durable authenticated pre-reboot selected-value reference enforces the same
+selector family and a different payload, so retained state cannot falsely prove acceptance. The
+candidate cannot be retried and becomes `ESTABLISHED` only through explicit consumed
+reconciliation. A measured external baseline remains optional validation evidence, not a runtime
+dependency. Reviewed unresolved evidence from the prior epoch is retained immutably when reboot
+adoption retires that epoch's live reservation.
+
+Authenticated alarm/system count reads use the pinned `Alerts.COUNT` and `System.COUNT` mappings from
+the target research revision `de7e867241fafd2fb8061ceeecf42af2883b9eb4`. Exact 8-byte GLB validation
+is required. Target evidence, not the mapping alone, establishes support; missing, ambiguous, malformed,
+or zero family counts leave the corresponding selector row blocked rather than guessed.
+
 The standalone candidate reads master and supervisor firmware numerically and accepts every
 well-formed version `>= V05.00.52`; it does not hardcode an exact accepted firmware. It additionally
 requires the observed canonical control protocol `1.3\0`. Setup failures therefore retain capability
@@ -39,8 +54,9 @@ prove local blocking, one `floor + 2` candidate to distinguish strict-next from 
 read-only value observation bound to an unresolved selector's durable hash, and authenticated
 next-reboot observation. The +2 reservation durably stores its exact prior floor; rejected/not-consumed
 reconciliation restores that floor rather than decrementing the candidate. Larger gaps and all scans
-are rejected. Reboot adoption makes write state uncertain until a separately measured epoch baseline
-is installed.
+are rejected. Reboot adoption makes write state uncertain until the epoch's one-shot counter-1
+bootstrap is resolved from reviewed semantic/counter evidence; a separately measured epoch baseline
+remains optional validation evidence rather than a runtime prerequisite.
 
 The exact candidate provides labelled application-level interruption, callback suppression and
 duplicate-callback injections. Those validate durable uncertainty behavior but are not substitutes for

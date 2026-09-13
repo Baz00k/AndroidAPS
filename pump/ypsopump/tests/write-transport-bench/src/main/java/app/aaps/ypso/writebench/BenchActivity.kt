@@ -98,8 +98,11 @@ class BenchActivity : Activity() {
                 "install" -> install()
                 "inspect" -> inspect()
                 "run-selector" -> runConnection(RunKind.SELECTOR)
+                "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
                 "observe-reboot" -> runConnection(RunKind.OBSERVE_REBOOT)
+                "record-bootstrap-reference" -> runConnection(RunKind.RECORD_BOOTSTRAP_REFERENCE)
+                "read-history-counts" -> runConnection(RunKind.READ_HISTORY_COUNTS)
                 "readiness-probe" -> runConnection(RunKind.READINESS_PROBE)
                 "reconcile" -> reconcile()
                 else -> error("Unknown action")
@@ -127,7 +130,31 @@ class BenchActivity : Activity() {
     private fun install() {
         val doc = loadDocument()
         try {
-            val baseline = JSONObject(File(filesDir, "write-baseline.json").readText())
+            val baselineFile = File(filesDir, "write-baseline.json")
+            if (!baselineFile.exists()) {
+                val installation =
+                    session.install(
+                        PumpSession.Provisioning(
+                            pump = doc.mac,
+                            serial = doc.serial,
+                            sharedKey = doc.sharedKey,
+                            createdAt = doc.createdAt.toEpochMilli(),
+                            importedAt = doc.capturedAt.toEpochMilli(),
+                            source = doc.source,
+                        ),
+                    )
+                recorder.fact(
+                    "KeyOnlyInstalled",
+                    JSONObject()
+                        .put("pump_hash", hash(doc.mac.toByteArray()))
+                        .put("key_id", PumpSession.fingerprint(doc.sharedKey))
+                        .put("installation", installation.name)
+                        .put("bootstrap", PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH.name),
+                )
+                report("INSTALLED:key-only;bootstrap=UNKNOWN_MID_EPOCH; observe current epoch, reboot, then bootstrap")
+                return
+            }
+            val baseline = JSONObject(baselineFile.readText())
             require(baseline.keys().asSequence().toSet() == setOf("pump", "key_id", "reboot", "read", "write", "source"))
             require(baseline.getString("pump").equals(doc.mac, true)) { "Baseline pump mismatch" }
             require(baseline.getString("key_id") == PumpSession.fingerprint(doc.sharedKey)) { "Baseline key mismatch" }
@@ -166,6 +193,7 @@ class BenchActivity : Activity() {
             val reservation = record.reservation
             report(
                 "SESSION:generation=${opened.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
+                    "bootstrap=${record.writeBootstrapState},bootstrap_attempted=${record.benchNewEpochBootstrapAttempted}," +
                     "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
             )
         } finally {
@@ -184,13 +212,19 @@ class BenchActivity : Activity() {
         }
         val doc = loadDocument().also { document = it }
         token = session.open(doc.mac, doc.sharedKey)
-        if (kind != RunKind.OBSERVE_SELECTOR) {
+        if (kind !in setOf(
+                RunKind.OBSERVE_SELECTOR,
+                RunKind.OBSERVE_REBOOT,
+                RunKind.RECORD_BOOTSTRAP_REFERENCE,
+                RunKind.READ_HISTORY_COUNTS,
+            )
+        ) {
             require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
                 "An earlier write requires reconciliation"
             }
         }
         selector =
-            if (kind == RunKind.OBSERVE_REBOOT) {
+            if (kind in setOf(RunKind.OBSERVE_REBOOT, RunKind.READ_HISTORY_COUNTS)) {
                 null
             } else {
                 Selector.parse(
@@ -220,7 +254,7 @@ class BenchActivity : Activity() {
             .forEach { require(it <= EXPECTED_SELECTOR_FRAME_COUNT) { "injected frame must be within 1..$EXPECTED_SELECTOR_FRAME_COUNT" } }
         require(kind == RunKind.SELECTOR ||
             injectedDisconnectAfterFrame == null && injectedIgnoredCallbackFrame == null && injectedDuplicateCallbackAfterFrame == null) {
-            "transport fault injection is valid only for run-selector"
+            "transport fault injection is valid only for ordinary selector writes"
         }
         recorder.fact(
             "RunRequested",
@@ -801,8 +835,10 @@ class BenchActivity : Activity() {
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
                     when (runKind) {
-                        RunKind.SELECTOR, RunKind.READINESS_PROBE -> startSelector(owner)
+                        RunKind.SELECTOR, RunKind.BOOTSTRAP_NEW_EPOCH, RunKind.READINESS_PROBE -> startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
+                        RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
+                        RunKind.READ_HISTORY_COUNTS -> readHistoryCounts(owner)
                         RunKind.OBSERVE_REBOOT -> {
                             close(owner)
                             report("REBOOT:not-observed; authenticated read remained in current epoch")
@@ -823,12 +859,109 @@ class BenchActivity : Activity() {
                         close(owner)
                         report(
                             "REBOOT:adopted;reboot=${adopted?.reboot};read=${adopted?.read};" +
-                                "write=${adopted?.write ?: "uncertain"}; reconnect and install measured write baseline required",
+                                "write=${adopted?.write ?: "uncertain"};bootstrap=${adopted?.writeBootstrapState};" +
+                                " reconnect before the one-time new-epoch bootstrap",
                         )
                     } else {
                         fail("prime read failed: ${it.message}")
                     }
                 },
+            )
+        }
+    }
+
+    private fun recordBootstrapReference(owner: BluetoothGatt) {
+        val selected = checkNotNull(selector)
+        require(selected.name == "event") { "Bootstrap reference must use the event selector family" }
+        val binding = resolveSelector(owner, selected) ?: return
+        readEncrypted(owner, binding.value) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val embedded = historyIndex(body)
+                    if (!YpsoCrc.isValid(body) || embedded == null) {
+                        fail("bootstrap reference event value is not CRC-valid history data")
+                        return@fold
+                    }
+                    val payloadHash = hash(YpsoGlb.encode(embedded))
+                    session.recordBenchNewEpochBootstrapReference(
+                        checkNotNull(token),
+                        selected.indexUuid.toString(),
+                        payloadHash,
+                    )
+                    recorder.fact(
+                        "BootstrapReferenceRecorded",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector_type", selected.name)
+                            .put("embedded_history_index", embedded)
+                            .put("selector_payload_sha256", payloadHash)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("crc_valid", true)
+                            .putSessionSnapshot(),
+                    )
+                    close(owner)
+                    report("BOOTSTRAP_REFERENCE:event=$embedded")
+                },
+                onFailure = { fail("bootstrap reference read failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun readHistoryCounts(owner: BluetoothGatt) {
+        val alarmCount = findUnique(owner, ALARM_COUNT_UUID)
+        val systemCount = findUnique(owner, SYSTEM_COUNT_UUID)
+        if (alarmCount == null || systemCount == null) {
+            fail(
+                "history count characteristic missing or ambiguous",
+                YpsoWriteFailure.Layer.READINESS,
+                alarmCount?.uuid ?: systemCount?.uuid,
+                stage = "HISTORY_COUNTS",
+            )
+            return
+        }
+        readEncrypted(owner, alarmCount) { alarmResult ->
+            alarmResult.fold(
+                onSuccess = { alarmBody ->
+                    val alarms = BenchEventCount.decode(alarmBody)
+                    recorder.fact(
+                        if (alarms != null) "AlarmCountVerified" else "AlarmCountRejected",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("body_size", alarmBody.size)
+                            .put("body_sha256", hash(alarmBody))
+                            .put("glb", alarms ?: JSONObject.NULL)
+                            .put("integrity", "EXACT_GLB"),
+                    )
+                    if (alarms == null) {
+                        fail("alarm count exact GLB invalid")
+                        return@fold
+                    }
+                    readEncrypted(owner, systemCount) { systemResult ->
+                        systemResult.fold(
+                            onSuccess = { systemBody ->
+                                val systems = BenchEventCount.decode(systemBody)
+                                recorder.fact(
+                                    if (systems != null) "SystemCountVerified" else "SystemCountRejected",
+                                    JSONObject()
+                                        .put("write_id", writeId)
+                                        .put("body_size", systemBody.size)
+                                        .put("body_sha256", hash(systemBody))
+                                        .put("glb", systems ?: JSONObject.NULL)
+                                        .put("integrity", "EXACT_GLB"),
+                                )
+                                if (systems == null) {
+                                    fail("system count exact GLB invalid")
+                                    return@fold
+                                }
+                                close(owner)
+                                report("COUNTS:alarm=$alarms,system=$systems")
+                            },
+                            onFailure = { fail("system count read failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("alarm count read failed: ${it.message}") },
             )
         }
     }
@@ -858,6 +991,7 @@ class BenchActivity : Activity() {
                 firmware = firmware,
                 deadlineMs = intent.getLongExtra("deadline_ms", 8_000L),
                 forwardGap = forwardGap,
+                newEpochBootstrap = runKind == RunKind.BOOTSTRAP_NEW_EPOCH,
                 dispatch = { frame ->
                     dispatchedFrames++
                     val accepted = writeCharacteristic(owner, binding.index, frame)
@@ -1307,8 +1441,11 @@ class BenchActivity : Activity() {
 
     private enum class RunKind {
         SELECTOR,
+        BOOTSTRAP_NEW_EPOCH,
         OBSERVE_SELECTOR,
         OBSERVE_REBOOT,
+        RECORD_BOOTSTRAP_REFERENCE,
+        READ_HISTORY_COUNTS,
         READINESS_PROBE,
     }
 
@@ -1391,6 +1528,8 @@ class BenchActivity : Activity() {
         val CONTROL_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         val EXTENDED_READ_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
         val EVENT_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
+        val ALARM_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbec83b7bc5")
+        val SYSTEM_COUNT_UUID: UUID = UUID.fromString("86a5a431-d442-2c8d-304b-19ee355571fc")
         val EVENT_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
         val ALARM_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeca3b7bc5")
         val SYSTEM_VALUE_UUID: UUID = UUID.fromString("ae3022af-2ec8-bf88-e64c-da68c9a3891a")

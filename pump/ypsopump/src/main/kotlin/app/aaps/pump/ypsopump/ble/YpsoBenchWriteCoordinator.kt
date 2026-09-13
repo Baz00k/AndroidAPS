@@ -51,6 +51,7 @@ internal class YpsoBenchWriteCoordinator(
         firmware: String?,
         deadlineMs: Long,
         forwardGap: Int = 0,
+        newEpochBootstrap: Boolean = false,
         dispatch: (ByteArray) -> Boolean,
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean {
@@ -69,10 +70,17 @@ internal class YpsoBenchWriteCoordinator(
             return false
         }
         val record = session.snapshot()
+        val bootstrapReady =
+            newEpochBootstrap &&
+                record?.writeBootstrapState == PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH &&
+                !record.benchNewEpochBootstrapAttempted &&
+                record.write == null &&
+                record.reservation == null &&
+                record.benchNewEpochBootstrapReference != null
         val counterCertain =
             record?.reboot != null &&
                 record.read != null &&
-                record.write != null &&
+                (record.write != null || bootstrapReady) &&
                 (record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
         val ready = readiness.snapshot(owner.readinessOwner(), counterCertain, setupRequired = true)
         if (!ready.commandReady) {
@@ -100,17 +108,19 @@ internal class YpsoBenchWriteCoordinator(
         }
         val reservation =
             runCatching {
-                session.reserveBenchCandidate(
-                    owner.token,
-                    transaction,
+                val intent =
                     PumpSession.WriteIntent(
                         writeId,
                         characteristic.toString(),
                         category.name,
                         MessageDigest.getInstance("SHA-256").digest(plaintext).joinToString("") { "%02x".format(it) },
-                    ),
-                    forwardGap,
-                )
+                    )
+                if (newEpochBootstrap) {
+                    require(forwardGap == 0) { "new-epoch bootstrap cannot use a forward gap" }
+                    session.reserveBenchNewEpochBootstrapCandidate(owner.token, transaction, intent)
+                } else {
+                    session.reserveBenchCandidate(owner.token, transaction, intent, forwardGap)
+                }
             }.getOrElse {
                 finish()
                 onOutcome(

@@ -367,6 +367,50 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `failed same-key candidate merge retains candidate write evidence`() {
+        val (service) = service()
+        install(service)
+        acceptFirst(service.owner, mac, key)
+        service.markVerified(serial, 1_500)
+        service.owner.provisionBenchWriteBaseline(mac, key, reboot = 8, write = 42)
+        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000))
+        val candidate = service.connectionSession()!!
+        val token = service.owner.openGeneration(candidate.generation, mac, key)
+        val transaction = service.owner.begin(token)
+        val reservation =
+            service.owner.reserveBenchCandidate(
+                token,
+                transaction,
+                PumpSession.WriteIntent("selector", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        service.owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        service.owner.finish(token, transaction)
+        service.owner.recordUnresolvedWriteEvidence(
+            token,
+            reservation.id,
+            "cd".repeat(32),
+            "reviewed candidate evidence",
+        )
+
+        assertTrue(
+            service.failCandidateOrRecord(
+                candidate.generation,
+                candidate.attemptId,
+                setOf(PumpSession.AvailabilityCause.TRANSPORT),
+                "read",
+                now = 3_000,
+            ),
+        )
+
+        val retained = service.owner.committedRecord()!!
+        assertEquals(reservation.id, retained.reservation!!.id)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, retained.reservation!!.phase)
+        assertEquals("cd".repeat(32), retained.writeEvidence.single().evidenceHash)
+        assertNull(retained.writeEvidence.single().resolution)
+    }
+
+    @Test
     fun `promotion is rejected once a session mutation has started`() {
         val (service) = service()
         install(service)
@@ -552,7 +596,13 @@ class YpsoProvisioningServiceTest {
         val first = YpsoProvisioningService(PumpSession(base), YpsoPumpState(), Legacy())
         install(first)
         acceptFirst(first.owner, mac, key)
-        base.saved = base.saved.copy(records = base.saved.records.map { it.copy(write = 41) })
+        base.saved =
+            base.saved.copy(
+                records =
+                    base.saved.records.map {
+                        it.copy(write = 41, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+                    },
+            )
         val service = YpsoProvisioningService(PumpSession(base), YpsoPumpState(), Legacy())
         val token = service.owner.open(mac, key)
         val transaction = service.owner.begin(token)

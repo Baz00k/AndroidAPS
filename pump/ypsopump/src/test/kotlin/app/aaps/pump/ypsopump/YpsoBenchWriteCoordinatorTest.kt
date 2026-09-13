@@ -41,7 +41,13 @@ class YpsoBenchWriteCoordinatorTest {
 
     init {
         PumpSession(store).provisionReadBaseline("pump", key, 8, 100)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(write = 42, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+                    },
+            )
         session = PumpSession(store)
         token = session.open("pump", key)
         owner = YpsoBenchWriteCoordinator.Owner(gatt, "connection", token)
@@ -468,6 +474,127 @@ class YpsoBenchWriteCoordinatorTest {
                 .single()
                 .evidenceHash,
         )
+    }
+
+    @Test
+    fun `authenticated observed new epoch permits exactly one counter one bootstrap selector`() {
+        session.quiesce()
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            reboot = 9,
+                            read = 1,
+                            write = null,
+                            reservation = null,
+                            benchNewEpochBootstrapReference =
+                                PumpSession.BootstrapReference(
+                                    reboot = 8,
+                                    read = 100,
+                                    characteristic = YpsoWritePolicy.EVENT_INDEX_UUID.toString(),
+                                    payloadHash = java.security.MessageDigest.getInstance("SHA-256")
+                                        .digest(YpsoGlb.encode(17))
+                                        .joinToString("") { "%02x".format(it) },
+                                ),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH,
+                            benchNewEpochBootstrapAttempted = false,
+                            benchStrictNextAccepted = false,
+                            benchForwardGapAttempted = false,
+                        )
+                    },
+            )
+        val bootstrapSession = PumpSession(store)
+        val bootstrapToken = bootstrapSession.open("pump", key)
+        val bootstrapReadiness = YpsoCommandReadiness()
+        val bootstrapOwner = YpsoBenchWriteCoordinator.Owner(gatt, "bootstrap-connection", bootstrapToken)
+        bootstrapReadiness.connected(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.authenticated(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.readVerified(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.requiredSetupVerified(bootstrapOwner.readinessOwner())
+        val bootstrapFrames = mutableListOf<ByteArray>()
+        val bootstrapCallbacks = mutableListOf<YpsoWriteOutcome>()
+        val bootstrapTransport = YpsoSerializedWriteTransport({ _, _ -> }, {})
+        val bootstrapCoordinator = YpsoBenchWriteCoordinator(bootstrapSession, crypto, bootstrapReadiness, bootstrapTransport)
+
+        assertTrue(
+            bootstrapCoordinator.writeSelector(
+                writeId = "bootstrap-selector",
+                owner = bootstrapOwner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.EVENT_INDEX_UUID,
+                plaintext = YpsoGlb.encode(18),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                newEpochBootstrap = true,
+                dispatch = { bootstrapFrames += it.copyOf(); true },
+                onOutcome = bootstrapCallbacks::add,
+            ),
+        )
+        while (bootstrapCallbacks.isEmpty()) {
+            bootstrapTransport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(bootstrapFrames), key)
+        assertEquals(9, message.reboot)
+        assertEquals(1L, message.counter)
+        assertEquals(PumpSession.WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR, bootstrapSession.snapshot()!!.reservation!!.candidate)
+        assertTrue(bootstrapSession.snapshot()!!.benchNewEpochBootstrapAttempted)
+    }
+
+    @Test
+    fun `new epoch bootstrap without a durable reference fails readiness before reservation`() {
+        session.quiesce()
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            reboot = 9,
+                            read = 1,
+                            write = null,
+                            reservation = null,
+                            benchNewEpochBootstrapReference = null,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH,
+                            benchNewEpochBootstrapAttempted = false,
+                            benchStrictNextAccepted = false,
+                            benchForwardGapAttempted = false,
+                        )
+                    },
+            )
+        val bootstrapSession = PumpSession(store)
+        val bootstrapToken = bootstrapSession.open("pump", key)
+        val bootstrapReadiness = YpsoCommandReadiness()
+        val bootstrapOwner = YpsoBenchWriteCoordinator.Owner(gatt, "bootstrap-connection", bootstrapToken)
+        bootstrapReadiness.connected(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.authenticated(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.readVerified(bootstrapOwner.readinessOwner())
+        bootstrapReadiness.requiredSetupVerified(bootstrapOwner.readinessOwner())
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val bootstrapCoordinator =
+            YpsoBenchWriteCoordinator(
+                bootstrapSession,
+                crypto,
+                bootstrapReadiness,
+                YpsoSerializedWriteTransport({ _, _ -> }, {}),
+            )
+
+        assertFalse(
+            bootstrapCoordinator.writeSelector(
+                writeId = "bootstrap-selector",
+                owner = bootstrapOwner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.EVENT_INDEX_UUID,
+                plaintext = YpsoGlb.encode(18),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                newEpochBootstrap = true,
+                dispatch = { error("dispatch must not run") },
+                onOutcome = outcomes::add,
+            ),
+        )
+        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
+        assertNull(bootstrapSession.snapshot()!!.reservation)
+        assertFalse(bootstrapSession.snapshot()!!.benchNewEpochBootstrapAttempted)
     }
 
     private fun makeReady() {

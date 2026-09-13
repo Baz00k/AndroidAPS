@@ -97,7 +97,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(9, org.json.JSONObject(body).getInt("version"))
+        assertEquals(10, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -122,6 +122,7 @@ class SessionJournalTest {
                     old.records.map {
                         it.copy(
                             write = 44,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                             reservation = reservation,
                             benchStrictNextAccepted = true,
                             benchForwardGapAttempted = true
@@ -138,6 +139,102 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `version ten roundtrip preserves explicit new epoch bootstrap state and attempt marker`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val state =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            reboot = 9,
+                            read = 1,
+                            write = null,
+                            benchNewEpochBootstrapReference =
+                                PumpSession.BootstrapReference(
+                                    reboot = 8,
+                                    read = 100,
+                                    characteristic = "characteristic",
+                                    payloadHash = "ab".repeat(32),
+                                ),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH,
+                            benchNewEpochBootstrapAttempted = true,
+                        )
+                    },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val loaded = journal.load().records.single()
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, loaded.writeBootstrapState)
+        assertTrue(loaded.benchNewEpochBootstrapAttempted)
+        assertEquals(8, loaded.benchNewEpochBootstrapReference!!.reboot)
+    }
+
+    @Test
+    fun `version nine migration preserves established floor and starts with no bootstrap reference`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "reservation-4",
+                counter = 4,
+                phase = PumpSession.Phase.ACKED,
+                operationId = "selector-gap",
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "selector-gap",
+                reservationId = reservation.id,
+                counter = 4,
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "reviewed but unresolved",
+            )
+        journal.commit(
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 4,
+                            reservation = reservation,
+                            writeEvidence = listOf(evidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchStrictNextAccepted = true,
+                            benchForwardGapAttempted = true,
+                        )
+                    },
+            ),
+        )
+        val body = committedBody(storage).put("version", 9)
+        body.getJSONArray("records").getJSONObject(0).apply {
+            remove("writeBootstrapState")
+            remove("benchNewEpochBootstrapAttempted")
+            remove("benchNewEpochBootstrapReference")
+        }
+        replaceBody(storage, body)
+
+        val loaded = journal.load().records.single()
+
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, loaded.writeBootstrapState)
+        assertFalse(loaded.benchNewEpochBootstrapAttempted)
+        assertNull(loaded.benchNewEpochBootstrapReference)
+        assertEquals(reservation, loaded.reservation)
+        assertEquals(listOf(evidence), loaded.writeEvidence)
+    }
+
+    @Test
     fun `version eight rejects missing reservation and epoch gate fields`() {
         val baseState =
             old.copy(
@@ -145,6 +242,7 @@ class SessionJournalTest {
                     old.records.map {
                         it.copy(
                             write = 101,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                             reservation =
                                 PumpSession.Reservation(
                                     id = "reservation-101",
@@ -240,7 +338,12 @@ class SessionJournalTest {
             old.copy(
                 records =
                     old.records.map {
-                        it.copy(write = 43, reservation = reservation, writeEvidence = listOf(evidence))
+                        it.copy(
+                            write = 43,
+                            reservation = reservation,
+                            writeEvidence = listOf(evidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
                     },
             ),
         )
@@ -278,6 +381,7 @@ class SessionJournalTest {
                     old.records.map {
                         it.copy(
                             write = 44,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                             reservation = reservation,
                             benchStrictNextAccepted = true,
                             benchForwardGapAttempted = true,

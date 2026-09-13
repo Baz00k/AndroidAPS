@@ -58,13 +58,18 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..9)
+        check(version in 1..6 || version in 8..10)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
             if (version >= 8) {
                 require(r.has("benchStrictNextAccepted") && !r.isNull("benchStrictNextAccepted"))
                 require(r.has("benchForwardGapAttempted") && !r.isNull("benchForwardGapAttempted"))
+            }
+            if (version >= 10) {
+                require(r.has("writeBootstrapState") && !r.isNull("writeBootstrapState"))
+                require(r.has("benchNewEpochBootstrapAttempted") && !r.isNull("benchNewEpochBootstrapAttempted"))
+                require(r.has("benchNewEpochBootstrapReference"))
             }
             val reservation = r.optJSONObject("reservation")?.let {
                 if (version >= 8) {
@@ -137,6 +142,23 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         )
                     }
                 }.orEmpty(),
+                benchNewEpochBootstrapReference = r.optJSONObject("benchNewEpochBootstrapReference")?.let {
+                    PumpSession.BootstrapReference(
+                        reboot = it.getInt("reboot"),
+                        read = it.getLong("read"),
+                        characteristic = it.getString("characteristic"),
+                        payloadHash = it.getString("payloadHash"),
+                    )
+                },
+                writeBootstrapState =
+                    r.stringOrNull("writeBootstrapState")?.let(PumpSession.WriteBootstrapState::valueOf)
+                        ?: if (r.isNull("write")) {
+                            PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH
+                        } else {
+                            PumpSession.WriteBootstrapState.ESTABLISHED
+                        },
+                benchNewEpochBootstrapAttempted =
+                    if (version >= 10) r.getBoolean("benchNewEpochBootstrapAttempted") else false,
                 benchStrictNextAccepted =
                     if (version >= 8) r.getBoolean("benchStrictNextAccepted") else inferredLegacyGap,
                 benchForwardGapAttempted =
@@ -201,6 +223,15 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
                 .put("source", JSONObject(r.source)).put("verifiedAt", r.verifiedAt ?: JSONObject.NULL)
                 .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL)
+                .put("benchNewEpochBootstrapReference", r.benchNewEpochBootstrapReference?.let {
+                    JSONObject()
+                        .put("reboot", it.reboot)
+                        .put("read", it.read)
+                        .put("characteristic", it.characteristic)
+                        .put("payloadHash", it.payloadHash)
+                } ?: JSONObject.NULL)
+                .put("writeBootstrapState", r.writeBootstrapState.name)
+                .put("benchNewEpochBootstrapAttempted", r.benchNewEpochBootstrapAttempted)
                 .put("benchStrictNextAccepted", r.benchStrictNextAccepted)
                 .put("benchForwardGapAttempted", r.benchForwardGapAttempted)
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
@@ -228,7 +259,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 9).put("records", records)
+        val body = JSONObject().put("version", 10).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

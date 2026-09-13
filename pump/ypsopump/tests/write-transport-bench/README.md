@@ -34,10 +34,11 @@ adb -s "$SERIAL" shell pm grant app.aaps.ypso.writebench android.permission.BLUE
 Record source revision, APK SHA-256, signer fingerprint, phone model, Android version, pump firmware,
 redacted pump identity and initial pump/controller/clock state.
 
-## Import the session and measured floors
+## Import the session; measured floors are optional validation evidence
 
-Force-stop the app. Push the canonical `ypso-keys` schema-v1 document as `ypso-keys.json` and a
-separately reviewed, independently measured baseline as `write-baseline.json`:
+Force-stop the app and push the canonical `ypso-keys` schema-v1 document as `ypso-keys.json`.
+A separately reviewed, independently measured `write-baseline.json` may also be supplied for an
+already active validation epoch; it is not a runtime prerequisite for key-only onboarding:
 
 ```json
 {
@@ -61,11 +62,56 @@ adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity --
 adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
 ```
 
-The baseline is epoch-bound and one-time: it cannot replace an established write floor or erase an
+When supplied, the baseline is epoch-bound and one-time: it cannot replace an established write floor or erase an
 unresolved reservation. Protect both input files; `ypso-keys.json` contains the real shared key.
-After a validated pump reboot, `observe-reboot` deliberately makes the write floor uncertain; a new
-independently measured baseline for that adopted epoch may then establish it. This is not a reset of
-an existing floor.
+After a validated pump reboot, `observe-reboot` deliberately makes the write floor uncertain. The
+bounded new-epoch bootstrap below is the runtime path to establish the reset floor; an external
+baseline remains optional independent validation evidence and is not required after adoption.
+
+Without a baseline, `install` records `UNKNOWN_MID_EPOCH`. Run `observe-reboot` before physically
+rebooting to learn the current authenticated reboot/read tuple without enabling writes. After the user
+performs the reviewed disconnected-pump reboot, run `observe-reboot` again. Only exact authenticated
+`old + 1` adoption produces `OBSERVED_NEW_EPOCH`; jumps and lower generations fail closed.
+
+Before reboot, durably record the authenticated current event-selector value. The bootstrap action
+must use the same family and rejects an identical payload, making retained-state read-back incapable
+of falsely proving acceptance:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action record-bootstrap-reference --es write_id "reference-$(uuidgen)" \
+  --es selector_type event --ei selector 0
+```
+
+The numeric `selector` extra identifies the family binding for this read-only action; the durable
+reference value itself comes from the CRC-valid embedded history index returned by the pump.
+
+The new epoch permits exactly one `bootstrap-new-epoch` selector at counter `1`. The session enforces
+that its payload differs from the durable pre-reboot reference so an exact CRC-valid read-back can
+prove acceptance. The attempted marker is persisted before dispatch and survives restart/in-place upgrade.
+No retry is permitted, including after proven local not-sent. Only explicit consumed reconciliation
+changes the bootstrap state to `ESTABLISHED`; unknown or not-consumed evidence leaves writes blocked.
+
+```sh
+WRITE_ID="$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action bootstrap-new-epoch --es write_id "$WRITE_ID" \
+  --es selector_type event --ei selector 18
+```
+
+Family-specific alarm and system indices must come from authenticated read-only family counts, never
+from guessing or a shared database index:
+
+The count UUIDs are pinned to the `Alerts.COUNT` and `System.COUNT` mappings in
+`SandraK82/ypsopump-research` revision `de7e867241fafd2fb8061ceeecf42af2883b9eb4`; target reads still
+decide whether each mapping is usable. Missing, ambiguous, unauthenticated, or non-exact-GLB values fail
+closed. Select the most recent existing entry as `count - 1`, matching the pinned reference's zero-based
+history iteration; a zero count leaves that selector family blocked.
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action read-history-counts --es write_id "counts-$(uuidgen)"
+```
 
 ## Run one selector transaction
 
@@ -184,8 +230,10 @@ rejected/not-consumed result this row is the final evidence that the exact prior
 
 ### Reboot observation
 
-With no unresolved write, place the disconnected bench pump through the reviewed reboot procedure,
-then run one observation:
+First record the authenticated event-selector reference described above. A reviewed unresolved write
+may remain only when immutable unresolved evidence fully binds that reservation; otherwise there must
+be no unresolved write. Place the disconnected bench pump through the reviewed reboot procedure, then
+run one observation:
 
 ```sh
 adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
@@ -194,9 +242,10 @@ adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
 
 Only an authenticated next generation (`old + 1`) with a positive read counter is adopted, under the
 same `>= V05.00.52` and control `1.3` capability policy. The response is discarded, the connection is
-closed, and the write floor becomes uncertain. Lower generations, jumps, zero counters, unsupported
-capability identity, or any unresolved write fail closed. Independently measure the new epoch's write
-floor before installing a new `write-baseline.json`; never infer that it reset to zero.
+closed, and the write floor becomes uncertain in `OBSERVED_NEW_EPOCH`. Lower generations, jumps, zero
+counters, unsupported capability identity, or an unresolved write without fully bound reviewed
+evidence fail closed. Never infer that the floor reset to zero: execute the one-time counter-1
+bootstrap and reconcile it only from exact semantic/counter evidence.
 
 ## Explicit reconciliation
 

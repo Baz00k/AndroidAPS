@@ -34,7 +34,7 @@ class PumpSessionTest {
     fun `observed reboot commits independent floor and invalidates old connection`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val old = owner.open(pump, key)
         val id = owner.begin(old)
@@ -44,6 +44,7 @@ class PumpSessionTest {
         assertEquals(9, store.saved.records.single().reboot)
         assertEquals(1L, store.saved.records.single().read)
         assertNull(store.saved.records.single().write)
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, store.saved.records.single().writeBootstrapState)
         assertThrows(IllegalStateException::class.java) { owner.begin(old) }
         val restored = PumpSession(store)
         val token = restored.open(pump, key)
@@ -83,6 +84,7 @@ class PumpSessionTest {
         store.saved = store.saved.copy(records = store.saved.records.map {
             it.copy(
                 write = 42,
+                writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                 reservation = PumpSession.Reservation("pending", 42, PumpSession.Phase.POSSIBLY_SENT, priorWrite = 41),
             )
         })
@@ -104,6 +106,7 @@ class PumpSessionTest {
                     store.saved.records.map {
                         it.copy(
                             write = 42,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                             reservation =
                                 PumpSession.Reservation(
                                     "verified",
@@ -134,6 +137,207 @@ class PumpSessionTest {
         assertNull(adopted.reservation)
         assertFalse(adopted.benchStrictNextAccepted)
         assertFalse(adopted.benchForwardGapAttempted)
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, adopted.writeBootstrapState)
+        assertFalse(adopted.benchNewEpochBootstrapAttempted)
+    }
+
+    @Test
+    fun `reviewed unresolved old epoch evidence permits exact next reboot without resolving old counter`() {
+        val store = MemoryStore()
+        initialized(store)
+        val reservation =
+            PumpSession.Reservation(
+                "gap-reservation",
+                4,
+                PumpSession.Phase.ACKED,
+                "gap-operation",
+                "characteristic",
+                "HISTORY_SELECTOR",
+                "ab".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "gap-operation",
+                reservationId = reservation.id,
+                counter = 4,
+                characteristic = "characteristic",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "same-value readback could not classify the one-time gap candidate",
+            )
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 4,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            reservation = reservation,
+                            writeEvidence = listOf(evidence),
+                            benchStrictNextAccepted = true,
+                            benchForwardGapAttempted = true,
+                        )
+                    },
+            )
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+
+        val adopted = store.saved.records.single()
+        assertEquals(9, adopted.reboot)
+        assertEquals(1L, adopted.read)
+        assertNull(adopted.write)
+        assertNull(adopted.reservation)
+        assertEquals(listOf(evidence), adopted.writeEvidence)
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, adopted.writeBootstrapState)
+        assertFalse(adopted.benchNewEpochBootstrapAttempted)
+        assertFalse(adopted.benchStrictNextAccepted)
+        assertFalse(adopted.benchForwardGapAttempted)
+    }
+
+    @Test
+    fun `new epoch bootstrap is counter one attempted once and only becomes established on consumed evidence`() {
+        val store = MemoryStore()
+        initialized(store)
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32))
+        val transaction = owner.begin(token)
+
+        val reservation = owner.reserveBenchNewEpochBootstrapCandidate(token, transaction, intent)
+
+        assertEquals(1L, reservation.counter)
+        assertEquals(0L, reservation.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR, reservation.candidate)
+        assertTrue(owner.snapshot()!!.benchNewEpochBootstrapAttempted)
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+        owner.finish(token, transaction)
+        owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "fresh selector readback matched")
+
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, owner.snapshot()!!.writeBootstrapState)
+        assertEquals(1L, owner.snapshot()!!.write)
+        assertEquals(PumpSession.Phase.VERIFIED, owner.snapshot()!!.reservation!!.phase)
+    }
+
+    @Test
+    fun `new epoch bootstrap cannot run mid epoch or retry after proven not sent`() {
+        val store = MemoryStore()
+        var owner = initialized(store)
+        var token = owner.open(pump, key)
+        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32))
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent)
+        }
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        owner.reserveBenchNewEpochBootstrapCandidate(token, transaction, intent)
+        owner.markNotSent(token, transaction)
+        owner.finish(token, transaction)
+        assertNull(owner.snapshot()!!.write)
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, owner.snapshot()!!.writeBootstrapState)
+
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent.copy(operationId = "retry"))
+        }
+    }
+
+    @Test
+    fun `new epoch bootstrap requires pre-reboot reference and rejects retained selector value`() {
+        val store = MemoryStore()
+        initialized(store)
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent)
+        }
+
+        val secondStore = MemoryStore()
+        initialized(secondStore)
+        owner = PumpSession(secondStore)
+        token = owner.open(pump, key)
+        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.quiesce()
+        owner = PumpSession(secondStore)
+        token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(secondStore)
+        token = owner.open(pump, key)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent)
+        }
+    }
+
+    @Test
+    fun `established bootstrap permits a fresh current epoch reference for the next reboot`() {
+        val store = MemoryStore()
+        initialized(store)
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        val reservation =
+            owner.reserveBenchNewEpochBootstrapCandidate(
+                token,
+                transaction,
+                PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32)),
+            )
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+        owner.finish(token, transaction)
+        owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted")
+
+        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "bc".repeat(32))
+
+        assertEquals(9, owner.snapshot()!!.benchNewEpochBootstrapReference!!.reboot)
+        assertEquals("bc".repeat(32), owner.snapshot()!!.benchNewEpochBootstrapReference!!.payloadHash)
     }
 
     @Test
@@ -261,7 +465,7 @@ class PumpSessionTest {
             val store = MemoryStore()
             initialized(store)
             // Injected bench contract only: production provisioning always leaves write=null.
-            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
             val owner = PumpSession(store)
             val token = owner.open(pump, key)
             val transaction = owner.begin(token)
@@ -292,7 +496,7 @@ class PumpSessionTest {
         var owner = initialized(store)
         var token = owner.open(pump, key)
         assertThrows(SecurityException::class.java) { owner.reserve(token, owner.begin(token)) }
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = Long.MAX_VALUE, read = Long.MAX_VALUE) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE) })
         owner = PumpSession(store)
         token = owner.open(pump, key)
         assertThrows(SecurityException::class.java) { accept(owner, token, Long.MAX_VALUE) }
@@ -304,7 +508,7 @@ class PumpSessionTest {
     fun `proven local not sent restores counter and permits a new reservation`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
         val transaction = owner.begin(token)
@@ -324,7 +528,7 @@ class PumpSessionTest {
     fun `bounded forward gap retains exact prior floor when proven not consumed`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         store.saved = store.saved.copy(records = store.saved.records.map { it.copy(benchStrictNextAccepted = true) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
@@ -353,7 +557,7 @@ class PumpSessionTest {
     fun `bench candidate rejects offsets beyond the single forward gap`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
         val transaction = owner.begin(token)
@@ -370,7 +574,7 @@ class PumpSessionTest {
     fun `forward gap requires accepted strict next and is attempted once per epoch across restart`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         var owner = PumpSession(store)
         var token = owner.open(pump, key)
         val intent = PumpSession.WriteIntent("gap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
@@ -403,7 +607,7 @@ class PumpSessionTest {
     fun `accepted standard reservation cannot unlock the bench forward gap`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
         val transaction = owner.begin(token)
@@ -434,7 +638,7 @@ class PumpSessionTest {
     fun `restart can roll back only a durable pre-dispatch reservation`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
         val transaction = owner.begin(token)
@@ -456,7 +660,7 @@ class PumpSessionTest {
         for (phase in listOf(PumpSession.Phase.ACKED, PumpSession.Phase.VERIFIED)) {
             val store = MemoryStore()
             initialized(store)
-            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
             val owner = PumpSession(store)
             val token = owner.open(pump, key)
             val transaction = owner.begin(token)
@@ -476,7 +680,7 @@ class PumpSessionTest {
         for (resolution in PumpSession.WriteResolution.entries) {
             val store = MemoryStore()
             initialized(store)
-            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
             val owner = PumpSession(store)
             val token = owner.open(pump, key)
             val transaction = owner.begin(token)
@@ -514,7 +718,7 @@ class PumpSessionTest {
     fun `write reservation durably identifies characteristic purpose and plaintext hash`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.copy(write = 42) })
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
         val owner = PumpSession(store)
         val token = owner.open(pump, key)
         val transaction = owner.begin(token)
@@ -528,4 +732,7 @@ class PumpSessionTest {
         assertEquals("ab".repeat(32), reserved.payloadHash)
         assertEquals(reserved, store.saved.records.single().reservation)
     }
+    private fun PumpSession.Record.established(write: Long): PumpSession.Record =
+        copy(write = write, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+
 }
