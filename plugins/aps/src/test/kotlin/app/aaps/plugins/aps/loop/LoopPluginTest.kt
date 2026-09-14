@@ -9,6 +9,8 @@ import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
+import app.aaps.core.interfaces.aps.APSResult
+import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -16,10 +18,13 @@ import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.pump.PumpStatusProvider
+import app.aaps.core.interfaces.pump.PumpSync
+import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.receivers.ReceiverStatusStore
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.HardLimits
+import app.aaps.core.keys.IntNonKey
 import app.aaps.core.nssdk.interfaces.RunningConfiguration
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.pump.virtual.VirtualPumpPlugin
@@ -33,7 +38,9 @@ import org.mockito.Mock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -537,4 +544,71 @@ class LoopPluginTest : TestBaseWithProfile() {
 
 // endregion
 
+// region ---- open loop acceptChangeRequest (issue #25) ----
+
+    private fun unacceptedSuggestionResult(): APSResult =
+        mock {
+            on { isTempBasalRequested } doReturn true
+            on { rate } doReturn 1.0
+            on { duration } doReturn 30
+            on { usePercent } doReturn false
+            on { isChangeRequested } doReturn true
+        }
+
+    @Test
+    fun `acceptChangeRequest enacts the temp basal and counts one manual enactment`() {
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        whenever(virtualPumpPlugin.isInitialized()).thenReturn(true)
+        whenever(virtualPumpPlugin.isSuspended()).thenReturn(false)
+        whenever(virtualPumpPlugin.baseBasalRate).thenReturn(0.5)
+        whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
+        whenever(processedTbrEbData.getTempBasalIncludingConvertedExtended(anyLong())).thenReturn(null)
+        whenever(commandQueue.tempBasalAbsolute(any(), any(), any(), any(), any(), any())).thenAnswer { invocation ->
+            val callback = invocation.getArgument(5) as Callback
+            callback
+                .result(pumpEnactResultProvider.get().absolute(1.0).duration(30).enacted(true).success(true))
+                .run()
+            true
+        }
+        loopPlugin.lastRun = Loop.LastRun().also { lastRun ->
+            lastRun.constraintsProcessed = unacceptedSuggestionResult()
+            lastRun.lastAPSRun = dateUtil.now() - T.mins(1).msecs()
+        }
+
+        loopPlugin.acceptChangeRequest()
+
+        verify(commandQueue).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
+        assertThat(loopPlugin.lastRun?.lastOpenModeAccept).isEqualTo(dateUtil.now())
+        assertThat(loopPlugin.lastRun?.lastTBRRequest).isEqualTo(loopPlugin.lastRun?.lastAPSRun)
+        assertThat(loopPlugin.lastRun?.lastTBREnact).isEqualTo(dateUtil.now())
+        verify(preferences).inc(IntNonKey.ObjectivesManualEnacts)
+    }
+
+    @Test
+    fun `acceptChangeRequest does not count a manual enactment when the pump does not enact`() {
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        whenever(virtualPumpPlugin.isInitialized()).thenReturn(true)
+        whenever(virtualPumpPlugin.isSuspended()).thenReturn(false)
+        whenever(virtualPumpPlugin.baseBasalRate).thenReturn(0.5)
+        whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
+        whenever(processedTbrEbData.getTempBasalIncludingConvertedExtended(anyLong())).thenReturn(null)
+        whenever(commandQueue.tempBasalAbsolute(any(), any(), any(), any(), any(), any())).thenAnswer { invocation ->
+            val callback = invocation.getArgument(5) as Callback
+            callback
+                .result(pumpEnactResultProvider.get().absolute(1.0).duration(30).enacted(false).success(false))
+                .run()
+            true
+        }
+        loopPlugin.lastRun = Loop.LastRun().also { lastRun ->
+            lastRun.constraintsProcessed = unacceptedSuggestionResult()
+            lastRun.lastAPSRun = dateUtil.now() - T.mins(1).msecs()
+        }
+
+        loopPlugin.acceptChangeRequest()
+
+        assertThat(loopPlugin.lastRun?.lastOpenModeAccept).isEqualTo(0L)
+        verify(preferences, never()).inc(IntNonKey.ObjectivesManualEnacts)
+    }
+
+// endregion
 }

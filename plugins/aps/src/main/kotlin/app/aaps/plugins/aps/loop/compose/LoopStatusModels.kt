@@ -1,5 +1,8 @@
 package app.aaps.plugins.aps.loop.compose
 
+import app.aaps.core.interfaces.aps.APSResult
+import app.aaps.core.interfaces.aps.Loop
+
 /** One label/value line of the loop's last run. [value] may be empty while nothing has run yet. */
 data class LoopStatusRow(val label: String, val value: CharSequence)
 
@@ -13,6 +16,28 @@ data class LoopStatusState(
     val lastRun: String = "",
     val source: String = "",
     val running: Boolean = false,
+    val suggestion: CharSequence = "",
     val detail: List<LoopStatusRow> = emptyList(),
     val timing: List<LoopStatusRow> = emptyList()
 )
+
+/**
+ * Whether an open-loop suggestion is still waiting to be accepted, i.e. the "Accept temp basal"
+ * action should be offered. Same condition the legacy Overview accept button used:
+ * the suggestion was never accepted, or a new APS run happened after the last acceptance,
+ * and the processed result actually requests a change — while the pump is ready,
+ * the loop runs in OPEN_LOOP mode and the loop plugin is enabled.
+ */
+fun openLoopSuggestionPending(
+    lastRun: Loop.LastRun?,
+    constraintsProcessed: APSResult?,
+    pumpInitialized: Boolean,
+    openLoop: Boolean,
+    loopEnabled: Boolean
+): Boolean =
+    lastRun != null &&
+        (lastRun.lastOpenModeAccept == 0L || lastRun.lastOpenModeAccept < lastRun.lastAPSRun) &&
+        constraintsProcessed?.isChangeRequested == true &&
+        pumpInitialized &&
+        openLoop &&
+        loopEnabled
