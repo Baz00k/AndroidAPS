@@ -123,8 +123,8 @@ typed purpose and SHA-256 of the exact plaintext command. Exact-counter encrypti
 identity before producing ciphertext. A proven first-frame local dispatch refusal may roll the
 reservation back; every callback failure, later-frame dispatch refusal, lost callback/deadline,
 disconnect after dispatch or duplicate same-UUID callback remains durable uncertainty. All expected
-fragment callbacks establish only `AcceptedUnverified`; measured semantic read-back and explicit
-counter-consumption evidence are required to reach `VERIFIED`. A duplicate same-UUID callback cannot
+fragment callbacks establish only `AcceptedUnverified`; command-specific semantic evidence and, for
+rejection, explicit counter disposition are required to reach `VERIFIED`. A duplicate same-UUID callback cannot
 be promoted to `Verified` by the same live transport because its frame ownership is unknowable;
 external evidence may still classify the durable reservation for operator recovery. No possibly
 effective operation is automatically retried.
@@ -134,7 +134,8 @@ purpose, plaintext SHA-256, exact prior floor and candidate mode into immutable 
 with the SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving `RESERVED` phase is
 the only offline state that proves the dispatch boundary was never committed; it may be rolled back
 only as rejected/counter-not-consumed, with the same evidence binding. `POSSIBLY_SENT` and `ACKED`
-remain uncertain until measured semantic and counter evidence resolves them.
+remain uncertain until command-specific semantic evidence resolves the effect and any required counter
+disposition. An unresolved counter is neither reused nor silently promoted to a known floor.
 
 The Step 07 physical harness permits one bounded forward-gap candidate only: either strict-next
 (`floor + 1`) or a single skipped value (`floor + 2`). The reservation persists its exact prior write
@@ -176,15 +177,16 @@ the required control-notification CCCD setup; it exposes no therapy/configuratio
 persists redacted JSONL behavior evidence. Complaint selectors remain excluded because no
 target-verified UUID resolves the conflicting references.
 
-Software now wires the durable journal into serialized whole-write dispatch, but target behavior is
-still unqualified. Required bench measurements before this contract can claim supported writes:
-
-- strict-next versus forward-gap acceptance;
-- whether each rejection consumes a counter, including malformed commands;
-- lost-ACK and partial-frame outcomes and independent effect verification;
-- read/write behavior across reboot and re-key;
-- counter range/overflow and exhaustion recovery;
-- validated fresh-session recovery after storage loss.
+Target measurements establish that strict-next and one skipped counter are accepted, while a different
+payload can also be applied with an already accepted counter. The counter therefore cannot provide
+therapy idempotency. A possibly effective command is never resent; its effect must be reconciled from
+command-specific status and stable history identity. If counter `N` remains ambiguous, the measured
+safe recovery window permits at most one distinct, predesigned `N + 1` recovery/cancellation command:
+it is strict-next if `N` was consumed and the measured `floor + 2` case if it was not. This is not a
+general retry path. If that recovery is also ambiguous, or the original therapy effect cannot be
+attributed, automated therapy remains blocked because `N + 2` could be an unqualified `floor + 3`.
+Reboot, re-key, counter exhaustion and storage-loss recovery continue to use their explicit session
+transitions; they are not reasons to scan or reuse counters.
 
 Neither scanning, decrement, read-counter substitution nor `max(seed, persisted)` may establish
 write readiness. Bare numeric errors 134/138/139 never select a retry/cancel/recovery action. The

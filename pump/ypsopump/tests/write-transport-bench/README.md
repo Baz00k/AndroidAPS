@@ -334,8 +334,9 @@ bootstrap and reconcile it only from exact semantic/counter evidence.
 
 ## Explicit reconciliation
 
-Do not reconcile from GATT status alone. First establish selector effect and counter consumption with
-the bounded target procedure. Build one reviewed evidence bundle containing the exported JSONL,
+Do not reconcile from GATT status alone. First establish selector effect and any counter disposition
+needed to resolve the durable reservation with the bounded target procedure. Build one reviewed evidence
+bundle containing the exported JSONL,
 target trace/probe records, and operator conclusion, then copy the exact bytes into the app:
 
 ```sh
@@ -361,19 +362,24 @@ For a measured rejection use `--es semantic rejected` with `--es counter consume
 `--es counter not-consumed`. Use `semantic unknown` and `counter none` only to append uncertainty;
 it does not unblock another write.
 
-## Required target evidence before issue closure
+## Step 07 scope and hand-off
 
-Repeat against the exact candidate for GLB/integrity behavior, authorization/CCCD failure, strict-next
-versus gaps, each rejection's counter consumption, reboot, interruption at every fragment, lost ACK,
-duplicate callback and error-layer classification. Record expected/observed pump and app effects,
-initial/final counters, trace hashes, cleanup and hand-back. Injected cases do not substitute for
-unobserved physical cases.
+The Step 07 target run must establish the counter and transport rules that can change production
+design: exact selector encoding/read-back, strict-next and bounded-gap behavior, duplicate-counter
+behavior, reboot bootstrap, readiness and error provenance. These establish that callbacks and counter
+errors cannot authorize a resend, and that only one distinct `N + 1` recovery/cancellation can remain
+within the measured window after an ambiguous `N`. Repeating each generic selector interruption has no
+additional production decision value.
+
+Setting/profile selection is completed with the coherent-profile work because only that ticket can
+qualify setting IDs and value layouts. Bolus/TBR interruption, lost ACK, cancellation and effect
+reconciliation are completed with those command implementations, using their status and stable history
+identity. A selector fault cannot qualify insulin or basal attribution.
 
 Suggested order minimizes irreversible uncertainty: metadata/capture preflight → readiness omission
-probes → one strict-next event → remaining selector families → bounded +2 candidate → fragment/lost
-ACK/duplicate/disconnect cases one at a time → reboot last. At every physical-state or semantic
-decision, stop and obtain the operator's explicit confirmation before recording the conclusion or
-reconciling.
+probes → one strict-next event → qualified history selector families → bounded +2 candidate → one
+same-counter duplicate measurement → reboot bootstrap. At every physical-state or semantic decision,
+stop and obtain the operator's explicit confirmation before recording the conclusion or reconciling.
 
 `force-stop` may not survive a system broadcast. For controller-free physical rows, temporarily run
 `pm disable-user --user 0 info.nightscout.androidaps` after force-stopping AAPS, and verify no AAPS,
@@ -381,9 +387,10 @@ mylife or bench process remains. Re-enable the unchanged package with
 `pm enable --user 0 info.nightscout.androidaps` during cleanup; do not uninstall or clear its data.
 
 The candidate intentionally has no control that fabricates a pump-originated AUTH/CCCD rejection or a
-physical radio/link failure. If external capture and the target setup cannot safely produce a required
-physical row, record it as **unobserved/blocking** and stop closure; never relabel an injected callback
-or app-requested disconnect as physical target evidence.
+physical radio/link failure. Never relabel an injected callback or app-requested disconnect as physical
+target evidence. An unobserved generic selector-fault row does not block Step 07 once the production
+decision above is established; carry forward only command-specific gaps that can change profile,
+bolus, TBR, cancellation or final-artifact behavior.
 
 ## Cleanup
 

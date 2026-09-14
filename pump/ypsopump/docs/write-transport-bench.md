@@ -119,20 +119,27 @@ stale/different callbacks, duplicate same-UUID callbacks, every fragment transit
 dispatch refusal, callback rejection, lost ACK/deadline, disconnect, recorder facts, durable intent,
 restart uncertainty, explicit counter consumption and semantic reconciliation.
 
-## Target evidence still required
+## Target evidence and production conclusion
 
-This document records no physical acceptance claim. Issue closure remains blocked until the exact
-candidate is run against the target pump and records:
+The exact V05.00.52 candidate established authenticated event/alarm/system selector encoding and
+read-back, strict-next and one skipped-counter acceptance, same-counter duplicate-payload acceptance,
+reboot bootstrap, readiness gating and raw error provenance. In particular, a write whose final frame
+reported raw status 139 still changed authenticated semantic state. Neither callback completion nor a
+numeric error can establish rejection, acceptance or safe retry.
 
-1. firmware, phone/OS, app revision/APK hash/signer and redacted identity;
-2. initial pump, controller, reboot/read/write counter and clock state;
-3. selector encoding and integrity behavior for each supported selector family;
-4. required authorization and CCCD success/failure semantics;
-5. strict-next versus gap behavior and counter consumption for acceptance and each rejection;
-6. interruption at each fragment, lost ACK, duplicate callback and disconnect/restart behavior;
-7. failure layer, characteristic, firmware and raw numeric code without bare-code inference;
-8. expected/observed pump and app/database effects, trace hashes, cleanup and hand-back.
+This resolves the transport decision needed by the future production driver:
 
-Injected fault results must be labelled injected and do not substitute for unobserved physical cases.
-The full operator procedure and evidence export commands are in
-`tests/write-transport-bench/README.md`.
+1. journal intent and counter before possible dispatch;
+2. never resend a possibly effective command or rely on counter reuse for idempotency;
+3. reconcile bolus/TBR from their own status and stable history identity;
+4. if counter `N` remains ambiguous, permit at most one predesigned distinct recovery/cancellation at
+   `N + 1`, which is within the measured strict-next/`floor + 2` window under either possible floor;
+5. if that recovery is ambiguous, or insulin/basal effect remains unattributed, inhibit automated
+   therapy rather than attempting `N + 2`, arbitrary gaps, scans or a routine reboot;
+6. retain layer, characteristic, firmware, frame and raw code as diagnostics only.
+
+Repeating every generic selector interruption does not change this decision and is not required for
+Step 07 closure. Setting/profile semantics belong to the profile-read ticket; therapy-specific lost-ACK,
+partial delivery, cancellation and history attribution belong to the bolus/TBR tickets and final exact-
+artifact qualification. Injected transport tests remain useful deterministic state-machine coverage,
+not substitutes for those command-specific physical tests.
