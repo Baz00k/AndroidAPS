@@ -41,7 +41,7 @@ private fun HomeScreenPreview() {
                 basal = "0.42 U/h",
                 basalSub = "50% · 0.85 sched",
                 supplies = listOf(
-                    HomeUiState.Supply("Cannula", "2d", AapsTone.InRange),
+                    HomeUiState.Supply("Cannula", "2d 3h", AapsTone.InRange),
                     HomeUiState.Supply("Sensor", "6d", AapsTone.High),
                     HomeUiState.Supply("Reservoir", "88 U", AapsTone.InRange),
                     HomeUiState.Supply("Battery", "74%", AapsTone.InRange)
