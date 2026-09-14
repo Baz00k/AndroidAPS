@@ -1223,6 +1223,7 @@ class PumpSession(private val store: Store) {
                         val binding = checkNotNull(it.historyBinding) { "Alarm/system selector reservation requires a history binding" }
                         require(binding.count.family == family)
                         require(r.reboot != null && binding.count.reboot == r.reboot)
+                        require(r.read != null && binding.count.read <= r.read && binding.selectedBefore.read <= r.read)
                         if (it.phase != Phase.VERIFIED) {
                             require(r.benchHistorySelectorStates.none { state -> state.family == family }) {
                                 "An unresolved history reservation must consume its pre-row selector state"
@@ -1273,7 +1274,14 @@ class PumpSession(private val store: Store) {
                     if (family != null) {
                         val binding = checkNotNull(it.historyBinding) { "Alarm/system evidence requires a history binding" }
                         require(binding.count.family == family)
-                        require(r.reboot != null && binding.count.reboot == r.reboot)
+                        // History bindings are immutable audit evidence and survive exact-next reboot
+                        // adoption. Live count/selector authority is cleared above and remains strictly
+                        // current-epoch; retained evidence may belong to the current or an older epoch,
+                        // but never to a future one.
+                        require(r.reboot != null && binding.count.reboot <= r.reboot)
+                        if (binding.count.reboot == r.reboot) {
+                            require(r.read != null && binding.count.read <= r.read && binding.selectedBefore.read <= r.read)
+                        }
                         requireHistoryBinding(binding, it.counter)
                     } else {
                         require(it.historyBinding == null)

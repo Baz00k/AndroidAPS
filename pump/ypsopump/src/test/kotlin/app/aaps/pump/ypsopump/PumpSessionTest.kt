@@ -647,6 +647,191 @@ class PumpSessionTest {
     }
 
     @Test
+    fun `resolved history binding remains audit evidence after next reboot adoption`() {
+        val store = MemoryStore()
+        initialized(store)
+        val count = alarmCount(200, "ab".repeat(32))
+        val selectedBefore = alarmState(150, "bc".repeat(32))
+        val binding = PumpSession.HistoryWriteBinding(count, selectedBefore, writeIndex = 199)
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "alarm-operation",
+                reservationId = "alarm-reservation",
+                counter = 43,
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "cd".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "de".repeat(32),
+                detail = "reviewed alarm selector acceptance",
+                historyBinding = binding,
+            )
+        val unresolvedSetting =
+            PumpSession.Reservation(
+                id = "setting-reservation",
+                counter = 44,
+                phase = PumpSession.Phase.ACKED,
+                operationId = "setting-operation",
+                characteristic = "669a0c20-0008-969e-e211-fcbeb3147bc5",
+                purpose = "SETTINGS_SELECTOR",
+                payloadHash = "ef".repeat(32),
+                priorWrite = 43,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val unresolvedEvidence =
+            PumpSession.WriteEvidence(
+                operationId = "setting-operation",
+                reservationId = unresolvedSetting.id,
+                counter = unresolvedSetting.counter,
+                characteristic = checkNotNull(unresolvedSetting.characteristic),
+                purpose = checkNotNull(unresolvedSetting.purpose),
+                payloadHash = checkNotNull(unresolvedSetting.payloadHash),
+                priorWrite = checkNotNull(unresolvedSetting.priorWrite),
+                candidate = unresolvedSetting.candidate,
+                resolution = null,
+                evidenceHash = "f0".repeat(32),
+                detail = "setting read-back is observational only",
+            )
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 44,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            reservation = unresolvedSetting,
+                            writeEvidence = listOf(evidence, unresolvedEvidence),
+                        )
+                    },
+            )
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+
+        val adopted = store.saved.records.single()
+        assertEquals(9, adopted.reboot)
+        assertEquals(1, adopted.read)
+        assertNull(adopted.write)
+        assertNull(adopted.reservation)
+        assertEquals(listOf(evidence, unresolvedEvidence), adopted.writeEvidence)
+        assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, adopted.writeBootstrapState)
+    }
+
+    @Test
+    fun `history audit evidence cannot belong to a future reboot epoch`() {
+        val store = MemoryStore()
+        initialized(store)
+        val futureCount = alarmCount(200, "ab".repeat(32)).copy(reboot = 9)
+        val futureState = alarmState(150, "bc".repeat(32)).copy(reboot = 9)
+        val binding = PumpSession.HistoryWriteBinding(futureCount, futureState, writeIndex = 199)
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "alarm-operation",
+                reservationId = "alarm-reservation",
+                counter = 43,
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "cd".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "de".repeat(32),
+                detail = "future evidence must fail closed",
+                historyBinding = binding,
+            )
+        val invalid =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 43,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            writeEvidence = listOf(evidence),
+                        )
+                    },
+            )
+
+        assertThrows(IllegalArgumentException::class.java) { PumpSession.validate(invalid) }
+    }
+
+    @Test
+    fun `current epoch history audit evidence cannot claim a future read counter`() {
+        val store = MemoryStore()
+        initialized(store)
+        val count = alarmCount(200, "ab".repeat(32)).copy(read = 101)
+        val selectedBefore = alarmState(150, "bc".repeat(32))
+        val binding = PumpSession.HistoryWriteBinding(count, selectedBefore, writeIndex = 199)
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "alarm-operation",
+                reservationId = "alarm-reservation",
+                counter = 43,
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "cd".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "de".repeat(32),
+                detail = "future read evidence must fail closed",
+                historyBinding = binding,
+            )
+        val invalid =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 43,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            writeEvidence = listOf(evidence),
+                        )
+                    },
+            )
+
+        assertThrows(IllegalArgumentException::class.java) { PumpSession.validate(invalid) }
+    }
+
+    @Test
+    fun `live history reservation cannot claim a future read counter`() {
+        val store = MemoryStore()
+        initialized(store)
+        val count = alarmCount(200, "ab".repeat(32)).copy(read = 101)
+        val selectedBefore = alarmState(150, "bc".repeat(32))
+        val binding = PumpSession.HistoryWriteBinding(count, selectedBefore, writeIndex = 199)
+        val reservation =
+            PumpSession.Reservation(
+                id = "alarm-reservation",
+                counter = 43,
+                phase = PumpSession.Phase.ACKED,
+                operationId = "alarm-operation",
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "cd".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                historyBinding = binding,
+            )
+        val invalid =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 43,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            reservation = reservation,
+                        )
+                    },
+            )
+
+        assertThrows(IllegalArgumentException::class.java) { PumpSession.validate(invalid) }
+    }
+
+    @Test
     fun `new epoch bootstrap is counter one attempted once and only becomes established on consumed evidence`() {
         val store = MemoryStore()
         initialized(store)
