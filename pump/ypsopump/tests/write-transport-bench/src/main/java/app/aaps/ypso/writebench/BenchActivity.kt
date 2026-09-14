@@ -98,6 +98,7 @@ class BenchActivity : Activity() {
                 "install" -> install()
                 "inspect" -> inspect()
                 "run-selector" -> runConnection(RunKind.SELECTOR)
+                "converge-ambiguity" -> runConnection(RunKind.AMBIGUITY_CONVERGENCE)
                 "duplicate-counter-probe" -> runConnection(RunKind.DUPLICATE_COUNTER_PROBE)
                 "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
@@ -199,6 +200,8 @@ class BenchActivity : Activity() {
                 "SESSION:generation=${opened.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
                     "bootstrap=${record.writeBootstrapState},bootstrap_attempted=${record.benchNewEpochBootstrapAttempted}," +
                     "duplicate_attempted=${record.benchDuplicateCounterAttempted}," +
+                    "convergence_attempted=${record.benchAmbiguityConvergenceAttempted}," +
+                    "convergence_ready=${session.benchAmbiguityConvergenceReady()}," +
                     "history_counts=$historyCounts,selector_states=$selectorStates," +
                     "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
             )
@@ -223,6 +226,7 @@ class BenchActivity : Activity() {
                 RunKind.OBSERVE_REBOOT,
                 RunKind.RECORD_BOOTSTRAP_REFERENCE,
                 RunKind.READ_HISTORY_COUNTS,
+                RunKind.AMBIGUITY_CONVERGENCE,
             )
         ) {
             require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
@@ -841,7 +845,11 @@ class BenchActivity : Activity() {
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
                     when (runKind) {
-                        RunKind.SELECTOR, RunKind.BOOTSTRAP_NEW_EPOCH, RunKind.DUPLICATE_COUNTER_PROBE, RunKind.READINESS_PROBE ->
+                        RunKind.SELECTOR,
+                        RunKind.BOOTSTRAP_NEW_EPOCH,
+                        RunKind.AMBIGUITY_CONVERGENCE,
+                        RunKind.DUPLICATE_COUNTER_PROBE,
+                        RunKind.READINESS_PROBE ->
                             startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
                         RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
@@ -1102,6 +1110,7 @@ class BenchActivity : Activity() {
                 mode =
                     when (runKind) {
                         RunKind.BOOTSTRAP_NEW_EPOCH -> YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP
+                        RunKind.AMBIGUITY_CONVERGENCE -> YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE
                         RunKind.DUPLICATE_COUNTER_PROBE -> YpsoBenchWriteCoordinator.BenchWriteMode.DUPLICATE_COUNTER
                         else ->
                             if (forwardGap == 1) {
@@ -1576,6 +1585,7 @@ class BenchActivity : Activity() {
     private enum class RunKind {
         SELECTOR,
         BOOTSTRAP_NEW_EPOCH,
+        AMBIGUITY_CONVERGENCE,
         DUPLICATE_COUNTER_PROBE,
         OBSERVE_SELECTOR,
         READ_SELECTOR_STATE,

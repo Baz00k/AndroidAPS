@@ -22,6 +22,7 @@ internal class YpsoBenchWriteCoordinator(
         STRICT_NEXT,
         FORWARD_GAP,
         NEW_EPOCH_BOOTSTRAP,
+        AMBIGUITY_CONVERGENCE,
         DUPLICATE_COUNTER,
     }
 
@@ -100,11 +101,12 @@ internal class YpsoBenchWriteCoordinator(
                 record.write == null &&
                 record.reservation == null &&
                 record.benchNewEpochBootstrapReference != null
+        val convergenceReady = mode == BenchWriteMode.AMBIGUITY_CONVERGENCE && session.benchAmbiguityConvergenceReady()
         val counterCertain =
             record?.reboot != null &&
                 record.read != null &&
                 (record.write != null || bootstrapReady) &&
-                (record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
+                (convergenceReady || record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
         val ready = readiness.snapshot(owner.readinessOwner(), counterCertain, setupRequired = true)
         if (!ready.commandReady) {
             onOutcome(notSent(writeId, characteristic, firmware, YpsoWriteFailure.Layer.READINESS, checkNotNull(ready.reason)))
@@ -143,6 +145,8 @@ internal class YpsoBenchWriteCoordinator(
                         session.reserveBenchNewEpochBootstrapCandidate(owner.token, transaction, intent)
                     BenchWriteMode.DUPLICATE_COUNTER ->
                         session.reserveBenchDuplicateCounterCandidate(owner.token, transaction, intent)
+                    BenchWriteMode.AMBIGUITY_CONVERGENCE ->
+                        session.reserveBenchAmbiguityConvergenceCandidate(owner.token, transaction, intent)
                     BenchWriteMode.STRICT_NEXT, BenchWriteMode.FORWARD_GAP ->
                         session.reserveBenchCandidate(
                             owner.token,

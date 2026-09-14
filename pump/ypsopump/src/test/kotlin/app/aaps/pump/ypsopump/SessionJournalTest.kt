@@ -97,7 +97,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(12, org.json.JSONObject(body).getInt("version"))
+        assertEquals(13, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -139,7 +139,7 @@ class SessionJournalTest {
     }
 
     @Test
-    fun `version twelve roundtrip preserves duplicate probe predecessor binding and marker`() {
+    fun `current roundtrip preserves duplicate probe predecessor binding and marker`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
         val accepted =
@@ -226,8 +226,14 @@ class SessionJournalTest {
         journal.commit(old)
         val envelope = org.json.JSONObject(checkNotNull(storage.file))
         val alias = storage.anchors().single()
-        val body = org.json.JSONObject(storage.open(alias, envelope.getString("sealed")))
-        body.getJSONArray("records").getJSONObject(0).put(
+        val body = org.json.JSONObject(storage.open(alias, envelope.getString("sealed"))).put("version", 12)
+        val record = body.getJSONArray("records").getJSONObject(0)
+        record.remove("benchAmbiguityConvergenceAttempted")
+        record.remove("benchDuplicateCounterPredecessor")
+        record.getJSONArray("writeEvidence").let { evidence ->
+            (0 until evidence.length()).forEach { evidence.getJSONObject(it).remove("unresolvedPredecessor") }
+        }
+        record.put(
             "reservation",
             org.json.JSONObject()
                 .put("id", "duplicate")
@@ -265,8 +271,13 @@ class SessionJournalTest {
                 detail = "accepted event predecessor",
             )
         journal.commit(old.copy(records = old.records.map { it.copy(writeEvidence = listOf(evidence)) }))
-        val body = committedBody(storage)
-        body.getJSONArray("records").getJSONObject(0).getJSONArray("writeEvidence").getJSONObject(0)
+        val body = committedBody(storage).put("version", 12)
+        val record = body.getJSONArray("records").getJSONObject(0)
+        record.remove("benchAmbiguityConvergenceAttempted")
+        record.remove("benchDuplicateCounterPredecessor")
+        val evidenceJson = record.getJSONArray("writeEvidence").getJSONObject(0)
+        evidenceJson.remove("unresolvedPredecessor")
+        evidenceJson
             .remove("acceptedPredecessor")
         replaceBody(storage, body)
 
@@ -274,7 +285,7 @@ class SessionJournalTest {
     }
 
     @Test
-    fun `version twelve rejects duplicate attempt marker without strict next acceptance`() {
+    fun `version thirteen rejects duplicate attempt marker without accepted predecessor`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
         val established =
@@ -458,6 +469,228 @@ class SessionJournalTest {
         assertEquals(42, loaded.write)
         assertTrue(loaded.benchStrictNextAccepted)
         assertFalse(loaded.benchDuplicateCounterAttempted)
+    }
+
+    @Test
+    fun `version twelve migration preserves unresolved write and starts convergence unused`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "unresolved-two",
+                counter = 2,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "ambiguous-event",
+                characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 1,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "ambiguous-event",
+                reservationId = reservation.id,
+                counter = 2,
+                characteristic = checkNotNull(reservation.characteristic),
+                purpose = checkNotNull(reservation.purpose),
+                payloadHash = checkNotNull(reservation.payloadHash),
+                priorWrite = 1,
+                candidate = reservation.candidate,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "counter two effect remains unknown",
+            )
+        val preserved =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 2,
+                            reservation = reservation,
+                            writeEvidence = listOf(evidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
+                    },
+            )
+        journal.commit(preserved)
+        val body = committedBody(storage).put("version", 12)
+        body.getJSONArray("records").getJSONObject(0).apply {
+            remove("benchAmbiguityConvergenceAttempted")
+            remove("benchDuplicateCounterPredecessor")
+            getJSONObject("reservation").remove("unresolvedPredecessor")
+            getJSONArray("writeEvidence").getJSONObject(0).remove("unresolvedPredecessor")
+        }
+        replaceBody(storage, body)
+
+        val loaded = journal.load().records.single()
+        assertEquals(reservation, loaded.reservation)
+        assertEquals(listOf(evidence), loaded.writeEvidence)
+        assertFalse(loaded.benchAmbiguityConvergenceAttempted)
+        assertNull(loaded.benchDuplicateCounterPredecessor)
+    }
+
+    @Test
+    fun `current roundtrip preserves convergence and nested duplicate predecessor bindings`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val unresolvedReservation =
+            PumpSession.Reservation(
+                id = "unresolved-two",
+                counter = 2,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "ambiguous-event",
+                characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 1,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val unresolvedEvidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(unresolvedReservation.operationId),
+                reservationId = unresolvedReservation.id,
+                counter = unresolvedReservation.counter,
+                characteristic = checkNotNull(unresolvedReservation.characteristic),
+                purpose = checkNotNull(unresolvedReservation.purpose),
+                payloadHash = checkNotNull(unresolvedReservation.payloadHash),
+                priorWrite = checkNotNull(unresolvedReservation.priorWrite),
+                candidate = unresolvedReservation.candidate,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "counter two effect remains unknown",
+            )
+        val unresolvedBinding = PumpSession.UnresolvedWriteBinding.from(8, unresolvedReservation, unresolvedEvidence)
+        val convergenceEvidence =
+            PumpSession.WriteEvidence(
+                operationId = "converge-event",
+                reservationId = "converge-three",
+                counter = 3,
+                characteristic = checkNotNull(unresolvedReservation.characteristic),
+                purpose = checkNotNull(unresolvedReservation.purpose),
+                payloadHash = "ef".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "12".repeat(32),
+                detail = "counter three accepted",
+                unresolvedPredecessor = unresolvedBinding,
+            )
+        val acceptedBinding = PumpSession.AcceptedWriteBinding.from(8, convergenceEvidence)
+        val duplicate =
+            PumpSession.Reservation(
+                id = "duplicate-three",
+                counter = 3,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "duplicate-event",
+                characteristic = convergenceEvidence.characteristic,
+                purpose = convergenceEvidence.purpose,
+                payloadHash = "34".repeat(32),
+                priorWrite = 3,
+                candidate = PumpSession.WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR,
+                acceptedPredecessor = acceptedBinding,
+            )
+        val duplicateEvidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(duplicate.operationId),
+                reservationId = duplicate.id,
+                counter = duplicate.counter,
+                characteristic = checkNotNull(duplicate.characteristic),
+                purpose = checkNotNull(duplicate.purpose),
+                payloadHash = checkNotNull(duplicate.payloadHash),
+                priorWrite = checkNotNull(duplicate.priorWrite),
+                candidate = duplicate.candidate,
+                resolution = null,
+                evidenceHash = "56".repeat(32),
+                detail = "duplicate counter remains unresolved",
+                acceptedPredecessor = acceptedBinding,
+            )
+        val state =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 3,
+                            reservation = duplicate,
+                            writeEvidence = listOf(unresolvedEvidence, convergenceEvidence, duplicateEvidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchAmbiguityConvergenceAttempted = true,
+                            benchDuplicateCounterAttempted = true,
+                            benchDuplicateCounterPredecessor = acceptedBinding,
+                        )
+                    },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        assertEquals(unresolvedBinding, journal.load().records.single().reservation!!.acceptedPredecessor!!.unresolvedPredecessor)
+    }
+
+    @Test
+    fun `version thirteen rejects convergence binding with altered unresolved evidence hash`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "unresolved-two",
+                counter = 2,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "ambiguous-event",
+                characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 1,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(reservation.operationId),
+                reservationId = reservation.id,
+                counter = reservation.counter,
+                characteristic = checkNotNull(reservation.characteristic),
+                purpose = checkNotNull(reservation.purpose),
+                payloadHash = checkNotNull(reservation.payloadHash),
+                priorWrite = checkNotNull(reservation.priorWrite),
+                candidate = reservation.candidate,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "counter two effect remains unknown",
+            )
+        val binding = PumpSession.UnresolvedWriteBinding.from(8, reservation, evidence)
+        val convergence =
+            PumpSession.Reservation(
+                id = "converge-three",
+                counter = 3,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "converge-event",
+                characteristic = checkNotNull(reservation.characteristic),
+                purpose = checkNotNull(reservation.purpose),
+                payloadHash = "ef".repeat(32),
+                priorWrite = 2,
+                candidate = PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
+                unresolvedPredecessor = binding,
+            )
+        journal.commit(
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 3,
+                            reservation = convergence,
+                            writeEvidence = listOf(evidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchAmbiguityConvergenceAttempted = true,
+                        )
+                    },
+            ),
+        )
+        val body = committedBody(storage)
+        body.getJSONArray("records").getJSONObject(0).getJSONObject("reservation")
+            .getJSONObject("unresolvedPredecessor").put("evidenceHash", "12".repeat(32))
+        replaceBody(storage, body)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
     }
 
     @Test

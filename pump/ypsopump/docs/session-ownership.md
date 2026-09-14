@@ -147,12 +147,26 @@ operation and cannot establish that the epoch's gap attempt is still unused. Aut
 adoption alone clears the epoch markers. Larger offsets, repeated advancement and scanning are
 unavailable.
 
+When exactly one strict-next event selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, and its
+full immutable reservation has one reviewed hash-bound `UNKNOWN` evidence record, the bench permits one
+bounded ambiguity-convergence candidate in that epoch. It uses a new operation ID and different event
+payload at exactly `N + 1`. Because the pump floor is then `{N - 1, N}`, the candidate is either the
+already measured `floor + 2` case or strict-next; it is not a counter scan. Its reservation binds the
+unresolved predecessor's operation ID, reservation ID, phase, counter, characteristic, purpose,
+plaintext hash, prior floor, candidate mode and evidence hash. The attempt marker commits before
+dispatch and prevents a second convergence attempt in the epoch. Proven not-sent or rejected/not-
+consumed recovery restores the exact unresolved predecessor reservation, not merely a numeric floor.
+Acceptance or consumed rejection establishes `N + 1` while retaining the predecessor's `UNKNOWN`
+evidence as audit history.
+
 The bench additionally permits one same-counter duplicate-behavior probe per authenticated epoch. It
-is available only after a strict-next event selector is fully reconciled as accepted, requires a new
-operation ID and different event payload, and binds the predecessor's complete accepted evidence. This
-does not permit retrying an unresolved operation: possibly effective plaintext is never resent. The
-probe marker commits before dispatch, survives restart/in-place install and clears only on authenticated
-reboot adoption. Its result must be established from authenticated semantic and counter evidence.
+is available only after an event selector—either strict-next or the bounded ambiguity-convergence
+candidate—is fully reconciled as accepted. It requires a new operation ID and different event payload,
+and binds the predecessor's complete accepted evidence, including the convergence candidate's nested
+unresolved-predecessor binding when applicable. This does not permit retrying an unresolved operation:
+possibly effective plaintext is never resent. The probe marker commits before dispatch, survives
+restart/in-place install and clears only on authenticated reboot adoption. Its result must be
+established from authenticated semantic and counter evidence.
 
 Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
 write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at

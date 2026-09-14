@@ -1231,6 +1231,226 @@ class PumpSessionTest {
     }
 
     @Test
+    fun `ambiguity convergence reserves unresolved counter plus one and restores exact predecessor when not sent`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 1) })
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        val unresolvedId = owner.begin(token)
+        val unresolved =
+            owner.reserveBenchCandidate(
+                token,
+                unresolvedId,
+                PumpSession.WriteIntent("ambiguous-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, unresolvedId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, unresolvedId)
+        owner.recordUnresolvedWriteEvidence(token, unresolved.id, "cd".repeat(32), "counter two effect remains unknown")
+        assertTrue(owner.benchAmbiguityConvergenceReady())
+
+        val convergenceId = owner.begin(token)
+        val convergence =
+            owner.reserveBenchAmbiguityConvergenceCandidate(
+                token,
+                convergenceId,
+                PumpSession.WriteIntent("converge-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+
+        assertEquals(3, convergence.counter)
+        assertEquals(2, convergence.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR, convergence.candidate)
+        assertEquals(unresolved.id, convergence.unresolvedPredecessor!!.reservationId)
+        assertEquals("cd".repeat(32), convergence.unresolvedPredecessor!!.evidenceHash)
+        assertTrue(owner.snapshot()!!.benchAmbiguityConvergenceAttempted)
+        owner.markNotSent(token, convergenceId)
+        owner.finish(token, convergenceId)
+
+        val restored = owner.snapshot()!!
+        assertEquals(2, restored.write)
+        assertEquals(unresolved.copy(phase = PumpSession.Phase.POSSIBLY_SENT), restored.reservation)
+        assertTrue(restored.benchAmbiguityConvergenceAttempted)
+        assertFalse(owner.benchAmbiguityConvergenceReady())
+
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertEquals(unresolved.copy(phase = PumpSession.Phase.POSSIBLY_SENT), owner.snapshot()!!.reservation)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchAmbiguityConvergenceCandidate(
+                token,
+                owner.begin(token),
+                PumpSession.WriteIntent("converge-again", EVENT_INDEX, "HISTORY_SELECTOR", "12".repeat(32)),
+            )
+        }
+    }
+
+    @Test
+    fun `accepted ambiguity convergence establishes next floor and can authorize duplicate probe`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 1) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val unresolvedId = owner.begin(token)
+        val unresolved =
+            owner.reserveBenchCandidate(
+                token,
+                unresolvedId,
+                PumpSession.WriteIntent("ambiguous-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, unresolvedId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, unresolvedId)
+        owner.recordUnresolvedWriteEvidence(token, unresolved.id, "cd".repeat(32), "counter two effect remains unknown")
+        val convergenceId = owner.begin(token)
+        val convergence =
+            owner.reserveBenchAmbiguityConvergenceCandidate(
+                token,
+                convergenceId,
+                PumpSession.WriteIntent("converge-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+        owner.advance(token, convergenceId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, convergenceId, PumpSession.Phase.ACKED)
+        owner.finish(token, convergenceId)
+        owner.resolveWrite(token, convergence.id, PumpSession.WriteResolution.ACCEPTED, "12".repeat(32), "counter three accepted")
+
+        val converged = owner.snapshot()!!
+        assertEquals(3, converged.write)
+        assertEquals(PumpSession.Phase.VERIFIED, converged.reservation!!.phase)
+        assertEquals(listOf(null, PumpSession.WriteResolution.ACCEPTED), converged.writeEvidence.map { it.resolution })
+        assertEquals(unresolved.id, converged.writeEvidence.last().unresolvedPredecessor!!.reservationId)
+
+        val duplicateId = owner.begin(token)
+        val duplicate =
+            owner.reserveBenchDuplicateCounterCandidate(
+                token,
+                duplicateId,
+                PumpSession.WriteIntent("duplicate-three", EVENT_INDEX, "HISTORY_SELECTOR", "34".repeat(32)),
+            )
+        assertEquals(3, duplicate.counter)
+        assertEquals(PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR, duplicate.acceptedPredecessor!!.candidate)
+        assertEquals("converge-event", duplicate.acceptedPredecessor!!.operationId)
+        assertEquals(duplicate.acceptedPredecessor, owner.snapshot()!!.benchDuplicateCounterPredecessor)
+    }
+
+    @Test
+    fun `not consumed ambiguity convergence retains unresolved predecessor and convergence evidence`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 1) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val unresolvedId = owner.begin(token)
+        val unresolved =
+            owner.reserveBenchCandidate(
+                token,
+                unresolvedId,
+                PumpSession.WriteIntent("ambiguous-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, unresolvedId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, unresolvedId)
+        owner.recordUnresolvedWriteEvidence(token, unresolved.id, "cd".repeat(32), "counter two effect remains unknown")
+        val convergenceId = owner.begin(token)
+        val convergence =
+            owner.reserveBenchAmbiguityConvergenceCandidate(
+                token,
+                convergenceId,
+                PumpSession.WriteIntent("converge-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+        owner.advance(token, convergenceId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, convergenceId)
+        owner.resolveWrite(
+            token,
+            convergence.id,
+            PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
+            "12".repeat(32),
+            "counter three not consumed",
+        )
+
+        val restored = owner.snapshot()!!
+        assertEquals(2, restored.write)
+        assertEquals(unresolved.copy(phase = PumpSession.Phase.POSSIBLY_SENT), restored.reservation)
+        assertEquals(listOf(null, PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED), restored.writeEvidence.map { it.resolution })
+        assertEquals(unresolved.id, restored.writeEvidence.last().unresolvedPredecessor!!.reservationId)
+    }
+
+    @Test
+    fun `ambiguity convergence requires one exact reviewed unresolved event predecessor`() {
+        fun unresolvedOwner(): Triple<PumpSession, PumpSession.Token, PumpSession.Reservation> {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 1) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val unresolvedId = owner.begin(token)
+            val unresolved =
+                owner.reserveBenchCandidate(
+                    token,
+                    unresolvedId,
+                    PumpSession.WriteIntent("ambiguous-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                    forwardGap = 0,
+                )
+            owner.advance(token, unresolvedId, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, unresolvedId)
+            return Triple(owner, token, unresolved)
+        }
+
+        run {
+            val (owner, token) = unresolvedOwner()
+            val id = owner.begin(token)
+            assertThrows(SecurityException::class.java) {
+                owner.reserveBenchAmbiguityConvergenceCandidate(
+                    token,
+                    id,
+                    PumpSession.WriteIntent("converge-without-evidence", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+                )
+            }
+            owner.finish(token, id)
+            assertFalse(owner.benchAmbiguityConvergenceReady())
+        }
+        run {
+            val (owner, token, unresolved) = unresolvedOwner()
+            owner.recordUnresolvedWriteEvidence(token, unresolved.id, "cd".repeat(32), "first reviewed unknown bundle")
+            owner.recordUnresolvedWriteEvidence(token, unresolved.id, "ef".repeat(32), "second reviewed unknown bundle")
+            val id = owner.begin(token)
+            assertThrows(SecurityException::class.java) {
+                owner.reserveBenchAmbiguityConvergenceCandidate(
+                    token,
+                    id,
+                    PumpSession.WriteIntent("converge-ambiguous-evidence", EVENT_INDEX, "HISTORY_SELECTOR", "12".repeat(32)),
+                )
+            }
+            owner.finish(token, id)
+            assertFalse(owner.benchAmbiguityConvergenceReady())
+        }
+        run {
+            val (owner, token, unresolved) = unresolvedOwner()
+            owner.recordUnresolvedWriteEvidence(token, unresolved.id, "cd".repeat(32), "reviewed unknown bundle")
+            val samePayloadId = owner.begin(token)
+            assertThrows(IllegalStateException::class.java) {
+                owner.reserveBenchAmbiguityConvergenceCandidate(
+                    token,
+                    samePayloadId,
+                    PumpSession.WriteIntent("converge-same-payload", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                )
+            }
+            owner.finish(token, samePayloadId)
+            val nonEventId = owner.begin(token)
+            assertThrows(IllegalStateException::class.java) {
+                owner.reserveBenchAmbiguityConvergenceCandidate(
+                    token,
+                    nonEventId,
+                    PumpSession.WriteIntent("converge-non-event", "characteristic", "HISTORY_SELECTOR", "ef".repeat(32)),
+                )
+            }
+            owner.finish(token, nonEventId)
+        }
+    }
+
+    @Test
     fun `duplicate counter probe reuses accepted event counter once with a different payload`() {
         val store = MemoryStore()
         initialized(store)

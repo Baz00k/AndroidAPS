@@ -189,14 +189,46 @@ captures separately. Inbound control notifications are also recorded as raw unsi
 length/hash, characteristic and observed firmware; they are evidence, not an automatic error
 classifier.
 
+### One-shot ambiguity convergence without reboot
+
+If one strict-next **event** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
+and review its evidence bundle and record exactly one hash-bound `UNKNOWN` reconciliation record. When
+that record is the sole exact match for the durable reservation, `converge-ambiguity` reserves exactly
+`N + 1` with a new operation ID and different event payload:
+
+```sh
+WRITE_ID="converge-$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action converge-ambiguity --es write_id "$WRITE_ID" \
+  --es selector_type event --ei selector 18
+```
+
+Choose an event index different from the unresolved predecessor payload and from the immediately
+authenticated current selector value. There is no counter extra: the candidate is mechanically fixed
+to the unresolved reservation's counter plus one. If the actual pump floor is `N - 1`, this is the
+already measured `floor + 2`; if it is `N`, this is strict-next. No counter is scanned.
+
+The reservation durably binds the unresolved predecessor's operation ID, reservation ID, phase,
+counter, characteristic, purpose, plaintext hash, exact prior floor, candidate mode and reviewed
+evidence hash. The epoch's convergence marker is persisted before dispatch and permits only one
+attempt. Proven not-sent or reviewed rejected/not-consumed evidence restores the exact unresolved
+predecessor reservation. Acceptance or consumed rejection establishes counter `N + 1` while retaining
+the older `UNKNOWN` evidence. Do not continue to the duplicate probe unless authenticated semantic
+read-back and reviewed counter evidence qualify the convergence write as accepted.
+
+For the epoch-21 counter-2 uncertainty, this action therefore reserves exactly counter `3`; it replaces
+the previously proposed clean-reboot procedure.
+
 ### One-shot duplicate-counter probe
 
 Duplicate-counter behavior is measured only after a complete event-selector write has been explicitly
-reconciled as accepted. The probe reuses that exact verified counter once in the current reboot epoch,
+reconciled as accepted. The accepted predecessor may be strict-next or the bounded ambiguity-
+convergence write above. The probe reuses that exact verified counter once in the current reboot epoch,
 requires a new operation ID and a different event-selector payload, and durably binds the accepted
 predecessor's operation ID, reservation ID, counter, characteristic, purpose, plaintext hash, prior
-floor, candidate mode and accepted-evidence hash. It is not a retry of an unresolved command and it
-cannot target alarm, system, settings, bolus, TBR or any configuration value.
+floor, candidate mode and accepted-evidence hash. For convergence, that accepted binding also includes
+the nested unresolved counter-`N` binding. It is not a retry of an unresolved command and it cannot
+target alarm, system, settings, bolus, TBR or any configuration value.
 
 ```sh
 adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \

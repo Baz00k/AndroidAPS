@@ -197,6 +197,38 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `ambiguity convergence bypasses only its bound unresolved predecessor and encrypts counter plus one`() {
+        makeReady()
+        assertTrue(write(YpsoGlb.encode(16), writeId = "ambiguous-event"))
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        coordinator.ownerDisconnected(gatt, "injected interruption after first frame")
+        val unresolved = session.snapshot()!!.reservation!!
+        assertEquals(43, unresolved.counter)
+        session.recordUnresolvedWriteEvidence(token, unresolved.id, evidenceHash, "reviewed injected interruption remains unknown")
+
+        frames.clear()
+        callbacks.clear()
+        makeReady()
+        assertTrue(
+            write(
+                YpsoGlb.encode(17),
+                writeId = "converge-event",
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE,
+            ),
+        )
+        while (callbacks.isEmpty()) {
+            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+
+        assertEquals(44, message.counter)
+        assertArrayEquals(YpsoGlb.encode(17), message.body)
+        assertEquals(unresolved.id, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.reservationId)
+        assertEquals(evidenceHash, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.evidenceHash)
+        assertTrue(session.snapshot()!!.benchAmbiguityConvergenceAttempted)
+    }
+
+    @Test
     fun `live reconciliation requires the original GATT connection and generation owner`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))

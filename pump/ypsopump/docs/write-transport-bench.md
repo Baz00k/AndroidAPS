@@ -62,18 +62,24 @@ qualified setting-ID-to-layout mapping exists; the artifact never writes a setti
 
 The physical-test build exposes only bounded measurement seams: omission of one readiness fact to
 prove local blocking, one `floor + 2` candidate to distinguish strict-next from a single forward gap,
-one same-counter duplicate probe bound to a fully verified accepted event-selector predecessor,
+one `N + 1` ambiguity-convergence candidate bound to a hash-reviewed unresolved strict-next event at
+`N`, one same-counter duplicate probe bound to a fully verified accepted event-selector predecessor,
 read-only value observation bound to an unresolved selector's durable hash, and authenticated
 next-reboot observation. The +2 reservation durably stores its exact prior floor; rejected/not-consumed
-reconciliation restores that floor rather than decrementing the candidate. Larger gaps and all scans
-are rejected. Reboot adoption makes write state uncertain until the epoch's one-shot counter-1
-bootstrap is resolved from reviewed semantic/counter evidence; a separately measured epoch baseline
-remains optional validation evidence rather than a runtime prerequisite.
+reconciliation restores that floor rather than decrementing the candidate. The convergence seam is
+available only when the pump floor is bounded to `{N - 1, N}`; therefore `N + 1` is either the measured
+`floor + 2` case or strict-next. Proven not-sent or rejected/not-consumed convergence restores the exact
+unresolved predecessor reservation. Larger gaps, arbitrary counter input and all scans are rejected.
+Reboot adoption makes write state uncertain until the epoch's one-shot counter-1 bootstrap is resolved
+from reviewed semantic/counter evidence; a separately measured epoch baseline remains optional
+validation evidence rather than a runtime prerequisite.
 
 The duplicate probe is not an unresolved-write retry. It requires a new operation ID, a different event
-payload, and immutable current-epoch binding to the predecessor's accepted evidence. It reuses exactly
-the predecessor counter once per epoch and cannot target settings, alarm/system selectors, therapy or
-configuration. Every result remains subject to explicit reconciliation; ambiguity still blocks writes.
+payload, and immutable current-epoch binding to the predecessor's accepted evidence. An accepted
+convergence predecessor also carries the complete nested binding to the older unresolved write. The
+probe reuses exactly the predecessor counter once per epoch and cannot target settings, alarm/system
+selectors, therapy or configuration. Every result remains subject to explicit reconciliation;
+ambiguity still blocks writes.
 
 The exact candidate provides labelled application-level interruption, callback suppression and
 duplicate-callback injections. Those validate durable uncertainty behavior but are not substitutes for
