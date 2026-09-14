@@ -58,7 +58,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..11)
+        check(version in 1..6 || version in 8..12)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -75,11 +75,15 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 require(r.optJSONArray("benchHistoryCounts") != null)
                 require(r.optJSONArray("benchHistorySelectorStates") != null)
             }
+            if (version >= 12) {
+                require(r.has("benchDuplicateCounterAttempted") && !r.isNull("benchDuplicateCounterAttempted"))
+            }
             val reservation = r.optJSONObject("reservation")?.let {
                 if (version >= 8) {
                     require(it.has("priorWrite") && !it.isNull("priorWrite"))
                     require(it.has("candidate") && !it.isNull("candidate"))
                 }
+                if (version >= 12) require(it.has("acceptedPredecessor"))
                 val counter = it.getLong("counter")
                 val priorWrite = it.optLongOrNull("priorWrite") ?: (counter - 1).takeIf { version < 8 }
                 val candidate =
@@ -100,6 +104,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                     priorWrite,
                     candidate,
                     historyBinding = it.optJSONObject("historyBinding")?.let(::historyBinding),
+                    acceptedPredecessor = it.optJSONObject("acceptedPredecessor")?.let(::acceptedWriteBinding),
                 )
             }
             val inferredLegacyGap =
@@ -120,6 +125,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         if (version >= 9) {
                             require(EVIDENCE_BINDING_FIELDS.all { evidence.has(it) && !evidence.isNull(it) })
                         }
+                        if (version >= 12) require(evidence.has("acceptedPredecessor"))
                         val boundReservation = reservation?.takeIf { it.id == evidence.getString("reservationId") }
                         PumpSession.WriteEvidence(
                             operationId = evidence.getString("operationId"),
@@ -145,6 +151,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                             evidenceHash = evidence.getString("evidenceHash"),
                             detail = evidence.getString("detail"),
                             historyBinding = evidence.optJSONObject("historyBinding")?.let(::historyBinding),
+                            acceptedPredecessor = evidence.optJSONObject("acceptedPredecessor")?.let(::acceptedWriteBinding),
                         )
                     }
                 }.orEmpty(),
@@ -174,7 +181,9 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 benchStrictNextAccepted =
                     if (version >= 8) r.getBoolean("benchStrictNextAccepted") else inferredLegacyGap,
                 benchForwardGapAttempted =
-                    if (version >= 8) r.getBoolean("benchForwardGapAttempted") else inferredLegacyGap
+                    if (version >= 8) r.getBoolean("benchForwardGapAttempted") else inferredLegacyGap,
+                benchDuplicateCounterAttempted =
+                    if (version >= 12) r.getBoolean("benchDuplicateCounterAttempted") else false,
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -267,6 +276,33 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("selectedBefore", historySelectorStateJson(value.selectedBefore))
             .put("writeIndex", value.writeIndex)
 
+    private fun acceptedWriteBinding(value: JSONObject) =
+        PumpSession.AcceptedWriteBinding(
+            reboot = value.getInt("reboot"),
+            operationId = value.getString("operationId"),
+            reservationId = value.getString("reservationId"),
+            counter = value.getLong("counter"),
+            characteristic = value.getString("characteristic"),
+            purpose = value.getString("purpose"),
+            payloadHash = value.getString("payloadHash"),
+            priorWrite = value.getLong("priorWrite"),
+            candidate = PumpSession.WriteCandidate.valueOf(value.getString("candidate")),
+            evidenceHash = value.getString("evidenceHash"),
+        )
+
+    private fun acceptedWriteBindingJson(value: PumpSession.AcceptedWriteBinding) =
+        JSONObject()
+            .put("reboot", value.reboot)
+            .put("operationId", value.operationId)
+            .put("reservationId", value.reservationId)
+            .put("counter", value.counter)
+            .put("characteristic", value.characteristic)
+            .put("purpose", value.purpose)
+            .put("payloadHash", value.payloadHash)
+            .put("priorWrite", value.priorWrite)
+            .put("candidate", value.candidate.name)
+            .put("evidenceHash", value.evidenceHash)
+
     override fun commit(state: PumpSession.State) {
         PumpSession.validate(state)
         val records = JSONArray()
@@ -282,6 +318,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("priorWrite", it.priorWrite ?: JSONObject.NULL)
                         .put("candidate", it.candidate.name)
                         .put("historyBinding", it.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
+                        .put("acceptedPredecessor", it.acceptedPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
                 } ?: JSONObject.NULL)
                 .put("serial", r.serial).put("keyHex", r.keyHex ?: JSONObject.NULL)
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
@@ -300,6 +337,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("benchNewEpochBootstrapAttempted", r.benchNewEpochBootstrapAttempted)
                 .put("benchStrictNextAccepted", r.benchStrictNextAccepted)
                 .put("benchForwardGapAttempted", r.benchForwardGapAttempted)
+                .put("benchDuplicateCounterAttempted", r.benchDuplicateCounterAttempted)
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
                     JSONObject()
                         .put("operationId", evidence.operationId)
@@ -314,6 +352,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("evidenceHash", evidence.evidenceHash)
                         .put("detail", evidence.detail)
                         .put("historyBinding", evidence.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
+                        .put("acceptedPredecessor", evidence.acceptedPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
                 })))
         }
         val availability = JSONObject()
@@ -326,7 +365,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 11).put("records", records)
+        val body = JSONObject().put("version", 12).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

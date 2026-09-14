@@ -97,7 +97,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(11, org.json.JSONObject(body).getInt("version"))
+        assertEquals(12, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -136,6 +136,165 @@ class SessionJournalTest {
         assertEquals(42, journal.load().records.single().reservation!!.priorWrite)
         assertTrue(journal.load().records.single().benchStrictNextAccepted)
         assertTrue(journal.load().records.single().benchForwardGapAttempted)
+    }
+
+    @Test
+    fun `version twelve roundtrip preserves duplicate probe predecessor binding and marker`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val accepted =
+            PumpSession.WriteEvidence(
+                operationId = "accepted-event",
+                reservationId = "accepted-reservation",
+                counter = 43,
+                characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "accepted event predecessor",
+            )
+        val predecessor =
+            PumpSession.AcceptedWriteBinding(
+                reboot = 8,
+                operationId = accepted.operationId,
+                reservationId = accepted.reservationId,
+                counter = accepted.counter,
+                characteristic = accepted.characteristic,
+                purpose = accepted.purpose,
+                payloadHash = accepted.payloadHash,
+                priorWrite = accepted.priorWrite,
+                candidate = accepted.candidate,
+                evidenceHash = accepted.evidenceHash,
+            )
+        val duplicate =
+            PumpSession.Reservation(
+                id = "duplicate-reservation",
+                counter = 43,
+                phase = PumpSession.Phase.POSSIBLY_SENT,
+                operationId = "duplicate-event",
+                characteristic = accepted.characteristic,
+                purpose = accepted.purpose,
+                payloadHash = "ef".repeat(32),
+                priorWrite = 43,
+                candidate = PumpSession.WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR,
+                acceptedPredecessor = predecessor,
+            )
+        val unresolved =
+            PumpSession.WriteEvidence(
+                operationId = "duplicate-event",
+                reservationId = duplicate.id,
+                counter = duplicate.counter,
+                characteristic = checkNotNull(duplicate.characteristic),
+                purpose = checkNotNull(duplicate.purpose),
+                payloadHash = checkNotNull(duplicate.payloadHash),
+                priorWrite = checkNotNull(duplicate.priorWrite),
+                candidate = duplicate.candidate,
+                resolution = null,
+                evidenceHash = "12".repeat(32),
+                detail = "duplicate probe unresolved",
+                acceptedPredecessor = predecessor,
+            )
+        val state =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 43,
+                            reservation = duplicate,
+                            writeEvidence = listOf(accepted, unresolved),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchStrictNextAccepted = true,
+                            benchDuplicateCounterAttempted = true,
+                        )
+                    },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        assertEquals(predecessor, journal.load().records.single().reservation!!.acceptedPredecessor)
+        assertTrue(journal.load().records.single().benchDuplicateCounterAttempted)
+    }
+
+    @Test
+    fun `version twelve rejects missing duplicate predecessor binding field`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        val envelope = org.json.JSONObject(checkNotNull(storage.file))
+        val alias = storage.anchors().single()
+        val body = org.json.JSONObject(storage.open(alias, envelope.getString("sealed")))
+        body.getJSONArray("records").getJSONObject(0).put(
+            "reservation",
+            org.json.JSONObject()
+                .put("id", "duplicate")
+                .put("counter", 43)
+                .put("phase", "POSSIBLY_SENT")
+                .put("operationId", "duplicate-event")
+                .put("characteristic", "669a0c20-0008-969e-e211-fcbecc3b7bc5")
+                .put("purpose", "HISTORY_SELECTOR")
+                .put("payloadHash", "ab".repeat(32))
+                .put("priorWrite", 43)
+                .put("candidate", "BENCH_DUPLICATE_COUNTER_SELECTOR")
+                .put("historyBinding", org.json.JSONObject.NULL),
+        )
+        storage.file = org.json.JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body.toString())).toString()
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
+    }
+
+    @Test
+    fun `version twelve rejects write evidence missing accepted predecessor field`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "accepted-event",
+                reservationId = "accepted-reservation",
+                counter = 43,
+                characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "accepted event predecessor",
+            )
+        journal.commit(old.copy(records = old.records.map { it.copy(writeEvidence = listOf(evidence)) }))
+        val body = committedBody(storage)
+        body.getJSONArray("records").getJSONObject(0).getJSONArray("writeEvidence").getJSONObject(0)
+            .remove("acceptedPredecessor")
+        replaceBody(storage, body)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
+    }
+
+    @Test
+    fun `version twelve rejects duplicate attempt marker without strict next acceptance`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val established =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 42,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
+                    },
+            )
+        journal.commit(established)
+        val body = committedBody(storage)
+        body.getJSONArray("records").getJSONObject(0)
+            .put("benchDuplicateCounterAttempted", true)
+            .put("benchStrictNextAccepted", false)
+        replaceBody(storage, body)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
     }
 
     @Test
@@ -273,6 +432,32 @@ class SessionJournalTest {
         assertTrue(loaded.benchHistorySelectorStates.isEmpty())
         assertEquals(42, loaded.write)
         assertEquals(preserved.records.single().benchNewEpochBootstrapReference, loaded.benchNewEpochBootstrapReference)
+    }
+
+    @Test
+    fun `version eleven migration starts with duplicate probe unused`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val preserved =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 42,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchStrictNextAccepted = true,
+                        )
+                    },
+            )
+        journal.commit(preserved)
+        val body = committedBody(storage).put("version", 11)
+        body.getJSONArray("records").getJSONObject(0).remove("benchDuplicateCounterAttempted")
+        replaceBody(storage, body)
+
+        val loaded = journal.load().records.single()
+        assertEquals(42, loaded.write)
+        assertTrue(loaded.benchStrictNextAccepted)
+        assertFalse(loaded.benchDuplicateCounterAttempted)
     }
 
     @Test

@@ -189,6 +189,29 @@ captures separately. Inbound control notifications are also recorded as raw unsi
 length/hash, characteristic and observed firmware; they are evidence, not an automatic error
 classifier.
 
+### One-shot duplicate-counter probe
+
+Duplicate-counter behavior is measured only after a complete event-selector write has been explicitly
+reconciled as accepted. The probe reuses that exact verified counter once in the current reboot epoch,
+requires a new operation ID and a different event-selector payload, and durably binds the accepted
+predecessor's operation ID, reservation ID, counter, characteristic, purpose, plaintext hash, prior
+floor, candidate mode and accepted-evidence hash. It is not a retry of an unresolved command and it
+cannot target alarm, system, settings, bolus, TBR or any configuration value.
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action duplicate-counter-probe --es write_id "duplicate-$(uuidgen)" \
+  --es selector_type event --ei selector 18
+```
+
+Use an event index different from the fully verified predecessor and confirm the current authenticated
+cursor before the probe. The epoch marker is persisted before dispatch, so local not-sent, rejection,
+ambiguity, restart and in-place install cannot permit a second duplicate probe. Successful fragment
+callbacks remain `AcceptedUnverified`; classify duplicate acceptance only from authenticated semantic
+read-back and reviewed counter evidence. An ambiguous result blocks later writes. Exact-next reboot
+adoption may retire it only after immutable unresolved evidence matches the full duplicate and accepted-
+predecessor bindings.
+
 ## Bounded target actions
 
 These actions exist only to execute the required matrix without editing the journal or scanning

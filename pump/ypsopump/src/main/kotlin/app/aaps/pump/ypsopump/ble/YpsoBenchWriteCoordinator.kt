@@ -18,6 +18,13 @@ internal class YpsoBenchWriteCoordinator(
     private val readiness: YpsoCommandReadiness,
     private val transport: YpsoSerializedWriteTransport,
 ) {
+    enum class BenchWriteMode {
+        STRICT_NEXT,
+        FORWARD_GAP,
+        NEW_EPOCH_BOOTSTRAP,
+        DUPLICATE_COUNTER,
+    }
+
     data class Owner(
         val gatt: Any,
         val connectionId: String,
@@ -51,8 +58,7 @@ internal class YpsoBenchWriteCoordinator(
         plaintext: ByteArray,
         firmware: String?,
         deadlineMs: Long,
-        forwardGap: Int = 0,
-        newEpochBootstrap: Boolean = false,
+        mode: BenchWriteMode = BenchWriteMode.STRICT_NEXT,
         dispatch: (ByteArray) -> Boolean,
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean {
@@ -88,7 +94,7 @@ internal class YpsoBenchWriteCoordinator(
             }
         val record = session.snapshot()
         val bootstrapReady =
-            newEpochBootstrap &&
+            mode == BenchWriteMode.NEW_EPOCH_BOOTSTRAP &&
                 record?.writeBootstrapState == PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH &&
                 !record.benchNewEpochBootstrapAttempted &&
                 record.write == null &&
@@ -132,19 +138,21 @@ internal class YpsoBenchWriteCoordinator(
                         category.name,
                         MessageDigest.getInstance("SHA-256").digest(plaintext).joinToString("") { "%02x".format(it) },
                     )
-                if (newEpochBootstrap) {
-                    require(forwardGap == 0) { "new-epoch bootstrap cannot use a forward gap" }
-                    session.reserveBenchNewEpochBootstrapCandidate(owner.token, transaction, intent)
-                } else {
-                    session.reserveBenchCandidate(
-                        owner.token,
-                        transaction,
-                        intent,
-                        forwardGap,
-                        historyBinding?.first,
-                        historyBinding?.second,
-                        historyBinding?.third,
-                    )
+                when (mode) {
+                    BenchWriteMode.NEW_EPOCH_BOOTSTRAP ->
+                        session.reserveBenchNewEpochBootstrapCandidate(owner.token, transaction, intent)
+                    BenchWriteMode.DUPLICATE_COUNTER ->
+                        session.reserveBenchDuplicateCounterCandidate(owner.token, transaction, intent)
+                    BenchWriteMode.STRICT_NEXT, BenchWriteMode.FORWARD_GAP ->
+                        session.reserveBenchCandidate(
+                            owner.token,
+                            transaction,
+                            intent,
+                            forwardGap = if (mode == BenchWriteMode.FORWARD_GAP) 1 else 0,
+                            historyBinding?.first,
+                            historyBinding?.second,
+                            historyBinding?.third,
+                        )
                 }
             }.getOrElse {
                 finish()

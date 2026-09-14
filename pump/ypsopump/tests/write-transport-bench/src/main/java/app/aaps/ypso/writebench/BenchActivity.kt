@@ -98,6 +98,7 @@ class BenchActivity : Activity() {
                 "install" -> install()
                 "inspect" -> inspect()
                 "run-selector" -> runConnection(RunKind.SELECTOR)
+                "duplicate-counter-probe" -> runConnection(RunKind.DUPLICATE_COUNTER_PROBE)
                 "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
                 "read-selector-state" -> runConnection(RunKind.READ_SELECTOR_STATE)
@@ -197,6 +198,7 @@ class BenchActivity : Activity() {
             report(
                 "SESSION:generation=${opened.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
                     "bootstrap=${record.writeBootstrapState},bootstrap_attempted=${record.benchNewEpochBootstrapAttempted}," +
+                    "duplicate_attempted=${record.benchDuplicateCounterAttempted}," +
                     "history_counts=$historyCounts,selector_states=$selectorStates," +
                     "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
             )
@@ -839,7 +841,8 @@ class BenchActivity : Activity() {
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
                     when (runKind) {
-                        RunKind.SELECTOR, RunKind.BOOTSTRAP_NEW_EPOCH, RunKind.READINESS_PROBE -> startSelector(owner)
+                        RunKind.SELECTOR, RunKind.BOOTSTRAP_NEW_EPOCH, RunKind.DUPLICATE_COUNTER_PROBE, RunKind.READINESS_PROBE ->
+                            startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
                         RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
                         RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
@@ -1096,8 +1099,17 @@ class BenchActivity : Activity() {
                 YpsoGlb.encode(selected.value),
                 firmware = firmware,
                 deadlineMs = intent.getLongExtra("deadline_ms", 8_000L),
-                forwardGap = forwardGap,
-                newEpochBootstrap = runKind == RunKind.BOOTSTRAP_NEW_EPOCH,
+                mode =
+                    when (runKind) {
+                        RunKind.BOOTSTRAP_NEW_EPOCH -> YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP
+                        RunKind.DUPLICATE_COUNTER_PROBE -> YpsoBenchWriteCoordinator.BenchWriteMode.DUPLICATE_COUNTER
+                        else ->
+                            if (forwardGap == 1) {
+                                YpsoBenchWriteCoordinator.BenchWriteMode.FORWARD_GAP
+                            } else {
+                                YpsoBenchWriteCoordinator.BenchWriteMode.STRICT_NEXT
+                            }
+                    },
                 dispatch = { frame ->
                     dispatchedFrames++
                     val accepted = writeCharacteristic(owner, binding.index, frame)
@@ -1564,6 +1576,7 @@ class BenchActivity : Activity() {
     private enum class RunKind {
         SELECTOR,
         BOOTSTRAP_NEW_EPOCH,
+        DUPLICATE_COUNTER_PROBE,
         OBSERVE_SELECTOR,
         READ_SELECTOR_STATE,
         OBSERVE_REBOOT,

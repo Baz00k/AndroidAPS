@@ -19,6 +19,7 @@ class PumpSession(private val store: Store) {
         BENCH_STRICT_NEXT_SELECTOR,
         BENCH_FORWARD_GAP_SELECTOR,
         BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+        BENCH_DUPLICATE_COUNTER_SELECTOR,
     }
     enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, ESTABLISHED }
     enum class HistoryFamily { ALARM, SYSTEM }
@@ -54,6 +55,7 @@ class PumpSession(private val store: Store) {
         val priorWrite: Long? = null,
         val candidate: WriteCandidate = WriteCandidate.STANDARD,
         val historyBinding: HistoryWriteBinding? = null,
+        val acceptedPredecessor: AcceptedWriteBinding? = null,
     )
     data class WriteEvidence(
         val operationId: String,
@@ -68,6 +70,7 @@ class PumpSession(private val store: Store) {
         val evidenceHash: String,
         val detail: String,
         val historyBinding: HistoryWriteBinding? = null,
+        val acceptedPredecessor: AcceptedWriteBinding? = null,
     )
     data class WriteIntent(val operationId: String, val characteristic: String, val purpose: String, val payloadHash: String)
     data class BootstrapReference(
@@ -97,6 +100,45 @@ class PumpSession(private val store: Store) {
         val selectedBefore: HistorySelectorState,
         val writeIndex: Int,
     )
+    data class AcceptedWriteBinding(
+        val reboot: Int,
+        val operationId: String,
+        val reservationId: String,
+        val counter: Long,
+        val characteristic: String,
+        val purpose: String,
+        val payloadHash: String,
+        val priorWrite: Long,
+        val candidate: WriteCandidate,
+        val evidenceHash: String,
+    ) {
+        fun matches(evidence: WriteEvidence): Boolean =
+            operationId == evidence.operationId &&
+                reservationId == evidence.reservationId &&
+                counter == evidence.counter &&
+                characteristic == evidence.characteristic &&
+                purpose == evidence.purpose &&
+                payloadHash == evidence.payloadHash &&
+                priorWrite == evidence.priorWrite &&
+                candidate == evidence.candidate &&
+                evidenceHash == evidence.evidenceHash
+
+        companion object {
+            fun from(reboot: Int, evidence: WriteEvidence): AcceptedWriteBinding =
+                AcceptedWriteBinding(
+                    reboot = reboot,
+                    operationId = evidence.operationId,
+                    reservationId = evidence.reservationId,
+                    counter = evidence.counter,
+                    characteristic = evidence.characteristic,
+                    purpose = evidence.purpose,
+                    payloadHash = evidence.payloadHash,
+                    priorWrite = evidence.priorWrite,
+                    candidate = evidence.candidate,
+                    evidenceHash = evidence.evidenceHash,
+                )
+        }
+    }
     enum class AttemptStatus { PENDING, SUCCEEDED, FAILED, CANCELLED }
     data class AttemptResult(val id: String, val status: AttemptStatus)
     data class Record(
@@ -129,7 +171,9 @@ class PumpSession(private val store: Store) {
         /** Bench-only epoch evidence; never authorizes production writes. */
         val benchStrictNextAccepted: Boolean = false,
         /** Set before the epoch's sole +2 candidate can reach platform dispatch. */
-        val benchForwardGapAttempted: Boolean = false
+        val benchForwardGapAttempted: Boolean = false,
+        /** Set before the epoch's sole same-counter duplicate probe can reach platform dispatch. */
+        val benchDuplicateCounterAttempted: Boolean = false,
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -477,7 +521,8 @@ class PumpSession(private val store: Store) {
                     writeBootstrapState = candidate.writeBootstrapState,
                     benchNewEpochBootstrapAttempted = candidate.benchNewEpochBootstrapAttempted,
                     benchStrictNextAccepted = candidate.benchStrictNextAccepted,
-                    benchForwardGapAttempted = candidate.benchForwardGapAttempted
+                    benchForwardGapAttempted = candidate.benchForwardGapAttempted,
+                    benchDuplicateCounterAttempted = candidate.benchDuplicateCounterAttempted,
                 )
             } else {
                 replaced.copy(
@@ -494,7 +539,9 @@ class PumpSession(private val store: Store) {
                     benchNewEpochBootstrapAttempted =
                         replaced.benchNewEpochBootstrapAttempted || candidate.benchNewEpochBootstrapAttempted,
                     benchStrictNextAccepted = replaced.benchStrictNextAccepted || candidate.benchStrictNextAccepted,
-                    benchForwardGapAttempted = replaced.benchForwardGapAttempted || candidate.benchForwardGapAttempted
+                    benchForwardGapAttempted = replaced.benchForwardGapAttempted || candidate.benchForwardGapAttempted,
+                    benchDuplicateCounterAttempted =
+                        replaced.benchDuplicateCounterAttempted || candidate.benchDuplicateCounterAttempted,
                 )
             }
             current.records.filterNot { it.generation == candidate.generation || it.generation == replaced.generation } + merged
@@ -633,6 +680,7 @@ class PumpSession(private val store: Store) {
                             it.priorWrite == unresolved.priorWrite &&
                             it.candidate == unresolved.candidate &&
                             it.historyBinding == unresolved.historyBinding &&
+                            it.acceptedPredecessor == unresolved.acceptedPredecessor &&
                             it.resolution == null
                     },
                 ) { "Cannot transition with an unreviewed outstanding write record" }
@@ -650,7 +698,8 @@ class PumpSession(private val store: Store) {
                     writeBootstrapState = WriteBootstrapState.OBSERVED_NEW_EPOCH,
                     benchNewEpochBootstrapAttempted = false,
                     benchStrictNextAccepted = false,
-                    benchForwardGapAttempted = false
+                    benchForwardGapAttempted = false,
+                    benchDuplicateCounterAttempted = false,
                 )
             update(next)
             quiesce()
@@ -770,6 +819,59 @@ class PumpSession(private val store: Store) {
             bootstrapPriorWrite = 0,
             markNewEpochBootstrapAttempted = true,
         )
+    }
+
+    /**
+     * Dedicated one-shot bench probe for duplicate-counter behavior. It reuses exactly the counter of
+     * a fully verified accepted strict-next event selector and requires a different event payload.
+     */
+    @Synchronized
+    internal fun reserveBenchDuplicateCounterCandidate(origin: Token, id: String, intent: WriteIntent): Reservation {
+        val old = owned(origin)
+        check(transaction == id) { "Stale transaction" }
+        check(old.writeBootstrapState == WriteBootstrapState.ESTABLISHED) { "Write bootstrap is not established" }
+        check(!old.benchDuplicateCounterAttempted) { "The epoch's duplicate-counter probe was already attempted" }
+        check(intent.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC && intent.purpose == "HISTORY_SELECTOR") {
+            "Duplicate-counter probe supports only the event selector"
+        }
+        val predecessor = checkNotNull(old.reservation) { "A verified predecessor reservation is required" }
+        check(predecessor.phase == Phase.VERIFIED) { "The predecessor write is not verified" }
+        check(predecessor.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR) {
+            "Duplicate-counter probe requires an accepted strict-next predecessor"
+        }
+        check(predecessor.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC && predecessor.purpose == "HISTORY_SELECTOR") {
+            "Duplicate-counter predecessor must be an event selector"
+        }
+        check(predecessor.operationId != intent.operationId) { "Duplicate-counter probe requires a new operation ID" }
+        check(predecessor.payloadHash != intent.payloadHash) { "Duplicate-counter probe must use a different payload" }
+        val accepted =
+            old.writeEvidence.singleOrNull {
+                it.reservationId == predecessor.id &&
+                    it.operationId == predecessor.operationId &&
+                    it.counter == predecessor.counter &&
+                    it.characteristic == predecessor.characteristic &&
+                    it.purpose == predecessor.purpose &&
+                    it.payloadHash == predecessor.payloadHash &&
+                    it.priorWrite == predecessor.priorWrite &&
+                    it.candidate == predecessor.candidate &&
+                    it.resolution == WriteResolution.ACCEPTED
+            } ?: throw SecurityException("Accepted predecessor evidence is missing or ambiguous")
+        val binding = AcceptedWriteBinding.from(checkNotNull(old.reboot), accepted)
+        val reserved =
+            Reservation(
+                id = id,
+                counter = predecessor.counter,
+                phase = Phase.RESERVED,
+                operationId = intent.operationId,
+                characteristic = intent.characteristic,
+                purpose = intent.purpose,
+                payloadHash = intent.payloadHash,
+                priorWrite = predecessor.counter,
+                candidate = WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR,
+                acceptedPredecessor = binding,
+            )
+        update(old.copy(reservation = reserved, benchDuplicateCounterAttempted = true))
+        return reserved
     }
 
     /** Record one authenticated, CRC-validated pre-reboot selector value without changing write state. */
@@ -923,7 +1025,9 @@ class PumpSession(private val store: Store) {
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == id && reserved.phase in setOf(Phase.RESERVED, Phase.POSSIBLY_SENT)) { "Write already acknowledged" }
         val priorWrite = priorWrite(reserved)
-        check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
+        check(old.write == reserved.counter && priorWrite >= 0 && validCounterDistance(reserved, priorWrite)) {
+            "Invalid write reservation"
+        }
         update(
             if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
                 old.copy(write = null, reservation = null)
@@ -941,7 +1045,9 @@ class PumpSession(private val store: Store) {
         val reserved = checkNotNull(old.reservation)
         check(reserved.operationId == operationId && reserved.phase == Phase.RESERVED) { "Write is not proven undispatched" }
         val priorWrite = priorWrite(reserved)
-        check(old.write == reserved.counter && priorWrite >= 0 && priorWrite < reserved.counter) { "Invalid write reservation" }
+        check(old.write == reserved.counter && priorWrite >= 0 && validCounterDistance(reserved, priorWrite)) {
+            "Invalid write reservation"
+        }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
         update(
@@ -1073,9 +1179,17 @@ class PumpSession(private val store: Store) {
             evidenceHash = evidenceHash,
             detail = detail,
             historyBinding = reservation.historyBinding,
+            acceptedPredecessor = reservation.acceptedPredecessor,
         )
 
     private fun priorWrite(reservation: Reservation): Long = reservation.priorWrite ?: reservation.counter - 1
+
+    private fun validCounterDistance(reservation: Reservation, priorWrite: Long): Boolean =
+        if (reservation.candidate == WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR) {
+            priorWrite == reservation.counter
+        } else {
+            priorWrite < reservation.counter
+        }
 
     private fun owned(origin: Token): Record {
         check(token == origin && state != null) { "Stale or unavailable session" }
@@ -1186,12 +1300,13 @@ class PumpSession(private val store: Store) {
                 require(!r.benchNewEpochBootstrapAttempted || r.writeBootstrapState != WriteBootstrapState.UNKNOWN_MID_EPOCH)
                 require(!r.benchNewEpochBootstrapAttempted || r.benchNewEpochBootstrapReference != null)
                 require(!r.benchForwardGapAttempted || r.benchStrictNextAccepted)
-                require(r.reboot != null || !r.benchStrictNextAccepted && !r.benchForwardGapAttempted)
+                require(!r.benchDuplicateCounterAttempted || r.benchStrictNextAccepted)
+                require(!r.benchDuplicateCounterAttempted || r.writeBootstrapState == WriteBootstrapState.ESTABLISHED)
+                require(r.reboot != null || !r.benchStrictNextAccepted && !r.benchForwardGapAttempted && !r.benchDuplicateCounterAttempted)
                 r.reservation?.let {
                     require(it.id.isNotBlank() && it.counter > 0 && it.counter == r.write)
                     val priorWrite = checkNotNull(it.priorWrite)
-                    require(priorWrite >= 0 && priorWrite < it.counter)
-                    require(it.counter - priorWrite in 1..2)
+                    require(priorWrite >= 0)
                     when (it.candidate) {
                         WriteCandidate.STANDARD -> require(it.counter - priorWrite == 1L)
                         WriteCandidate.BENCH_STRICT_NEXT_SELECTOR -> {
@@ -1215,6 +1330,12 @@ class PumpSession(private val store: Store) {
                             )
                             require(it.operationId != null)
                         }
+                        WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR -> {
+                            require(it.counter == priorWrite)
+                            require(r.benchDuplicateCounterAttempted)
+                            require(it.operationId != null)
+                            requireAcceptedPredecessor(r, checkNotNull(it.acceptedPredecessor), AcceptedPredecessorEpoch.CURRENT)
+                        }
                     }
                     require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
                     require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
@@ -1233,6 +1354,7 @@ class PumpSession(private val store: Store) {
                     } else {
                         require(it.historyBinding == null)
                     }
+                    require((it.candidate == WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR) == (it.acceptedPredecessor != null))
                 }
                 require(
                     r.writeEvidence.map { it.reservationId to it.evidenceHash }.distinct().size == r.writeEvidence.size
@@ -1245,10 +1367,8 @@ class PumpSession(private val store: Store) {
                             it.characteristic.isNotBlank() &&
                             it.purpose.isNotBlank() &&
                             it.payloadHash.matches(Regex("[0-9a-f]{64}")) &&
-                            it.priorWrite >= 0 &&
-                            it.priorWrite < it.counter,
+                            it.priorWrite >= 0,
                     )
-                    require(it.counter - it.priorWrite in 1..2)
                     when (it.candidate) {
                         WriteCandidate.STANDARD, WriteCandidate.BENCH_STRICT_NEXT_SELECTOR ->
                             require(it.counter - it.priorWrite == 1L)
@@ -1256,6 +1376,10 @@ class PumpSession(private val store: Store) {
                             require(it.counter - it.priorWrite == 2L)
                         WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR ->
                             require(it.counter == 1L && it.priorWrite == 0L)
+                        WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR -> {
+                            require(it.counter == it.priorWrite)
+                            requireAcceptedPredecessor(r, checkNotNull(it.acceptedPredecessor), AcceptedPredecessorEpoch.CURRENT_OR_PAST)
+                        }
                     }
                     r.reservation?.takeIf { reservation -> reservation.id == it.reservationId }?.let { reservation ->
                         require(
@@ -1266,7 +1390,8 @@ class PumpSession(private val store: Store) {
                                 reservation.payloadHash == it.payloadHash &&
                                 reservation.priorWrite == it.priorWrite &&
                                 reservation.candidate == it.candidate &&
-                                reservation.historyBinding == it.historyBinding,
+                                reservation.historyBinding == it.historyBinding &&
+                                reservation.acceptedPredecessor == it.acceptedPredecessor,
                         )
                     }
                     require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
@@ -1286,6 +1411,7 @@ class PumpSession(private val store: Store) {
                     } else {
                         require(it.historyBinding == null)
                     }
+                    require((it.candidate == WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR) == (it.acceptedPredecessor != null))
                 }
             }
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)
@@ -1318,6 +1444,32 @@ class PumpSession(private val store: Store) {
             require(binding.writeIndex >= 0 && binding.writeIndex == binding.count.count - 1)
             require(binding.selectedBefore.index != binding.writeIndex)
             require(counter > 0)
+        }
+
+        private enum class AcceptedPredecessorEpoch { CURRENT, CURRENT_OR_PAST }
+
+        private fun requireAcceptedPredecessor(
+            record: Record,
+            binding: AcceptedWriteBinding,
+            epoch: AcceptedPredecessorEpoch,
+        ) {
+            require(
+                record.reboot != null &&
+                    when (epoch) {
+                        AcceptedPredecessorEpoch.CURRENT -> binding.reboot == record.reboot
+                        AcceptedPredecessorEpoch.CURRENT_OR_PAST -> binding.reboot <= record.reboot
+                    },
+            )
+            require(binding.operationId.isNotBlank() && binding.reservationId.isNotBlank())
+            require(binding.counter > 0 && binding.priorWrite >= 0 && binding.priorWrite < binding.counter)
+            require(binding.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC)
+            require(binding.purpose == "HISTORY_SELECTOR")
+            require(binding.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.evidenceHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR)
+            require(
+                record.writeEvidence.any { binding.matches(it) && it.resolution == WriteResolution.ACCEPTED },
+            )
         }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

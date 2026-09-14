@@ -144,8 +144,15 @@ and the epoch's gap-attempt marker is committed with reservation before dispatch
 outcome, restart, in-place reinstall/upgrade that preserves app data, and same-epoch baseline import.
 Uninstall removes the sealed journal and its Android Keystore anchor; it is not a supported recovery
 operation and cannot establish that the epoch's gap attempt is still unused. Authenticated reboot
-adoption alone clears both epoch markers. Larger offsets, repeated advancement and scanning are
+adoption alone clears the epoch markers. Larger offsets, repeated advancement and scanning are
 unavailable.
+
+The bench additionally permits one same-counter duplicate-behavior probe per authenticated epoch. It
+is available only after a strict-next event selector is fully reconciled as accepted, requires a new
+operation ID and different event payload, and binds the predecessor's complete accepted evidence. This
+does not permit retrying an unresolved operation: possibly effective plaintext is never resent. The
+probe marker commits before dispatch, survives restart/in-place install and clears only on authenticated
+reboot adoption. Its result must be established from authenticated semantic and counter evidence.
 
 Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
 write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at

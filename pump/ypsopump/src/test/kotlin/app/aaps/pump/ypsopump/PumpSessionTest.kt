@@ -1231,6 +1231,299 @@ class PumpSessionTest {
     }
 
     @Test
+    fun `duplicate counter probe reuses accepted event counter once with a different payload`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        val predecessorId = owner.begin(token)
+        val predecessor =
+            owner.reserveBenchCandidate(
+                token,
+                predecessorId,
+                PumpSession.WriteIntent("accepted-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, predecessorId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, predecessorId, PumpSession.Phase.ACKED)
+        owner.finish(token, predecessorId)
+        owner.resolveWrite(token, predecessor.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted event predecessor")
+
+        val probeId = owner.begin(token)
+        val probe =
+            owner.reserveBenchDuplicateCounterCandidate(
+                token,
+                probeId,
+                PumpSession.WriteIntent("duplicate-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+
+        assertEquals(43, probe.counter)
+        assertEquals(43, probe.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR, probe.candidate)
+        assertEquals("accepted-event", probe.acceptedPredecessor!!.operationId)
+        assertEquals("cd".repeat(32), probe.acceptedPredecessor!!.evidenceHash)
+        assertTrue(owner.snapshot()!!.benchDuplicateCounterAttempted)
+        owner.markNotSent(token, probeId)
+        owner.finish(token, probeId)
+        assertEquals(43, owner.snapshot()!!.write)
+        assertNull(owner.snapshot()!!.reservation)
+
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchDuplicateCounterCandidate(
+                token,
+                owner.begin(token),
+                PumpSession.WriteIntent("duplicate-again", EVENT_INDEX, "HISTORY_SELECTOR", "12".repeat(32)),
+            )
+        }
+    }
+
+    @Test
+    fun `duplicate counter probe rejects same payload non-event and missing accepted evidence`() {
+        fun acceptedState(): Pair<MemoryStore, PumpSession> {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val id = owner.begin(token)
+            val predecessor =
+                owner.reserveBenchCandidate(
+                    token,
+                    id,
+                    PumpSession.WriteIntent("accepted-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                    forwardGap = 0,
+                )
+            owner.advance(token, id, PumpSession.Phase.POSSIBLY_SENT)
+            owner.advance(token, id, PumpSession.Phase.ACKED)
+            owner.finish(token, id)
+            owner.resolveWrite(token, predecessor.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted event predecessor")
+            return store to owner
+        }
+
+        run {
+            val (_, owner) = acceptedState()
+            val token = owner.open(pump, key)
+            assertThrows(IllegalStateException::class.java) {
+                owner.reserveBenchDuplicateCounterCandidate(
+                    token,
+                    owner.begin(token),
+                    PumpSession.WriteIntent("same", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                )
+            }
+        }
+        run {
+            val (_, owner) = acceptedState()
+            val token = owner.open(pump, key)
+            assertThrows(IllegalStateException::class.java) {
+                owner.reserveBenchDuplicateCounterCandidate(
+                    token,
+                    owner.begin(token),
+                    PumpSession.WriteIntent("setting", "669a0c20-0008-969e-e211-fcbeb3147bc5", "SETTINGS_SELECTOR", "ef".repeat(32)),
+                )
+            }
+        }
+        run {
+            val (store, owner) = acceptedState()
+            owner.quiesce()
+            store.saved = store.saved.copy(records = store.saved.records.map { it.copy(writeEvidence = emptyList()) })
+            val restored = PumpSession(store)
+            val token = restored.open(pump, key)
+            assertThrows(SecurityException::class.java) {
+                restored.reserveBenchDuplicateCounterCandidate(
+                    token,
+                    restored.begin(token),
+                    PumpSession.WriteIntent("missing-evidence", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+                )
+            }
+        }
+        run {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val id = owner.begin(token)
+            val rejected =
+                owner.reserveBenchCandidate(
+                    token,
+                    id,
+                    PumpSession.WriteIntent("rejected-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                    forwardGap = 0,
+                )
+            owner.advance(token, id, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, id)
+            owner.resolveWrite(
+                token,
+                rejected.id,
+                PumpSession.WriteResolution.REJECTED_COUNTER_CONSUMED,
+                "cd".repeat(32),
+                "counter consumed without selector acceptance",
+            )
+
+            assertThrows(SecurityException::class.java) {
+                owner.reserveBenchDuplicateCounterCandidate(
+                    token,
+                    owner.begin(token),
+                    PumpSession.WriteIntent("duplicate-after-rejection", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `duplicate counter rejection without consumption retains accepted predecessor floor`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val predecessorId = owner.begin(token)
+        val predecessor =
+            owner.reserveBenchCandidate(
+                token,
+                predecessorId,
+                PumpSession.WriteIntent("accepted-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, predecessorId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, predecessorId, PumpSession.Phase.ACKED)
+        owner.finish(token, predecessorId)
+        owner.resolveWrite(token, predecessor.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted predecessor")
+        val duplicateId = owner.begin(token)
+        val duplicate =
+            owner.reserveBenchDuplicateCounterCandidate(
+                token,
+                duplicateId,
+                PumpSession.WriteIntent("duplicate-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+        owner.advance(token, duplicateId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, duplicateId)
+
+        owner.resolveWrite(
+            token,
+            duplicate.id,
+            PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED,
+            "12".repeat(32),
+            "duplicate counter rejected without consumption",
+        )
+
+        val record = owner.snapshot()!!
+        assertEquals(43, record.write)
+        assertNull(record.reservation)
+        assertTrue(record.benchDuplicateCounterAttempted)
+        assertEquals(PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, record.writeEvidence.last().resolution)
+        assertEquals(duplicate.acceptedPredecessor, record.writeEvidence.last().acceptedPredecessor)
+    }
+
+    @Test
+    fun `reviewed unresolved duplicate probe retires on exact next reboot and retains full audit binding`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val acceptedId = owner.begin(token)
+        val accepted =
+            owner.reserveBenchCandidate(
+                token,
+                acceptedId,
+                PumpSession.WriteIntent("accepted-event", EVENT_INDEX, "HISTORY_SELECTOR", "ab".repeat(32)),
+                forwardGap = 0,
+            )
+        owner.advance(token, acceptedId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, acceptedId, PumpSession.Phase.ACKED)
+        owner.finish(token, acceptedId)
+        owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted predecessor")
+        val duplicateId = owner.begin(token)
+        val duplicate =
+            owner.reserveBenchDuplicateCounterCandidate(
+                token,
+                duplicateId,
+                PumpSession.WriteIntent("duplicate-event", EVENT_INDEX, "HISTORY_SELECTOR", "ef".repeat(32)),
+            )
+        owner.advance(token, duplicateId, PumpSession.Phase.POSSIBLY_SENT)
+        owner.finish(token, duplicateId)
+        owner.recordUnresolvedWriteEvidence(token, duplicate.id, "12".repeat(32), "duplicate outcome unknown")
+        val predecessor = checkNotNull(duplicate.acceptedPredecessor)
+
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+
+        val adopted = store.saved.records.single()
+        assertEquals(9, adopted.reboot)
+        assertNull(adopted.write)
+        assertNull(adopted.reservation)
+        assertFalse(adopted.benchDuplicateCounterAttempted)
+        assertEquals(predecessor, adopted.writeEvidence.last().acceptedPredecessor)
+        assertEquals(listOf(PumpSession.WriteResolution.ACCEPTED, null), adopted.writeEvidence.map { it.resolution })
+    }
+
+    @Test
+    fun `duplicate predecessor audit binding cannot belong to a future epoch`() {
+        val store = MemoryStore()
+        initialized(store)
+        val accepted =
+            PumpSession.WriteEvidence(
+                operationId = "accepted-event",
+                reservationId = "accepted-reservation",
+                counter = 43,
+                characteristic = EVENT_INDEX,
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "accepted predecessor",
+            )
+        val predecessor =
+            PumpSession.AcceptedWriteBinding(
+                reboot = 9,
+                operationId = accepted.operationId,
+                reservationId = accepted.reservationId,
+                counter = accepted.counter,
+                characteristic = accepted.characteristic,
+                purpose = accepted.purpose,
+                payloadHash = accepted.payloadHash,
+                priorWrite = accepted.priorWrite,
+                candidate = accepted.candidate,
+                evidenceHash = accepted.evidenceHash,
+            )
+        val unresolved =
+            accepted.copy(
+                operationId = "duplicate-event",
+                reservationId = "duplicate-reservation",
+                payloadHash = "ef".repeat(32),
+                priorWrite = 43,
+                candidate = PumpSession.WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR,
+                resolution = null,
+                evidenceHash = "12".repeat(32),
+                detail = "future predecessor binding",
+                acceptedPredecessor = predecessor,
+            )
+        val invalid =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.copy(
+                            write = 43,
+                            writeEvidence = listOf(accepted, unresolved),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchStrictNextAccepted = true,
+                            benchDuplicateCounterAttempted = true,
+                        )
+                    },
+            )
+
+        assertThrows(IllegalArgumentException::class.java) { PumpSession.validate(invalid) }
+    }
+
+    @Test
     fun `accepted standard reservation cannot unlock the bench forward gap`() {
         val store = MemoryStore()
         initialized(store)
@@ -1361,6 +1654,10 @@ class PumpSessionTest {
     }
     private fun PumpSession.Record.established(write: Long): PumpSession.Record =
         copy(write = write, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+
+    private companion object {
+        const val EVENT_INDEX = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
+    }
 
     private fun alarmCount(count: Int, payloadHash: String) =
         PumpSession.HistoryCountEvidence(

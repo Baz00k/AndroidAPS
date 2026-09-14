@@ -129,7 +129,7 @@ class YpsoBenchWriteCoordinatorTest {
         )
         frames.clear()
         callbacks.clear()
-        assertTrue(write(YpsoGlb.encode(17), forwardGap = 1))
+        assertTrue(write(YpsoGlb.encode(17), mode = YpsoBenchWriteCoordinator.BenchWriteMode.FORWARD_GAP))
         while (frames.size < (frames.first()[0].toInt() and 0x0f)) {
             transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
         }
@@ -153,6 +153,47 @@ class YpsoBenchWriteCoordinatorTest {
         assertEquals(43, session.snapshot()!!.write)
         assertNull(session.snapshot()!!.reservation)
         assertTrue(session.snapshot()!!.benchForwardGapAttempted)
+    }
+
+    @Test
+    fun `duplicate probe encrypts a different event payload with the accepted predecessor counter`() {
+        makeReady()
+        assertTrue(write(YpsoGlb.encode(16), writeId = "accepted-event"))
+        while (callbacks.isEmpty()) {
+            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        val acceptedMessage = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+        coordinator.reconcile(
+            "accepted-event",
+            owner,
+            YpsoBenchWriteCoordinator.Reconciliation(
+                YpsoSemanticEvidence.ACCEPTED,
+                PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash,
+                "accepted predecessor event selector",
+            ),
+        )
+
+        frames.clear()
+        callbacks.clear()
+        assertTrue(
+            write(
+                YpsoGlb.encode(17),
+                writeId = "duplicate-event",
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.DUPLICATE_COUNTER,
+            ),
+        )
+        while (callbacks.isEmpty()) {
+            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0)
+        }
+        val duplicateMessage = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+
+        assertEquals(acceptedMessage.counter, duplicateMessage.counter)
+        assertEquals(43, duplicateMessage.counter)
+        assertArrayEquals(YpsoGlb.encode(17), duplicateMessage.body)
+        assertEquals(PumpSession.WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR, session.snapshot()!!.reservation!!.candidate)
+        assertEquals("accepted-event", session.snapshot()!!.reservation!!.acceptedPredecessor!!.operationId)
+        assertEquals(evidenceHash, session.snapshot()!!.reservation!!.acceptedPredecessor!!.evidenceHash)
     }
 
     @Test
@@ -526,7 +567,7 @@ class YpsoBenchWriteCoordinatorTest {
                 plaintext = YpsoGlb.encode(18),
                 firmware = "V05.00.52",
                 deadlineMs = 8_000,
-                newEpochBootstrap = true,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP,
                 dispatch = { bootstrapFrames += it.copyOf(); true },
                 onOutcome = bootstrapCallbacks::add,
             ),
@@ -587,7 +628,7 @@ class YpsoBenchWriteCoordinatorTest {
                 plaintext = YpsoGlb.encode(18),
                 firmware = "V05.00.52",
                 deadlineMs = 8_000,
-                newEpochBootstrap = true,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP,
                 dispatch = { error("dispatch must not run") },
                 onOutcome = outcomes::add,
             ),
@@ -705,18 +746,19 @@ class YpsoBenchWriteCoordinatorTest {
 
     private fun write(
         payload: ByteArray,
-        forwardGap: Int = 0,
+        mode: YpsoBenchWriteCoordinator.BenchWriteMode = YpsoBenchWriteCoordinator.BenchWriteMode.STRICT_NEXT,
+        writeId: String = "selector-1",
         dispatch: (ByteArray) -> Boolean = { true },
     ): Boolean =
         coordinator.writeSelector(
-            writeId = "selector-1",
+            writeId = writeId,
             owner = owner,
             category = YpsoRemoteWrite.HISTORY_SELECTOR,
             characteristic = YpsoWritePolicy.EVENT_INDEX_UUID,
             plaintext = payload,
             firmware = "V05.00.52",
             deadlineMs = 8_000,
-            forwardGap = forwardGap,
+            mode = mode,
             dispatch = { frame ->
                 frames += frame.copyOf()
                 dispatch(frame)
