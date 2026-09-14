@@ -29,6 +29,8 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.rx.events.EventLoopUpdateGui
+import app.aaps.core.interfaces.rx.events.EventRefreshOverview
+import app.aaps.core.interfaces.rx.events.EventRunningModeChange
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
@@ -56,7 +58,9 @@ import javax.inject.Inject
  * `loop.invoke(..., allowNotification = true)` call on the same background handler.
  * While an unaccepted open-loop suggestion exists, "Accept temp basal" is offered and follows the
  * legacy Overview button path: refresh the loop, BOLUS-protected confirmation, then
- * `loop.acceptChangeRequest()`.
+ * `loop.acceptChangeRequest()`. The pending state is re-validated right before the confirmation and
+ * again at acceptance, so a suggestion that is no longer pending — or a loop run that replaced it
+ * while the dialog was open — can never be enacted sight unseen.
  */
 class LoopFragment : DaggerFragment() {
 
@@ -85,6 +89,9 @@ class LoopFragment : DaggerFragment() {
             setContent { AapsTheme { LoopStatusScreen(state.value, onRunNow = ::runNow, onAccept = ::acceptSuggestion) } }
         }
 
+    /** True while an accept flow is in flight — blocks re-entry and disables the accept button. */
+    private var accepting = false
+
     private fun runNow() {
         state.value = state.value.copy(lastRun = rh.gs(R.string.executing), running = true)
         handler.post { loop.invoke("Loop menu", true) }
@@ -92,35 +99,79 @@ class LoopFragment : DaggerFragment() {
 
     /** Same two-stage flow as the legacy Overview accept_temp_button: rerun, confirm, then accept. */
     private fun acceptSuggestion() {
+        if (accepting) return
         profileFunction.getProfile() ?: return
+        if (loop.runningMode != RM.Mode.OPEN_LOOP) return
         if (!(loop as PluginBase).isEnabled()) return
+        accepting = true
         handler.post {
-            loop.invoke("Accept temp button", false)
-            val lastRun = loop.lastRun
-            if (lastRun?.lastAPSRun != null && lastRun.constraintsProcessed?.isChangeRequested == true) {
+            try {
+                loop.invoke("Accept temp button", false)
+                val lastRun = loop.lastRun
+                // Re-validate on the state as it is NOW: only offer the confirmation while an
+                // open-loop suggestion is actually still pending — never a stale one from before a
+                // mode change, and never when this invocation failed to produce a fresh result.
+                if (!openLoopSuggestionPending(
+                        lastRun = lastRun,
+                        pumpInitialized = activePlugin.activePump.isInitialized(),
+                        openLoop = loop.runningMode == RM.Mode.OPEN_LOOP,
+                        loopEnabled = (loop as PluginBase).isEnabled()
+                    )
+                ) {
+                    accepting = false
+                    refreshAcceptingState()
+                    return@post
+                }
+                val confirmedLastAPSRun = lastRun?.lastAPSRun ?: return@post
+                val suggestion = lastRun.constraintsProcessed?.resultAsSpanned() ?: "".toSpanned()
                 activity?.let { act ->
                     act.runOnUiThread {
-                        protectionCheck.queryProtection(act, ProtectionCheck.Protection.BOLUS, UIRunnable {
-                            if (isAdded)
-                                OKDialog.showConfirmation(
-                                    act,
-                                    rh.gs(app.aaps.core.ui.R.string.tempbasal_label),
-                                    lastRun.constraintsProcessed?.resultAsSpanned() ?: "".toSpanned(),
-                                    {
-                                        uel.log(Action.ACCEPTS_TEMP_BASAL, Sources.Loop)
-                                        (context?.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?)?.cancel(Constants.notificationID)
-                                        handler.post { loop.acceptChangeRequest() }
-                                    }
-                                )
-                        })
+                        refreshAcceptingState()
+                        protectionCheck.queryProtection(
+                            act,
+                            ProtectionCheck.Protection.BOLUS,
+                            UIRunnable {
+                                if (isAdded)
+                                    OKDialog.showConfirmation(
+                                        act,
+                                        rh.gs(app.aaps.core.ui.R.string.tempbasal_label),
+                                        suggestion,
+                                        {
+                                            // Only enact the APS run the user just reviewed: if the
+                                            // loop ran again while the dialog was open, the newer
+                                            // suggestion has to be confirmed on its own.
+                                            if (loop.lastRun?.lastAPSRun == confirmedLastAPSRun) {
+                                                uel.log(Action.ACCEPTS_TEMP_BASAL, Sources.Loop)
+                                                cancelOpenLoopNotification()
+                                                loop.acceptChangeRequest()
+                                            } else {
+                                                accepting = false
+                                                refreshAcceptingState()
+                                            }
+                                        },
+                                        { accepting = false; refreshAcceptingState() }
+                                    )
+                            },
+                            { accepting = false; refreshAcceptingState() },
+                            { accepting = false; refreshAcceptingState() }
+                        )
                     }
                 }
+            } catch (e: Exception) {
+                accepting = false
+                fabricPrivacy.logException(e)
+                refreshAcceptingState()
             }
         }
     }
 
+    private fun refreshAcceptingState() {
+        activity?.runOnUiThread { state.value = state.value.copy(accepting = accepting) }
+    }
+
     override fun onResume() {
         super.onResume()
+        accepting = false
         disposable += rxBus
             .toObservable(EventLoopUpdateGui::class.java)
             .observeOn(aapsSchedulers.main)
@@ -133,6 +184,21 @@ class LoopFragment : DaggerFragment() {
 
         disposable += rxBus
             .toObservable(EventAcceptOpenLoopChange::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({
+                accepting = false
+                updateGUI()
+            }, fabricPrivacy::logException)
+
+        // The accept card depends on the running mode and pump state; keep it in sync when those
+        // change while the tab is open (same events the legacy Overview button visibility used).
+        disposable += rxBus
+            .toObservable(EventRefreshOverview::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ updateGUI() }, fabricPrivacy::logException)
+
+        disposable += rxBus
+            .toObservable(EventRunningModeChange::class.java)
             .observeOn(aapsSchedulers.main)
             .subscribe({ updateGUI() }, fabricPrivacy::logException)
 
@@ -155,6 +221,21 @@ class LoopFragment : DaggerFragment() {
     fun updateGUI() {
         val lastRun = loop.lastRun ?: return
 
+        // The pending-suggestion check reads `loop.runningMode`, which does blocking DB I/O
+        // (`persistenceLayer.getRunningModeActiveAt`) and may run `runningModePreCheck` with side
+        // effects — so the full state is computed on the fragment handler and only assigned on the
+        // UI thread (the same background-handler pattern the legacy Overview used).
+        handler.post {
+            try {
+                val newState = buildStatusState(lastRun)
+                activity?.runOnUiThread { state.value = newState }
+            } catch (e: Exception) {
+                fabricPrivacy.logException(e)
+            }
+        }
+    }
+
+    private fun buildStatusState(lastRun: Loop.LastRun): LoopStatusState {
         var constraints =
             lastRun.constraintsProcessed?.let { constraintsProcessed ->
                 val allConstraints = ConstraintObject(0.0, aapsLogger)
@@ -166,17 +247,17 @@ class LoopFragment : DaggerFragment() {
 
         val suggestionPending = openLoopSuggestionPending(
             lastRun = lastRun,
-            constraintsProcessed = lastRun.constraintsProcessed,
             pumpInitialized = activePlugin.activePump.isInitialized(),
             openLoop = loop.runningMode == RM.Mode.OPEN_LOOP,
             loopEnabled = (loop as PluginBase).isEnabled()
         )
 
-        state.value = LoopStatusState(
+        return LoopStatusState(
             lastRun = dateUtil.dateAndTimeString(lastRun.lastAPSRun),
             source = lastRun.source ?: "",
             running = false,
             suggestion = if (suggestionPending) lastRun.constraintsProcessed?.resultAsSpanned() ?: "" else "",
+            accepting = accepting,
             detail = listOf(
                 LoopStatusRow(rh.gs(R.string.request_label), lastRun.request?.resultAsSpanned() ?: ""),
                 LoopStatusRow(rh.gs(R.string.loop_constraints_processed_label), lastRun.constraintsProcessed?.resultAsSpanned() ?: ""),
@@ -197,5 +278,9 @@ class LoopFragment : DaggerFragment() {
                 )
             )
         )
+    }
+
+    private fun cancelOpenLoopNotification() {
+        (context?.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?)?.cancel(Constants.notificationID)
     }
 }

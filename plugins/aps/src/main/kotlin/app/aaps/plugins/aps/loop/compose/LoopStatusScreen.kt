@@ -29,7 +29,11 @@ import app.aaps.core.compose.theme.AapsTheme
  * is shown and goes through the same BOLUS-protected confirmation the legacy Home button used.
  */
 @Composable
-fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit, onAccept: () -> Unit = {}) {
+fun LoopStatusScreen(
+    state: LoopStatusState,
+    onRunNow: () -> Unit,
+    onAccept: () -> Unit
+) {
     val colors = AapsTheme.colors
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
@@ -74,6 +78,7 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit, onAccept: () 
                     PrimaryButton(
                         label = "Accept temp basal",
                         onClick = onAccept,
+                        enabled = !state.accepting,
                         modifier = Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGap)
                     )
                 }

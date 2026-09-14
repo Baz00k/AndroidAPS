@@ -22,6 +22,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.receivers.ReceiverStatusStore
+import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.HardLimits
 import app.aaps.core.keys.IntNonKey
@@ -555,6 +556,19 @@ class LoopPluginTest : TestBaseWithProfile() {
             on { isChangeRequested } doReturn true
         }
 
+    private fun givenPendingSuggestion() {
+        loopPlugin.lastRun = Loop.LastRun().also { lastRun ->
+            lastRun.constraintsProcessed = unacceptedSuggestionResult()
+            lastRun.lastAPSRun = dateUtil.now() - T.mins(1).msecs()
+        }
+    }
+
+    private fun eventAcceptOpenLoopChanges(): MutableList<EventAcceptOpenLoopChange> {
+        val events = mutableListOf<EventAcceptOpenLoopChange>()
+        rxBus.toObservable(EventAcceptOpenLoopChange::class.java).subscribe(events::add)
+        return events
+    }
+
     @Test
     fun `acceptChangeRequest enacts the temp basal and counts one manual enactment`() {
         whenever(profileFunction.getProfile()).thenReturn(validProfile)
@@ -570,18 +584,19 @@ class LoopPluginTest : TestBaseWithProfile() {
                 .run()
             true
         }
-        loopPlugin.lastRun = Loop.LastRun().also { lastRun ->
-            lastRun.constraintsProcessed = unacceptedSuggestionResult()
-            lastRun.lastAPSRun = dateUtil.now() - T.mins(1).msecs()
-        }
+        givenPendingSuggestion()
+        val lastAPSRun = dateUtil.now() - T.mins(1).msecs()
+        val events = eventAcceptOpenLoopChanges()
 
         loopPlugin.acceptChangeRequest()
 
-        verify(commandQueue).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
+        // The reviewed suggestion is delivered as an absolute temp basal, non-enforced, NORMAL type
+        verify(commandQueue).tempBasalAbsolute(eq(1.0), eq(30), eq(false), eq(validProfile), eq(PumpSync.TemporaryBasalType.NORMAL), any())
         assertThat(loopPlugin.lastRun?.lastOpenModeAccept).isEqualTo(dateUtil.now())
-        assertThat(loopPlugin.lastRun?.lastTBRRequest).isEqualTo(loopPlugin.lastRun?.lastAPSRun)
+        assertThat(loopPlugin.lastRun?.lastTBRRequest).isEqualTo(lastAPSRun)
         assertThat(loopPlugin.lastRun?.lastTBREnact).isEqualTo(dateUtil.now())
         verify(preferences).inc(IntNonKey.ObjectivesManualEnacts)
+        assertThat(events).hasSize(1)
     }
 
     @Test
@@ -599,15 +614,16 @@ class LoopPluginTest : TestBaseWithProfile() {
                 .run()
             true
         }
-        loopPlugin.lastRun = Loop.LastRun().also { lastRun ->
-            lastRun.constraintsProcessed = unacceptedSuggestionResult()
-            lastRun.lastAPSRun = dateUtil.now() - T.mins(1).msecs()
-        }
+        givenPendingSuggestion()
+        val events = eventAcceptOpenLoopChanges()
 
         loopPlugin.acceptChangeRequest()
 
+        // The command still went out and its callback ran — only the enactment bookkeeping is skipped
+        verify(commandQueue).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
         assertThat(loopPlugin.lastRun?.lastOpenModeAccept).isEqualTo(0L)
         verify(preferences, never()).inc(IntNonKey.ObjectivesManualEnacts)
+        assertThat(events).hasSize(1)
     }
 
 // endregion
