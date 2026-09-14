@@ -34,7 +34,25 @@ class PumpSessionTest {
     fun `observed reboot commits independent floor and invalidates old connection`() {
         val store = MemoryStore()
         initialized(store)
-        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        store.saved =
+            store.saved.copy(
+                records =
+                    store.saved.records.map {
+                        it.established(write = 42).copy(
+                            benchHistoryCounts =
+                                listOf(
+                                    PumpSession.HistoryCountEvidence(
+                                        PumpSession.HistoryFamily.ALARM,
+                                        reboot = 8,
+                                        read = 100,
+                                        count = 200,
+                                        characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                                        payloadHash = "ab".repeat(32),
+                                    ),
+                                ),
+                        )
+                    },
+            )
         val owner = PumpSession(store)
         val old = owner.open(pump, key)
         val id = owner.begin(old)
@@ -45,12 +63,436 @@ class PumpSessionTest {
         assertEquals(1L, store.saved.records.single().read)
         assertNull(store.saved.records.single().write)
         assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, store.saved.records.single().writeBootstrapState)
+        assertTrue(store.saved.records.single().benchHistoryCounts.isEmpty())
         assertThrows(IllegalStateException::class.java) { owner.begin(old) }
         val restored = PumpSession(store)
         val token = restored.open(pump, key)
         assertThrows(SecurityException::class.java) { accept(restored, token, 1, 9) }
         assertThrows(SecurityException::class.java) { accept(restored, token, 101, 8) }
         accept(restored, token, 2, 9)
+    }
+
+    @Test
+    fun `history counts are epoch bound and zero removes family authority`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "ab".repeat(32),
+                ),
+            ),
+        )
+        assertEquals(200, owner.snapshot()!!.benchHistoryCounts.single().count)
+        owner.recordBenchHistorySelectorState(
+            token,
+            PumpSession.HistorySelectorState(
+                PumpSession.HistoryFamily.ALARM,
+                reboot = 8,
+                read = 100,
+                index = 150,
+                characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                payloadHash = "ee".repeat(32),
+            ),
+        )
+        assertEquals(150, owner.snapshot()!!.benchHistorySelectorStates.single().index)
+
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 0,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "cd".repeat(32),
+                ),
+            ),
+        )
+        assertTrue(owner.snapshot()!!.benchHistoryCounts.isEmpty())
+        assertTrue(owner.snapshot()!!.benchHistorySelectorStates.isEmpty())
+
+        assertThrows(IllegalArgumentException::class.java) {
+            owner.recordBenchHistoryCounts(
+                token,
+                listOf(
+                    PumpSession.HistoryCountEvidence(
+                        PumpSession.HistoryFamily.SYSTEM,
+                        reboot = 7,
+                        read = 100,
+                        count = 600,
+                        characteristic = "86a5a431-d442-2c8d-304b-19ee355571fc",
+                        payloadHash = "ef".repeat(32),
+                    ),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            owner.recordBenchHistoryCounts(
+                token,
+                listOf(
+                    PumpSession.HistoryCountEvidence(
+                        PumpSession.HistoryFamily.SYSTEM,
+                        reboot = 8,
+                        read = 100,
+                        count = 600,
+                        characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                        payloadHash = "ef".repeat(32),
+                    ),
+                ),
+            )
+        }
+
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "ab".repeat(32),
+                ),
+            ),
+        )
+        owner.provisionReadBaseline(pump, key, 8, 101)
+        assertTrue(store.saved.records.single().benchHistoryCounts.isEmpty())
+    }
+
+    @Test
+    fun `alarm and system selector reservation requires current count minus one`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val alarmIntent =
+            PumpSession.WriteIntent(
+                "alarm",
+                "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                "HISTORY_SELECTOR",
+                "ab".repeat(32),
+            )
+        val systemIntent =
+            PumpSession.WriteIntent(
+                "system",
+                "381ddce9-e934-b4ae-e345-eb87283db426",
+                "HISTORY_SELECTOR",
+                "ef".repeat(32),
+            )
+
+        var transaction = owner.begin(token)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(token, transaction, alarmIntent, forwardGap = 0)
+        }
+        owner.finish(token, transaction)
+
+        transaction = owner.begin(token)
+        assertThrows(SecurityException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        }
+        owner.finish(token, transaction)
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "cd".repeat(32),
+                ),
+            ),
+        )
+
+        transaction = owner.begin(token)
+        assertThrows(SecurityException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        }
+        owner.finish(token, transaction)
+        owner.recordBenchHistorySelectorState(
+            token,
+            PumpSession.HistorySelectorState(
+                PumpSession.HistoryFamily.ALARM,
+                reboot = 8,
+                read = 100,
+                index = 150,
+                characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                payloadHash = "ee".repeat(32),
+            ),
+        )
+
+        transaction = owner.begin(token)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 198,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        }
+        owner.finish(token, transaction)
+        transaction = owner.begin(token)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "wrong-alarm-count",
+            )
+        }
+        owner.finish(token, transaction)
+        owner.recordBenchHistorySelectorState(
+            token,
+            PumpSession.HistorySelectorState(
+                PumpSession.HistoryFamily.ALARM,
+                reboot = 8,
+                read = 100,
+                index = 199,
+                characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                payloadHash = "ff".repeat(32),
+            ),
+        )
+
+        transaction = owner.begin(token)
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        }
+        owner.finish(token, transaction)
+        owner.recordBenchHistorySelectorState(
+            token,
+            PumpSession.HistorySelectorState(
+                PumpSession.HistoryFamily.ALARM,
+                reboot = 8,
+                read = 100,
+                index = 150,
+                characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                payloadHash = "ee".repeat(32),
+            ),
+        )
+
+        transaction = owner.begin(token)
+        val reservation =
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                alarmIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        assertEquals(43, reservation.counter)
+        val binding = checkNotNull(reservation.historyBinding)
+        assertEquals(200, binding.count.count)
+        assertEquals(150, binding.selectedBefore.index)
+        assertEquals(199, binding.writeIndex)
+        assertTrue(owner.snapshot()!!.benchHistorySelectorStates.none { it.family == PumpSession.HistoryFamily.ALARM })
+        owner.markNotSent(token, transaction)
+        owner.finish(token, transaction)
+
+        transaction = owner.begin(token)
+        assertThrows(SecurityException::class.java) {
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                systemIntent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.SYSTEM,
+                historyIndex = 599,
+                historyCountCharacteristic = "86a5a431-d442-2c8d-304b-19ee355571fc",
+            )
+        }
+        owner.finish(token, transaction)
+    }
+
+    @Test
+    fun `verified history row permits a fresh pre-row observation for the next row`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        owner.recordBenchHistoryCounts(token, listOf(alarmCount(200, "ab".repeat(32))))
+        owner.recordBenchHistorySelectorState(token, alarmState(150, "ee".repeat(32)))
+        val intent =
+            PumpSession.WriteIntent(
+                "alarm",
+                "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                "HISTORY_SELECTOR",
+                "ab".repeat(32),
+            )
+        var transaction = owner.begin(token)
+        val first =
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                intent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+        owner.finish(token, transaction)
+        owner.resolveWrite(token, first.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "changed value accepted")
+        assertEquals(PumpSession.Phase.VERIFIED, owner.snapshot()!!.reservation!!.phase)
+
+        owner.recordBenchHistorySelectorState(token, alarmState(199, "ef".repeat(32)))
+        assertEquals(199, owner.snapshot()!!.benchHistorySelectorStates.single().index)
+
+        owner.recordBenchHistorySelectorState(token, alarmState(151, "ff".repeat(32)))
+        transaction = owner.begin(token)
+        val second =
+            owner.reserveBenchCandidate(
+                token,
+                transaction,
+                intent,
+                forwardGap = 0,
+                historyFamily = PumpSession.HistoryFamily.ALARM,
+                historyIndex = 199,
+                historyCountCharacteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            )
+        assertEquals(151, second.historyBinding!!.selectedBefore.index)
+        assertTrue(owner.snapshot()!!.benchHistorySelectorStates.isEmpty())
+    }
+
+    @Test
+    fun `new epoch bootstrap rejects non-event family destinations`() {
+        val store = MemoryStore()
+        initialized(store)
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "ab".repeat(32))
+        owner.quiesce()
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            owner.accept(token, owner.begin(token), SessionCrypto.Message(byteArrayOf(), 9, 1), true)
+        }
+        owner = PumpSession(store)
+        token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.reserveBenchNewEpochBootstrapCandidate(
+                token,
+                transaction,
+                PumpSession.WriteIntent(
+                    "bootstrap-alarm",
+                    "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                    "HISTORY_SELECTOR",
+                    "bc".repeat(32),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `same key candidate retirement keeps explicitly cleared history count authority`() {
+        val store = MemoryStore()
+        initialized(store)
+        var owner = PumpSession(store)
+        var token = owner.open(pump, key)
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "ab".repeat(32),
+                ),
+            ),
+        )
+        owner.quiesce()
+
+        owner = PumpSession(store)
+        owner.install(
+            PumpSession.Provisioning(
+                pump = pump,
+                serial = "10054912",
+                sharedKey = key,
+                createdAt = null,
+                importedAt = 1_000,
+                source = mapOf("profile" to "test"),
+            ),
+        )
+        token = owner.open(pump, key)
+        owner.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 0,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "cd".repeat(32),
+                ),
+            ),
+        )
+        assertTrue(owner.snapshot()!!.benchHistoryCounts.isEmpty())
+        owner.quiesce()
+
+        owner = PumpSession(store)
+        owner.install(
+            PumpSession.Provisioning(
+                pump = pump,
+                serial = "10054912",
+                sharedKey = key,
+                createdAt = null,
+                importedAt = 2_000,
+                source = mapOf("profile" to "test"),
+            ),
+        )
+
+        val retired = store.saved.records.single { it.generation == store.saved.activeGeneration }
+        assertTrue(retired.benchHistoryCounts.isEmpty())
     }
 
     @Test
@@ -210,7 +652,7 @@ class PumpSessionTest {
         initialized(store)
         var owner = PumpSession(store)
         var token = owner.open(pump, key)
-        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "ab".repeat(32))
         owner.quiesce()
         owner = PumpSession(store)
         token = owner.open(pump, key)
@@ -219,7 +661,7 @@ class PumpSessionTest {
         }
         owner = PumpSession(store)
         token = owner.open(pump, key)
-        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32))
+        val intent = PumpSession.WriteIntent("bootstrap", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR", "bc".repeat(32))
         val transaction = owner.begin(token)
 
         val reservation = owner.reserveBenchNewEpochBootstrapCandidate(token, transaction, intent)
@@ -243,14 +685,14 @@ class PumpSessionTest {
         val store = MemoryStore()
         var owner = initialized(store)
         var token = owner.open(pump, key)
-        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32))
+        val intent = PumpSession.WriteIntent("bootstrap", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR", "bc".repeat(32))
         assertThrows(IllegalStateException::class.java) {
             owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent)
         }
         owner.quiesce()
         owner = PumpSession(store)
         token = owner.open(pump, key)
-        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "ab".repeat(32))
         owner.quiesce()
         owner = PumpSession(store)
         token = owner.open(pump, key)
@@ -284,7 +726,7 @@ class PumpSessionTest {
         }
         owner = PumpSession(store)
         token = owner.open(pump, key)
-        val intent = PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32))
+        val intent = PumpSession.WriteIntent("bootstrap", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR", "ab".repeat(32))
         assertThrows(IllegalStateException::class.java) {
             owner.reserveBenchNewEpochBootstrapCandidate(token, owner.begin(token), intent)
         }
@@ -293,7 +735,7 @@ class PumpSessionTest {
         initialized(secondStore)
         owner = PumpSession(secondStore)
         token = owner.open(pump, key)
-        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "ab".repeat(32))
         owner.quiesce()
         owner = PumpSession(secondStore)
         token = owner.open(pump, key)
@@ -313,7 +755,7 @@ class PumpSessionTest {
         initialized(store)
         var owner = PumpSession(store)
         var token = owner.open(pump, key)
-        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "ab".repeat(32))
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "ab".repeat(32))
         owner.quiesce()
         owner = PumpSession(store)
         token = owner.open(pump, key)
@@ -327,14 +769,14 @@ class PumpSessionTest {
             owner.reserveBenchNewEpochBootstrapCandidate(
                 token,
                 transaction,
-                PumpSession.WriteIntent("bootstrap", "characteristic", "HISTORY_SELECTOR", "bc".repeat(32)),
+                PumpSession.WriteIntent("bootstrap", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR", "bc".repeat(32)),
             )
         owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
         owner.advance(token, transaction, PumpSession.Phase.ACKED)
         owner.finish(token, transaction)
         owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "accepted")
 
-        owner.recordBenchNewEpochBootstrapReference(token, "characteristic", "bc".repeat(32))
+        owner.recordBenchNewEpochBootstrapReference(token, "669a0c20-0008-969e-e211-fcbecc3b7bc5", "bc".repeat(32))
 
         assertEquals(9, owner.snapshot()!!.benchNewEpochBootstrapReference!!.reboot)
         assertEquals("bc".repeat(32), owner.snapshot()!!.benchNewEpochBootstrapReference!!.payloadHash)
@@ -735,4 +1177,23 @@ class PumpSessionTest {
     private fun PumpSession.Record.established(write: Long): PumpSession.Record =
         copy(write = write, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
 
+    private fun alarmCount(count: Int, payloadHash: String) =
+        PumpSession.HistoryCountEvidence(
+            PumpSession.HistoryFamily.ALARM,
+            reboot = 8,
+            read = 100,
+            count = count,
+            characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+            payloadHash = payloadHash,
+        )
+
+    private fun alarmState(index: Int, payloadHash: String) =
+        PumpSession.HistorySelectorState(
+            PumpSession.HistoryFamily.ALARM,
+            reboot = 8,
+            read = 100,
+            index = index,
+            characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+            payloadHash = payloadHash,
+        )
 }

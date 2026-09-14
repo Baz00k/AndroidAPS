@@ -39,6 +39,16 @@ restart/in-place upgrade. Only reviewed consumed evidence transitions to `ESTABL
 not-consumed evidence remains blocked. External counter files are optional validation evidence, not
 a runtime prerequisite for manual or canonical `ypso-keys` provisioning.
 
+Authenticated alarm/system counts and pre-row selected values are separate current-epoch selector
+evidence. The protected journal binds each non-zero count to its family, reboot/read tuple, count
+characteristic and plaintext SHA-256, and each read-only selected value to its family, epoch and value
+characteristic. Reboot clears those bindings. The bench rejects alarm/system selectors unless the
+requested zero-based index is exactly the durable current-epoch `count - 1` and differs from the
+durable pre-row value; both bindings plus the exact written index are copied into the reservation and
+its reconciliation evidence, and the reservation consumes the pre-row observation so a later row
+requires a fresh authenticated read. Missing, stale, malformed, zero-count or no-op evidence therefore
+cannot be replaced by an operator-supplied index.
+
 Legacy `ypso_ble_state` credentials migrate only into the protected journal. A validated complete
 serial/MAC/key triple migrates automatically. For older MAC/key-only state, a recognized bonded-pump name
 for that exact MAC may independently supply the real serial; the serial is never derived from the MAC. If

@@ -100,6 +100,7 @@ class BenchActivity : Activity() {
                 "run-selector" -> runConnection(RunKind.SELECTOR)
                 "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
+                "read-selector-state" -> runConnection(RunKind.READ_SELECTOR_STATE)
                 "observe-reboot" -> runConnection(RunKind.OBSERVE_REBOOT)
                 "record-bootstrap-reference" -> runConnection(RunKind.RECORD_BOOTSTRAP_REFERENCE)
                 "read-history-counts" -> runConnection(RunKind.READ_HISTORY_COUNTS)
@@ -191,9 +192,12 @@ class BenchActivity : Activity() {
             val opened = session.open(doc.mac, doc.sharedKey)
             val record = checkNotNull(session.snapshot())
             val reservation = record.reservation
+            val historyCounts = record.benchHistoryCounts.joinToString(",") { "${it.family.name}:${it.count}@${it.reboot}" }.ifEmpty { "none" }
+            val selectorStates = record.benchHistorySelectorStates.joinToString(",") { "${it.family.name}:${it.index}@${it.reboot}" }.ifEmpty { "none" }
             report(
                 "SESSION:generation=${opened.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
                     "bootstrap=${record.writeBootstrapState},bootstrap_attempted=${record.benchNewEpochBootstrapAttempted}," +
+                    "history_counts=$historyCounts,selector_states=$selectorStates," +
                     "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
             )
         } finally {
@@ -837,6 +841,7 @@ class BenchActivity : Activity() {
                     when (runKind) {
                         RunKind.SELECTOR, RunKind.BOOTSTRAP_NEW_EPOCH, RunKind.READINESS_PROBE -> startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
+                        RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
                         RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
                         RunKind.READ_HISTORY_COUNTS -> readHistoryCounts(owner)
                         RunKind.OBSERVE_REBOOT -> {
@@ -909,8 +914,8 @@ class BenchActivity : Activity() {
     }
 
     private fun readHistoryCounts(owner: BluetoothGatt) {
-        val alarmCount = findUnique(owner, ALARM_COUNT_UUID)
-        val systemCount = findUnique(owner, SYSTEM_COUNT_UUID)
+        val alarmCount = findUnique(owner, YpsoWritePolicy.ALARM_COUNT_UUID)
+        val systemCount = findUnique(owner, YpsoWritePolicy.SYSTEM_COUNT_UUID)
         if (alarmCount == null || systemCount == null) {
             fail(
                 "history count characteristic missing or ambiguous",
@@ -937,6 +942,7 @@ class BenchActivity : Activity() {
                         fail("alarm count exact GLB invalid")
                         return@fold
                     }
+                    recordHistoryCount(PumpSession.HistoryFamily.ALARM, alarmCount, alarms, alarmBody)
                     readEncrypted(owner, systemCount) { systemResult ->
                         systemResult.fold(
                             onSuccess = { systemBody ->
@@ -954,6 +960,7 @@ class BenchActivity : Activity() {
                                     fail("system count exact GLB invalid")
                                     return@fold
                                 }
+                                recordHistoryCount(PumpSession.HistoryFamily.SYSTEM, systemCount, systems, systemBody)
                                 close(owner)
                                 report("COUNTS:alarm=$alarms,system=$systems")
                             },
@@ -962,6 +969,105 @@ class BenchActivity : Activity() {
                     }
                 },
                 onFailure = { fail("alarm count read failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun recordHistoryCount(
+        family: PumpSession.HistoryFamily,
+        characteristic: BluetoothGattCharacteristic,
+        count: Int,
+        body: ByteArray,
+    ) {
+        val snapshot = checkNotNull(session.snapshot())
+        session.recordBenchHistoryCounts(
+            checkNotNull(token),
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    family = family,
+                    reboot = checkNotNull(snapshot.reboot),
+                    read = checkNotNull(snapshot.read),
+                    count = count,
+                    characteristic = characteristic.uuid.toString(),
+                    payloadHash = hash(body),
+                ),
+            ),
+        )
+        recorder.fact(
+            "HistoryCountBound",
+            JSONObject()
+                .put("write_id", writeId)
+                .put("family", family.name)
+                .put("reboot", snapshot.reboot)
+                .put("read", snapshot.read)
+                .put("count", count)
+                .put("characteristic", characteristic.uuid.toString())
+                .put("body_sha256", hash(body))
+                .putSessionSnapshot(),
+        )
+    }
+
+    private fun readSelectorState(owner: BluetoothGatt) {
+        val selected = checkNotNull(selector)
+        require(selected.name in setOf("alarm", "system")) {
+            "read-selector-state supports alarm and system families only"
+        }
+        val binding = resolveSelector(owner, selected) ?: return
+        readEncrypted(owner, binding.value) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val evidence = BenchSelectorEvidenceDecoder.history(body)
+                    recorder.fact(
+                        if (evidence.crcValid && evidence.embeddedHistoryIndex != null) {
+                            "CurrentSelectorStateVerified"
+                        } else {
+                            "CurrentSelectorStateRejected"
+                        },
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector_type", selected.name)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("glb", evidence.glb ?: JSONObject.NULL)
+                            .put("crc_valid", evidence.crcValid)
+                            .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                            .putSessionSnapshot(),
+                    )
+                    if (!evidence.crcValid || evidence.embeddedHistoryIndex == null) {
+                        fail("current ${selected.name} selector value is not CRC-valid history data")
+                        return@fold
+                    }
+                    val family = historyFamily(selected.name)
+                    if (family == null) {
+                        fail("read-selector-state supports alarm and system families only")
+                        return@fold
+                    }
+                    val snapshot = checkNotNull(session.snapshot())
+                    session.recordBenchHistorySelectorState(
+                        checkNotNull(token),
+                        PumpSession.HistorySelectorState(
+                            family = family,
+                            reboot = checkNotNull(snapshot.reboot),
+                            read = checkNotNull(snapshot.read),
+                            index = evidence.embeddedHistoryIndex,
+                            characteristic = binding.value.uuid.toString(),
+                            payloadHash = hash(body),
+                        ),
+                    )
+                    recorder.fact(
+                        "SelectorStateBound",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector_type", selected.name)
+                            .put("index", evidence.embeddedHistoryIndex)
+                            .put("characteristic", binding.value.uuid.toString())
+                            .put("body_sha256", hash(body))
+                            .putSessionSnapshot(),
+                    )
+                    close(owner)
+                    report("SELECTOR_STATE:${selected.name}=${evidence.embeddedHistoryIndex}")
+                },
+                onFailure = { fail("current ${selected.name} selector read failed: ${it.message}") },
             )
         }
     }
@@ -1043,6 +1149,7 @@ class BenchActivity : Activity() {
         readEncrypted(owner, binding.value) { result ->
             result.fold(
                 onSuccess = { body ->
+                    val evidence = selectorEvidence(selected, body)
                     recorder.fact(
                         "UnresolvedSelectorObserved",
                         JSONObject()
@@ -1053,9 +1160,10 @@ class BenchActivity : Activity() {
                             .put("selector", selected.value)
                             .put("body_size", body.size)
                             .put("body_sha256", hash(body))
-                            .put("glb", YpsoGlb.find(body) ?: JSONObject.NULL)
-                            .put("crc_valid", YpsoCrc.isValid(body))
-                            .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL)
+                            .put("glb", evidence.glb ?: JSONObject.NULL)
+                            .put("crc_valid", evidence.crcValid)
+                            .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                            .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
                             .putSessionSnapshot(),
                     )
                     close(owner)
@@ -1080,6 +1188,7 @@ class BenchActivity : Activity() {
     ) = readEncrypted(owner, valueCharacteristic) { result ->
         result.fold(
             onSuccess = { body ->
+                val evidence = selectorEvidence(selected, body)
                 recorder.fact(
                     "SelectorReadBack",
                     JSONObject()
@@ -1088,9 +1197,10 @@ class BenchActivity : Activity() {
                         .put("selector", selected.value)
                         .put("body_size", body.size)
                         .put("body_sha256", hash(body))
-                        .put("glb", YpsoGlb.find(body) ?: JSONObject.NULL)
-                        .put("crc_valid", YpsoCrc.isValid(body))
-                        .put("embedded_history_index", historyIndex(body) ?: JSONObject.NULL)
+                        .put("glb", evidence.glb ?: JSONObject.NULL)
+                        .put("crc_valid", evidence.crcValid)
+                        .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                        .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
                         .putSessionSnapshot(),
                 )
                 close(owner)
@@ -1379,10 +1489,22 @@ class BenchActivity : Activity() {
     }
 
     private fun historyIndex(body: ByteArray): Int? {
-        val payload = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
-        if (payload.size < 17) return null
-        return (payload[15].toInt() and 0xff) or ((payload[16].toInt() and 0xff) shl 8)
+        return BenchSelectorEvidenceDecoder.history(body).embeddedHistoryIndex
     }
+
+    private fun selectorEvidence(selected: Selector, body: ByteArray): BenchSelectorEvidence =
+        if (selected.name == "setting") {
+            BenchSelectorEvidenceDecoder.setting(body)
+        } else {
+            BenchSelectorEvidenceDecoder.history(body, selected.value)
+        }
+
+    private fun historyFamily(selectorName: String): PumpSession.HistoryFamily? =
+        when (selectorName) {
+            "alarm" -> PumpSession.HistoryFamily.ALARM
+            "system" -> PumpSession.HistoryFamily.SYSTEM
+            else -> null
+        }
 
     private fun JSONObject.putSessionSnapshot(): JSONObject {
         val record = session.snapshot()
@@ -1443,6 +1565,7 @@ class BenchActivity : Activity() {
         SELECTOR,
         BOOTSTRAP_NEW_EPOCH,
         OBSERVE_SELECTOR,
+        READ_SELECTOR_STATE,
         OBSERVE_REBOOT,
         RECORD_BOOTSTRAP_REFERENCE,
         READ_HISTORY_COUNTS,
@@ -1528,8 +1651,6 @@ class BenchActivity : Activity() {
         val CONTROL_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         val EXTENDED_READ_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
         val EVENT_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
-        val ALARM_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbec83b7bc5")
-        val SYSTEM_COUNT_UUID: UUID = UUID.fromString("86a5a431-d442-2c8d-304b-19ee355571fc")
         val EVENT_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
         val ALARM_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeca3b7bc5")
         val SYSTEM_VALUE_UUID: UUID = UUID.fromString("ae3022af-2ec8-bf88-e64c-da68c9a3891a")

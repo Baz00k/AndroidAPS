@@ -49,6 +49,17 @@ variable and carries no CRC. This was confirmed on the target by an authenticate
 with its bitwise complement. The bench rejects any non-exact GLB body before readiness or counter
 reservation; CRC handling remains characteristic-specific for response types that actually carry it.
 
+Alarm/system family counts use the same exact-GLB validation but are persisted separately with the
+authenticated current epoch. Their selector writes are machine-bound to zero-based `count - 1` and
+fail closed after reboot until fresh counts are read. A read-only selector-state action captures and
+persists the CRC-valid embedded current history index; the reservation additionally requires that
+durable pre-row value to differ from the requested index, and the count, pre-row value and exact
+written index are stored immutably in the reservation and reconciliation evidence. A reservation
+consumes the family's pre-row observation, so every alarm/system row needs a fresh read-only
+selector-state action after the previous row is reconciled. Setting ID `1` read-back accepts an
+exact GLB or a CRC-valid response containing a GLB and records the value observationally, because no
+qualified setting-ID-to-layout mapping exists; the artifact never writes a setting value.
+
 The physical-test build exposes only bounded measurement seams: omission of one readiness fact to
 prove local blocking, one `floor + 2` candidate to distinguish strict-next from a single forward gap,
 read-only value observation bound to an unresolved selector's durable hash, and authenticated

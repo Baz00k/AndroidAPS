@@ -58,7 +58,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..10)
+        check(version in 1..6 || version in 8..11)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -70,6 +70,10 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 require(r.has("writeBootstrapState") && !r.isNull("writeBootstrapState"))
                 require(r.has("benchNewEpochBootstrapAttempted") && !r.isNull("benchNewEpochBootstrapAttempted"))
                 require(r.has("benchNewEpochBootstrapReference"))
+            }
+            if (version >= 11) {
+                require(r.optJSONArray("benchHistoryCounts") != null)
+                require(r.optJSONArray("benchHistorySelectorStates") != null)
             }
             val reservation = r.optJSONObject("reservation")?.let {
                 if (version >= 8) {
@@ -94,7 +98,8 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                     it.stringOrNull("purpose"),
                     it.stringOrNull("payloadHash"),
                     priorWrite,
-                    candidate
+                    candidate,
+                    historyBinding = it.optJSONObject("historyBinding")?.let(::historyBinding),
                 )
             }
             val inferredLegacyGap =
@@ -139,6 +144,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                             resolution = evidence.stringOrNull("resolution")?.let(PumpSession.WriteResolution::valueOf),
                             evidenceHash = evidence.getString("evidenceHash"),
                             detail = evidence.getString("detail"),
+                            historyBinding = evidence.optJSONObject("historyBinding")?.let(::historyBinding),
                         )
                     }
                 }.orEmpty(),
@@ -150,6 +156,12 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         payloadHash = it.getString("payloadHash"),
                     )
                 },
+                benchHistoryCounts = r.optJSONArray("benchHistoryCounts")?.let { values ->
+                    (0 until values.length()).map { countIndex -> historyCount(values.getJSONObject(countIndex)) }
+                }.orEmpty(),
+                benchHistorySelectorStates = r.optJSONArray("benchHistorySelectorStates")?.let { values ->
+                    (0 until values.length()).map { stateIndex -> historySelectorState(values.getJSONObject(stateIndex)) }
+                }.orEmpty(),
                 writeBootstrapState =
                     r.stringOrNull("writeBootstrapState")?.let(PumpSession.WriteBootstrapState::valueOf)
                         ?: if (r.isNull("write")) {
@@ -204,6 +216,57 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         ).also(PumpSession::validate)
     }
 
+    private fun historyCount(value: JSONObject) =
+        PumpSession.HistoryCountEvidence(
+            family = PumpSession.HistoryFamily.valueOf(value.getString("family")),
+            reboot = value.getInt("reboot"),
+            read = value.getLong("read"),
+            count = value.getInt("count"),
+            characteristic = value.getString("characteristic"),
+            payloadHash = value.getString("payloadHash"),
+        )
+
+    private fun historySelectorState(value: JSONObject) =
+        PumpSession.HistorySelectorState(
+            family = PumpSession.HistoryFamily.valueOf(value.getString("family")),
+            reboot = value.getInt("reboot"),
+            read = value.getLong("read"),
+            index = value.getInt("index"),
+            characteristic = value.getString("characteristic"),
+            payloadHash = value.getString("payloadHash"),
+        )
+
+    private fun historyBinding(value: JSONObject) =
+        PumpSession.HistoryWriteBinding(
+            count = historyCount(value.getJSONObject("count")),
+            selectedBefore = historySelectorState(value.getJSONObject("selectedBefore")),
+            writeIndex = value.getInt("writeIndex"),
+        )
+
+    private fun historyCountJson(value: PumpSession.HistoryCountEvidence) =
+        JSONObject()
+            .put("family", value.family.name)
+            .put("reboot", value.reboot)
+            .put("read", value.read)
+            .put("count", value.count)
+            .put("characteristic", value.characteristic)
+            .put("payloadHash", value.payloadHash)
+
+    private fun historySelectorStateJson(value: PumpSession.HistorySelectorState) =
+        JSONObject()
+            .put("family", value.family.name)
+            .put("reboot", value.reboot)
+            .put("read", value.read)
+            .put("index", value.index)
+            .put("characteristic", value.characteristic)
+            .put("payloadHash", value.payloadHash)
+
+    private fun historyBindingJson(value: PumpSession.HistoryWriteBinding) =
+        JSONObject()
+            .put("count", historyCountJson(value.count))
+            .put("selectedBefore", historySelectorStateJson(value.selectedBefore))
+            .put("writeIndex", value.writeIndex)
+
     override fun commit(state: PumpSession.State) {
         PumpSession.validate(state)
         val records = JSONArray()
@@ -218,6 +281,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("payloadHash", it.payloadHash ?: JSONObject.NULL)
                         .put("priorWrite", it.priorWrite ?: JSONObject.NULL)
                         .put("candidate", it.candidate.name)
+                        .put("historyBinding", it.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
                 } ?: JSONObject.NULL)
                 .put("serial", r.serial).put("keyHex", r.keyHex ?: JSONObject.NULL)
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
@@ -230,6 +294,8 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("characteristic", it.characteristic)
                         .put("payloadHash", it.payloadHash)
                 } ?: JSONObject.NULL)
+                .put("benchHistoryCounts", JSONArray(r.benchHistoryCounts.map(::historyCountJson)))
+                .put("benchHistorySelectorStates", JSONArray(r.benchHistorySelectorStates.map(::historySelectorStateJson)))
                 .put("writeBootstrapState", r.writeBootstrapState.name)
                 .put("benchNewEpochBootstrapAttempted", r.benchNewEpochBootstrapAttempted)
                 .put("benchStrictNextAccepted", r.benchStrictNextAccepted)
@@ -247,6 +313,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("resolution", evidence.resolution?.name ?: JSONObject.NULL)
                         .put("evidenceHash", evidence.evidenceHash)
                         .put("detail", evidence.detail)
+                        .put("historyBinding", evidence.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
                 })))
         }
         val availability = JSONObject()
@@ -259,7 +326,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 10).put("records", records)
+        val body = JSONObject().put("version", 11).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

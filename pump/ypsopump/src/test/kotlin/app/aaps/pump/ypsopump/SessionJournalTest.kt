@@ -97,7 +97,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(10, org.json.JSONObject(body).getInt("version"))
+        assertEquals(11, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -139,7 +139,7 @@ class SessionJournalTest {
     }
 
     @Test
-    fun `version ten roundtrip preserves explicit new epoch bootstrap state and attempt marker`() {
+    fun `current roundtrip preserves explicit new epoch bootstrap state and attempt marker`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
         val state =
@@ -170,6 +170,109 @@ class SessionJournalTest {
         assertEquals(PumpSession.WriteBootstrapState.OBSERVED_NEW_EPOCH, loaded.writeBootstrapState)
         assertTrue(loaded.benchNewEpochBootstrapAttempted)
         assertEquals(8, loaded.benchNewEpochBootstrapReference!!.reboot)
+    }
+
+    @Test
+    fun `version eleven roundtrip preserves current epoch history count state and binding`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val state = boundHistoryState()
+        val record = state.records.single()
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val loaded = journal.load().records.single()
+        assertEquals(record.benchHistoryCounts, loaded.benchHistoryCounts)
+        assertTrue(loaded.benchHistorySelectorStates.isEmpty())
+        assertEquals(checkNotNull(record.reservation).historyBinding, loaded.reservation!!.historyBinding)
+        assertEquals(record.writeEvidence.single().historyBinding, loaded.writeEvidence.single().historyBinding)
+    }
+
+    @Test
+    fun `journal validation rejects epoch-inconsistent and mismatched history bindings`() {
+        val baseline = boundHistoryState()
+        PumpSession.validate(baseline)
+        val record = baseline.records.single()
+        val reservation = checkNotNull(record.reservation)
+        val binding = checkNotNull(reservation.historyBinding)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                baseline.copy(
+                    records =
+                        listOf(
+                            record.copy(
+                                reservation =
+                                    reservation.copy(
+                                        historyBinding =
+                                            binding.copy(
+                                                selectedBefore = binding.selectedBefore.copy(reboot = binding.selectedBefore.reboot + 1),
+                                            ),
+                                    ),
+                            ),
+                        ),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                baseline.copy(
+                    records =
+                        listOf(
+                            record.copy(
+                                writeEvidence =
+                                    listOf(
+                                        record.writeEvidence.single().copy(
+                                            historyBinding = binding.copy(writeIndex = binding.writeIndex + 1),
+                                        ),
+                                    ),
+                            ),
+                        ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `version eleven rejects malformed history arrays instead of silently emptying them`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        val body = committedBody(storage)
+        body.getJSONArray("records").getJSONObject(0).put("benchHistoryCounts", "not-an-array")
+        replaceBody(storage, body)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.load() }
+    }
+
+    @Test
+    fun `version ten migration starts with no history count authority`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val preserved =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            write = 42,
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                            benchNewEpochBootstrapReference =
+                                PumpSession.BootstrapReference(8, 100, "event-index", "ab".repeat(32)),
+                        )
+                    },
+            )
+        journal.commit(preserved)
+        val body = committedBody(storage).put("version", 10)
+        body.getJSONArray("records").getJSONObject(0).remove("benchHistoryCounts")
+        body.getJSONArray("records").getJSONObject(0).remove("benchHistorySelectorStates")
+        replaceBody(storage, body)
+
+        val loaded = journal.load().records.single()
+        assertTrue(loaded.benchHistoryCounts.isEmpty())
+        assertTrue(loaded.benchHistorySelectorStates.isEmpty())
+        assertEquals(42, loaded.write)
+        assertEquals(preserved.records.single().benchNewEpochBootstrapReference, loaded.benchNewEpochBootstrapReference)
     }
 
     @Test
@@ -555,6 +658,82 @@ class SessionJournalTest {
         invalid.forEach { assertThrows(IllegalArgumentException::class.java) { journal.commit(it) } }
         assertTrue(storage.keys.isEmpty())
         assertNull(storage.file)
+    }
+
+    private fun boundHistoryState(): PumpSession.State {
+        val counts =
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                    payloadHash = "ab".repeat(32),
+                ),
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.SYSTEM,
+                    reboot = 8,
+                    read = 100,
+                    count = 600,
+                    characteristic = "86a5a431-d442-2c8d-304b-19ee355571fc",
+                    payloadHash = "cd".repeat(32),
+                ),
+            )
+        val selectorStates =
+            listOf(
+                PumpSession.HistorySelectorState(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    index = 150,
+                    characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                    payloadHash = "ee".repeat(32),
+                ),
+            )
+        val binding = PumpSession.HistoryWriteBinding(counts.first(), selectorStates.first(), writeIndex = 199)
+        val reservation =
+            PumpSession.Reservation(
+                id = "reservation-43",
+                counter = 43,
+                phase = PumpSession.Phase.ACKED,
+                operationId = "selector-alarm",
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 42,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                historyBinding = binding,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = "selector-alarm",
+                reservationId = reservation.id,
+                counter = 43,
+                characteristic = reservation.characteristic!!,
+                purpose = reservation.purpose!!,
+                payloadHash = reservation.payloadHash!!,
+                priorWrite = 42,
+                candidate = reservation.candidate,
+                resolution = null,
+                evidenceHash = "cd".repeat(32),
+                detail = "reviewed alarm selector evidence with durable count binding",
+                historyBinding = binding,
+            )
+        return old.copy(
+            records =
+                old.records.map {
+                    it.copy(
+                        write = 43,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        reservation = reservation,
+                        writeEvidence = listOf(evidence),
+                        benchHistoryCounts = counts,
+                        // The active reservation consumed the family's pre-row observation.
+                        benchHistorySelectorStates = emptyList(),
+                    )
+                },
+        )
     }
 
     private fun committedBody(storage: Storage): org.json.JSONObject {

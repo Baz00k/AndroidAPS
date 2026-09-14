@@ -113,6 +113,36 @@ adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
   --es action read-history-counts --es write_id "counts-$(uuidgen)"
 ```
 
+Successful non-zero counts are persisted with the authenticated reboot/read tuple, count
+characteristic and plaintext response SHA-256. Alarm and system writes are rejected unless their
+selector is exactly `count - 1` for durable evidence from the current reboot epoch. Reboot clears the
+binding; a zero count removes it and keeps that family blocked.
+
+Before every alarm or system selector row, read the currently selected value without writing. The
+numeric extra binds the family only; the result reports the CRC-valid embedded current index and
+persists that authenticated value for the current epoch. A row is rejected when the requested
+`count - 1` equals the durable pre-row value, so a no-op write cannot masquerade as a changed
+selection. The row consumes that observation as immutable reservation evidence, so the next
+alarm/system row requires a fresh read after the previous row is reconciled:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action read-selector-state --es write_id "alarm-state-$(uuidgen)" \
+  --es selector_type alarm --ei selector 0
+
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action read-selector-state --es write_id "system-state-$(uuidgen)" \
+  --es selector_type system --ei selector 0
+```
+
+This read-only action fails closed while a write awaits reconciliation. If the durable current value
+already equals `count - 1`, choose a different reviewed index only when a later authenticated count read
+makes it the new last entry; otherwise leave the family unresolved.
+
+For setting ID `1`, read-back accepts an exact GLB or a CRC-valid response containing a GLB and records
+it observationally. There is no qualified setting-ID-to-layout mapping, so it never claims a semantic
+match. It never writes a setting value.
+
 ## Run one selector transaction
 
 Example: select event index 17. Valid selector types are `event`, `alarm`, `system`, and `setting`.
@@ -289,6 +319,11 @@ probes → one strict-next event → remaining selector families → bounded +2 
 ACK/duplicate/disconnect cases one at a time → reboot last. At every physical-state or semantic
 decision, stop and obtain the operator's explicit confirmation before recording the conclusion or
 reconciling.
+
+`force-stop` may not survive a system broadcast. For controller-free physical rows, temporarily run
+`pm disable-user --user 0 info.nightscout.androidaps` after force-stopping AAPS, and verify no AAPS,
+mylife or bench process remains. Re-enable the unchanged package with
+`pm enable --user 0 info.nightscout.androidaps` during cleanup; do not uninstall or clear its data.
 
 The candidate intentionally has no control that fabricates a pump-originated AUTH/CCCD rejection or a
 physical radio/link failure. If external capture and the target setup cannot safely produce a required

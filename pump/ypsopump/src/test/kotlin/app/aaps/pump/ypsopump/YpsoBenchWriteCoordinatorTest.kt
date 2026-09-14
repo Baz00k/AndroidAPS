@@ -597,6 +597,104 @@ class YpsoBenchWriteCoordinatorTest {
         assertFalse(bootstrapSession.snapshot()!!.benchNewEpochBootstrapAttempted)
     }
 
+    @Test
+    fun `alarm selector requires durable current epoch count minus one`() {
+        makeReady()
+
+        assertFalse(
+            coordinator.writeSelector(
+                writeId = "alarm-missing-count",
+                owner = owner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID,
+                plaintext = YpsoGlb.encode(199),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { error("dispatch must not run") },
+                onOutcome = callbacks::add,
+            ),
+        )
+        assertTrue(callbacks.single() is YpsoWriteOutcome.NotSent)
+        assertNull(session.snapshot()!!.reservation)
+
+        callbacks.clear()
+        session.recordBenchHistoryCounts(
+            token,
+            listOf(
+                PumpSession.HistoryCountEvidence(
+                    PumpSession.HistoryFamily.ALARM,
+                    reboot = 8,
+                    read = 100,
+                    count = 200,
+                    characteristic = YpsoWritePolicy.ALARM_COUNT_UUID.toString(),
+                    payloadHash = "ab".repeat(32),
+                ),
+            ),
+        )
+        assertFalse(
+            coordinator.writeSelector(
+                writeId = "alarm-wrong-index",
+                owner = owner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID,
+                plaintext = YpsoGlb.encode(198),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { error("dispatch must not run") },
+                onOutcome = callbacks::add,
+            ),
+        )
+        assertTrue(callbacks.single() is YpsoWriteOutcome.NotSent)
+        assertNull(session.snapshot()!!.reservation)
+
+        callbacks.clear()
+        assertFalse(
+            coordinator.writeSelector(
+                writeId = "alarm-missing-state",
+                owner = owner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID,
+                plaintext = YpsoGlb.encode(199),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { error("dispatch must not run") },
+                onOutcome = callbacks::add,
+            ),
+        )
+        assertTrue(callbacks.single() is YpsoWriteOutcome.NotSent)
+        assertNull(session.snapshot()!!.reservation)
+
+        session.recordBenchHistorySelectorState(
+            token,
+            PumpSession.HistorySelectorState(
+                PumpSession.HistoryFamily.ALARM,
+                reboot = 8,
+                read = 100,
+                index = 150,
+                characteristic = "669a0c20-0008-969e-e211-fcbeca3b7bc5",
+                payloadHash = "cd".repeat(32),
+            ),
+        )
+        callbacks.clear()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "alarm-bound-count",
+                owner = owner,
+                category = YpsoRemoteWrite.HISTORY_SELECTOR,
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID,
+                plaintext = YpsoGlb.encode(199),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { true },
+                onOutcome = callbacks::add,
+            ),
+        )
+        assertEquals(43, session.snapshot()!!.reservation!!.counter)
+        assertEquals(150, session.snapshot()!!.reservation!!.historyBinding!!.selectedBefore.index)
+        assertEquals(199, session.snapshot()!!.reservation!!.historyBinding!!.writeIndex)
+        assertTrue(session.snapshot()!!.benchHistorySelectorStates.none { it.family == PumpSession.HistoryFamily.ALARM })
+    }
+
     private fun makeReady() {
         val readyOwner = owner.readinessOwner()
         readiness.connected(readyOwner)

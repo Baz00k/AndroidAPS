@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump.ble
 
 import app.aaps.pump.ypsopump.comm.YpsoFraming
+import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import java.security.MessageDigest
@@ -69,6 +70,22 @@ internal class YpsoBenchWriteCoordinator(
             )
             return false
         }
+        val historyBinding =
+            when (characteristic) {
+                YpsoWritePolicy.ALARM_INDEX_UUID ->
+                    Triple(
+                        PumpSession.HistoryFamily.ALARM,
+                        checkNotNull(YpsoGlb.decodeExact(plaintext)),
+                        YpsoWritePolicy.ALARM_COUNT_UUID.toString(),
+                    )
+                YpsoWritePolicy.SYSTEM_INDEX_UUID ->
+                    Triple(
+                        PumpSession.HistoryFamily.SYSTEM,
+                        checkNotNull(YpsoGlb.decodeExact(plaintext)),
+                        YpsoWritePolicy.SYSTEM_COUNT_UUID.toString(),
+                    )
+                else -> null
+            }
         val record = session.snapshot()
         val bootstrapReady =
             newEpochBootstrap &&
@@ -119,7 +136,15 @@ internal class YpsoBenchWriteCoordinator(
                     require(forwardGap == 0) { "new-epoch bootstrap cannot use a forward gap" }
                     session.reserveBenchNewEpochBootstrapCandidate(owner.token, transaction, intent)
                 } else {
-                    session.reserveBenchCandidate(owner.token, transaction, intent, forwardGap)
+                    session.reserveBenchCandidate(
+                        owner.token,
+                        transaction,
+                        intent,
+                        forwardGap,
+                        historyBinding?.first,
+                        historyBinding?.second,
+                        historyBinding?.third,
+                    )
                 }
             }.getOrElse {
                 finish()

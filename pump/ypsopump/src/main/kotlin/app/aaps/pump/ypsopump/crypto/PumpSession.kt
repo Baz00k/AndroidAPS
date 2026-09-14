@@ -21,6 +21,7 @@ class PumpSession(private val store: Store) {
         BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
     }
     enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, ESTABLISHED }
+    enum class HistoryFamily { ALARM, SYSTEM }
     enum class AvailabilityCause {
         UNCONFIGURED,
         BOND_OR_PERMISSION,
@@ -51,7 +52,8 @@ class PumpSession(private val store: Store) {
         val payloadHash: String? = null,
         /** Exact durable write floor before this candidate; absent only in legacy journals. */
         val priorWrite: Long? = null,
-        val candidate: WriteCandidate = WriteCandidate.STANDARD
+        val candidate: WriteCandidate = WriteCandidate.STANDARD,
+        val historyBinding: HistoryWriteBinding? = null,
     )
     data class WriteEvidence(
         val operationId: String,
@@ -64,7 +66,8 @@ class PumpSession(private val store: Store) {
         val candidate: WriteCandidate,
         val resolution: WriteResolution?,
         val evidenceHash: String,
-        val detail: String
+        val detail: String,
+        val historyBinding: HistoryWriteBinding? = null,
     )
     data class WriteIntent(val operationId: String, val characteristic: String, val purpose: String, val payloadHash: String)
     data class BootstrapReference(
@@ -72,6 +75,27 @@ class PumpSession(private val store: Store) {
         val read: Long,
         val characteristic: String,
         val payloadHash: String,
+    )
+    data class HistoryCountEvidence(
+        val family: HistoryFamily,
+        val reboot: Int,
+        val read: Long,
+        val count: Int,
+        val characteristic: String,
+        val payloadHash: String,
+    )
+    data class HistorySelectorState(
+        val family: HistoryFamily,
+        val reboot: Int,
+        val read: Long,
+        val index: Int,
+        val characteristic: String,
+        val payloadHash: String,
+    )
+    data class HistoryWriteBinding(
+        val count: HistoryCountEvidence,
+        val selectedBefore: HistorySelectorState,
+        val writeIndex: Int,
     )
     enum class AttemptStatus { PENDING, SUCCEEDED, FAILED, CANCELLED }
     data class AttemptResult(val id: String, val status: AttemptStatus)
@@ -93,6 +117,10 @@ class PumpSession(private val store: Store) {
         val writeEvidence: List<WriteEvidence> = emptyList(),
         /** Authenticated pre-reboot selected value; the counter-1 bootstrap must choose a different payload. */
         val benchNewEpochBootstrapReference: BootstrapReference? = null,
+        /** Authenticated, family-specific count evidence used to bind alarm/system selector indices. */
+        val benchHistoryCounts: List<HistoryCountEvidence> = emptyList(),
+        /** Authenticated selected values used to prove alarm/system selector rows change state. */
+        val benchHistorySelectorStates: List<HistorySelectorState> = emptyList(),
         /** Write ownership is explicit: ordinary reads cannot turn an unknown mid-epoch floor into a usable floor. */
         val writeBootstrapState: WriteBootstrapState =
             if (write == null) WriteBootstrapState.UNKNOWN_MID_EPOCH else WriteBootstrapState.ESTABLISHED,
@@ -444,6 +472,8 @@ class PumpSession(private val store: Store) {
                     reservation = candidate.reservation,
                     writeEvidence = mergeWriteEvidence(replaced.writeEvidence, candidate.writeEvidence),
                     benchNewEpochBootstrapReference = candidate.benchNewEpochBootstrapReference,
+                    benchHistoryCounts = candidate.benchHistoryCounts,
+                    benchHistorySelectorStates = candidate.benchHistorySelectorStates,
                     writeBootstrapState = candidate.writeBootstrapState,
                     benchNewEpochBootstrapAttempted = candidate.benchNewEpochBootstrapAttempted,
                     benchStrictNextAccepted = candidate.benchStrictNextAccepted,
@@ -458,6 +488,8 @@ class PumpSession(private val store: Store) {
                     writeEvidence = mergeWriteEvidence(replaced.writeEvidence, candidate.writeEvidence),
                     benchNewEpochBootstrapReference =
                         candidate.benchNewEpochBootstrapReference ?: replaced.benchNewEpochBootstrapReference,
+                    benchHistoryCounts = candidate.benchHistoryCounts,
+                    benchHistorySelectorStates = candidate.benchHistorySelectorStates,
                     writeBootstrapState = candidate.writeBootstrapState,
                     benchNewEpochBootstrapAttempted =
                         replaced.benchNewEpochBootstrapAttempted || candidate.benchNewEpochBootstrapAttempted,
@@ -497,7 +529,23 @@ class PumpSession(private val store: Store) {
         if (previous != null) {
             check(previous.pump == pump) { "Key belongs to another pump" }
             check(previous.reboot == reboot && read >= checkNotNull(previous.read)) { "Cannot roll back or reset an imported key" }
-            persist(current.copy(records = current.records.map { if (it == previous) it.copy(read = read) else it }, activeGeneration = previous.generation))
+            persist(
+                current.copy(
+                    records =
+                        current.records.map {
+                            if (it == previous) {
+                                it.copy(
+                                    read = read,
+                                    benchHistoryCounts = if (read == previous.read) it.benchHistoryCounts else emptyList(),
+                                    benchHistorySelectorStates = if (read == previous.read) it.benchHistorySelectorStates else emptyList(),
+                                )
+                            } else {
+                                it
+                            }
+                        },
+                    activeGeneration = previous.generation,
+                ),
+            )
         } else {
             val installed = Record(pump, id, UUID.randomUUID().toString(), reboot, read, null)
             persist(current.copy(records = current.records + installed, activeGeneration = installed.generation))
@@ -584,6 +632,7 @@ class PumpSession(private val store: Store) {
                             it.payloadHash == unresolved.payloadHash &&
                             it.priorWrite == unresolved.priorWrite &&
                             it.candidate == unresolved.candidate &&
+                            it.historyBinding == unresolved.historyBinding &&
                             it.resolution == null
                     },
                 ) { "Cannot transition with an unreviewed outstanding write record" }
@@ -596,6 +645,8 @@ class PumpSession(private val store: Store) {
                     reservation = null,
                     benchNewEpochBootstrapReference =
                         old.benchNewEpochBootstrapReference?.takeIf { it.reboot == old.reboot },
+                    benchHistoryCounts = emptyList(),
+                    benchHistorySelectorStates = emptyList(),
                     writeBootstrapState = WriteBootstrapState.OBSERVED_NEW_EPOCH,
                     benchNewEpochBootstrapAttempted = false,
                     benchStrictNextAccepted = false,
@@ -628,16 +679,65 @@ class PumpSession(private val store: Store) {
 
     /** Dedicated Step 07 seam: zero means strict-next; one means the single bounded +2 candidate. */
     @Synchronized
-    internal fun reserveBenchCandidate(origin: Token, id: String, intent: WriteIntent, forwardGap: Int): Reservation {
+    internal fun reserveBenchCandidate(
+        origin: Token,
+        id: String,
+        intent: WriteIntent,
+        forwardGap: Int,
+        historyFamily: HistoryFamily? = null,
+        historyIndex: Int? = null,
+        historyCountCharacteristic: String? = null,
+    ): Reservation {
         require(forwardGap in 0..1) { "forward gap must be exactly 0 or 1" }
         val old = owned(origin)
+        val requiredFamily =
+            when (intent.characteristic.lowercase()) {
+                expectedHistoryIndexCharacteristic(HistoryFamily.ALARM) -> HistoryFamily.ALARM
+                expectedHistoryIndexCharacteristic(HistoryFamily.SYSTEM) -> HistoryFamily.SYSTEM
+                else -> null
+            }
+        if (requiredFamily != null) check(historyFamily == requiredFamily) { "Missing history selector binding" }
+        else check(historyFamily == null) { "Unexpected history selector binding" }
+        val historyBinding = historyFamily?.let { family ->
+            val index = checkNotNull(historyIndex) { "History selector index is missing" }
+            val countCharacteristic = checkNotNull(historyCountCharacteristic) { "History count characteristic is missing" }.lowercase()
+            require(index >= 0) { "history selector index must be non-negative" }
+            require(intent.characteristic.lowercase() == expectedHistoryIndexCharacteristic(family)) {
+                "History selector family does not match write destination"
+            }
+            require(intent.purpose == "HISTORY_SELECTOR") { "History selector purpose does not match" }
+            val reboot = checkNotNull(old.reboot) { "Authenticated epoch is unavailable" }
+            val evidence = old.benchHistoryCounts.singleOrNull { it.family == family && it.reboot == reboot }
+                ?: throw SecurityException("Authenticated ${family.name.lowercase()} count is unavailable for this epoch")
+            check(evidence.characteristic == countCharacteristic) {
+                "Authenticated ${family.name.lowercase()} count characteristic does not match"
+            }
+            check(evidence.count > 0 && index == evidence.count - 1) {
+                "${family.name.lowercase()} selector must equal authenticated count - 1"
+            }
+            val selectedBefore = old.benchHistorySelectorStates.singleOrNull { it.family == family && it.reboot == reboot }
+                ?: throw SecurityException("Authenticated ${family.name.lowercase()} selector state is unavailable for this epoch")
+            check(selectedBefore.characteristic == expectedHistoryValueCharacteristic(family)) {
+                "Authenticated ${family.name.lowercase()} selector state characteristic does not match"
+            }
+            check(selectedBefore.index != index) { "${family.name.lowercase()} selector already equals requested index" }
+            HistoryWriteBinding(evidence, selectedBefore, index)
+        }
         if (forwardGap == 1) {
             check(old.benchStrictNextAccepted) { "A reconciled accepted strict-next selector is required before the gap candidate" }
             check(!old.benchForwardGapAttempted) { "The epoch's single forward-gap candidate was already attempted" }
         }
         val candidate =
             if (forwardGap == 0) WriteCandidate.BENCH_STRICT_NEXT_SELECTOR else WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
-        return reserveCandidate(origin, id, intent, forwardGap, candidate, markForwardGapAttempted = forwardGap == 1)
+        return reserveCandidate(
+            origin,
+            id,
+            intent,
+            forwardGap,
+            candidate,
+            markForwardGapAttempted = forwardGap == 1,
+            historyBinding = historyBinding,
+        )
     }
 
     /**
@@ -647,6 +747,9 @@ class PumpSession(private val store: Store) {
     @Synchronized
     internal fun reserveBenchNewEpochBootstrapCandidate(origin: Token, id: String, intent: WriteIntent): Reservation {
         val old = owned(origin)
+        check(intent.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC && intent.purpose == "HISTORY_SELECTOR") {
+            "New-epoch bootstrap supports only the event selector"
+        }
         check(old.writeBootstrapState == WriteBootstrapState.OBSERVED_NEW_EPOCH) {
             "New-epoch bootstrap requires an authenticated next reboot"
         }
@@ -688,6 +791,64 @@ class PumpSession(private val store: Store) {
         update(old.copy(benchNewEpochBootstrapReference = reference))
     }
 
+    /** Persist authenticated family counts only for the current epoch; zero removes and blocks that family. */
+    @Synchronized
+    internal fun recordBenchHistoryCounts(
+        origin: Token,
+        counts: List<HistoryCountEvidence>,
+    ) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "An unresolved write blocks count replacement" }
+        val reboot = checkNotNull(old.reboot) { "Authenticated epoch is unavailable" }
+        val read = checkNotNull(old.read) { "Authenticated read floor is unavailable" }
+        require(counts.map { it.family }.distinct().size == counts.size) { "Duplicate history count family" }
+        counts.forEach {
+            require(it.reboot == reboot && it.read == read && it.read > 0 && it.count >= 0)
+            require(it.characteristic == expectedHistoryCountCharacteristic(it.family)) {
+                "History count family does not match characteristic"
+            }
+            require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+        }
+        val replacedFamilies = counts.mapTo(mutableSetOf()) { it.family }
+        update(
+            old.copy(
+                benchHistoryCounts =
+                    (old.benchHistoryCounts.filterNot { it.reboot != reboot || it.family in replacedFamilies } + counts.filter { it.count > 0 })
+                        .sortedBy { it.family.name },
+                // A fresh count observation invalidates the family's previous pre-row value; the
+                // operator must re-read the current selection before any later alarm/system row.
+                benchHistorySelectorStates =
+                    old.benchHistorySelectorStates.filterNot { it.reboot != reboot || it.family in replacedFamilies },
+            ),
+        )
+    }
+
+    /** Persist one authenticated current selector value for changed-value history evidence. */
+    @Synchronized
+    internal fun recordBenchHistorySelectorState(
+        origin: Token,
+        selectorState: HistorySelectorState,
+    ) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "An unresolved write blocks selector-state replacement" }
+        val reboot = checkNotNull(old.reboot) { "Authenticated epoch is unavailable" }
+        val read = checkNotNull(old.read) { "Authenticated read floor is unavailable" }
+        require(selectorState.reboot == reboot && selectorState.read == read && selectorState.read > 0 && selectorState.index >= 0)
+        require(selectorState.characteristic == expectedHistoryValueCharacteristic(selectorState.family)) {
+            "History selector state family does not match characteristic"
+        }
+        require(selectorState.payloadHash.matches(Regex("[0-9a-f]{64}")))
+        update(
+            old.copy(
+                benchHistorySelectorStates =
+                    (old.benchHistorySelectorStates.filterNot { it.reboot != reboot || it.family == selectorState.family } + selectorState)
+                        .sortedBy { it.family.name },
+            ),
+        )
+    }
+
     private fun reserveCandidate(
         origin: Token,
         id: String,
@@ -697,6 +858,7 @@ class PumpSession(private val store: Store) {
         markForwardGapAttempted: Boolean = false,
         bootstrapPriorWrite: Long? = null,
         markNewEpochBootstrapAttempted: Boolean = false,
+        historyBinding: HistoryWriteBinding? = null,
     ): Reservation {
         val old = owned(origin)
         check(transaction == id) { "Stale transaction" }
@@ -717,12 +879,21 @@ class PumpSession(private val store: Store) {
             intent?.purpose,
             intent?.payloadHash,
             priorWrite = last,
-            candidate = candidate
+            candidate = candidate,
+            historyBinding = historyBinding,
         )
         update(
             old.copy(
                 write = reserved.counter,
                 reservation = reserved,
+                // A history row consumes its authenticated pre-row observation; every later alarm/system
+                // row must establish a fresh current value before it can prove a changed selection.
+                benchHistorySelectorStates =
+                    historyBinding?.let { binding ->
+                        old.benchHistorySelectorStates.filterNot {
+                            it.family == binding.count.family && it.reboot == binding.count.reboot
+                        }
+                    } ?: old.benchHistorySelectorStates,
                 benchNewEpochBootstrapAttempted =
                     old.benchNewEpochBootstrapAttempted || markNewEpochBootstrapAttempted,
                 benchForwardGapAttempted = old.benchForwardGapAttempted || markForwardGapAttempted
@@ -901,6 +1072,7 @@ class PumpSession(private val store: Store) {
             resolution = resolution,
             evidenceHash = evidenceHash,
             detail = detail,
+            historyBinding = reservation.historyBinding,
         )
 
     private fun priorWrite(reservation: Reservation): Long = reservation.priorWrite ?: reservation.counter - 1
@@ -935,6 +1107,35 @@ class PumpSession(private val store: Store) {
     }
 
     companion object {
+        private fun expectedHistoryIndexCharacteristic(family: HistoryFamily): String =
+            when (family) {
+                HistoryFamily.ALARM -> "669a0c20-0008-969e-e211-fcbec93b7bc5"
+                HistoryFamily.SYSTEM -> "381ddce9-e934-b4ae-e345-eb87283db426"
+            }
+
+        private fun historyFamilyFor(characteristic: String?): HistoryFamily? =
+            characteristic?.lowercase()?.let {
+                when (it) {
+                    expectedHistoryIndexCharacteristic(HistoryFamily.ALARM) -> HistoryFamily.ALARM
+                    expectedHistoryIndexCharacteristic(HistoryFamily.SYSTEM) -> HistoryFamily.SYSTEM
+                    else -> null
+                }
+            }
+
+        private const val EVENT_INDEX_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
+
+        private fun expectedHistoryValueCharacteristic(family: HistoryFamily): String =
+            when (family) {
+                HistoryFamily.ALARM -> "669a0c20-0008-969e-e211-fcbeca3b7bc5"
+                HistoryFamily.SYSTEM -> "ae3022af-2ec8-bf88-e64c-da68c9a3891a"
+            }
+
+        private fun expectedHistoryCountCharacteristic(family: HistoryFamily): String =
+            when (family) {
+                HistoryFamily.ALARM -> "669a0c20-0008-969e-e211-fcbec83b7bc5"
+                HistoryFamily.SYSTEM -> "86a5a431-d442-2c8d-304b-19ee355571fc"
+            }
+
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
         fun validate(state: State) {
@@ -955,6 +1156,22 @@ class PumpSession(private val store: Store) {
                     require(it.reboot >= 0 && it.read > 0 && it.characteristic.isNotBlank())
                     require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
                     require(r.reboot != null && (it.reboot == r.reboot || it.reboot < Int.MAX_VALUE && it.reboot + 1 == r.reboot))
+                }
+                require(r.benchHistoryCounts.map { it.family }.distinct().size == r.benchHistoryCounts.size)
+                r.benchHistoryCounts.forEach {
+                    require(it.reboot >= 0 && it.read > 0 && it.count > 0)
+                    require(it.characteristic == expectedHistoryCountCharacteristic(it.family))
+                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(r.reboot != null && it.reboot == r.reboot)
+                    require(r.read != null && it.read > 0 && it.read <= r.read)
+                }
+                require(r.benchHistorySelectorStates.map { it.family }.distinct().size == r.benchHistorySelectorStates.size)
+                r.benchHistorySelectorStates.forEach {
+                    require(it.reboot >= 0 && it.read > 0 && it.index >= 0)
+                    require(it.characteristic == expectedHistoryValueCharacteristic(it.family))
+                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(r.reboot != null && it.reboot == r.reboot)
+                    require(r.read != null && it.read > 0 && it.read <= r.read)
                 }
                 when (r.writeBootstrapState) {
                     WriteBootstrapState.UNKNOWN_MID_EPOCH -> require(r.write == null && r.reservation == null)
@@ -1001,6 +1218,20 @@ class PumpSession(private val store: Store) {
                     }
                     require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
                     require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
+                    val family = historyFamilyFor(it.characteristic)
+                    if (family != null) {
+                        val binding = checkNotNull(it.historyBinding) { "Alarm/system selector reservation requires a history binding" }
+                        require(binding.count.family == family)
+                        require(r.reboot != null && binding.count.reboot == r.reboot)
+                        if (it.phase != Phase.VERIFIED) {
+                            require(r.benchHistorySelectorStates.none { state -> state.family == family }) {
+                                "An unresolved history reservation must consume its pre-row selector state"
+                            }
+                        }
+                        requireHistoryBinding(binding, it.counter)
+                    } else {
+                        require(it.historyBinding == null)
+                    }
                 }
                 require(
                     r.writeEvidence.map { it.reservationId to it.evidenceHash }.distinct().size == r.writeEvidence.size
@@ -1033,10 +1264,20 @@ class PumpSession(private val store: Store) {
                                 reservation.purpose == it.purpose &&
                                 reservation.payloadHash == it.payloadHash &&
                                 reservation.priorWrite == it.priorWrite &&
-                                reservation.candidate == it.candidate,
+                                reservation.candidate == it.candidate &&
+                                reservation.historyBinding == it.historyBinding,
                         )
                     }
                     require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
+                    val family = historyFamilyFor(it.characteristic)
+                    if (family != null) {
+                        val binding = checkNotNull(it.historyBinding) { "Alarm/system evidence requires a history binding" }
+                        require(binding.count.family == family)
+                        require(r.reboot != null && binding.count.reboot == r.reboot)
+                        requireHistoryBinding(binding, it.counter)
+                    } else {
+                        require(it.historyBinding == null)
+                    }
                 }
             }
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)
@@ -1054,6 +1295,21 @@ class PumpSession(private val store: Store) {
             require(candidateRecord == null || replacedRecord == null || candidateRecord.keyId == replacedRecord.keyId)
             require(state.availability.failures >= 0)
             require((state.candidateAvailability?.failures ?: 0) >= 0)
+        }
+
+        private fun requireHistoryBinding(binding: HistoryWriteBinding, counter: Long) {
+            val family = binding.count.family
+            require(binding.count.reboot == binding.selectedBefore.reboot)
+            require(binding.count.reboot >= 0 && binding.count.read > 0 && binding.count.count > 0)
+            require(binding.count.characteristic == expectedHistoryCountCharacteristic(family))
+            require(binding.count.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.selectedBefore.family == family)
+            require(binding.selectedBefore.reboot >= 0 && binding.selectedBefore.read > 0 && binding.selectedBefore.index >= 0)
+            require(binding.selectedBefore.characteristic == expectedHistoryValueCharacteristic(family))
+            require(binding.selectedBefore.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.writeIndex >= 0 && binding.writeIndex == binding.count.count - 1)
+            require(binding.selectedBefore.index != binding.writeIndex)
+            require(counter > 0)
         }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
