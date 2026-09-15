@@ -520,11 +520,11 @@ class OverviewFragment : DaggerFragment() {
         // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
         val pump = activePlugin.activePump
         val now = dateUtil.now()
-        fun ageDays(type: TE.Type): String? = persistenceLayer.getLastTherapyRecordUpToNow(type)?.let {
-            "${TimeUnit.MILLISECONDS.toDays(now - it.timestamp)}d"
+        fun ageLabel(type: TE.Type): String? = persistenceLayer.getLastTherapyRecordUpToNow(type)?.let {
+            compactDurationLabel(now - it.timestamp)
         }
         val supplies = buildList {
-            ageDays(TE.Type.CANNULA_CHANGE)?.let {
+            ageLabel(TE.Type.CANNULA_CHANGE)?.let {
                 add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsTone.InRange))
             }
             // Sensor: a depleting countdown to EXPIRY (not elapsed age), with the warm-up window drawn
@@ -554,12 +554,7 @@ class OverviewFragment : DaggerFragment() {
                     val remaining = te.timestamp + lifeMs - now
                     val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
                     val remH = TimeUnit.MILLISECONDS.toHours(remaining)
-                    val label = when {
-                        remaining <= 0 -> "Expired"
-                        remH >= 24     -> "${remH / 24}d ${remH % 24}h"
-                        remH >= 1      -> "${remH}h"
-                        else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
-                    }
+                    val label = if (remaining <= 0) "Expired" else compactDurationLabel(remaining)
                     val tone = when {
                         remaining <= 0 -> AapsTone.Low
                         remH < 12      -> AapsTone.Low
@@ -810,5 +805,21 @@ class OverviewFragment : DaggerFragment() {
                 }
             }
         }
+    }
+}
+
+/**
+ * Compact duration label for the Home supply tiles: whole minutes below an hour, whole hours below
+ * a day, then days + remainder hours ("27m", "23h", "1d 3h"). Shared by the cannula age and the
+ * sensor countdown so the two tiles cannot drift apart. The hours component is kept even when zero
+ * ("2d 0h") so the days part stays in place at day boundaries.
+ */
+internal fun compactDurationLabel(millis: Long): String {
+    val elapsed = millis.coerceAtLeast(0L)
+    val hours = TimeUnit.MILLISECONDS.toHours(elapsed)
+    return when {
+        hours >= 24 -> "${hours / 24}d ${hours % 24}h"
+        hours >= 1  -> "${hours}h"
+        else        -> "${TimeUnit.MILLISECONDS.toMinutes(elapsed)}m"
     }
 }
