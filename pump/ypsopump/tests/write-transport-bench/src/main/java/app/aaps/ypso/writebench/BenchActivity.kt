@@ -828,7 +828,7 @@ class BenchActivity : Activity() {
         readEncrypted(owner, eventCount, allowObservedReboot = runKind == RunKind.OBSERVE_REBOOT) { result ->
             result.fold(
                 onSuccess = { body ->
-                    val count = BenchEventCount.decode(body)
+                    val count = BenchHistoryCount.decode(body)
                     recorder.fact(
                         if (count != null) "PrimeReadVerified" else "PrimeReadRejected",
                         JSONObject()
@@ -939,7 +939,7 @@ class BenchActivity : Activity() {
         readEncrypted(owner, alarmCount) { alarmResult ->
             alarmResult.fold(
                 onSuccess = { alarmBody ->
-                    val alarms = BenchEventCount.decode(alarmBody)
+                    val alarms = BenchHistoryCount.decode(alarmBody)
                     recorder.fact(
                         if (alarms != null) "AlarmCountVerified" else "AlarmCountRejected",
                         JSONObject()
@@ -957,7 +957,7 @@ class BenchActivity : Activity() {
                     readEncrypted(owner, systemCount) { systemResult ->
                         systemResult.fold(
                             onSuccess = { systemBody ->
-                                val systems = BenchEventCount.decode(systemBody)
+                                val systems = BenchHistoryCount.decode(systemBody)
                                 recorder.fact(
                                     if (systems != null) "SystemCountVerified" else "SystemCountRejected",
                                     JSONObject()
@@ -1367,6 +1367,11 @@ class BenchActivity : Activity() {
     private fun close(owner: BluetoothGatt) {
         if (gatt !== owner) return
         gatt = null
+        resetActivityState(owner)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun resetActivityState(owner: BluetoothGatt? = null) {
         pendingRead = null
         pendingCapabilityRead = null
         pendingCapabilityIndex = 0
@@ -1378,10 +1383,12 @@ class BenchActivity : Activity() {
         controlNotificationCharacteristic = null
         expectedDescriptor = null
         handshakePhase = HandshakePhase.IDLE
-        readiness.disconnected(owner)
-        coordinator.releaseOwner(owner)
-        runCatching { owner.disconnect() }
-        runCatching { owner.close() }
+        owner?.let {
+            readiness.disconnected(it)
+            coordinator.releaseOwner(it)
+            runCatching { it.disconnect() }
+            runCatching { it.close() }
+        }
         session.quiesce()
         token = null
         document?.sharedKey?.fill(0)
@@ -1397,22 +1404,7 @@ class BenchActivity : Activity() {
             close(owner)
             return
         }
-        pendingRead = null
-        pendingCapabilityRead = null
-        pendingCapabilityIndex = 0
-        firmware = null
-        supervisorFirmware = null
-        controlVersion = null
-        expectedAuthCharacteristic = null
-        expectedSelectorCharacteristic = null
-        controlNotificationCharacteristic = null
-        expectedDescriptor = null
-        handshakePhase = HandshakePhase.IDLE
-        session.quiesce()
-        token = null
-        document?.sharedKey?.fill(0)
-        document = null
-        releaseRunLease()
+        resetActivityState()
     }
 
     private fun releaseRunLease() {
