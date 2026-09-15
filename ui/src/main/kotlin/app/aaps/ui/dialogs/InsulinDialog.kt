@@ -94,8 +94,8 @@ class InsulinDialog : DaggerDialogFragment() {
      * toggle starts checked (e.g. the Home "+" record-only menu). Default ONLY — the switch stays
      * user-editable and submit() honors whatever the user chose.
      */
-    private val forceRecordOnly: Boolean
-        get() = arguments?.getBoolean("forceRecordOnly", false) ?: false
+    private val defaultRecordOnly: Boolean
+        get() = arguments?.getBoolean("defaultRecordOnly", false) ?: false
 
     override fun onStart() {
         super.onStart()
@@ -122,7 +122,7 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement2),
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
-            forceRecordOnly = config.AAPSCLIENT || suspended || forceRecordOnly,
+            defaultRecordOnly = config.AAPSCLIENT || suspended || defaultRecordOnly,
             suspendedWarning = suspended
         )
         return ComposeView(requireContext()).apply {

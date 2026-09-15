@@ -30,7 +30,7 @@ data class InsulinSheetState(
     val decimals: Int,
     val quickIncrements: List<Double>,
     /** Initial value of the "Record only" toggle — a default only; the switch stays user-editable. */
-    val forceRecordOnly: Boolean,
+    val defaultRecordOnly: Boolean,
     val suspendedWarning: Boolean
 )
 
@@ -47,7 +47,7 @@ data class InsulinInputs(
 fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
     val colors = AapsTheme.colors
     var amount by remember { mutableStateOf(0.0) }
-    var recordOnly by remember { mutableStateOf(state.forceRecordOnly) }
+    var recordOnly by remember { mutableStateOf(state.defaultRecordOnly) }
     var timeOffset by remember { mutableStateOf(0.0) }
     var eatingSoon by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
