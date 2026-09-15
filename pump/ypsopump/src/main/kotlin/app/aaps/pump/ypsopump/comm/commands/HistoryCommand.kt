@@ -2,6 +2,9 @@ package app.aaps.pump.ypsopump.comm.commands
 
 import app.aaps.pump.ypsopump.comm.YpsoCommand
 import app.aaps.pump.ypsopump.comm.YpsoCommandCodes
+import app.aaps.pump.ypsopump.comm.YpsoCrc
+import app.aaps.pump.ypsopump.comm.YpsoGlb
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 
 /**
  * History entry read commands following the COUNT/INDEX/VALUE pattern.
@@ -18,20 +21,14 @@ class CountCommand(commandCode: YpsoCommandCodes) : YpsoCommand(commandCode) {
     override fun encode(): ByteArray = byteArrayOf(0x00)
 
     override fun decode(data: ByteArray) {
-        if (data.size >= 4) {
-            entryCount = data.getInt32(0)
-            success = true
-        } else if (data.size >= 2) {
-            entryCount = data.getUInt16(0)
-            success = true
-        } else {
-            success = false
-        }
+        val decoded = YpsoGlb.decodeExact(data)
+        success = decoded != null && decoded >= 0
+        if (success) entryCount = checkNotNull(decoded)
     }
 }
 
 class IndexCommand(commandCode: YpsoCommandCodes, private val index: Int) : YpsoCommand(commandCode) {
-    override fun encode(): ByteArray = index.toLeBytes()
+    override fun encode(): ByteArray = YpsoGlb.encode(index)
 
     override fun decode(data: ByteArray) {
         // Index write acknowledgment
@@ -45,7 +42,20 @@ class ValueCommand(commandCode: YpsoCommandCodes) : YpsoCommand(commandCode) {
     override fun encode(): ByteArray = byteArrayOf(0x00)
 
     override fun decode(data: ByteArray) {
-        rawValue = data
-        success = data.isNotEmpty()
+        val payload = YpsoCrc.validatedPayload(data)
+        success = payload != null
+        rawValue = payload ?: byteArrayOf()
+    }
+}
+
+/** Event-history value decoder with exact field widths and mandatory CRC integrity. */
+class EventValueCommand : YpsoCommand(YpsoCommandCodes.EVENT_ENTRY_VALUE) {
+    var entry: YpsoHistoryEntry? = null; private set
+
+    override fun encode(): ByteArray = byteArrayOf(0x00)
+
+    override fun decode(data: ByteArray) {
+        entry = YpsoHistoryEntry.decodeWire(data)
+        success = entry != null
     }
 }

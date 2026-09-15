@@ -33,6 +33,28 @@ adb -s "$SERIAL" shell pm grant app.aaps.ypso.writebench android.permission.BLUE
 Record source revision, APK SHA-256, signer fingerprint, phone model, Android version, pump firmware,
 redacted pump identity and initial pump/controller/clock state.
 
+## Capture the current history cursor and clock fields
+
+Before any Step 08 selector attempt, capture the authenticated event count, the currently selected
+event value and the pump's date/time fields without changing the selector:
+
+```sh
+CAPTURE_ID="current-$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action capture-current-history --es write_id "$CAPTURE_ID"
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/history-captures.jsonl \
+  > "history-captures-$CAPTURE_ID.jsonl"
+sha256sum "history-captures-$CAPTURE_ID.jsonl"
+```
+
+The action accepts the event count only as an exact GLB and the event value only as an exact 17-byte
+payload with a valid trailing CRC. It records the first four bytes as `factory_seconds`; it does not
+apply the reference parser's unverified year-2000 epoch. Pump date/time bytes are retained verbatim
+with wall/elapsed phone observations so their field layout and conversion can be established from
+paired target observations. `history-captures.jsonl` contains decrypted pump data and may identify
+the operator's treatment history. Keep it protected like a raw Bluetooth trace; do not publish it.
+
 ## Import the session; measured floors are optional validation evidence
 
 Force-stop the app and push the canonical `ypso-keys` schema-v1 document as `ypso-keys.json`.

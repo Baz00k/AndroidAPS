@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 
-/** Append-only, fsynced evidence. It stores no key, ciphertext, or decrypted pump-response body. */
+/** Append-only, fsynced summary evidence. Decrypted history bodies use a separate app-private file. */
 internal class BenchEvidenceRecorder(
     context: Context,
 ) : YpsoWriteBehaviorRecorder {

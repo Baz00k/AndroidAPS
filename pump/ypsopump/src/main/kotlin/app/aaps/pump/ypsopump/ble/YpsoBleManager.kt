@@ -18,6 +18,7 @@ import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -1115,24 +1116,4 @@ class YpsoBleManager @Inject constructor(
         aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled=$controlNotificationsEnabled)")
     }
 
-}
-
-/**
- * A parsed pump event-history entry (17 bytes, tech-doc §10.6). For fast-bolus events (types 1/2/3)
- * [v1] is the units in hundredths (delivered for completed/cancelled; requested for started) and, for
- * a cancelled bolus, [v2] is the requested amount. [timestamp] is pump-clock Unix seconds.
- */
-data class YpsoHistoryEntry(
-    val timestamp: Long,
-    val eventType: Int,
-    val v1: Int,
-    val v2: Int,
-    val v3: Int,
-    val sequence: Long,
-    val index: Int
-) {
-    /** Units in v1, converted from hundredths. */
-    val v1Units: Double get() = v1 / 100.0
-    /** Units in v2 (requested, for a cancelled bolus), converted from hundredths. */
-    val v2Units: Double get() = v2 / 100.0
 }

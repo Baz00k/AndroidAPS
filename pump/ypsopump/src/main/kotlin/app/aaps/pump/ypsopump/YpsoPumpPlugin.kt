@@ -29,7 +29,7 @@ import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
-import app.aaps.pump.ypsopump.ble.YpsoHistoryEntry
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
@@ -304,15 +304,16 @@ class YpsoPumpPlugin @Inject constructor(
         //     nothing, so this can only rescue an under-count, never invent or reduce a dose.
         if (delivered + bolusStepU < requested) {
             val hist = readLastFastBolusEventBlocking()
-            if (hist != null && hist.v1Units > delivered && hist.v1Units <= requested + bolusStepU) {
+            val historyUnits = hist?.value1?.div(100.0)
+            if (hist != null && historyUnits != null && historyUnits > delivered && historyUnits <= requested + bolusStepU) {
                 aapsLogger.warn(
                     LTag.PUMP,
-                    "YpsoPump bolus reconcile: pump history type=${hist.eventType} delivered=${hist.v1Units}U (poll saw $delivered U of $requested U) — recording history; dropped-confirm rescued"
+                    "YpsoPump bolus reconcile: pump history type=${hist.eventType} delivered=${historyUnits}U (poll saw $delivered U of $requested U) — recording history; dropped-confirm rescued"
                 )
-                delivered = hist.v1Units
+                delivered = historyUnits
                 sawDelivering = true
             } else {
-                aapsLogger.info(LTag.PUMP, "YpsoPump bolus reconcile: no usable history (hist=${hist?.eventType}/${hist?.v1Units}); keeping polled $delivered U")
+                aapsLogger.info(LTag.PUMP, "YpsoPump bolus reconcile: no usable history (hist=${hist?.eventType}/${historyUnits}); keeping polled $delivered U")
             }
         }
 
