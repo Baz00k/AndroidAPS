@@ -29,7 +29,6 @@ data class InsulinSheetState(
     val bolusStep: Double,
     val decimals: Int,
     val quickIncrements: List<Double>,
-    /** Initial value of the "Record only" toggle — a default only; the switch stays user-editable. */
     val defaultRecordOnly: Boolean,
     val suspendedWarning: Boolean
 )

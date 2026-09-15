@@ -90,9 +90,7 @@ class InsulinDialog : DaggerDialogFragment() {
     private val disposable = CompositeDisposable()
 
     /**
-     * Entry-point intent carried via [UiInteraction.runInsulinDialog]: when true, the "Record only"
-     * toggle starts checked (e.g. the Home "+" record-only menu). Default ONLY — the switch stays
-     * user-editable and submit() honors whatever the user chose.
+     * Entry-point intent carried via [UiInteraction.runInsulinDialog]: when true, the "Record only" toggle starts checked 
      */
     private val defaultRecordOnly: Boolean
         get() = arguments?.getBoolean("defaultRecordOnly", false) ?: false
