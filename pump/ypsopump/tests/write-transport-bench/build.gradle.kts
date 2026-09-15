@@ -13,6 +13,7 @@ val sharedDriverSources =
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/YpsoFraming.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/YpsoGlb.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/YpsoCrc.kt",
+        "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoHistoryEntry.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoWritePolicy.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoAuthentication.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoCommandReadiness.kt",

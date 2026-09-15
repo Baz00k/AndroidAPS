@@ -104,7 +104,9 @@ another verification attempt is allowed.
 - Therapy remains blocked unless a future exact artifact is independently qualified.
 
 Implementation details are in [status lifecycle](docs/status-lifecycle.md), [session ownership](docs/session-ownership.md)
-and [status protocol](docs/status-protocol.md). Any capability change must update user-facing usage text in
+and [status protocol](docs/status-protocol.md). The qualified read-only event schema, pump-local time
+conversion and still-blocked command-attribution boundary are documented in
+[history identity and time](docs/history-identity-time.md). Any capability change must update user-facing usage text in
 the same change. Unverified observations must not be presented as supported behavior.
 
 ## Build

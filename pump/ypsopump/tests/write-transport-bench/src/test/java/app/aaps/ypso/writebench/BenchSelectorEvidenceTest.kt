@@ -34,6 +34,18 @@ class BenchSelectorEvidenceTest {
     }
 
     @Test
+    fun `history evidence rejects raw and trailing payload fallbacks`() {
+        val payload = ByteArray(17).also { it[15] = 17 }
+
+        listOf(payload, YpsoCrc.appendCrc(payload) + byteArrayOf(0)).forEach { body ->
+            val evidence = BenchSelectorEvidenceDecoder.history(body, selectedIndex = 17)
+            assertFalse(evidence.crcValid)
+            assertNull(evidence.embeddedHistoryIndex)
+            assertEquals(false, evidence.semanticMatch)
+        }
+    }
+
+    @Test
     fun `setting evidence is observational and never claims a semantic match`() {
         val exact = BenchSelectorEvidenceDecoder.setting(YpsoGlb.encode(3))
         assertEquals(3, exact.glb)

@@ -742,7 +742,8 @@ class YpsoBleManager @Inject constructor(
     fun readEventCount(onResult: (Int?) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(null); return }
         readMultiframe(CHAR_EVENT_COUNT, onFailure = { onResult(null) }) { _, fc ->
-            val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.find(decryptOwned(fc)) }.getOrElse {
+            val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(decryptOwned(fc)) }
+                .getOrElse {
                 aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
             }
             aapsLogger.debug(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
@@ -762,11 +763,6 @@ class YpsoBleManager @Inject constructor(
             }.getOrNull()
             onResult(cmd)
         }
-    }
-
-    /** Status-only compatibility stub. History selection exists only in the separate bench app. */
-    fun readLastFastBolusEvent(maxScan: Int = 4, onResult: (YpsoHistoryEntry?) -> Unit) {
-        onResult(null)
     }
 
     /** Status-only compatibility stub; normal AAPS cannot deliver therapy. */
@@ -1115,24 +1111,4 @@ class YpsoBleManager @Inject constructor(
         aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled=$controlNotificationsEnabled)")
     }
 
-}
-
-/**
- * A parsed pump event-history entry (17 bytes, tech-doc §10.6). For fast-bolus events (types 1/2/3)
- * [v1] is the units in hundredths (delivered for completed/cancelled; requested for started) and, for
- * a cancelled bolus, [v2] is the requested amount. [timestamp] is pump-clock Unix seconds.
- */
-data class YpsoHistoryEntry(
-    val timestamp: Long,
-    val eventType: Int,
-    val v1: Int,
-    val v2: Int,
-    val v3: Int,
-    val sequence: Long,
-    val index: Int
-) {
-    /** Units in v1, converted from hundredths. */
-    val v1Units: Double get() = v1 / 100.0
-    /** Units in v2 (requested, for a cancelled bolus), converted from hundredths. */
-    val v2Units: Double get() = v2 / 100.0
 }

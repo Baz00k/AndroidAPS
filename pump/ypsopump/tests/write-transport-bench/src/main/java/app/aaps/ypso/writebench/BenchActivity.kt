@@ -31,10 +31,12 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocumentParser
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -90,6 +92,9 @@ class BenchActivity : Activity() {
     private var expectedDescriptor: BluetoothGattDescriptor? = null
     private var runLeaseHeld = false
     private var handshakePhase = HandshakePhase.IDLE
+    private var primeEventCount: Int? = null
+    private var primeEventCountBody: ByteArray? = null
+    private var primePumpReboot: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,6 +111,7 @@ class BenchActivity : Activity() {
                 "observe-reboot" -> runConnection(RunKind.OBSERVE_REBOOT)
                 "record-bootstrap-reference" -> runConnection(RunKind.RECORD_BOOTSTRAP_REFERENCE)
                 "read-history-counts" -> runConnection(RunKind.READ_HISTORY_COUNTS)
+                "capture-current-history" -> runConnection(RunKind.CAPTURE_CURRENT_HISTORY)
                 "readiness-probe" -> runConnection(RunKind.READINESS_PROBE)
                 "reconcile" -> reconcile()
                 else -> error("Unknown action")
@@ -234,7 +240,7 @@ class BenchActivity : Activity() {
             }
         }
         selector =
-            if (kind in setOf(RunKind.OBSERVE_REBOOT, RunKind.READ_HISTORY_COUNTS)) {
+            if (kind in setOf(RunKind.OBSERVE_REBOOT, RunKind.READ_HISTORY_COUNTS, RunKind.CAPTURE_CURRENT_HISTORY)) {
                 null
             } else {
                 Selector.parse(
@@ -842,6 +848,9 @@ class BenchActivity : Activity() {
                         fail("prime read exact GLB invalid")
                         return@fold
                     }
+                    primeEventCount = count
+                    primeEventCountBody = body.copyOf()
+                    primePumpReboot = session.snapshot()?.reboot
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
                     when (runKind) {
@@ -855,6 +864,7 @@ class BenchActivity : Activity() {
                         RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
                         RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
                         RunKind.READ_HISTORY_COUNTS -> readHistoryCounts(owner)
+                        RunKind.CAPTURE_CURRENT_HISTORY -> captureCurrentHistory(owner)
                         RunKind.OBSERVE_REBOOT -> {
                             close(owner)
                             report("REBOOT:not-observed; authenticated read remained in current epoch")
@@ -921,6 +931,169 @@ class BenchActivity : Activity() {
                 },
                 onFailure = { fail("bootstrap reference read failed: ${it.message}") },
             )
+        }
+    }
+
+    /** Capture a stable logical-head cursor without selecting or mutating pump state. */
+    private fun captureCurrentHistory(owner: BluetoothGatt) {
+        val eventCount = findUnique(owner, EVENT_COUNT_UUID)
+        val eventValue = findUnique(owner, EVENT_VALUE_UUID)
+        val systemDate = findUnique(owner, SYSTEM_DATE_UUID)
+        val systemTime = findUnique(owner, SYSTEM_TIME_UUID)
+        if (eventCount == null || eventValue == null || systemDate == null || systemTime == null) {
+            fail(
+                "history/time characteristic missing or ambiguous",
+                YpsoWriteFailure.Layer.READINESS,
+                eventCount?.uuid ?: eventValue?.uuid ?: systemDate?.uuid ?: systemTime?.uuid,
+                stage = "CAPTURE_CURRENT_HISTORY",
+            )
+            return
+        }
+        readEncrypted(owner, eventValue) { headResult ->
+            headResult.fold(
+                onSuccess = { headBefore -> capturePumpDate(owner, eventCount, eventValue, systemDate, systemTime, headBefore) },
+                onFailure = { fail("event head before capture failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun capturePumpDate(
+        owner: BluetoothGatt,
+        eventCount: BluetoothGattCharacteristic,
+        eventValue: BluetoothGattCharacteristic,
+        systemDate: BluetoothGattCharacteristic,
+        systemTime: BluetoothGattCharacteristic,
+        headBefore: ByteArray,
+    ) {
+        readEncrypted(owner, systemDate) { dateResult ->
+            dateResult.fold(
+                onSuccess = { dateBody ->
+                    readEncrypted(owner, systemTime) { timeResult ->
+                        timeResult.fold(
+                            onSuccess = { timeBody ->
+                                captureCountAfter(owner, eventCount, eventValue, headBefore, dateBody, timeBody)
+                            },
+                            onFailure = { fail("system time capture failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("system date capture failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun captureCountAfter(
+        owner: BluetoothGatt,
+        eventCount: BluetoothGattCharacteristic,
+        eventValue: BluetoothGattCharacteristic,
+        headBefore: ByteArray,
+        dateBody: ByteArray,
+        timeBody: ByteArray,
+    ) {
+        readEncrypted(owner, eventCount) { countResult ->
+            countResult.fold(
+                onSuccess = { countBody ->
+                    val countAfter = BenchHistoryCount.decode(countBody)
+                    if (countAfter == null) {
+                        fail("event count after capture is not an exact non-negative GLB")
+                        return@fold
+                    }
+                    readEncrypted(owner, eventValue) { headResult ->
+                        headResult.fold(
+                            onSuccess = { headAfter ->
+                                finishCurrentHistoryCapture(owner, headBefore, headAfter, countBody, dateBody, timeBody, countAfter)
+                            },
+                            onFailure = { fail("event head after capture failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("event count after capture failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun finishCurrentHistoryCapture(
+        owner: BluetoothGatt,
+        headBeforeBody: ByteArray,
+        headAfterBody: ByteArray,
+        countAfterBody: ByteArray,
+        dateBody: ByteArray,
+        timeBody: ByteArray,
+        countAfter: Int,
+    ) {
+        val headBefore = YpsoHistoryEntry.decodeWire(headBeforeBody)
+        val headAfter = YpsoHistoryEntry.decodeWire(headAfterBody)
+        val rebootAfter = session.snapshot()?.reboot
+        val countBeforeBody = primeEventCountBody
+        val stable =
+            countAfter > 0 && countBeforeBody != null && primeEventCount == countAfter && primePumpReboot == rebootAfter &&
+                headBefore?.index == 0 && headAfter?.index == 0 &&
+                headBefore.sequence == headAfter.sequence && headBefore.fingerprint() == headAfter.fingerprint()
+        appendProtectedCapture(
+            eventCaptureJson(headBeforeBody, headBefore)
+                .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
+                .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
+                .put("event_count_before_wire_hex", countBeforeBody?.toHex() ?: JSONObject.NULL)
+                .put("event_count_before_wire_sha256", countBeforeBody?.let(::hash) ?: JSONObject.NULL)
+                .put("event_count_after", countAfter)
+                .put("event_count_after_wire_hex", countAfterBody.toHex())
+                .put("event_count_after_wire_sha256", hash(countAfterBody))
+                .put("head_after_wire_hex", headAfterBody.toHex())
+                .put("head_after_wire_sha256", hash(headAfterBody))
+                .put("system_date_hex", dateBody.toHex())
+                .put("system_time_hex", timeBody.toHex())
+                .put("stable_head_cursor", stable)
+                .putSessionSnapshot(),
+        )
+        recorder.fact(
+            if (stable) "CurrentHistoryCaptureVerified" else "CurrentHistoryCaptureRejected",
+            eventCaptureJson(headBeforeBody, headBefore)
+                .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
+                .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
+                .put("event_count_before_body_size", countBeforeBody?.size ?: JSONObject.NULL)
+                .put("event_count_before_body_sha256", countBeforeBody?.let(::hash) ?: JSONObject.NULL)
+                .put("event_count_after", countAfter)
+                .put("event_count_after_body_size", countAfterBody.size)
+                .put("event_count_after_body_sha256", hash(countAfterBody))
+                .put("head_after_body_size", headAfterBody.size)
+                .put("head_after_body_sha256", hash(headAfterBody))
+                .put("system_date_size", dateBody.size)
+                .put("system_date_sha256", hash(dateBody))
+                .put("system_time_size", timeBody.size)
+                .put("system_time_sha256", hash(timeBody))
+                .put("stable_head_cursor", stable)
+                .putSessionSnapshot(),
+        )
+        close(owner)
+        report(
+            if (stable) {
+                "CAPTURE:count=$countAfter;index=0;sequence=${headBefore.sequence};factory_seconds=${headBefore.factorySeconds};type=${headBefore.eventType}"
+            } else {
+                "CAPTURE:rejected; count, reboot and exact logical head must remain stable"
+            },
+        )
+    }
+
+    private fun eventCaptureJson(body: ByteArray, entry: YpsoHistoryEntry?): JSONObject =
+        JSONObject()
+            .put("write_id", writeId)
+            .put("event_count_before", primeEventCount ?: JSONObject.NULL)
+            .put("event_body_size", body.size)
+            .put("event_body_sha256", hash(body))
+            .put("event_crc_valid", entry != null)
+            .put("event_strict_layout", entry != null)
+            .put("factory_seconds", entry?.factorySeconds ?: JSONObject.NULL)
+            .put("event_type", entry?.eventType ?: JSONObject.NULL)
+            .put("value1", entry?.value1 ?: JSONObject.NULL)
+            .put("value2", entry?.value2 ?: JSONObject.NULL)
+            .put("value3", entry?.value3 ?: JSONObject.NULL)
+            .put("sequence", entry?.sequence ?: JSONObject.NULL)
+            .put("embedded_history_index", entry?.index ?: JSONObject.NULL)
+
+    private fun appendProtectedCapture(capture: JSONObject) {
+        FileOutputStream(File(filesDir, "history-captures.jsonl"), true).use { out ->
+            out.write((capture.toString() + "\n").toByteArray())
+            out.fd.sync()
         }
     }
 
@@ -1210,6 +1383,7 @@ class BenchActivity : Activity() {
         result.fold(
             onSuccess = { body ->
                 val evidence = selectorEvidence(selected, body)
+                if (selected.name == "event") appendSelectedEventCapture(selected, body)
                 recorder.fact(
                     "SelectorReadBack",
                     JSONObject()
@@ -1247,6 +1421,34 @@ class BenchActivity : Activity() {
         if (!owner.readCharacteristic(characteristic)) {
             finishRead(Result.failure(IllegalStateException("read dispatch refused for ${characteristic.uuid}")))
         }
+    }
+
+    private fun appendSelectedEventCapture(selected: Selector, body: ByteArray) {
+        val entry = YpsoHistoryEntry.decodeWire(body)
+        appendProtectedCapture(
+            JSONObject()
+                .put("capture_id", writeId)
+                .put("capture_kind", "SELECTOR_READ_BACK")
+                .put("wall_time_ms", System.currentTimeMillis())
+                .put("elapsed_ms", android.os.SystemClock.elapsedRealtime())
+                .put("firmware", firmware ?: JSONObject.NULL)
+                .put("supervisor_firmware", supervisorFirmware ?: JSONObject.NULL)
+                .put("control_protocol", controlVersion ?: JSONObject.NULL)
+                .put("event_count_before", primeEventCount ?: JSONObject.NULL)
+                .put("selected_index", selected.value)
+                .put("event_wire_hex", body.toHex())
+                .put("event_wire_sha256", hash(body))
+                .put("event_crc_valid", YpsoCrc.isValid(body))
+                .put("event_strict_layout", entry != null)
+                .put("factory_seconds", entry?.factorySeconds ?: JSONObject.NULL)
+                .put("event_type", entry?.eventType ?: JSONObject.NULL)
+                .put("value1", entry?.value1 ?: JSONObject.NULL)
+                .put("value2", entry?.value2 ?: JSONObject.NULL)
+                .put("value3", entry?.value3 ?: JSONObject.NULL)
+                .put("sequence", entry?.sequence ?: JSONObject.NULL)
+                .put("index", entry?.index ?: JSONObject.NULL)
+                .putSessionSnapshot(),
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -1488,6 +1690,8 @@ class BenchActivity : Activity() {
 
     private fun hash(value: ByteArray) = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
 
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
     private fun hash(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().buffered().use { input ->
@@ -1584,6 +1788,7 @@ class BenchActivity : Activity() {
         OBSERVE_REBOOT,
         RECORD_BOOTSTRAP_REFERENCE,
         READ_HISTORY_COUNTS,
+        CAPTURE_CURRENT_HISTORY,
         READINESS_PROBE,
     }
 
@@ -1667,6 +1872,8 @@ class BenchActivity : Activity() {
         val EXTENDED_READ_SERVICE_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
         val EVENT_COUNT_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
         val EVENT_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
+        val SYSTEM_DATE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbedc3b7bc5")
+        val SYSTEM_TIME_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbedd3b7bc5")
         val ALARM_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeca3b7bc5")
         val SYSTEM_VALUE_UUID: UUID = UUID.fromString("ae3022af-2ec8-bf88-e64c-da68c9a3891a")
         val SETTING_VALUE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb4147bc5")
