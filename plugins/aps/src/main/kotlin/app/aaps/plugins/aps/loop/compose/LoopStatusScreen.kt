@@ -24,11 +24,16 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Redesigned Loop tab: what the algorithm last asked for, what the constraints did to it, and when the
- * pump was actually told. Read-only apart from "Run now", which is the same `loop.invoke(...)` the
- * legacy swipe-to-refresh and overflow menu called.
+ * pump was actually told. "Run now" is the same `loop.invoke(...)` the legacy swipe-to-refresh and
+ * overflow menu called. While an unaccepted open-loop suggestion exists, an "Accept temp basal" card
+ * is shown and goes through the same BOLUS-protected confirmation the legacy Home button used.
  */
 @Composable
-fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
+fun LoopStatusScreen(
+    state: LoopStatusState,
+    onRunNow: () -> Unit,
+    onAccept: () -> Unit
+) {
     val colors = AapsTheme.colors
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
@@ -57,6 +62,26 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
                     onClick = onRunNow,
                     modifier = Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGap)
                 )
+            }
+        }
+
+        if (state.suggestion.isNotBlank()) {
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Column {
+                    Text("NEW SUGGESTION", style = AapsTheme.type.label, color = colors.textSecondary)
+                    Text(
+                        state.suggestion.toString(),
+                        style = AapsTheme.type.body,
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    PrimaryButton(
+                        label = "Accept temp basal",
+                        onClick = onAccept,
+                        enabled = !state.accepting,
+                        modifier = Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGap)
+                    )
+                }
             }
         }
 
