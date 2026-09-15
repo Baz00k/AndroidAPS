@@ -58,13 +58,65 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..3)
+        check(version in 1..6 || version in 8..13)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
-            val reservation = r.optJSONObject("reservation")?.let {
-                PumpSession.Reservation(it.getString("id"), it.getLong("counter"), PumpSession.Phase.valueOf(it.getString("phase")))
+            if (version >= 8) {
+                require(r.has("benchStrictNextAccepted") && !r.isNull("benchStrictNextAccepted"))
+                require(r.has("benchForwardGapAttempted") && !r.isNull("benchForwardGapAttempted"))
             }
+            if (version >= 10) {
+                require(r.has("writeBootstrapState") && !r.isNull("writeBootstrapState"))
+                require(r.has("benchNewEpochBootstrapAttempted") && !r.isNull("benchNewEpochBootstrapAttempted"))
+                require(r.has("benchNewEpochBootstrapReference"))
+            }
+            if (version >= 11) {
+                require(r.optJSONArray("benchHistoryCounts") != null)
+                require(r.optJSONArray("benchHistorySelectorStates") != null)
+            }
+            if (version >= 12) {
+                require(r.has("benchDuplicateCounterAttempted") && !r.isNull("benchDuplicateCounterAttempted"))
+            }
+            if (version >= 13) {
+                require(r.has("benchAmbiguityConvergenceAttempted") && !r.isNull("benchAmbiguityConvergenceAttempted"))
+                require(r.has("benchDuplicateCounterPredecessor"))
+            }
+            val reservation = r.optJSONObject("reservation")?.let {
+                if (version >= 8) {
+                    require(it.has("priorWrite") && !it.isNull("priorWrite"))
+                    require(it.has("candidate") && !it.isNull("candidate"))
+                }
+                if (version >= 12) require(it.has("acceptedPredecessor"))
+                if (version >= 13) require(it.has("unresolvedPredecessor"))
+                val counter = it.getLong("counter")
+                val priorWrite = it.optLongOrNull("priorWrite") ?: (counter - 1).takeIf { version < 8 }
+                val candidate =
+                    it.stringOrNull("candidate")?.let(PumpSession.WriteCandidate::valueOf)
+                        ?: if (priorWrite != null && counter - priorWrite == 2L) {
+                            PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
+                        } else {
+                            PumpSession.WriteCandidate.STANDARD
+                        }
+                PumpSession.Reservation(
+                    it.getString("id"),
+                    counter,
+                    PumpSession.Phase.valueOf(it.getString("phase")),
+                    it.stringOrNull("operationId"),
+                    it.stringOrNull("characteristic"),
+                    it.stringOrNull("purpose"),
+                    it.stringOrNull("payloadHash"),
+                    priorWrite,
+                    candidate,
+                    historyBinding = it.optJSONObject("historyBinding")?.let(::historyBinding),
+                    acceptedPredecessor = it.optJSONObject("acceptedPredecessor")?.let { value ->
+                        acceptedWriteBinding(value, version)
+                    },
+                    unresolvedPredecessor = it.optJSONObject("unresolvedPredecessor")?.let(::unresolvedWriteBinding),
+                )
+            }
+            val inferredLegacyGap =
+                version < 8 && reservation?.candidate == PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
             PumpSession.Record(
                 r.getString("pump"), r.getString("key"), r.getString("generation"), if (r.isNull("reboot")) null else r.getInt("reboot"),
                 if (r.isNull("read")) null else r.getLong("read"), if (r.isNull("write")) null else r.getLong("write"), reservation,
@@ -74,7 +126,84 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 importedAt = r.optLongOrNull("importedAt"),
                 source = r.optJSONObject("source")?.toStringMap().orEmpty(),
                 verifiedAt = r.optLongOrNull("verifiedAt"),
-                verifiedSerial = r.stringOrNull("verifiedSerial")
+                verifiedSerial = r.stringOrNull("verifiedSerial"),
+                writeEvidence = r.optJSONArray("writeEvidence")?.let { values ->
+                    (0 until values.length()).map { evidenceIndex ->
+                        val evidence = values.getJSONObject(evidenceIndex)
+                        if (version >= 9) {
+                            require(EVIDENCE_BINDING_FIELDS.all { evidence.has(it) && !evidence.isNull(it) })
+                        }
+                        if (version >= 12) require(evidence.has("acceptedPredecessor"))
+                        if (version >= 13) require(evidence.has("unresolvedPredecessor"))
+                        val boundReservation = reservation?.takeIf { it.id == evidence.getString("reservationId") }
+                        PumpSession.WriteEvidence(
+                            operationId = evidence.getString("operationId"),
+                            reservationId = evidence.getString("reservationId"),
+                            counter = evidence.getLong("counter"),
+                            characteristic = evidence.stringOrNull("characteristic") ?: checkNotNull(boundReservation?.characteristic) {
+                                "Legacy write evidence has no recoverable characteristic binding"
+                            },
+                            purpose = evidence.stringOrNull("purpose") ?: checkNotNull(boundReservation?.purpose) {
+                                "Legacy write evidence has no recoverable purpose binding"
+                            },
+                            payloadHash = evidence.stringOrNull("payloadHash") ?: checkNotNull(boundReservation?.payloadHash) {
+                                "Legacy write evidence has no recoverable payload binding"
+                            },
+                            priorWrite = evidence.optLongOrNull("priorWrite") ?: checkNotNull(boundReservation?.priorWrite) {
+                                "Legacy write evidence has no recoverable prior-write binding"
+                            },
+                            candidate =
+                                evidence.stringOrNull("candidate")?.let(PumpSession.WriteCandidate::valueOf)
+                                    ?: boundReservation?.candidate
+                                    ?: error("Legacy write evidence has no recoverable candidate binding"),
+                            resolution = evidence.stringOrNull("resolution")?.let(PumpSession.WriteResolution::valueOf),
+                            evidenceHash = evidence.getString("evidenceHash"),
+                            detail = evidence.getString("detail"),
+                            historyBinding = evidence.optJSONObject("historyBinding")?.let(::historyBinding),
+                            acceptedPredecessor = evidence.optJSONObject("acceptedPredecessor")?.let { value ->
+                                acceptedWriteBinding(value, version)
+                            },
+                            unresolvedPredecessor = evidence.optJSONObject("unresolvedPredecessor")?.let(::unresolvedWriteBinding),
+                        )
+                    }
+                }.orEmpty(),
+                benchNewEpochBootstrapReference = r.optJSONObject("benchNewEpochBootstrapReference")?.let {
+                    PumpSession.BootstrapReference(
+                        reboot = it.getInt("reboot"),
+                        read = it.getLong("read"),
+                        characteristic = it.getString("characteristic"),
+                        payloadHash = it.getString("payloadHash"),
+                    )
+                },
+                benchHistoryCounts = r.optJSONArray("benchHistoryCounts")?.let { values ->
+                    (0 until values.length()).map { countIndex -> historyCount(values.getJSONObject(countIndex)) }
+                }.orEmpty(),
+                benchHistorySelectorStates = r.optJSONArray("benchHistorySelectorStates")?.let { values ->
+                    (0 until values.length()).map { stateIndex -> historySelectorState(values.getJSONObject(stateIndex)) }
+                }.orEmpty(),
+                writeBootstrapState =
+                    r.stringOrNull("writeBootstrapState")?.let(PumpSession.WriteBootstrapState::valueOf)
+                        ?: if (r.isNull("write")) {
+                            PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH
+                        } else {
+                            PumpSession.WriteBootstrapState.ESTABLISHED
+                        },
+                benchNewEpochBootstrapAttempted =
+                    if (version >= 10) r.getBoolean("benchNewEpochBootstrapAttempted") else false,
+                benchStrictNextAccepted =
+                    if (version >= 8) r.getBoolean("benchStrictNextAccepted") else inferredLegacyGap,
+                benchForwardGapAttempted =
+                    if (version >= 8) r.getBoolean("benchForwardGapAttempted") else inferredLegacyGap,
+                benchDuplicateCounterAttempted =
+                    if (version >= 12) r.getBoolean("benchDuplicateCounterAttempted") else false,
+                benchAmbiguityConvergenceAttempted =
+                    if (version >= 13) r.getBoolean("benchAmbiguityConvergenceAttempted") else false,
+                benchDuplicateCounterPredecessor =
+                    if (version >= 13) {
+                        r.optJSONObject("benchDuplicateCounterPredecessor")?.let { value -> acceptedWriteBinding(value, version) }
+                    } else {
+                        null
+                    },
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -116,6 +245,121 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         ).also(PumpSession::validate)
     }
 
+    private fun historyCount(value: JSONObject) =
+        PumpSession.HistoryCountEvidence(
+            family = PumpSession.HistoryFamily.valueOf(value.getString("family")),
+            reboot = value.getInt("reboot"),
+            read = value.getLong("read"),
+            count = value.getInt("count"),
+            characteristic = value.getString("characteristic"),
+            payloadHash = value.getString("payloadHash"),
+        )
+
+    private fun historySelectorState(value: JSONObject) =
+        PumpSession.HistorySelectorState(
+            family = PumpSession.HistoryFamily.valueOf(value.getString("family")),
+            reboot = value.getInt("reboot"),
+            read = value.getLong("read"),
+            index = value.getInt("index"),
+            characteristic = value.getString("characteristic"),
+            payloadHash = value.getString("payloadHash"),
+        )
+
+    private fun historyBinding(value: JSONObject) =
+        PumpSession.HistoryWriteBinding(
+            count = historyCount(value.getJSONObject("count")),
+            selectedBefore = historySelectorState(value.getJSONObject("selectedBefore")),
+            writeIndex = value.getInt("writeIndex"),
+        )
+
+    private fun historyCountJson(value: PumpSession.HistoryCountEvidence) =
+        JSONObject()
+            .put("family", value.family.name)
+            .put("reboot", value.reboot)
+            .put("read", value.read)
+            .put("count", value.count)
+            .put("characteristic", value.characteristic)
+            .put("payloadHash", value.payloadHash)
+
+    private fun historySelectorStateJson(value: PumpSession.HistorySelectorState) =
+        JSONObject()
+            .put("family", value.family.name)
+            .put("reboot", value.reboot)
+            .put("read", value.read)
+            .put("index", value.index)
+            .put("characteristic", value.characteristic)
+            .put("payloadHash", value.payloadHash)
+
+    private fun historyBindingJson(value: PumpSession.HistoryWriteBinding) =
+        JSONObject()
+            .put("count", historyCountJson(value.count))
+            .put("selectedBefore", historySelectorStateJson(value.selectedBefore))
+            .put("writeIndex", value.writeIndex)
+
+    private fun acceptedWriteBinding(value: JSONObject, version: Int) =
+        PumpSession.AcceptedWriteBinding(
+            reboot = value.getInt("reboot"),
+            operationId = value.getString("operationId"),
+            reservationId = value.getString("reservationId"),
+            counter = value.getLong("counter"),
+            characteristic = value.getString("characteristic"),
+            purpose = value.getString("purpose"),
+            payloadHash = value.getString("payloadHash"),
+            priorWrite = value.getLong("priorWrite"),
+            candidate = PumpSession.WriteCandidate.valueOf(value.getString("candidate")),
+            evidenceHash = value.getString("evidenceHash"),
+            unresolvedPredecessor =
+                if (version >= 13) {
+                    require(value.has("unresolvedPredecessor"))
+                    value.optJSONObject("unresolvedPredecessor")?.let(::unresolvedWriteBinding)
+                } else {
+                    null
+                },
+        )
+
+    private fun acceptedWriteBindingJson(value: PumpSession.AcceptedWriteBinding) =
+        JSONObject()
+            .put("reboot", value.reboot)
+            .put("operationId", value.operationId)
+            .put("reservationId", value.reservationId)
+            .put("counter", value.counter)
+            .put("characteristic", value.characteristic)
+            .put("purpose", value.purpose)
+            .put("payloadHash", value.payloadHash)
+            .put("priorWrite", value.priorWrite)
+            .put("candidate", value.candidate.name)
+            .put("evidenceHash", value.evidenceHash)
+            .put("unresolvedPredecessor", value.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
+
+    private fun unresolvedWriteBinding(value: JSONObject) =
+        PumpSession.UnresolvedWriteBinding(
+            reboot = value.getInt("reboot"),
+            reservationId = value.getString("reservationId"),
+            phase = PumpSession.Phase.valueOf(value.getString("phase")),
+            operationId = value.getString("operationId"),
+            counter = value.getLong("counter"),
+            characteristic = value.getString("characteristic"),
+            purpose = value.getString("purpose"),
+            payloadHash = value.getString("payloadHash"),
+            priorWrite = value.getLong("priorWrite"),
+            candidate = PumpSession.WriteCandidate.valueOf(value.getString("candidate")),
+            evidenceHash = value.getString("evidenceHash"),
+        )
+
+    private fun unresolvedWriteBindingJson(value: PumpSession.UnresolvedWriteBinding) =
+        JSONObject()
+            .put("reboot", value.reboot)
+            .put("reservationId", value.reservationId)
+            .put("phase", value.phase.name)
+            .put("operationId", value.operationId)
+            .put("counter", value.counter)
+            .put("characteristic", value.characteristic)
+            .put("purpose", value.purpose)
+            .put("payloadHash", value.payloadHash)
+            .put("priorWrite", value.priorWrite)
+            .put("candidate", value.candidate.name)
+            .put("evidenceHash", value.evidenceHash)
+
     override fun commit(state: PumpSession.State) {
         PumpSession.validate(state)
         val records = JSONArray()
@@ -124,11 +368,53 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("reboot", r.reboot ?: JSONObject.NULL).put("read", r.read ?: JSONObject.NULL).put("write", r.write ?: JSONObject.NULL)
                 .put("reservation", r.reservation?.let {
                     JSONObject().put("id", it.id).put("counter", it.counter).put("phase", it.phase.name)
+                        .put("operationId", it.operationId ?: JSONObject.NULL)
+                        .put("characteristic", it.characteristic ?: JSONObject.NULL)
+                        .put("purpose", it.purpose ?: JSONObject.NULL)
+                        .put("payloadHash", it.payloadHash ?: JSONObject.NULL)
+                        .put("priorWrite", it.priorWrite ?: JSONObject.NULL)
+                        .put("candidate", it.candidate.name)
+                        .put("historyBinding", it.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
+                        .put("acceptedPredecessor", it.acceptedPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
+                        .put("unresolvedPredecessor", it.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
                 } ?: JSONObject.NULL)
                 .put("serial", r.serial).put("keyHex", r.keyHex ?: JSONObject.NULL)
                 .put("createdAt", r.createdAt ?: JSONObject.NULL).put("importedAt", r.importedAt ?: JSONObject.NULL)
                 .put("source", JSONObject(r.source)).put("verifiedAt", r.verifiedAt ?: JSONObject.NULL)
-                .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL))
+                .put("verifiedSerial", r.verifiedSerial ?: JSONObject.NULL)
+                .put("benchNewEpochBootstrapReference", r.benchNewEpochBootstrapReference?.let {
+                    JSONObject()
+                        .put("reboot", it.reboot)
+                        .put("read", it.read)
+                        .put("characteristic", it.characteristic)
+                        .put("payloadHash", it.payloadHash)
+                } ?: JSONObject.NULL)
+                .put("benchHistoryCounts", JSONArray(r.benchHistoryCounts.map(::historyCountJson)))
+                .put("benchHistorySelectorStates", JSONArray(r.benchHistorySelectorStates.map(::historySelectorStateJson)))
+                .put("writeBootstrapState", r.writeBootstrapState.name)
+                .put("benchNewEpochBootstrapAttempted", r.benchNewEpochBootstrapAttempted)
+                .put("benchStrictNextAccepted", r.benchStrictNextAccepted)
+                .put("benchForwardGapAttempted", r.benchForwardGapAttempted)
+                .put("benchDuplicateCounterAttempted", r.benchDuplicateCounterAttempted)
+                .put("benchAmbiguityConvergenceAttempted", r.benchAmbiguityConvergenceAttempted)
+                .put("benchDuplicateCounterPredecessor", r.benchDuplicateCounterPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
+                .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
+                    JSONObject()
+                        .put("operationId", evidence.operationId)
+                        .put("reservationId", evidence.reservationId)
+                        .put("counter", evidence.counter)
+                        .put("characteristic", evidence.characteristic)
+                        .put("purpose", evidence.purpose)
+                        .put("payloadHash", evidence.payloadHash)
+                        .put("priorWrite", evidence.priorWrite)
+                        .put("candidate", evidence.candidate.name)
+                        .put("resolution", evidence.resolution?.name ?: JSONObject.NULL)
+                        .put("evidenceHash", evidence.evidenceHash)
+                        .put("detail", evidence.detail)
+                        .put("historyBinding", evidence.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
+                        .put("acceptedPredecessor", evidence.acceptedPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
+                        .put("unresolvedPredecessor", evidence.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
+                })))
         }
         val availability = JSONObject()
             .put("causes", JSONArray(state.availability.causes.map { it.name }))
@@ -140,7 +426,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 3).put("records", records)
+        val body = JSONObject().put("version", 13).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)
@@ -221,5 +507,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
     companion object {
         private const val PREFIX = "ypso.session.revision."
         private const val IV_SIZE = 12
+        private val EVIDENCE_BINDING_FIELDS =
+            setOf("characteristic", "purpose", "payloadHash", "priorWrite", "candidate")
     }
 }

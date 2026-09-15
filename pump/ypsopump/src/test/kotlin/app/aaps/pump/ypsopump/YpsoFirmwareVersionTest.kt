@@ -23,4 +23,14 @@ class YpsoFirmwareVersionTest {
         assertNull(YpsoFirmwareVersion.fromWire("V05.00.52\u0000\u0000".toByteArray()))
         assertEquals(YpsoFirmwareVersion.MINIMUM, YpsoFirmwareVersion.fromWire("V05.00.52\u0000".toByteArray()))
     }
+
+    @Test
+    fun `wire minimum gate accepts every well formed version at or above minimum`() {
+        listOf("V05.00.52", "V05.00.53", "V05.01.00", "V06.00.00", "V10.00.00").forEach { value ->
+            assertTrue(YpsoFirmwareVersion.fromWire("$value\u0000".toByteArray())!!.meetsMinimum, value)
+        }
+        listOf("V04.99.99", "V05.00.51").forEach { value ->
+            assertFalse(YpsoFirmwareVersion.fromWire("$value\u0000".toByteArray())!!.meetsMinimum, value)
+        }
+    }
 }

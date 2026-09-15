@@ -2,7 +2,7 @@
 
 ## Supported contract
 
-The status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCrypto` is
+The distributed status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCrypto` is
 a stateless XChaCha20-Poly1305 codec: ciphertext/tag followed by a 24-byte nonce, with
 a mandatory authenticated 12-byte little-endian reboot/read-counter tail. `PumpSession`
 owns acceptance. AEAD failure, incomplete tails, unsupported signed counter ranges,
@@ -28,6 +28,26 @@ Normal builds install manual serial/MAC/key input and canonical `ypso-keys` sche
 one transactional provisioning service. Imported reboot metadata remains a hint; it is not used as
 proof of the current read/write floor or command readiness. A new generation starts without a read
 floor and adopts the first positive authenticated current-pump read before publishing status.
+
+Write bootstrap is explicit. Key-only provisioning is `UNKNOWN_MID_EPOCH`: ordinary authenticated
+reads may establish reboot/read ownership but never invent a write floor. An exact authenticated
+`old + 1` reboot observation may transition the bench to `OBSERVED_NEW_EPOCH`, where exactly one
+counter-1 bootstrap selector can be attempted. A durable authenticated pre-reboot selected-value
+reference requires the candidate to use the same selector family and a different payload, preventing
+retained state from falsely proving acceptance. Its durable marker precedes dispatch and survives
+restart/in-place upgrade. Only reviewed consumed evidence transitions to `ESTABLISHED`; unknown or
+not-consumed evidence remains blocked. External counter files are optional validation evidence, not
+a runtime prerequisite for manual or canonical `ypso-keys` provisioning.
+
+Authenticated alarm/system counts and pre-row selected values are separate current-epoch selector
+evidence. The protected journal binds each non-zero count to its family, reboot/read tuple, count
+characteristic and plaintext SHA-256, and each read-only selected value to its family, epoch and value
+characteristic. Reboot clears those bindings. The bench rejects alarm/system selectors unless the
+requested zero-based index is exactly the durable current-epoch `count - 1` and differs from the
+durable pre-row value; both bindings plus the exact written index are copied into the reservation and
+its reconciliation evidence, and the reservation consumes the pre-row observation so a later row
+requires a fresh authenticated read. Missing, stale, malformed, zero-count or no-op evidence therefore
+cannot be replaced by an operator-supplied index.
 
 Legacy `ypso_ble_state` credentials migrate only into the protected journal. A validated complete
 serial/MAC/key triple migrates automatically. For older MAC/key-only state, a recognized bonded-pump name
@@ -64,11 +84,20 @@ uncertain. The first observed read need not be 1: earlier responses may have bee
 The transition response is discarded and the connection quiesced; a new connection must
 authenticate a later response before publishing status. CRC/schema-invalid transition bodies
 still consume the authenticated floor. Missing firmware/control eligibility, lower generations,
-generation jumps, zero counters and any outstanding write record reject without adoption.
+generation jumps and zero counters reject without adoption. A verified reservation is retired normally.
+An unresolved old-epoch reservation may be retired only when immutable reviewed evidence already binds
+that exact operation/reservation/counter and explicitly preserves its unknown disposition; unreviewed
+outstanding accounting still rejects adoption.
 
 There are **zero speculative counter probes**, no inferred write reset, and no recovery by
 same-key import that erases a replay floor. Write reset/acceptance and re-key reset semantics
 remain separate evidence gaps.
+
+A resolved `VERIFIED` reservation is retained as the current epoch's audit marker, but it is not
+outstanding accounting. Authenticated next-reboot adoption clears that marker together with the old
+write floor. Any `RESERVED`, `POSSIBLY_SENT` or `ACKED` reservation without bound unresolved evidence
+still blocks reboot adoption. Bound old-epoch uncertainty remains in immutable evidence after its live
+reservation is retired by exact next-reboot adoption.
 
 The pinned source reference is
 [`docs/19-key-lifecycle-pump-rotation.md` at de7e867241fafd2fb8061ceeecf42af2883b9eb4](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/docs/19-key-lifecycle-pump-rotation.md).
@@ -89,21 +118,80 @@ Reservations have four distinct durable phases: RESERVED → POSSIBLY_SENT → A
 Reservation increments with overflow checking and commits before any payload could be
 dispatched; POSSIBLY_SENT must commit before the transport call. GATT ACK is not pump-effect
 verification. Unresolved reservations survive restart and prevent another reservation.
-Storage failure poisons the current owner. Write provisioning is unavailable: production
-records have an uncertain (`null`) write floor and legacy write dispatch helpers reject.
+Each Step 07 reservation additionally binds a caller operation ID, destination characteristic,
+typed purpose and SHA-256 of the exact plaintext command. Exact-counter encryption checks that
+identity before producing ciphertext. A proven first-frame local dispatch refusal may roll the
+reservation back; every callback failure, later-frame dispatch refusal, lost callback/deadline,
+disconnect after dispatch or duplicate same-UUID callback remains durable uncertainty. All expected
+fragment callbacks establish only `AcceptedUnverified`; command-specific semantic evidence and, for
+rejection, explicit counter disposition are required to reach `VERIFIED`. A duplicate same-UUID callback cannot
+be promoted to `Verified` by the same live transport because its frame ownership is unknowable;
+external evidence may still classify the durable reservation for operator recovery. No possibly
+effective operation is automatically retried.
 
-The write-transport implementation must update this contract and wire the journal into its
-serialized dispatch before enabling any encrypted writes. Required bench measurements:
+Reviewed reconciliation durably copies the original operation, reservation, counter, characteristic,
+purpose, plaintext SHA-256, exact prior floor and candidate mode into immutable evidence, together
+with the SHA-256 of the exact evidence bundle and an operator detail. A restart-surviving `RESERVED` phase is
+the only offline state that proves the dispatch boundary was never committed; it may be rolled back
+only as rejected/counter-not-consumed, with the same evidence binding. `POSSIBLY_SENT` and `ACKED`
+remain uncertain until command-specific semantic evidence resolves the effect and any required counter
+disposition. An unresolved counter is neither reused nor silently promoted to a known floor.
 
-- strict-next versus forward-gap acceptance;
-- whether each rejection consumes a counter, including malformed commands;
-- lost-ACK and partial-frame outcomes and independent effect verification;
-- read/write behavior across reboot and re-key;
-- counter range/overflow and exhaustion recovery;
-- validated fresh-session recovery after storage loss.
+The Step 07 physical harness permits one bounded forward-gap candidate only: either strict-next
+(`floor + 1`) or a single skipped value (`floor + 2`). The reservation persists its exact prior write
+floor. Proven not-sent or measured rejected/counter-not-consumed recovery restores that exact floor;
+it does not assume `candidate - 1`. An accepted strict-next reconciliation is a durable prerequisite,
+and the epoch's gap-attempt marker is committed with reservation before dispatch. It survives every
+outcome, restart, in-place reinstall/upgrade that preserves app data, and same-epoch baseline import.
+Uninstall removes the sealed journal and its Android Keystore anchor; it is not a supported recovery
+operation and cannot establish that the epoch's gap attempt is still unused. Authenticated reboot
+adoption alone clears the epoch markers. Larger offsets, repeated advancement and scanning are
+unavailable.
+
+When exactly one strict-next event selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, and its
+full immutable reservation has one reviewed hash-bound `UNKNOWN` evidence record, the bench permits one
+bounded ambiguity-convergence candidate in that epoch. It uses a new operation ID and different event
+payload at exactly `N + 1`. Because the pump floor is then `{N - 1, N}`, the candidate is either the
+already measured `floor + 2` case or strict-next; it is not a counter scan. Its reservation binds the
+unresolved predecessor's operation ID, reservation ID, phase, counter, characteristic, purpose,
+plaintext hash, prior floor, candidate mode and evidence hash. The attempt marker commits before
+dispatch and prevents a second convergence attempt in the epoch. Proven not-sent or rejected/not-
+consumed recovery restores the exact unresolved predecessor reservation, not merely a numeric floor.
+Acceptance or consumed rejection establishes `N + 1` while retaining the predecessor's `UNKNOWN`
+evidence as audit history.
+
+The bench additionally permits one same-counter duplicate-behavior probe per authenticated epoch. It
+is available only after an event selector—either strict-next or the bounded ambiguity-convergence
+candidate—is fully reconciled as accepted. It requires a new operation ID and different event payload,
+and binds the predecessor's complete accepted evidence, including the convergence candidate's nested
+unresolved-predecessor binding when applicable. This does not permit retrying an unresolved operation:
+possibly effective plaintext is never resent. The probe marker commits before dispatch, survives
+restart/in-place install and clears only on authenticated reboot adoption. Its result must be
+established from authenticated semantic and counter evidence.
+
+Storage failure poisons the current owner. Normal production records have an uncertain (`null`)
+write floor and legacy write dispatch helpers reject. A separate-UID non-therapy bench artifact at
+`tests/write-transport-bench/` can import a one-time independently measured write floor for the same
+pump/key/reboot epoch. It permits only exact GLB event/alarm/system/settings selectors plus AUTH and
+the required control-notification CCCD setup; it exposes no therapy/configuration write API and
+persists redacted JSONL behavior evidence. Complaint selectors remain excluded because no
+target-verified UUID resolves the conflicting references.
+
+Target measurements establish that strict-next and one skipped counter are accepted, while a different
+payload can also be applied with an already accepted counter. The counter therefore cannot provide
+therapy idempotency. A possibly effective command is never resent; its effect must be reconciled from
+command-specific status and stable history identity. If counter `N` remains ambiguous, the measured
+safe recovery window permits at most one distinct, predesigned `N + 1` recovery/cancellation command:
+it is strict-next if `N` was consumed and the measured `floor + 2` case if it was not. This is not a
+general retry path. If that recovery is also ambiguous, or the original therapy effect cannot be
+attributed, automated therapy remains blocked because `N + 2` could be an unqualified `floor + 3`.
+Reboot, re-key, counter exhaustion and storage-loss recovery continue to use their explicit session
+transitions; they are not reasons to scan or reuse counters.
 
 Neither scanning, decrement, read-counter substitution nor `max(seed, persisted)` may establish
-write readiness. No existing gated canary implementation is acceptance evidence.
+write readiness. Bare numeric errors 134/138/139 never select a retry/cancel/recovery action. The
+old normal-AAPS counter-canary/scan paths are inert status-only stubs and are not acceptance evidence;
+all Step 07 selector measurements use the dedicated artifact and explicit reconciliation procedure.
 
 ## Software evidence scope
 

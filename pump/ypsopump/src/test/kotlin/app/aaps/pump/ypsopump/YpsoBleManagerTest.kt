@@ -14,6 +14,7 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
+import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -67,6 +68,15 @@ class YpsoBleManagerTest {
             override fun commit(state: PumpSession.State) { saved = state }
         }).apply { provisionReadBaseline("12:34:56:78:9A:BC", key, 8, 0) }
         manager.setSharedKey("00".repeat(32))
+        val realCrypto = SessionCrypto()
+        whenever(sessionCrypto.encrypt(any(), any(), any(), any())).thenAnswer {
+            realCrypto.encrypt(
+                it.getArgument(0),
+                it.getArgument(1),
+                it.getArgument(2),
+                it.getArgument(3)
+            )
+        }
     }
 
     @Test
@@ -552,7 +562,8 @@ class YpsoBleManagerTest {
         controlVersion: ByteArray? = "1.3\u0000".toByteArray(),
         controlVersionInObservedService: Boolean = true,
         firmware: String = "V05.00.52",
-        serial: ByteArray? = null
+        serial: ByteArray? = null,
+        state: ConnectionState = ConnectionState.CONNECTED
     ): GattFixture {
         val gatt: BluetoothGatt = mock()
         val identityService: BluetoothGattService = mock()
@@ -574,6 +585,9 @@ class YpsoBleManagerTest {
         whenever(gatt.services).thenReturn(listOf(identityService, controlService, extReadService, wrongService))
         whenever(gatt.readCharacteristic(status)).thenReturn(readDispatched)
         whenever(gatt.readCharacteristic(extRead)).thenReturn(readDispatched)
+        whenever(gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
+        whenever(gatt.writeCharacteristic(any(), any(), any())).thenReturn(0)
+        whenever(gatt.writeDescriptor(any(), any())).thenReturn(0)
         serial?.let { value ->
             val uuid = UUID.fromString("00002a25-0000-1000-8000-00805f9b34fb")
             val serialCharacteristic: BluetoothGattCharacteristic = mock()
@@ -605,7 +619,7 @@ class YpsoBleManagerTest {
                 true
             }
         }
-        ownGatt(gatt, ConnectionState.CONNECTED)
+        ownGatt(gatt, state)
         return GattFixture(gatt, status, extRead)
     }
 
@@ -1007,9 +1021,10 @@ class YpsoBleManagerTest {
         gatt: BluetoothGatt,
         state: ConnectionState,
     ) {
+        val token = manager.session!!.open("12:34:56:78:9A:BC", key)
         manager.javaClass.getDeclaredField("sessionToken").apply {
             isAccessible = true
-            set(manager, manager.session!!.open("12:34:56:78:9A:BC", key))
+            set(manager, token)
         }
         manager.javaClass.getDeclaredField("bluetoothGatt").apply {
             isAccessible = true
@@ -1032,7 +1047,7 @@ class YpsoBleManagerTest {
     private data class GattFixture(
         val gatt: BluetoothGatt,
         val status: BluetoothGattCharacteristic,
-        val extRead: BluetoothGattCharacteristic,
+        val extRead: BluetoothGattCharacteristic
     )
 
     private companion object {
