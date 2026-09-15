@@ -214,6 +214,43 @@ class YpsoHistoryContractTest {
         )
     }
 
+    @Test
+    fun `transformed target rows classify to evidenced kinds without claiming command origin`() {
+        fun wire(hex: String): YpsoHistoryEntry =
+            checkNotNull(YpsoHistoryEntry.decodeWire(hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()))
+        assertEquals(
+            YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
+            YpsoHistoryClassifier.classify(wire("7856341202960000000000650000000000ac4d")).kind,
+        )
+        assertEquals(
+            YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
+            YpsoHistoryClassifier.classify(wire("78563412032c010f0000006600000000001989")).kind,
+        )
+        assertEquals(
+            YpsoHistoryKind.PRIMING_FINISHED,
+            YpsoHistoryClassifier.classify(wire("78563412046400002eef2c670000000000dbc6")).kind,
+        )
+        assertEquals(
+            YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED,
+            YpsoHistoryClassifier.classify(wire("785634120ac8001e000000690000000000808d")).kind,
+        )
+        assertEquals(
+            YpsoHistoryKind.REWIND_FINISHED,
+            YpsoHistoryClassifier.classify(wire("785634121091ff0000c9006b0000000000f3e8")).kind,
+        )
+        for (hex in listOf(
+            "7856341202960000000000650000000000ac4d",
+            "78563412032c010f0000006600000000001989",
+            "78563412046400002eef2c670000000000dbc6",
+            "785634120996000f000000680000000000d6e4",
+            "785634120ac8001e000000690000000000808d",
+            "785634120e0a00000000006a0000000000ce63",
+            "785634121091ff0000c9006b0000000000f3e8",
+        )) {
+            assertFalse(YpsoHistoryClassifier.classify(wire(hex)).commandOriginAttributable)
+        }
+    }
+
     private fun entry(
         sequence: Long,
         index: Int = 0,

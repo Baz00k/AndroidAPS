@@ -6,8 +6,10 @@
 
 Protected capture provenance: the consolidated private target capture set has SHA-256
 `e3d8ae3d842e32c087a7597b50133cd02d88faeb725d4c0747082ce70b644b82`. Raw rows and real keys are
-not published. `YpsoHistoryEntryTest` contains a shape-only transformed type-14 target fixture: its
-identifying time/sequence fields were replaced and its CRC recomputed with an independent script.
+not published. `YpsoHistoryEntryTest` contains shape-only transformed target fixtures for all seven
+supported kinds (types 2, 3, 4, 9, 10, 14, 16): identifying time/sequence fields were replaced and
+each CRC recomputed with an independent script. `YpsoHistoryContractTest` decodes those wires and
+asserts their evidenced classification without command origin.
 
 ## Strict wire schema
 
