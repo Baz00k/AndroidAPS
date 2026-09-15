@@ -29,7 +29,7 @@ data class InsulinSheetState(
     val bolusStep: Double,
     val decimals: Int,
     val quickIncrements: List<Double>,
-    val forceRecordOnly: Boolean,
+    val defaultRecordOnly: Boolean,
     val suspendedWarning: Boolean
 )
 
@@ -46,7 +46,7 @@ data class InsulinInputs(
 fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
     val colors = AapsTheme.colors
     var amount by remember { mutableStateOf(0.0) }
-    var recordOnly by remember { mutableStateOf(state.forceRecordOnly) }
+    var recordOnly by remember { mutableStateOf(state.defaultRecordOnly) }
     var timeOffset by remember { mutableStateOf(0.0) }
     var eatingSoon by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
@@ -61,7 +61,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.quickIncrements.forEach { inc -> Chip(fmtInc(inc), onClick = { amount = (amount + inc).coerceIn(0.0, state.maxInsulin) }) }
             }
-            ToggleRow("Record only", recordOnly, { if (!state.forceRecordOnly) recordOnly = it }, sub = "Log without delivering")
+            ToggleRow("Record only", recordOnly, { recordOnly = it }, sub = "Log without delivering")
             if (recordOnly)
                 NumberField("Time", timeOffset, { timeOffset = it }, step = 5.0, min = -12 * 60.0, max = 12 * 60.0, decimals = 0, unit = "min", modifier = Modifier.fillMaxWidth())
             ToggleRow("Start eating-soon temp target", eatingSoon, { eatingSoon = it })

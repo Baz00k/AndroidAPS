@@ -89,6 +89,12 @@ class InsulinDialog : DaggerDialogFragment() {
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
 
+    /**
+     * Entry-point intent carried via [UiInteraction.runInsulinDialog]: when true, the "Record only" toggle starts checked 
+     */
+    private val defaultRecordOnly: Boolean
+        get() = arguments?.getBoolean("defaultRecordOnly", false) ?: false
+
     override fun onStart() {
         super.onStart()
         dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -114,7 +120,7 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement2),
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
-            forceRecordOnly = config.AAPSCLIENT || suspended,
+            defaultRecordOnly = config.AAPSCLIENT || suspended || defaultRecordOnly,
             suspendedWarning = suspended
         )
         return ComposeView(requireContext()).apply {
