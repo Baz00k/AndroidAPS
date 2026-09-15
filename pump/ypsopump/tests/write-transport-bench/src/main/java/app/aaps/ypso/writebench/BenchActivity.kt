@@ -93,6 +93,8 @@ class BenchActivity : Activity() {
     private var runLeaseHeld = false
     private var handshakePhase = HandshakePhase.IDLE
     private var primeEventCount: Int? = null
+    private var primeEventCountBody: ByteArray? = null
+    private var primePumpReboot: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -847,6 +849,8 @@ class BenchActivity : Activity() {
                         return@fold
                     }
                     primeEventCount = count
+                    primeEventCountBody = body.copyOf()
+                    primePumpReboot = session.snapshot()?.reboot
                     handshakePhase = HandshakePhase.READY
                     readiness.readVerified(readinessOwner(owner))
                     when (runKind) {
@@ -930,92 +934,44 @@ class BenchActivity : Activity() {
         }
     }
 
-    /**
-     * Read-only evidence capture for the currently selected event row and both pump clock fields.
-     * Decrypted bytes are written only to the app-private capture file; ordinary evidence retains hashes.
-     */
+    /** Capture a stable logical-head cursor without selecting or mutating pump state. */
     private fun captureCurrentHistory(owner: BluetoothGatt) {
+        val eventCount = findUnique(owner, EVENT_COUNT_UUID)
         val eventValue = findUnique(owner, EVENT_VALUE_UUID)
         val systemDate = findUnique(owner, SYSTEM_DATE_UUID)
         val systemTime = findUnique(owner, SYSTEM_TIME_UUID)
-        if (eventValue == null || systemDate == null || systemTime == null) {
+        if (eventCount == null || eventValue == null || systemDate == null || systemTime == null) {
             fail(
                 "history/time characteristic missing or ambiguous",
                 YpsoWriteFailure.Layer.READINESS,
-                eventValue?.uuid ?: systemDate?.uuid ?: systemTime?.uuid,
+                eventCount?.uuid ?: eventValue?.uuid ?: systemDate?.uuid ?: systemTime?.uuid,
                 stage = "CAPTURE_CURRENT_HISTORY",
             )
             return
         }
-        val startedWall = System.currentTimeMillis()
-        val startedElapsed = android.os.SystemClock.elapsedRealtime()
+        readEncrypted(owner, eventValue) { headResult ->
+            headResult.fold(
+                onSuccess = { headBefore -> capturePumpDate(owner, eventCount, eventValue, systemDate, systemTime, headBefore) },
+                onFailure = { fail("event head before capture failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun capturePumpDate(
+        owner: BluetoothGatt,
+        eventCount: BluetoothGattCharacteristic,
+        eventValue: BluetoothGattCharacteristic,
+        systemDate: BluetoothGattCharacteristic,
+        systemTime: BluetoothGattCharacteristic,
+        headBefore: ByteArray,
+    ) {
         readEncrypted(owner, systemDate) { dateResult ->
             dateResult.fold(
                 onSuccess = { dateBody ->
                     readEncrypted(owner, systemTime) { timeResult ->
                         timeResult.fold(
                             onSuccess = { timeBody ->
-                                readEncrypted(owner, eventValue) { eventResult ->
-                                    eventResult.fold(
-                                        onSuccess = { eventBody ->
-                                            val entry = YpsoHistoryEntry.decodeWire(eventBody)
-                                            val capture =
-                                                JSONObject()
-                                                    .put("capture_id", writeId)
-                                                    .put("started_wall_time_ms", startedWall)
-                                                    .put("started_elapsed_ms", startedElapsed)
-                                                    .put("finished_wall_time_ms", System.currentTimeMillis())
-                                                    .put("finished_elapsed_ms", android.os.SystemClock.elapsedRealtime())
-                                                    .put("firmware", firmware ?: JSONObject.NULL)
-                                                    .put("supervisor_firmware", supervisorFirmware ?: JSONObject.NULL)
-                                                    .put("control_protocol", controlVersion ?: JSONObject.NULL)
-                                                    .put("event_count_before", primeEventCount ?: JSONObject.NULL)
-                                                    .put("system_date_hex", dateBody.toHex())
-                                                    .put("system_date_crc_valid", YpsoCrc.isValid(dateBody))
-                                                    .put("system_time_hex", timeBody.toHex())
-                                                    .put("system_time_crc_valid", YpsoCrc.isValid(timeBody))
-                                                    .put("event_wire_hex", eventBody.toHex())
-                                                    .put("event_wire_sha256", hash(eventBody))
-                                                    .put("event_crc_valid", YpsoCrc.isValid(eventBody))
-                                                    .put("event_strict_layout", entry != null)
-                                                    .put("factory_seconds", entry?.factorySeconds ?: JSONObject.NULL)
-                                                    .put("event_type", entry?.eventType ?: JSONObject.NULL)
-                                                    .put("value1", entry?.value1 ?: JSONObject.NULL)
-                                                    .put("value2", entry?.value2 ?: JSONObject.NULL)
-                                                    .put("value3", entry?.value3 ?: JSONObject.NULL)
-                                                    .put("sequence", entry?.sequence ?: JSONObject.NULL)
-                                                    .put("index", entry?.index ?: JSONObject.NULL)
-                                                    .putSessionSnapshot()
-                                            appendProtectedCapture(capture)
-                                            recorder.fact(
-                                                if (entry != null) "CurrentHistoryCaptureVerified" else "CurrentHistoryCaptureRejected",
-                                                JSONObject()
-                                                    .put("write_id", writeId)
-                                                    .put("event_count_before", primeEventCount ?: JSONObject.NULL)
-                                                    .put("event_body_size", eventBody.size)
-                                                    .put("event_body_sha256", hash(eventBody))
-                                                    .put("event_crc_valid", YpsoCrc.isValid(eventBody))
-                                                    .put("event_strict_layout", entry != null)
-                                                    .put("embedded_history_index", entry?.index ?: JSONObject.NULL)
-                                                    .put("system_date_size", dateBody.size)
-                                                    .put("system_date_sha256", hash(dateBody))
-                                                    .put("system_time_size", timeBody.size)
-                                                    .put("system_time_sha256", hash(timeBody))
-                                                    .putSessionSnapshot(),
-                                            )
-                                            close(owner)
-                                            report(
-                                                if (entry == null) {
-                                                    "CAPTURE:rejected; strict event layout/CRC not established"
-                                                } else {
-                                                    "CAPTURE:count=${primeEventCount};index=${entry.index};sequence=${entry.sequence};" +
-                                                        "factory_seconds=${entry.factorySeconds};type=${entry.eventType}"
-                                                },
-                                            )
-                                        },
-                                        onFailure = { fail("current event value capture failed: ${it.message}") },
-                                    )
-                                }
+                                captureCountAfter(owner, eventCount, eventValue, headBefore, dateBody, timeBody)
                             },
                             onFailure = { fail("system time capture failed: ${it.message}") },
                         )
@@ -1025,6 +981,114 @@ class BenchActivity : Activity() {
             )
         }
     }
+
+    private fun captureCountAfter(
+        owner: BluetoothGatt,
+        eventCount: BluetoothGattCharacteristic,
+        eventValue: BluetoothGattCharacteristic,
+        headBefore: ByteArray,
+        dateBody: ByteArray,
+        timeBody: ByteArray,
+    ) {
+        readEncrypted(owner, eventCount) { countResult ->
+            countResult.fold(
+                onSuccess = { countBody ->
+                    val countAfter = BenchHistoryCount.decode(countBody)
+                    if (countAfter == null) {
+                        fail("event count after capture is not an exact non-negative GLB")
+                        return@fold
+                    }
+                    readEncrypted(owner, eventValue) { headResult ->
+                        headResult.fold(
+                            onSuccess = { headAfter ->
+                                finishCurrentHistoryCapture(owner, headBefore, headAfter, countBody, dateBody, timeBody, countAfter)
+                            },
+                            onFailure = { fail("event head after capture failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("event count after capture failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun finishCurrentHistoryCapture(
+        owner: BluetoothGatt,
+        headBeforeBody: ByteArray,
+        headAfterBody: ByteArray,
+        countAfterBody: ByteArray,
+        dateBody: ByteArray,
+        timeBody: ByteArray,
+        countAfter: Int,
+    ) {
+        val headBefore = YpsoHistoryEntry.decodeWire(headBeforeBody)
+        val headAfter = YpsoHistoryEntry.decodeWire(headAfterBody)
+        val rebootAfter = session.snapshot()?.reboot
+        val countBeforeBody = primeEventCountBody
+        val stable =
+            countAfter > 0 && countBeforeBody != null && primeEventCount == countAfter && primePumpReboot == rebootAfter &&
+                headBefore?.index == 0 && headAfter?.index == 0 &&
+                headBefore.sequence == headAfter.sequence && headBefore.fingerprint() == headAfter.fingerprint()
+        appendProtectedCapture(
+            eventCaptureJson(headBeforeBody, headBefore)
+                .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
+                .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
+                .put("event_count_before_wire_hex", countBeforeBody?.toHex() ?: JSONObject.NULL)
+                .put("event_count_before_wire_sha256", countBeforeBody?.let(::hash) ?: JSONObject.NULL)
+                .put("event_count_after", countAfter)
+                .put("event_count_after_wire_hex", countAfterBody.toHex())
+                .put("event_count_after_wire_sha256", hash(countAfterBody))
+                .put("head_after_wire_hex", headAfterBody.toHex())
+                .put("head_after_wire_sha256", hash(headAfterBody))
+                .put("system_date_hex", dateBody.toHex())
+                .put("system_time_hex", timeBody.toHex())
+                .put("stable_head_cursor", stable)
+                .putSessionSnapshot(),
+        )
+        recorder.fact(
+            if (stable) "CurrentHistoryCaptureVerified" else "CurrentHistoryCaptureRejected",
+            eventCaptureJson(headBeforeBody, headBefore)
+                .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
+                .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
+                .put("event_count_before_body_size", countBeforeBody?.size ?: JSONObject.NULL)
+                .put("event_count_before_body_sha256", countBeforeBody?.let(::hash) ?: JSONObject.NULL)
+                .put("event_count_after", countAfter)
+                .put("event_count_after_body_size", countAfterBody.size)
+                .put("event_count_after_body_sha256", hash(countAfterBody))
+                .put("head_after_body_size", headAfterBody.size)
+                .put("head_after_body_sha256", hash(headAfterBody))
+                .put("system_date_size", dateBody.size)
+                .put("system_date_sha256", hash(dateBody))
+                .put("system_time_size", timeBody.size)
+                .put("system_time_sha256", hash(timeBody))
+                .put("stable_head_cursor", stable)
+                .putSessionSnapshot(),
+        )
+        close(owner)
+        report(
+            if (stable) {
+                "CAPTURE:count=$countAfter;index=0;sequence=${headBefore.sequence};factory_seconds=${headBefore.factorySeconds};type=${headBefore.eventType}"
+            } else {
+                "CAPTURE:rejected; count, reboot and exact logical head must remain stable"
+            },
+        )
+    }
+
+    private fun eventCaptureJson(body: ByteArray, entry: YpsoHistoryEntry?): JSONObject =
+        JSONObject()
+            .put("write_id", writeId)
+            .put("event_count_before", primeEventCount ?: JSONObject.NULL)
+            .put("event_body_size", body.size)
+            .put("event_body_sha256", hash(body))
+            .put("event_crc_valid", entry != null)
+            .put("event_strict_layout", entry != null)
+            .put("factory_seconds", entry?.factorySeconds ?: JSONObject.NULL)
+            .put("event_type", entry?.eventType ?: JSONObject.NULL)
+            .put("value1", entry?.value1 ?: JSONObject.NULL)
+            .put("value2", entry?.value2 ?: JSONObject.NULL)
+            .put("value3", entry?.value3 ?: JSONObject.NULL)
+            .put("sequence", entry?.sequence ?: JSONObject.NULL)
+            .put("embedded_history_index", entry?.index ?: JSONObject.NULL)
 
     private fun appendProtectedCapture(capture: JSONObject) {
         FileOutputStream(File(filesDir, "history-captures.jsonl"), true).use { out ->

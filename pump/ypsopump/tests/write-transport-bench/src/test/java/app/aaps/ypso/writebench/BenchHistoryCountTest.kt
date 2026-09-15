@@ -15,5 +15,6 @@ class BenchHistoryCountTest {
     fun `history count rejects malformed or non-exact GLB`() {
         assertNull(BenchHistoryCount.decode(YpsoGlb.encode(3000).copyOf(7)))
         assertNull(BenchHistoryCount.decode(YpsoGlb.encode(3000) + byteArrayOf(0, 0)))
+        assertNull(BenchHistoryCount.decode(YpsoGlb.encode(-1)))
     }
 }

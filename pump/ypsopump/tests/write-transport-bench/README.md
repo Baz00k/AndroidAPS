@@ -35,8 +35,9 @@ redacted pump identity and initial pump/controller/clock state.
 
 ## Capture the current history cursor and clock fields
 
-Before any Step 08 selector attempt, capture the authenticated event count, the currently selected
-event value and the pump's date/time fields without changing the selector:
+Before any Step 08 selector attempt, capture the authenticated event count, logical head and the
+pump's date/time fields without changing the selector. This action succeeds only when the selector
+was already at logical index 0:
 
 ```sh
 CAPTURE_ID="current-$(uuidgen)"
@@ -48,11 +49,13 @@ adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/history-capt
 sha256sum "history-captures-$CAPTURE_ID.jsonl"
 ```
 
-The action accepts the event count only as an exact GLB and the event value only as an exact 17-byte
-payload with a valid trailing CRC. It records the first four bytes as `factory_seconds`; it does not
-apply the reference parser's unverified year-2000 epoch. Pump date/time bytes are retained verbatim
-with wall/elapsed phone observations so their field layout and conversion can be established from
-paired target observations. `history-captures.jsonl` contains decrypted pump data and may identify
+The action accepts the event count only as an exact GLB and each event value only as an exact 17-byte
+payload with a valid trailing CRC. It rereads count and head and verifies unchanged authenticated
+reboot, count, sequence and immutable payload before labelling the result a stable cursor. A nonzero
+embedded index, movement or malformed framing is rejected. It records the first four bytes as
+`factory_seconds` and leaves time-zone resolution outside the wire decoder; paired target observations
+now establish pump-local wall-clock seconds since 2000-01-01. Pump date/time bytes are retained verbatim
+with wall/elapsed phone observations. `history-captures.jsonl` contains decrypted pump data and may identify
 the operator's treatment history. Keep it protected like a raw Bluetooth trace; do not publish it.
 
 ## Import the session; measured floors are optional validation evidence
@@ -126,8 +129,11 @@ from guessing or a shared database index:
 The count UUIDs are pinned to the `Alerts.COUNT` and `System.COUNT` mappings in
 `SandraK82/ypsopump-research` revision `de7e867241fafd2fb8061ceeecf42af2883b9eb4`; target reads still
 decide whether each mapping is usable. Missing, ambiguous, unauthenticated, or non-exact-GLB values fail
-closed. Select the most recent existing entry as `count - 1`, matching the pinned reference's zero-based
-history iteration; a zero count leaves that selector family blocked.
+closed. For alarm and system families only, select the validated final index as `count - 1`, matching
+their pinned reference iteration and target counts; a zero count leaves that selector family blocked.
+Event history is different on the measured target: count `3000` is capacity and logical index `0` is
+the moving newest head. Never use event `count - 1` as the newest cursor. See
+[`docs/history-identity-time.md`](../../docs/history-identity-time.md).
 
 ```sh
 adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \

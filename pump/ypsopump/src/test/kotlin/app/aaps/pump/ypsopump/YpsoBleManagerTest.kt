@@ -666,11 +666,10 @@ class YpsoBleManagerTest {
             manager.testBolusCanary(1.25, 731) { sent, _ -> outcomes.add(!sent) }
             manager.cancelBolus(731, false) { sent, _ -> outcomes.add(!sent) }
             manager.testTbrCanary(150, 30, 731) { sent, _ -> outcomes.add(!sent) }
-            manager.readLastFastBolusEvent { outcomes.add(it == null) }
             for (category in YpsoRemoteWrite.entries) {
                 assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
             }
-            assertEquals(List(6) { true }, outcomes)
+            assertEquals(List(5) { true }, outcomes)
             assertEquals(0L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
         }

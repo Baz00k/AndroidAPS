@@ -7,10 +7,9 @@ import java.nio.ByteOrder
 /**
  * Strictly decoded 17-byte YpsoPump history value.
  *
- * The first field is deliberately named [factorySeconds], not timestamp. The pinned research
- * reference says history uses factory time, but its separate source parser's year-2000 conversion
- * is not target evidence. Conversion to an instant therefore requires a qualified calibration and
- * is intentionally outside this wire decoder.
+ * The first field is deliberately named [factorySeconds], not timestamp. Paired target observations
+ * establish pump-local wall-clock seconds since 2000-01-01; conversion to an instant still requires
+ * an explicit time-zone resolution and is intentionally outside this wire decoder.
  */
 data class YpsoHistoryEntry(
     val factorySeconds: Long,
@@ -21,8 +20,34 @@ data class YpsoHistoryEntry(
     val sequence: Long,
     val index: Int,
 ) {
+    init {
+        require(factorySeconds in 0..0xffffffffL)
+        require(eventType in 0..0xff)
+        require(value1 in 0..0xffff)
+        require(value2 in 0..0xffff)
+        require(value3 in 0..0xffff)
+        require(sequence in 0..0xffffffffL)
+        require(index in 0..0xffff)
+    }
+
+    /** Stable event fingerprint. The moving ring index is deliberately excluded. */
+    fun fingerprint(): String = encodePayload().joinToString("") { "%02x".format(it) }
+
+    private fun encodePayload(): ByteArray =
+        ByteBuffer
+            .allocate(IMMUTABLE_PAYLOAD_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(factorySeconds.toInt())
+            .put(eventType.toByte())
+            .putShort(value1.toShort())
+            .putShort(value2.toShort())
+            .putShort(value3.toShort())
+            .putInt(sequence.toInt())
+            .array()
+
     companion object {
         const val PAYLOAD_SIZE = 17
+        private const val IMMUTABLE_PAYLOAD_SIZE = PAYLOAD_SIZE - 2
         const val WIRE_SIZE = PAYLOAD_SIZE + 2
 
         /** Decode one exact CRC-protected history value. Raw or trailing-byte fallbacks are rejected. */

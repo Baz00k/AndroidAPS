@@ -18,7 +18,6 @@ import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
-import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -743,7 +742,8 @@ class YpsoBleManager @Inject constructor(
     fun readEventCount(onResult: (Int?) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(null); return }
         readMultiframe(CHAR_EVENT_COUNT, onFailure = { onResult(null) }) { _, fc ->
-            val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.find(decryptOwned(fc)) }.getOrElse {
+            val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(decryptOwned(fc)) }
+                .getOrElse {
                 aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
             }
             aapsLogger.debug(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
@@ -763,11 +763,6 @@ class YpsoBleManager @Inject constructor(
             }.getOrNull()
             onResult(cmd)
         }
-    }
-
-    /** Status-only compatibility stub. History selection exists only in the separate bench app. */
-    fun readLastFastBolusEvent(maxScan: Int = 4, onResult: (YpsoHistoryEntry?) -> Unit) {
-        onResult(null)
     }
 
     /** Status-only compatibility stub; normal AAPS cannot deliver therapy. */
