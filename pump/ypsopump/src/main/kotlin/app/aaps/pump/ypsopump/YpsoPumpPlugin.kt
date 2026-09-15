@@ -113,11 +113,6 @@ class YpsoPumpPlugin @Inject constructor(
     override fun isHandshakeInProgress(): Boolean =
         pumpState.connectionState == ConnectionState.DISCOVERING || pumpState.connectionState == ConnectionState.READY
 
-    private var writeValidationDone = false
-    private var testBolusDone = false
-    private var testTbrDone = false
-    private var bolusStatusReadDone = false
-
     private fun resolvedMac(): String = bleManager.installedPumpMac()
     /** A legacy replay tombstone without protected credentials is intentionally not connectable. */
     private fun configured(): Boolean = provisioning.isConfigured() && resolvedMac().isNotEmpty()
@@ -169,64 +164,8 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // Normal operation always takes the status-only branch. The remaining disabled diagnostic
-        // branches call certain-not-sent compatibility stubs and cannot dispatch therapy or selectors.
-        when {
-            YpsoPumpConst.READ_ONLY_MODE                    -> readStatusBlocking()
-            // Legacy disabled compatibility branch; the manager returns certain-not-sent.
-            YpsoPumpConst.RUN_TEST_BOLUS && !testBolusDone -> {
-                testBolusDone = true
-                val latch = java.util.concurrent.CountDownLatch(1)
-                bleManager.testBolusCanary(YpsoPumpConst.TEST_BOLUS_UNITS, YpsoPumpConst.CAPTURED_WRITE_COUNTER) { _, r ->
-                    aapsLogger.info(LTag.PUMP, "YpsoPump TEST-BOLUS: $r"); latch.countDown()
-                }
-                latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
-            }
-            // Legacy disabled compatibility branch; the manager returns certain-not-sent.
-            YpsoPumpConst.RUN_TEST_TBR && !testTbrDone -> {
-                testTbrDone = true
-                val latch = java.util.concurrent.CountDownLatch(1)
-                bleManager.testTbrCanary(YpsoPumpConst.TEST_TBR_PERCENT, YpsoPumpConst.TEST_TBR_DURATION_MIN, YpsoPumpConst.CAPTURED_WRITE_COUNTER) { _, r ->
-                    aapsLogger.info(LTag.PUMP, "YpsoPump TEST-TBR: $r"); latch.countDown()
-                }
-                latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
-            }
-            // READ-ONLY diagnostic: event-count (single-frame key check) -> system status -> bolus
-            // status. No writes — safe mid-bolus. Per-frame logging shows exactly what the pump returns.
-            YpsoPumpConst.RUN_READ_BOLUS_STATUS && !bolusStatusReadDone -> {
-                bolusStatusReadDone = true
-                val latch = java.util.concurrent.CountDownLatch(1)
-                // STRICTLY chained — the pump's EXTREAD cursor is shared, so multi-frame reads must
-                // never overlap (concurrent reads interleave EXTREAD frames and corrupt both).
-                bleManager.readEventCount {
-                    bleManager.readStatus { success ->
-                        if (!success) {
-                            latch.countDown()
-                            return@readStatus
-                        }
-                        bleManager.readBolusStatus { st ->
-                            aapsLogger.info(
-                                LTag.PUMP,
-                                "YpsoPump BOLUS-STATUS: state=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U"
-                            )
-                            latch.countDown()
-                        }
-                    }
-                }
-                latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            }
-            // Legacy disabled compatibility branch; use the separate bench APK instead.
-            YpsoPumpConst.RUN_WRITE_VALIDATION && YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0 && !writeValidationDone -> {
-                writeValidationDone = true
-                val latch = java.util.concurrent.CountDownLatch(1)
-                bleManager.validateWriteTransport { r ->
-                    aapsLogger.info(LTag.PUMP, "YpsoPump WRITE-VALIDATION: $r"); latch.countDown()
-                }
-                latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            }
-
-            else                                            -> bleManager.readStatus { if (it) onStatusRead() }
-        }
+        // Normal operation exposes only the supported authenticated status-only path.
+        readStatusBlocking()
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime

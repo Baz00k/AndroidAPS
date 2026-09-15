@@ -7,10 +7,10 @@ and anchors. It must never be adapted to reset a real pump session.
 
 ## Build and install
 
-From the repository root, using JDK 21 and a configured Android SDK:
+From the repository root, using JDK 21 via `mise` and a configured Android SDK:
 
 ```sh
-./gradlew -p pump/ypsopump/tests/session-bench assembleDebug --max-workers=2
+mise x java@21 -- ./gradlew -p pump/ypsopump/tests/session-bench assembleDebug --max-workers=2
 adb -s "$SERIAL" install -r pump/ypsopump/tests/session-bench/build/outputs/apk/debug/YpsoSessionBench-debug.apk
 ```
 

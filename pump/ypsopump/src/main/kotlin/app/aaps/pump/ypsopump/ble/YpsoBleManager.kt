@@ -738,11 +738,6 @@ class YpsoBleManager @Inject constructor(
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    /** Normal AAPS has no selector-write diagnostic; use the separate non-therapy bench artifact. */
-    fun validateWriteTransport(onResult: (String) -> Unit) {
-        onResult("write transport unavailable in status-only AAPS; use the dedicated non-therapy bench artifact")
-    }
-
     /** Single-frame read (event count) — isolates KEY validity from multi-frame reliability. */
     fun readEventCount(onResult: (Int?) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(null); return }
