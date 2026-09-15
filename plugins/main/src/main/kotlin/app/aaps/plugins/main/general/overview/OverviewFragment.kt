@@ -352,8 +352,9 @@ class OverviewFragment : DaggerFragment() {
             onWizard = { bolusProtected { uiInteraction.runWizardDialog(childFragmentManager) } },
             // "Record only" insulin entry (log a delivered pump/pen bolus into IOB WITHOUT re-delivering).
             // InsulinDialog is the ONLY dialog with a user-toggleable "Record only" — the redesign dropped
-            // its old insulin_button, so surface it here in the "+" menu.
-            onInsulinRecord = { bolusProtected { uiInteraction.runInsulinDialog(childFragmentManager) } },
+            // its old insulin_button, so surface it here in the "+" menu. forceRecordOnly carries the
+            // entry-point intent so this label can NEVER open the sheet in delivery mode (#21).
+            onInsulinRecord = { bolusProtected { uiInteraction.runInsulinDialog(childFragmentManager, forceRecordOnly = true) } },
             onDismissAlert = { alert ->
                 context?.let { ctx ->
                     notificationStore.snapshot().firstOrNull { it.id == alert.id }?.let { notificationStore.dismiss(it, ctx) }

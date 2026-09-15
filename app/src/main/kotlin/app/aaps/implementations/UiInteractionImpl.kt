@@ -107,8 +107,9 @@ class UiInteractionImpl @Inject constructor(
             .show(fragmentManager, "TreatmentDialog")
     }
 
-    override fun runInsulinDialog(fragmentManager: FragmentManager) {
+    override fun runInsulinDialog(fragmentManager: FragmentManager, forceRecordOnly: Boolean) {
         InsulinDialog()
+            .also { it.arguments = Bundle().also { bundle -> bundle.putBoolean("forceRecordOnly", forceRecordOnly) } }
             .show(fragmentManager, "InsulinDialog")
     }
 

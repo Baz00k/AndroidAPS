@@ -89,6 +89,14 @@ class InsulinDialog : DaggerDialogFragment() {
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
 
+    /**
+     * Entry-point intent carried via [UiInteraction.runInsulinDialog]: when true, this dialog was
+     * opened from a "record only" entry point (e.g. the Home "+" menu) and MUST never deliver.
+     * [submit] re-asserts this regardless of the sheet state (defense in depth).
+     */
+    private val forceRecordOnly: Boolean
+        get() = arguments?.getBoolean("forceRecordOnly", false) ?: false
+
     override fun onStart() {
         super.onStart()
         dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -114,7 +122,7 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement2),
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
-            forceRecordOnly = config.AAPSCLIENT || suspended,
+            forceRecordOnly = config.AAPSCLIENT || suspended || forceRecordOnly,
             suspendedWarning = suspended
         )
         return ComposeView(requireContext()).apply {
@@ -135,7 +143,7 @@ class InsulinDialog : DaggerDialogFragment() {
         val actions: LinkedList<String?> = LinkedList()
         val units = profileFunction.getUnits()
         val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
-        val recordOnlyChecked = inputs.recordOnly
+        val recordOnlyChecked = inputs.recordOnly || forceRecordOnly
         val eatingSoonChecked = inputs.eatingSoon
 
         if (insulinAfterConstraints > 0) {
