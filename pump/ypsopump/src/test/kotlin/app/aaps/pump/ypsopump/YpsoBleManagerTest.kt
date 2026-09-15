@@ -661,7 +661,6 @@ class YpsoBleManagerTest {
             assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
 
             val outcomes = mutableListOf<Boolean>()
-            manager.validateWriteTransport { outcomes.add(true) }
             manager.deliverBolus(1.25, 0, 1.25) { outcomes.add(true) }
             manager.startBolus(1.25, 731) { outcome, _ -> outcomes.add(outcome == YpsoBleManager.BolusStart.NOT_SENT) }
             manager.testBolusCanary(1.25, 731) { sent, _ -> outcomes.add(!sent) }
@@ -671,7 +670,7 @@ class YpsoBleManagerTest {
             for (category in YpsoRemoteWrite.entries) {
                 assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
             }
-            assertEquals(List(7) { true }, outcomes)
+            assertEquals(List(6) { true }, outcomes)
             assertEquals(0L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
         }

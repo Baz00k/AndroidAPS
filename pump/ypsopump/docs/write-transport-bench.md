@@ -94,19 +94,17 @@ Android BLE manager tests use mocked framework objects and the standalone APK bu
 driver sources copied by its Gradle task:
 
 ```sh
-JAVA_HOME=/tmp/opencode/jdk21 PATH=/tmp/opencode/jdk21/bin:$PATH \
-  ./gradlew :pump:ypsopump:testFullDebugUnitTest
+mise x java@21 -- ./gradlew :pump:ypsopump:testFullDebugUnitTest
 
-JAVA_HOME=/tmp/opencode/jdk21 PATH=/tmp/opencode/jdk21/bin:$PATH \
-  ./gradlew :pump:ypsopump:lintFullDebug --max-workers=2
+mise x java@21 -- ./gradlew :pump:ypsopump:lintFullDebug --max-workers=2
 
-JAVA_HOME=/tmp/opencode/jdk21 PATH=/tmp/opencode/jdk21/bin:$PATH \
-  ./gradlew :app:assembleFullDebug --max-workers=2
+mise x java@21 -- ./gradlew :app:assembleFullDebug --max-workers=2
 
-JAVA_HOME=/tmp/opencode/jdk21 PATH=/tmp/opencode/jdk21/bin:$PATH \
-ANDROID_HOME=/home/jbuzuk/Android/Sdk \
-  ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
+mise x java@21 -- ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
 ```
+
+Requires JDK 21 via `mise` and an explicit Android SDK (`ANDROID_HOME`/`ANDROID_SDK_ROOT` or
+`local.properties`) where the Gradle build needs it.
 
 Publish the exact candidate commit, test count, lint/ownership/build results, APK byte size, APK
 SHA-256 and signer-certificate SHA-256 together in the issue evidence. Rebuild and republish all of

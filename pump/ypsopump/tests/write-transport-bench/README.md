@@ -24,8 +24,7 @@ measured reconciliation before another selector can run.
 ## Build and install
 
 ```sh
-JAVA_HOME=/path/to/jdk21 PATH="$JAVA_HOME/bin:$PATH" \
-  ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
+mise x java@21 -- ./gradlew -p pump/ypsopump/tests/write-transport-bench clean assembleDebug --max-workers=2
 adb -s "$SERIAL" install -r pump/ypsopump/tests/write-transport-bench/build/outputs/apk/debug/YpsoWriteTransportBench-debug.apk
 adb -s "$SERIAL" shell pm grant app.aaps.ypso.writebench android.permission.BLUETOOTH_CONNECT
 adb -s "$SERIAL" shell pm grant app.aaps.ypso.writebench android.permission.BLUETOOTH_SCAN

@@ -52,28 +52,10 @@ object YpsoPumpConst {
     // Legacy credential names are retained solely for one-time protected migration. Normal setup never
     // reads credentials directly from preferences, build constants, ADB or configuration exports.
 
-    // Legacy disabled constants retained for compatibility with status-only diagnostic call sites.
     // Normal AAPS has no selector, counter-probing, therapy or configuration write implementation.
-    const val CAPTURED_WRITE_COUNTER = -1L   // <0 = writes disabled (read-only)
-    const val CAPTURED_REBOOT_COUNTER = 8
+    // Write-transport validation exists only in the separate bench APK.
 
     // Setup safety gate. Keep true until read-only status/reconnect testing is complete and pump writes
-    // are explicitly approved; unlike the diagnostic flags below, this also blocks production dosing paths.
+    // are explicitly approved; this also blocks production dosing paths.
     const val READ_ONLY_MODE = true
-
-    // Legacy disabled flag. Write-transport validation exists only in the separate bench APK.
-    const val RUN_WRITE_VALIDATION = false
-
-    // -- READ-ONLY test flag: read SYSTEM_STATUS + BOLUS_STATUS once and log them (no writes). Safe to
-    // run while a bolus is being delivered — validates the bolus-status decoder against live data.
-    const val RUN_READ_BOLUS_STATUS = false
-
-    // Legacy disabled compatibility flag; normal AAPS therapy methods are certain-not-sent stubs.
-    const val RUN_TEST_BOLUS = false
-    const val TEST_BOLUS_UNITS = 0.1
-
-    // Legacy disabled compatibility flag; normal AAPS TBR methods are certain-not-sent stubs.
-    const val RUN_TEST_TBR = false
-    const val TEST_TBR_PERCENT = 0
-    const val TEST_TBR_DURATION_MIN = 15
 }
