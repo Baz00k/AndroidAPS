@@ -1319,6 +1319,7 @@ class BenchActivity : Activity() {
         result.fold(
             onSuccess = { body ->
                 val evidence = selectorEvidence(selected, body)
+                if (selected.name == "event") appendSelectedEventCapture(selected, body)
                 recorder.fact(
                     "SelectorReadBack",
                     JSONObject()
@@ -1356,6 +1357,34 @@ class BenchActivity : Activity() {
         if (!owner.readCharacteristic(characteristic)) {
             finishRead(Result.failure(IllegalStateException("read dispatch refused for ${characteristic.uuid}")))
         }
+    }
+
+    private fun appendSelectedEventCapture(selected: Selector, body: ByteArray) {
+        val entry = YpsoHistoryEntry.decodeWire(body)
+        appendProtectedCapture(
+            JSONObject()
+                .put("capture_id", writeId)
+                .put("capture_kind", "SELECTOR_READ_BACK")
+                .put("wall_time_ms", System.currentTimeMillis())
+                .put("elapsed_ms", android.os.SystemClock.elapsedRealtime())
+                .put("firmware", firmware ?: JSONObject.NULL)
+                .put("supervisor_firmware", supervisorFirmware ?: JSONObject.NULL)
+                .put("control_protocol", controlVersion ?: JSONObject.NULL)
+                .put("event_count_before", primeEventCount ?: JSONObject.NULL)
+                .put("selected_index", selected.value)
+                .put("event_wire_hex", body.toHex())
+                .put("event_wire_sha256", hash(body))
+                .put("event_crc_valid", YpsoCrc.isValid(body))
+                .put("event_strict_layout", entry != null)
+                .put("factory_seconds", entry?.factorySeconds ?: JSONObject.NULL)
+                .put("event_type", entry?.eventType ?: JSONObject.NULL)
+                .put("value1", entry?.value1 ?: JSONObject.NULL)
+                .put("value2", entry?.value2 ?: JSONObject.NULL)
+                .put("value3", entry?.value3 ?: JSONObject.NULL)
+                .put("sequence", entry?.sequence ?: JSONObject.NULL)
+                .put("index", entry?.index ?: JSONObject.NULL)
+                .putSessionSnapshot(),
+        )
     }
 
     @SuppressLint("MissingPermission")
