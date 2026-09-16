@@ -16,6 +16,7 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
 import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
 import app.aaps.pump.ypsopump.comm.YpsoCrc
+import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -563,7 +564,8 @@ class YpsoBleManagerTest {
         controlVersionInObservedService: Boolean = true,
         firmware: String = "V05.00.52",
         serial: ByteArray? = null,
-        state: ConnectionState = ConnectionState.CONNECTED
+        state: ConnectionState = ConnectionState.CONNECTED,
+        eventCountPresent: Boolean = false,
     ): GattFixture {
         val gatt: BluetoothGatt = mock()
         val identityService: BluetoothGattService = mock()
@@ -572,12 +574,18 @@ class YpsoBleManagerTest {
         val wrongService: BluetoothGattService = mock()
         val status: BluetoothGattCharacteristic = mock()
         val extRead: BluetoothGattCharacteristic = mock()
+        val eventCount: BluetoothGattCharacteristic? = if (eventCountPresent) mock() else null
         whenever(identityService.uuid).thenReturn(UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000"))
         whenever(controlService.uuid).thenReturn(SERVICE_CONTROL)
         whenever(extReadService.uuid).thenReturn(SERVICE_EXTREAD)
         whenever(wrongService.uuid).thenReturn(UUID.fromString("00001800-0000-1000-8000-00805f9b34fb"))
         whenever(status.uuid).thenReturn(CHAR_STATUS)
         whenever(extRead.uuid).thenReturn(CHAR_EXTREAD)
+        eventCount?.let {
+            whenever(it.uuid).thenReturn(CHAR_EVENT_COUNT)
+            whenever(identityService.getCharacteristic(CHAR_EVENT_COUNT)).thenReturn(it)
+            whenever(gatt.readCharacteristic(it)).thenReturn(readDispatched)
+        }
         whenever(controlService.getCharacteristic(CHAR_STATUS)).thenReturn(status)
         whenever(extReadService.getCharacteristic(CHAR_EXTREAD)).thenReturn(extRead)
         whenever(gatt.getService(SERVICE_CONTROL)).thenReturn(controlService)
@@ -620,7 +628,7 @@ class YpsoBleManagerTest {
             }
         }
         ownGatt(gatt, state)
-        return GattFixture(gatt, status, extRead)
+        return GattFixture(gatt, status, extRead, eventCount)
     }
 
     @Suppress("DEPRECATION")
@@ -666,11 +674,10 @@ class YpsoBleManagerTest {
             manager.testBolusCanary(1.25, 731) { sent, _ -> outcomes.add(!sent) }
             manager.cancelBolus(731, false) { sent, _ -> outcomes.add(!sent) }
             manager.testTbrCanary(150, 30, 731) { sent, _ -> outcomes.add(!sent) }
-            manager.readLastFastBolusEvent { outcomes.add(it == null) }
             for (category in YpsoRemoteWrite.entries) {
                 assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
             }
-            assertEquals(List(6) { true }, outcomes)
+            assertEquals(List(5) { true }, outcomes)
             assertEquals(0L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
         }
@@ -851,6 +858,23 @@ class YpsoBleManagerTest {
         manager.readStatus(statusResults::add)
         manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
         assertEquals(listOf(true), statusResults)
+    }
+
+    @Test
+    fun `event count diagnostic rejects an exact negative GLB`() {
+        val fixture = connectedGatt(eventCountPresent = true)
+        whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(YpsoGlb.encode(-1), 8, 1))
+        val results = mutableListOf<Int?>()
+
+        manager.readEventCount(results::add)
+        manager.gattCallback.onCharacteristicRead(
+            fixture.gatt,
+            checkNotNull(fixture.eventCount),
+            byteArrayOf(0x11, 0x55),
+            BluetoothGatt.GATT_SUCCESS,
+        )
+
+        assertEquals(listOf<Int?>(null), results)
     }
 
     @Suppress("DEPRECATION")
@@ -1046,12 +1070,14 @@ class YpsoBleManagerTest {
     private data class GattFixture(
         val gatt: BluetoothGatt,
         val status: BluetoothGattCharacteristic,
-        val extRead: BluetoothGattCharacteristic
+        val extRead: BluetoothGattCharacteristic,
+        val eventCount: BluetoothGattCharacteristic? = null,
     )
 
     private companion object {
         val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
         val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
+        val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
         val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
         val SERVICE_CONTROL: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         val SERVICE_EXTREAD: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")

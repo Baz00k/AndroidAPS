@@ -22,6 +22,10 @@ internal object YpsoGlb {
         return value.takeIf { buffer.int == value.inv() }
     }
 
+    /**
+     * Scan for an embedded GLB value. Production reads must use [decodeExact]; this exists for
+     * bench evidence decoding, where a CRC-framed GLB can appear inside a larger captured payload.
+     */
     fun find(data: ByteArray): Int? {
         if (data.size < SIZE) return null
         for (start in 0..data.size - SIZE) {

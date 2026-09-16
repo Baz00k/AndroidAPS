@@ -21,15 +21,11 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
-import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.core.data.time.T
-import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
-import app.aaps.pump.ypsopump.ble.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
@@ -42,8 +38,6 @@ import androidx.preference.PreferenceScreen
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * AndroidAPS pump plugin for the Ypsomed YpsoPump.
@@ -61,7 +55,6 @@ class YpsoPumpPlugin @Inject constructor(
     private val pumpState: YpsoPumpState,
     private val bleManager: YpsoBleManager,
     private val pumpSync: PumpSync,
-    private val dateUtil: DateUtil,
     private val rxBus: RxBus,
     private val profileFunction: ProfileFunction,
     private val uiInteraction: UiInteraction,
@@ -179,21 +172,6 @@ class YpsoPumpPlugin @Inject constructor(
     // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
     override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
 
-    // ---- legacy dosing interface (blocked by READ_ONLY_MODE; BLE mutation methods are stubs) ----
-
-    /** Block the queue-worker thread until the pump is connected, connecting if needed. */
-    private fun ensureConnected(timeoutMs: Long = 40_000): Boolean {
-        if (bleManager.isConnected) return true
-        if (!configured()) return false
-        seedAndConnect()
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!bleManager.isConnected && System.currentTimeMillis() < deadline) Thread.sleep(250)
-        return bleManager.isConnected
-    }
-
-    /** YpsoPump TBR duration must be a 15-minute step (confirmed on-pump: 3-min was rejected 0x82). */
-    private fun round15(minutes: Int): Int = (Math.round(minutes / 15.0).toInt() * 15).coerceAtLeast(15)
-
     private fun fail(stringRes: Int, vararg args: Any): PumpEnactResult =
         pumpEnactResultProvider.get().success(false).enacted(false).comment(rh.gs(stringRes, *args))
 
@@ -211,203 +189,16 @@ class YpsoPumpPlugin @Inject constructor(
     // KeepAlive does not repeatedly queue a no-op or, in status-only mode, a blocked profile write.
     override fun isThisProfileSet(profile: Profile): Boolean = true
 
-    // Bolus delivery is CONFIRM-BY-READ: we never trust the write-accept callback alone (a dropped BLE ack
-    // can mean the pump ALREADY delivered — the 2026-07-05 IOB-desync incident). After the START write we
-    // poll the pump's own bolus status to the true delivered amount, drive the progress dialog from it, and
-    // record THAT. See report + [[ypsopump-bolus-hang]].
-    private val bolusConfirmTimeoutMs = 5 * 60 * 1000L
-    private val bolusPollFastMs = 500L
-    private val bolusPollSlowMs = 2000L
-    private val bolusStepU = 0.05
-    @Volatile private var bolusCancelRequested = false
+    // History identity and command origin are not yet wired into production therapy. Do not retain dormant
+    // amount/recent-event or receipt-time fallbacks: later dosing tickets must snapshot a stable cursor before
+    // dispatch and reconcile a uniquely attributable newer history event.
+    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult =
+        fail(R.string.ypsopump_read_only_bolus_blocked)
 
-    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
-        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
-        val requested = detailedBolusInfo.insulin
-        if (requested <= 0.0) return fail(R.string.ypsopump_bolus_non_positive)
-        if (!ensureConnected()) return fail(R.string.ypsopump_not_connected)
-        bolusCancelRequested = false
+    override fun stopBolusDelivering() = Unit
 
-        // PRE-FLIGHT on a FRESH read, not on whatever the last status happened to say. A pump that is
-        // stopped (user Stop, occlusion, or an empty-reservoir auto-stop) accepts nothing, so without
-        // this the bolus used to sit at 0% for the full five-minute confirm window before failing.
-        // Refusing here costs one status read and turns that into an immediate, explainable failure.
-        if (!readStatusBlocking()) return fail(R.string.ypsopump_fresh_status_unavailable)
-        if (pumpState.isSuspended) return fail(R.string.ypsopump_stopped)
-        if (reservoirEmpty()) return fail(R.string.ypsopump_reservoir_empty)
-
-        // Baseline (prior-bolus 'injected' the pump still reports) — logged so validation can confirm whether
-        // the pump RESETS deliveredUnits per bolus. Attribution only trusts values AFTER status goes
-        // 'delivering', so a lingering prior reading alone can never be mistaken for this dose.
-        val baseInjected = readBolusStatusBlocking()?.deliveredUnits ?: 0.0
-
-        // 1) START through the legacy manager API, which is a certain-not-sent stub in this artifact. The
-        //    unreachable confirm-by-read code remains quarantined behind the compile-time read-only gate.
-        var startOutcome = YpsoBleManager.BolusStart.NOT_SENT; var startMsg = "no response from pump"
-        val startLatch = java.util.concurrent.CountDownLatch(1)
-        bleManager.startBolus(requested, bleManager.writeCounter) { o, m -> startOutcome = o; startMsg = m; startLatch.countDown() }
-        if (!startLatch.await(2, java.util.concurrent.TimeUnit.MINUTES)) {
-            // No callback at all — the write may still have landed. Treat as uncertain, never as "no bolus".
-            startOutcome = YpsoBleManager.BolusStart.UNCERTAIN
-            startMsg = "no start response within 2 min — confirming against the pump"
-        }
-        val started = startOutcome == YpsoBleManager.BolusStart.SENT
-        if (startOutcome == YpsoBleManager.BolusStart.NOT_SENT) {
-            // Certain no-op: the bolus char was never written, so there is nothing to confirm and nothing
-            // to record. Return NOW rather than polling a pump that isn't delivering.
-            rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
-            aapsLogger.warn(LTag.PUMP, "YpsoPump bolus NOT SENT: $startMsg")
-            return if (pumpState.isSuspended) fail(R.string.ypsopump_stopped) else fail(R.string.ypsopump_bolus_not_sent)
-        }
-
-        // 2) CONFIRM-BY-READ: poll the pump's status until delivery finishes (or timeout / cancel / disconnect),
-        //    tracking the actual delivered units and driving the progress bar (fixes the stuck-at-0%).
-        var sawDelivering = false
-        var delivered = 0.0
-        var total = requested
-        var pollMs = bolusPollFastMs
-        val deadline = dateUtil.now() + bolusConfirmTimeoutMs
-        while (dateUtil.now() < deadline) {
-            val st = readBolusStatusBlocking()
-            if (st != null) {
-                // A 'completed' frame is also proof the pump delivered — capture it so a bolus that races
-                // 1→4 between polls still counts as seen (status decode fixed in BolusCommand.isDelivering).
-                if (st.isDelivering || st.isCompleted) sawDelivering = true
-                if (sawDelivering) delivered = max(delivered, st.deliveredUnits)
-                if (st.totalProgrammedUnits > 0.0) total = st.totalProgrammedUnits
-                val pct = if (total > 0.0) ((delivered / total) * 100).toInt().coerceIn(0, 99) else 0
-                rxBus.send(EventOverviewBolusProgress(rh, percent = pct, id = detailedBolusInfo.id))
-                aapsLogger.info(LTag.PUMP, "YpsoPump bolus poll: status=${st.bolusStatusCode} delivering=${st.isDelivering} injected=${st.deliveredUnits} total=${st.totalProgrammedUnits} | base=$baseInjected saw=$sawDelivering tracked=$delivered req=$requested")
-                if (sawDelivering && !st.isDelivering) break                 // our bolus completed
-            } else if (sawDelivering && !bleManager.isConnected) {
-                aapsLogger.warn(LTag.PUMP, "YpsoPump bolus: lost connection mid-delivery; recording confirmed $delivered U"); break
-            }
-            if (bolusCancelRequested) {
-                val cl = java.util.concurrent.CountDownLatch(1)
-                bleManager.cancelBolus(bleManager.writeCounter, extended = false) { _, cm -> aapsLogger.info(LTag.PUMP, "YpsoPump bolus cancel: $cm"); cl.countDown() }
-                cl.await(30, java.util.concurrent.TimeUnit.SECONDS)
-                readBolusStatusBlocking()?.let { if (it.isDelivering || sawDelivering) delivered = max(delivered, it.deliveredUnits) }
-                aapsLogger.info(LTag.PUMP, "YpsoPump bolus CANCELLED by user; delivered so far=$delivered")
-                break
-            }
-            Thread.sleep(pollMs)
-            pollMs = min(pollMs * 3 / 2, bolusPollSlowMs)                    // ramp 0.5s -> 2s
-        }
-        rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
-
-        // 2b) RECONCILE against the pump's OWN bolus history when the live poll did NOT confirm the full
-        //     requested dose. A dropped write-ack / BLE blip can leave `delivered` short of (or at zero,
-        //     while) what the pump actually pushed — the exact failure that let a 12.4U bolus record as
-        //     nothing. The pump logs every fast bolus (completed/cancelled) with the delivered units; that
-        //     is ground truth. ADDITIVE ONLY: we adopt the pump's figure solely when it exceeds what we saw
-        //     and is plausibly this bolus (<= requested + one step). A failed/implausible read changes
-        //     nothing, so this can only rescue an under-count, never invent or reduce a dose.
-        if (delivered + bolusStepU < requested) {
-            val hist = readLastFastBolusEventBlocking()
-            if (hist != null && hist.v1Units > delivered && hist.v1Units <= requested + bolusStepU) {
-                aapsLogger.warn(
-                    LTag.PUMP,
-                    "YpsoPump bolus reconcile: pump history type=${hist.eventType} delivered=${hist.v1Units}U (poll saw $delivered U of $requested U) — recording history; dropped-confirm rescued"
-                )
-                delivered = hist.v1Units
-                sawDelivering = true
-            } else {
-                aapsLogger.info(LTag.PUMP, "YpsoPump bolus reconcile: no usable history (hist=${hist?.eventType}/${hist?.v1Units}); keeping polled $delivered U")
-            }
-        }
-
-        // 2c) Nothing confirmed? Then find out WHY before deciding what to record. The pre-flight said the
-        //     pump was running with insulin in it, and only a fresh read can tell us whether it stopped or
-        //     ran dry during the delivery — which is exactly the case where banking the requested dose
-        //     would invent IOB. This also raises the empty-reservoir alarm at the moment it happens.
-        if (!(sawDelivering && delivered > 0.0)) readStatusBlocking()
-
-        // 3) RECORD the pump's TRUTH — never gated on the droppable start ack.
-        return when {
-            sawDelivering && delivered > 0.0 -> {                            // confirmed (possibly partial)
-                syncBolus(detailedBolusInfo, delivered)
-                val partial = delivered + bolusStepU < requested
-                pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(delivered)
-                    .comment(
-                        if (partial) rh.gs(R.string.ypsopump_bolus_partially_delivered, delivered, requested)
-                        else rh.gs(R.string.ypsopump_bolus_delivered, delivered)
-                    )
-            }
-            // The pump told us it is not delivering. Recording the request here is what manufactured
-            // phantom IOB the day the reservoir ran dry: every "unconfirmed" dose was banked as real
-            // while nothing went in, and the loop then under-dosed against an IOB that did not exist.
-            // A stopped or empty pump is not an ambiguous read — it is a known no-delivery state.
-            pumpState.isSuspended || reservoirEmpty() -> {
-                aapsLogger.error(LTag.PUMP, "YpsoPump bolus: pump ${if (pumpState.isSuspended) "stopped" else "reservoir empty"} and nothing confirmed — recording NOTHING (start=$startMsg)")
-                notifyNoDelivery()
-                fail(if (pumpState.isSuspended) R.string.ypsopump_stopped else R.string.ypsopump_reservoir_empty)
-            }
-            started                          -> {                            // ack OK but read never confirmed:
-                // FAIL SAFE for the loop — record the requested dose so IOB is if anything OVER-stated (loop
-                // then UNDER-doses) rather than the dangerous under-count that over-doses. Warn to verify.
-                syncBolus(detailedBolusInfo, requested)
-                uiInteraction.addNotification(
-                    Notification.PUMP_SYNC_ERROR,
-                    rh.gs(R.string.ypsopump_bolus_unconfirmed_notification, requested),
-                    Notification.URGENT
-                )
-                pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(requested)
-                    .comment(rh.gs(R.string.ypsopump_bolus_unconfirmed_result, requested))
-            }
-            else                             -> fail(R.string.ypsopump_bolus_not_delivered)
-        }
-    }
-
-    private fun syncBolus(info: DetailedBolusInfo, amount: Double) {
-        // Anchor the record to delivery-CONFIRMATION time (now), NOT the bolus start (info.timestamp). A big
-        // bolus takes minutes to deliver, so by the time confirm-by-read finishes, info.timestamp can already
-        // be older than AAPS's 1-minute freshness gate (see YpsoBleManager.connect serial seed) -> the sync
-        // gets silently rejected and the delivered dose is lost. Recording at confirmation time is at most a
-        // couple of minutes later than the true start (negligible for IOB) and can NEVER be dropped as stale.
-        pumpSync.syncBolusWithPumpId(
-            timestamp = dateUtil.now(), amount = amount, type = info.bolusType,
-            pumpId = dateUtil.now(), pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
-        )
-    }
-
-    /** One bolus-status read, blocking the caller (queue-worker) thread until the BLE callback returns. */
-    private fun readBolusStatusBlocking(timeoutMs: Long = 8000): app.aaps.pump.ypsopump.comm.commands.BolusCommand? {
-        var out: app.aaps.pump.ypsopump.comm.commands.BolusCommand? = null
-        val l = java.util.concurrent.CountDownLatch(1)
-        bleManager.readBolusStatus { st -> out = st; l.countDown() }
-        l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        return out
-    }
-
-    /**
-     * Blocking reconciliation read of the pump's last fast-bolus history event (multi-step: count read +
-     * index write + value read — hence a longer timeout than a single status read). Null on any failure.
-     */
-    private fun readLastFastBolusEventBlocking(timeoutMs: Long = 15000): YpsoHistoryEntry? {
-        var out: YpsoHistoryEntry? = null
-        val l = java.util.concurrent.CountDownLatch(1)
-        bleManager.readLastFastBolusEvent { e -> out = e; l.countDown() }
-        l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        return out
-    }
-
-    // Real cancel now that confirm-by-read tracks the partial: the Stop button flags a cancel; the poll loop
-    // sends the pump's all-zero START_STOP cancel and records what actually went in.
-    override fun stopBolusDelivering() { bolusCancelRequested = true }
-
-    // --- pump-side suspend reflection ---
-    // A loop/app suspend already zeroes basal via a recorded 0% TBR. But a suspend initiated ON THE PUMP
-    // (the pump's "Stop", or an occlusion/empty auto-suspend) is only learned from a status read: the BLE
-    // layer sets pumpState.isSuspended, but nothing tells AAPS the basal stopped — so the graph keeps drawing
-    // and IOB keeps ACCRUING the profile basal that isn't being delivered (over-stated IOB). Mirror the pump's
-    // real state as a 0-rate PUMP_SUSPEND temp basal (Medtrum/Combo pattern) so the graph + IOB read 0 while
-    // stopped. Rolling window refreshed each status read; ended on resume. Called from readStatus's onDone.
-    private val suspendTbrWindowMin = 30L
-    private var suspendTbrStartMs = 0L
-
-    /** Everything that must happen after a status read lands: mirror a pump-side stop, then check supplies. */
+    /** Everything that must happen after a status read lands in the status-only artifact. */
     private fun onStatusRead() {
-        if (!YpsoPumpConst.READ_ONLY_MODE) reconcileSuspendTbr()
         checkReservoir()
     }
 
@@ -488,111 +279,14 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    /** Raise the alarm for a dose the pump could not take, so a refusal is never silent. */
-    private fun notifyNoDelivery() {
-        if (reservoirEmpty()) checkReservoir()
-        else uiInteraction.addNotificationWithSound(
-            Notification.PUMP_SUSPENDED, rh.gs(R.string.ypsopump_stopped), Notification.URGENT, app.aaps.core.ui.R.raw.boluserror
-        )
-    }
+    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =
+        fail(R.string.ypsopump_read_only_tbr_blocked)
 
-    private fun reconcileSuspendTbr() {
-        val now = dateUtil.now()
-        // An EMPTY reservoir is a not-delivering state exactly like a stop, whether or not the pump has
-        // already flagged itself stopped. Without this the basal IOB kept accruing against insulin that
-        // was never pushed — half of the IOB error after the cartridge ran dry.
-        val notDelivering = pumpState.isSuspended || reservoirEmpty()
-        when {
-            notDelivering && suspendTbrStartMs == 0L -> {                 // pump just stopped
-                suspendTbrStartMs = now
-                pumpSync.syncTemporaryBasalWithPumpId(
-                    timestamp = now, rate = 0.0, duration = T.mins(suspendTbrWindowMin).msecs(),
-                    isAbsolute = true, type = PumpSync.TemporaryBasalType.PUMP_SUSPEND,
-                    pumpId = now, pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
-                )
-                aapsLogger.info(LTag.PUMP, "YpsoPump: pump suspended -> recorded PUMP_SUSPEND 0-TBR")
-            }
-            notDelivering && suspendTbrStartMs != 0L -> {                 // still stopped: extend window
-                pumpSync.syncTemporaryBasalWithPumpId(
-                    timestamp = suspendTbrStartMs, rate = 0.0,
-                    duration = (now - suspendTbrStartMs) + T.mins(suspendTbrWindowMin).msecs(),
-                    isAbsolute = true, type = PumpSync.TemporaryBasalType.PUMP_SUSPEND,
-                    pumpId = suspendTbrStartMs, pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
-                )
-            }
-            !notDelivering && suspendTbrStartMs != 0L -> {                // resumed: end it
-                pumpSync.syncStopTemporaryBasalWithPumpId(now, now, PumpType.YPSOPUMP, serialNumber())
-                aapsLogger.info(LTag.PUMP, "YpsoPump: pump resumed -> ended PUMP_SUSPEND 0-TBR")
-                suspendTbrStartMs = 0L
-            }
-        }
-    }
+    override fun setTempBasalAbsolute(absoluteRate: Double, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =
+        fail(R.string.ypsopump_read_only_tbr_blocked)
 
-    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
-        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
-        val dur = round15(durationInMinutes)
-        if (!ensureConnected()) return fail(R.string.ypsopump_not_connected)
-        if (!readStatusBlocking()) return fail(R.string.ypsopump_fresh_status_unavailable)
-        // A stopped or empty pump delivers nothing, and recording a TBR against it would overwrite the
-        // 0-rate PUMP_SUSPEND window [reconcileSuspendTbr] keeps — re-inflating IOB with insulin that
-        // never left the cartridge. Refuse instead; the loop switches to SUSPENDED_BY_PUMP on its own.
-        if (pumpState.isSuspended) return fail(R.string.ypsopump_stopped)
-        if (reservoirEmpty()) return fail(R.string.ypsopump_reservoir_empty)
-        var accepted = false; var msg = ""
-        val latch = java.util.concurrent.CountDownLatch(1)
-        bleManager.testTbrCanary(percent, dur, bleManager.writeCounter) { ok, m -> accepted = ok; msg = m; latch.countDown() }
-        latch.await(3, java.util.concurrent.TimeUnit.MINUTES)
-        if (!accepted) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump TBR failed: $msg")
-            return fail(R.string.ypsopump_tbr_failed)
-        }
-        pumpSync.syncTemporaryBasalWithPumpId(
-            timestamp = dateUtil.now(),
-            rate = percent.toDouble(),
-            duration = T.mins(dur.toLong()).msecs(),
-            isAbsolute = false,
-            type = tbrType,
-            pumpId = dateUtil.now(),
-            pumpType = PumpType.YPSOPUMP,
-            pumpSerial = serialNumber()
-        )
-        val result = pumpEnactResultProvider.get().success(true).enacted(true).comment(rh.gs(R.string.ypsopump_tbr_result, percent, dur))
-        result.isPercent = true; result.percent = percent; result.duration = dur
-        return result
-    }
-
-    override fun setTempBasalAbsolute(absoluteRate: Double, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
-        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
-        val base = profile.getBasal()
-        val percent = if (base > 0) Math.round(absoluteRate / base * 100.0).toInt() else 100
-        return setTempBasalPercent(percent, durationInMinutes, profile, enforceNew, tbrType)
-    }
-
-    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult {
-        if (YpsoPumpConst.READ_ONLY_MODE) {
-            return fail(R.string.ypsopump_read_only_tbr_cancel_blocked)
-        }
-        // No dedicated stop-TBR command RE'd yet; setting 100% for a 15-min step overrides any active
-        // override back to the normal (pump-programmed) basal.
-        if (!ensureConnected()) return fail(R.string.ypsopump_not_connected)
-        var accepted = false; var msg = ""
-        val latch = java.util.concurrent.CountDownLatch(1)
-        bleManager.testTbrCanary(100, 15, bleManager.writeCounter) { ok, m -> accepted = ok; msg = m; latch.countDown() }
-        latch.await(3, java.util.concurrent.TimeUnit.MINUTES)
-        if (!accepted) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump TBR cancellation failed: $msg")
-            return fail(R.string.ypsopump_tbr_cancel_failed)
-        }
-        pumpSync.syncStopTemporaryBasalWithPumpId(
-            timestamp = dateUtil.now(),
-            endPumpId = dateUtil.now(),
-            pumpType = PumpType.YPSOPUMP,
-            pumpSerial = serialNumber()
-        )
-        val result = pumpEnactResultProvider.get().success(true).enacted(true).comment(rh.gs(R.string.ypsopump_tbr_cancel_result))
-        result.isTempCancel = true
-        return result
-    }
+    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult =
+        fail(R.string.ypsopump_read_only_tbr_cancel_blocked)
 
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult = notImplemented()
     override fun cancelExtendedBolus(): PumpEnactResult = notImplemented()

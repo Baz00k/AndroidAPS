@@ -2,6 +2,7 @@ package app.aaps.ypso.writebench
 
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoGlb
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 
 internal data class BenchSelectorEvidence(
     val glb: Int?,
@@ -13,15 +14,12 @@ internal data class BenchSelectorEvidence(
 internal object BenchSelectorEvidenceDecoder {
 
     fun history(body: ByteArray, selectedIndex: Int? = null): BenchSelectorEvidence {
-        val payload = YpsoCrc.validatedPayload(body)
-        val embedded = payload?.takeIf { it.size >= 17 }?.let {
-            (it[15].toInt() and 0xff) or ((it[16].toInt() and 0xff) shl 8)
-        }
+        val entry = YpsoHistoryEntry.decodeWire(body)
         return BenchSelectorEvidence(
-            glb = YpsoGlb.find(body),
-            crcValid = payload != null,
-            embeddedHistoryIndex = embedded,
-            semanticMatch = selectedIndex?.let { payload != null && embedded == it },
+            glb = null,
+            crcValid = entry != null,
+            embeddedHistoryIndex = entry?.index,
+            semanticMatch = selectedIndex?.let { entry?.index == it },
         )
     }
 
