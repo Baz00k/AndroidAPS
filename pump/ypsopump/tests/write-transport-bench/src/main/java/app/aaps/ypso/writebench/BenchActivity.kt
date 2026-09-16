@@ -940,10 +940,9 @@ class BenchActivity : Activity() {
     }
 
     /**
-     * Read the event head twice around the pump date/time and count reads, without writes.
-     * This is protected wire evidence only: target observation shows reads advance a persistent
-     * selector, so the two head reads prove a stable logical head only if both decode as index 0
-     * with identical sequence and identity fingerprint.
+     * Read two consecutive event rows around pump date/time and count reads, without writes.
+     * Target observation shows each value read advances a persistent selector. The rows are
+     * therefore protected observations only and never establish a stable logical-head cursor.
      */
     private fun captureCurrentHistory(owner: BluetoothGatt) {
         val eventCount = findUnique(owner, EVENT_COUNT_UUID)
@@ -1031,14 +1030,17 @@ class BenchActivity : Activity() {
         timeBody: ByteArray,
         countAfter: Int,
     ) {
-        val headBefore = YpsoHistoryEntry.decodeWire(headBeforeBody)
-        val headAfter = YpsoHistoryEntry.decodeWire(headAfterBody)
         val rebootAfter = session.snapshot()?.reboot
         val countBeforeBody = primeEventCountBody
-        val stable =
-            countAfter > 0 && countBeforeBody != null && primeEventCount == countAfter && primePumpReboot == rebootAfter &&
-                headBefore?.index == 0 && headAfter?.index == 0 &&
-                headBefore.sequence == headAfter.sequence && headBefore.fingerprint() == headAfter.fingerprint()
+        val observation = BenchCurrentHistoryObservationDecoder.assess(
+            headBeforeBody,
+            headAfterBody,
+            primeEventCount,
+            countAfter,
+            primePumpReboot,
+            rebootAfter,
+        )
+        val headBefore = observation.first
         appendProtectedCapture(
             eventCaptureJson(headBeforeBody, headBefore)
                 .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
@@ -1050,13 +1052,19 @@ class BenchActivity : Activity() {
                 .put("event_count_after_wire_sha256", hash(countAfterBody))
                 .put("head_after_wire_hex", headAfterBody.toHex())
                 .put("head_after_wire_sha256", hash(headAfterBody))
+                .put("head_after_crc_valid", observation.second != null)
+                .put("head_after_embedded_history_index", observation.second?.index ?: JSONObject.NULL)
                 .put("system_date_hex", dateBody.toHex())
                 .put("system_time_hex", timeBody.toHex())
-                .put("stable_head_cursor", stable)
+                .put("count_stable", observation.countStable)
+                .put("reboot_stable", observation.rebootStable)
+                .put("started_at_logical_head", observation.startedAtLogicalHead)
+                .put("stable_head_cursor", observation.stableHeadCursor)
+                .put("disposition", observation.disposition)
                 .putSessionSnapshot(),
         )
         recorder.fact(
-            if (stable) "CurrentHistoryCaptureVerified" else "CurrentHistoryRowsObserved",
+            "CurrentHistoryRowsObserved",
             eventCaptureJson(headBeforeBody, headBefore)
                 .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
                 .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
@@ -1071,17 +1079,15 @@ class BenchActivity : Activity() {
                 .put("system_date_sha256", hash(dateBody))
                 .put("system_time_size", timeBody.size)
                 .put("system_time_sha256", hash(timeBody))
-                .put("stable_head_cursor", stable)
+                .put("count_stable", observation.countStable)
+                .put("reboot_stable", observation.rebootStable)
+                .put("started_at_logical_head", observation.startedAtLogicalHead)
+                .put("stable_head_cursor", observation.stableHeadCursor)
+                .put("disposition", observation.disposition)
                 .putSessionSnapshot(),
         )
         close(owner)
-        report(
-            if (stable) {
-                "CAPTURE:count=$countAfter;index=0;sequence=${headBefore.sequence};factory_seconds=${headBefore.factorySeconds};type=${headBefore.eventType}"
-            } else {
-                "CAPTURE:rows-observed; not a stable logical-head cursor"
-            },
-        )
+        report("CAPTURE:rows-observed; advancing selector cannot establish a stable logical-head cursor")
     }
 
     private fun eventCaptureJson(body: ByteArray, entry: YpsoHistoryEntry?): JSONObject =

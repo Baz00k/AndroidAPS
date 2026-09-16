@@ -4,8 +4,8 @@
 > control protocol 1.3 and history service 1.4, observed on 2026-09-15 and 2026-09-16. This defines the
 > Step 08 ingestion seam; it does not enable therapy or claim command attribution. Event type
 > identity follows the two-tier evidence policy in **Event semantics** below. It is a domain
-> contract: no production ingestion caller constructs snapshots yet, and the hardened stable-head
-> capture procedure has not been executed against the target (the protected captures predate it).
+> contract: no production ingestion caller constructs snapshots yet, and no read-only stable-head
+> capture procedure exists on the target because event-value reads advance its persistent selector.
 > CRC validation uses the project's current CRC-16 interpretation, which is not an independently
 > qualified firmware contract; the paired target rows decoded with it are the empirical support.
 
@@ -77,8 +77,10 @@ Raw 17-byte values, bad CRC, short/long values and trailing fallbacks are reject
   later bolus can make the mutable TBR row older than the cursor before cancellation. Every
   reconciliation verifies that tracked row: absence under complete coverage emits
   `TRACKED_TBR_ROW_MISSING`, absence under partial coverage emits `COVERAGE_INCOMPLETE`, and more
-  than one active type-9 row emits `MULTIPLE_ACTIVE_TBR_ROWS` instead of retaining or choosing stale
-  state. Other conflicting content for one sequence blocks ingestion. A reference-mapped abort row
+  than one concurrently active type-9 row emits `MULTIPLE_ACTIVE_TBR_ROWS` instead of retaining or
+  choosing stale state. Historical starts separated by a type-32 abort are replayed oldest-first, so
+  abort-then-replacement leaves only the replacement tracked. Other conflicting content for one
+  sequence blocks ingestion. A reference-mapped abort row
   (type 32) ends tracked TBR state when observed among newer events, without fabricating a terminal
   row; at bootstrap, a start row that a newer abort row has passed is not tracked. This interaction
   is reference-derived and not yet observed on the target.
@@ -109,6 +111,11 @@ A scan is stable only when all of these match before and after it:
 
 This head check is mandatory because a full ring remains at count 3000 while it moves. A changed
 count, reboot or head returns `Moving`; no cursor advances and the caller may start a fresh scan.
+On the measured target, event-value reads advance a persistent selector. Two consecutive value reads
+therefore cannot perform this head check by themselves: index 0 followed by index 1 is observational
+evidence only. The bench records such captures with `stable_head_cursor=false`; a future snapshot
+producer must use a reviewed, durably reconciled repositioning operation or another non-advancing
+head source before it may construct a stable snapshot.
 
 For incremental ingestion, the previous sequence plus immutable fingerprint must appear in the
 window. If it does not, incomplete coverage is retriable; complete coverage means the cursor was

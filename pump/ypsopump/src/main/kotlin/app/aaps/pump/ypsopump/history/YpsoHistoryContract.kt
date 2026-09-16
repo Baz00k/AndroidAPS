@@ -425,16 +425,8 @@ object YpsoHistoryReconciler {
         pumpSerial: String,
         sequenceGeneration: Int,
     ): YpsoMutableHistoryState? {
-        val candidate = withIndex().singleOrNull {
-            YpsoHistoryClassifier.classify(it.value).kind == YpsoHistoryKind.TEMP_BASAL_STARTED
-        } ?: return null
-        // A newer abort row (earlier in newest-first order) ends tracking for the same reason as in
-        // the reconcile loop; rows older than the candidate cannot affect it.
-        val abortedAfterStart = subList(0, candidate.index).any {
-            YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_ABORTED
-        }
-        if (abortedAfterStart) return null
-        return candidate.value.let {
+        val candidate = activeTbrAfterReplay() ?: return null
+        return candidate.let {
             YpsoMutableHistoryState(
                 YpsoEventIdentity(pumpSerial, sequenceGeneration, it.sequence),
                 it.fingerprint(),
@@ -447,11 +439,9 @@ object YpsoHistoryReconciler {
 
     private fun invalidStableSnapshot(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Gap? {
         val stableCount = snapshot.countAfter
-        val activeTbrRows = snapshot.rowsNewestFirst.count {
-            YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED
-        }
-        if (activeTbrRows > 1) {
-            // The pump permits one active TBR; two active rows mean the model cannot choose safely.
+        if (!snapshot.rowsNewestFirst.hasValidTbrTransitions()) {
+            // Historical type-9 rows can remain after a separate type-32 abort. Replay transitions
+            // oldest-first so abort-then-replacement is valid, while overlapping starts still fail.
             return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.MULTIPLE_ACTIVE_TBR_ROWS)
         }
         val duplicateIdenticalSequence = snapshot.rowsNewestFirst
@@ -468,6 +458,33 @@ object YpsoHistoryReconciler {
         } else {
             null
         }
+    }
+
+    private fun List<YpsoHistoryEntry>.hasValidTbrTransitions(): Boolean {
+        var active = false
+        for (entry in asReversed()) {
+            when (YpsoHistoryClassifier.classify(entry).kind) {
+                YpsoHistoryKind.TEMP_BASAL_STARTED -> {
+                    if (active) return false
+                    active = true
+                }
+                YpsoHistoryKind.TEMP_BASAL_ABORTED -> active = false
+                else -> Unit
+            }
+        }
+        return true
+    }
+
+    private fun List<YpsoHistoryEntry>.activeTbrAfterReplay(): YpsoHistoryEntry? {
+        var active: YpsoHistoryEntry? = null
+        for (entry in asReversed()) {
+            when (YpsoHistoryClassifier.classify(entry).kind) {
+                YpsoHistoryKind.TEMP_BASAL_STARTED -> active = entry
+                YpsoHistoryKind.TEMP_BASAL_ABORTED -> active = null
+                else -> Unit
+            }
+        }
+        return active
     }
 
     private fun moving(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Moving? {

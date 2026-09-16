@@ -697,6 +697,70 @@ class YpsoHistoryContractTest {
     }
 
     @Test
+    fun `TBR abort followed by replacement start leaves only the replacement active`() {
+        val trackedStart = entry(sequence = 99, type = 9, v1 = 150, v2 = 15)
+        val old = entry(sequence = 100)
+        val tracked = YpsoMutableHistoryState(
+            YpsoEventIdentity("serial", 0, 99),
+            trackedStart.fingerprint(),
+            trackedStart.stateFingerprint(),
+            trackedStart.value1,
+            trackedStart.value2,
+        )
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21, tracked)
+        val abort = entry(sequence = 101, type = 32, v1 = 150)
+        val replacement = entry(sequence = 102, type = 9, v1 = 110, v2 = 30)
+
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                cursor,
+                snapshot(4, 4, listOf(replacement, abort, old, trackedStart), fullCoverage = true),
+            ),
+        )
+
+        assertEquals(listOf(101L, 102L), stable.newEventsOldestFirst.map { it.identity.sequence })
+        assertEquals(102L, stable.cursor.activeTbr?.identity?.sequence)
+        assertEquals(110, stable.cursor.activeTbr?.percent)
+        assertEquals(30, stable.cursor.activeTbr?.requestedDurationMinutes)
+    }
+
+    @Test
+    fun `bootstrap replays abort before replacement instead of counting historical starts`() {
+        val oldStart = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
+        val abort = entry(sequence = 101, type = 32, v1 = 150)
+        val replacement = entry(sequence = 102, type = 9, v1 = 110, v2 = 30)
+
+        val bootstrap = assertInstanceOf(
+            YpsoHistoryReconciliation.Bootstrap::class.java,
+            YpsoHistoryReconciler.bootstrap(
+                "serial",
+                0,
+                snapshot(3, 3, listOf(replacement, abort, oldStart), fullCoverage = true),
+            ),
+        )
+
+        assertEquals(102L, bootstrap.cursor?.activeTbr?.identity?.sequence)
+    }
+
+    @Test
+    fun `standalone terminal row does not end an unrelated active TBR during bootstrap`() {
+        val active = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
+        val standaloneTerminal = entry(sequence = 101, type = 10, v1 = 110, v2 = 30)
+
+        val bootstrap = assertInstanceOf(
+            YpsoHistoryReconciliation.Bootstrap::class.java,
+            YpsoHistoryReconciler.bootstrap(
+                "serial",
+                0,
+                snapshot(2, 2, listOf(standaloneTerminal, active), fullCoverage = true),
+            ),
+        )
+
+        assertEquals(100L, bootstrap.cursor?.activeTbr?.identity?.sequence)
+    }
+
+    @Test
     fun `bootstrap does not track a TBR that a newer abort row ended`() {
         val active = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
         val abort = entry(sequence = 101, type = 32, v1 = 150)
