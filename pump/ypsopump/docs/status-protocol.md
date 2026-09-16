@@ -38,6 +38,25 @@ than being classified as accepted or rejected.
 
 A fresh authenticated, read-only observation of the corresponding setting-value characteristic
 `669a0c20-0008-969e-e211-fcbeb4147bc5` returned raw status `131`, with no decryptable body.
+The first harness version had already closed the selector connection before that read. A second
+fresh-connection read reproduced status `131`; neither observation reproduces the reference
+implementation's immediate same-connection selector-value read and therefore cannot determine
+whether the selected setting is connection-scoped.
+
+After preserving counter `34` as hash-bound `UNKNOWN`, a one-shot convergence selector repeated
+setting ID `1` at counter `35`. This candidate was safe whether the pump floor was `33` or `34`
+because both strict-next and forward-gap-by-one selector behavior had already been measured on this
+target. Frames 1–3 again returned status `0`; frame 4 again returned `139`. The harness then read
+`SETTING_VALUE` immediately on the same authenticated GATT connection, matching the reference
+implementation's ordering, and the read still returned raw status `131` with no body. Counter `35`
+therefore remains durably `POSSIBLY_SENT` with reviewed `UNKNOWN` evidence; the epoch's one-shot
+convergence gate is consumed and no third selector attempt is permitted.
+
+The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
+require real-pump verification. A separate researcher reported viewing Profiles A and B on a real
+pump, but published neither firmware identity nor raw selector/value traces. The target result here
+therefore differs from that reported success and is not the same as the separately reported
+configuration-write authorization error `8`.
 These observations do not establish active A/B decoding, setting-value framing, schedule units,
 or write-counter consumption. They block later selector writes pending explicit reconciliation and
 require profile coherence to remain unavailable/fail-closed.

@@ -981,8 +981,10 @@ class PumpSession(private val store: Store) {
     }
 
     /**
-     * From one hash-bound unresolved strict-next event at N, reserve exactly N+1. The pump's actual
-     * floor is then either N-1 or N, making this candidate respectively the measured +2 or strict-next.
+     * From one hash-bound unresolved strict-next selector at N, reserve exactly N+1. The pump's
+     * actual floor is then either N-1 or N, making this candidate respectively the measured +2 or
+     * strict-next. Event convergence changes the selected row for independent semantic evidence;
+     * settings convergence repeats the same read-only setting ID so its value can be read on-link.
      */
     @Synchronized
     internal fun reserveBenchAmbiguityConvergenceCandidate(origin: Token, id: String, intent: WriteIntent): Reservation {
@@ -990,19 +992,27 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         check(old.writeBootstrapState == WriteBootstrapState.ESTABLISHED) { "Write bootstrap is not established" }
         check(!old.benchAmbiguityConvergenceAttempted) { "The epoch's ambiguity-convergence candidate was already attempted" }
-        check(intent.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC && intent.purpose == "HISTORY_SELECTOR") {
-            "Ambiguity convergence supports only the event selector"
+        check(isAmbiguityConvergenceSelector(intent.characteristic, intent.purpose)) {
+            "Ambiguity convergence supports only event and settings selectors"
         }
         val unresolved = checkNotNull(old.reservation) { "An unresolved predecessor reservation is required" }
         check(unresolved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) { "The predecessor is not unresolved" }
         check(unresolved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR) {
             "Ambiguity convergence requires an unresolved strict-next predecessor"
         }
-        check(unresolved.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC && unresolved.purpose == "HISTORY_SELECTOR") {
-            "Ambiguity-convergence predecessor must be an event selector"
+        check(
+            unresolved.characteristic.equals(intent.characteristic, ignoreCase = true) &&
+                unresolved.purpose == intent.purpose &&
+                isAmbiguityConvergenceSelector(checkNotNull(unresolved.characteristic), checkNotNull(unresolved.purpose)),
+        ) {
+            "Ambiguity-convergence predecessor must be the same selector family"
         }
         check(unresolved.operationId != intent.operationId) { "Ambiguity convergence requires a new operation ID" }
-        check(unresolved.payloadHash != intent.payloadHash) { "Ambiguity convergence requires a different payload" }
+        if (intent.purpose == "HISTORY_SELECTOR") {
+            check(unresolved.payloadHash != intent.payloadHash) { "Event ambiguity convergence requires a different payload" }
+        } else {
+            check(unresolved.payloadHash == intent.payloadHash) { "Settings ambiguity convergence must repeat the same setting ID" }
+        }
         val evidence = unresolvedEvidence(old, unresolved)
             ?: throw SecurityException("Unresolved predecessor evidence is missing or ambiguous")
         val binding = UnresolvedWriteBinding.from(checkNotNull(old.reboot), unresolved, evidence)
@@ -1031,7 +1041,7 @@ class PumpSession(private val store: Store) {
         val unresolved = old.reservation ?: return false
         if (unresolved.phase !in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) return false
         if (unresolved.candidate != WriteCandidate.BENCH_STRICT_NEXT_SELECTOR) return false
-        if (unresolved.characteristic?.lowercase() != EVENT_INDEX_CHARACTERISTIC || unresolved.purpose != "HISTORY_SELECTOR") return false
+        if (!isAmbiguityConvergenceSelector(unresolved.characteristic, unresolved.purpose)) return false
         return unresolvedEvidence(old, unresolved) != null
     }
 
@@ -1416,6 +1426,14 @@ class PumpSession(private val store: Store) {
             }
 
         private const val EVENT_INDEX_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
+        private const val SETTING_ID_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbeb3147bc5"
+
+        private fun isAmbiguityConvergenceSelector(characteristic: String?, purpose: String?): Boolean =
+            when (purpose) {
+                "HISTORY_SELECTOR" -> characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
+                "SETTINGS_SELECTOR" -> characteristic?.lowercase() == SETTING_ID_CHARACTERISTIC
+                else -> false
+            }
 
         private fun expectedHistoryValueCharacteristic(family: HistoryFamily): String =
             when (family) {
@@ -1783,8 +1801,7 @@ class PumpSession(private val store: Store) {
             require(binding.reservationId.isNotBlank() && binding.operationId.isNotBlank())
             require(binding.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED))
             require(binding.counter > 0 && binding.priorWrite >= 0 && binding.counter - binding.priorWrite == 1L)
-            require(binding.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC)
-            require(binding.purpose == "HISTORY_SELECTOR")
+            require(isAmbiguityConvergenceSelector(binding.characteristic, binding.purpose))
             require(binding.payloadHash.matches(Regex("[0-9a-f]{64}")))
             require(binding.evidenceHash.matches(Regex("[0-9a-f]{64}")))
             require(binding.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR)

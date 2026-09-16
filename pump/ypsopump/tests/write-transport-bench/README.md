@@ -220,10 +220,11 @@ classifier.
 
 ### One-shot ambiguity convergence without reboot
 
-If one strict-next **event** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
+If one strict-next **event or settings** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
 and review its evidence bundle and record exactly one hash-bound `UNKNOWN` reconciliation record. When
 that record is the sole exact match for the durable reservation, `converge-ambiguity` reserves exactly
-`N + 1` with a new operation ID and different event payload:
+`N + 1` with a new operation ID. Event convergence requires a different event payload; settings
+convergence requires the exact same setting ID so the value can be read immediately on the same link:
 
 ```sh
 WRITE_ID="converge-$(uuidgen)"
@@ -236,6 +237,10 @@ Choose an event index different from the unresolved predecessor payload and from
 authenticated current selector value. There is no counter extra: the candidate is mechanically fixed
 to the unresolved reservation's counter plus one. If the actual pump floor is `N - 1`, this is the
 already measured `floor + 2`; if it is `N`, this is strict-next. No counter is scanned.
+
+For settings, use the same `selector_type setting` and selector value as the unresolved predecessor.
+The guard rejects a changed setting ID or selector family. This is still a non-mutating selector retry,
+not a setting-value write.
 
 The reservation durably binds the unresolved predecessor's operation ID, reservation ID, phase,
 counter, characteristic, purpose, plaintext hash, exact prior floor, candidate mode and reviewed
@@ -302,6 +307,12 @@ not induce it by changing the pump identity or sending an unreviewed AUTH payloa
 Every coordinator result is appended as `CoordinatorOutcome`, including failures before transport
 startup. `NotSent` also reports its failure layer, detail and optional counter in `result.txt`; do not
 retry a selector from a bare outcome string or infer pump rejection from a local session failure.
+
+If all selector frames were locally dispatched and only the final GATT callback is non-zero, the
+write remains `PossiblyApplied`, but the app performs one selector-value read on that same connection
+before closing it. This mirrors the reference settings read sequence and captures semantic evidence
+without treating the numeric callback as acceptance or rejection. Earlier-frame failures still close
+without read-back because a complete selector request was not observed.
 
 ### One forward-gap candidate
 

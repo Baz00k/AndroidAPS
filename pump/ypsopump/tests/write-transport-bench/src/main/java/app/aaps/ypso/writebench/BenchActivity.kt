@@ -1338,8 +1338,16 @@ class BenchActivity : Activity() {
                             report("OUTCOME:ProvenRejected; reconciliation required")
                         }
                         is YpsoWriteOutcome.PossiblyApplied -> {
-                            close(owner)
-                            report("OUTCOME:PossiblyApplied; reconciliation required")
+                            if (
+                                outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK &&
+                                outcome.failure.frame == EXPECTED_SELECTOR_FRAME_COUNT &&
+                                dispatchedFrames == EXPECTED_SELECTOR_FRAME_COUNT
+                            ) {
+                                readBackAfterAmbiguousFinalCallback(owner, selected, binding.value, outcome)
+                            } else {
+                                close(owner)
+                                report("OUTCOME:PossiblyApplied; reconciliation required")
+                            }
                         }
                         is YpsoWriteOutcome.Verified -> {
                             close(owner)
@@ -1427,6 +1435,54 @@ class BenchActivity : Activity() {
                 recorder.fact("SelectorReadBackFailed", JSONObject().put("write_id", writeId).put("detail", it.message))
                 close(owner)
                 report("OUTCOME:AcceptedUnverified; read-back failed; explicit reconciliation required")
+            },
+        )
+    }
+
+    /**
+     * A non-zero final callback does not prove rejection: target selector writes with raw status 139
+     * have later been semantically verified. Preserve the uncertain write outcome, but use the still-
+     * owned connection for the same selector-value read performed by the reference implementation.
+     */
+    private fun readBackAfterAmbiguousFinalCallback(
+        owner: BluetoothGatt,
+        selected: Selector,
+        valueCharacteristic: BluetoothGattCharacteristic,
+        outcome: YpsoWriteOutcome.PossiblyApplied,
+    ) = readEncrypted(owner, valueCharacteristic) { result ->
+        result.fold(
+            onSuccess = { body ->
+                val evidence = selectorEvidence(selected, body)
+                recorder.fact(
+                    "AmbiguousFinalCallbackReadBack",
+                    JSONObject()
+                        .put("write_id", writeId)
+                        .put("selector_type", selected.name)
+                        .put("selector", selected.value)
+                        .put("callback_status", outcome.failure.code ?: JSONObject.NULL)
+                        .put("callback_frame", outcome.failure.frame ?: JSONObject.NULL)
+                        .put("body_size", body.size)
+                        .put("body_sha256", hash(body))
+                        .put("glb", evidence.glb ?: JSONObject.NULL)
+                        .put("crc_valid", evidence.crcValid)
+                        .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                        .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
+                        .putSessionSnapshot(),
+                )
+                close(owner)
+                report("OUTCOME:PossiblyApplied; same-connection read-back captured; reconciliation required")
+            },
+            onFailure = {
+                recorder.fact(
+                    "AmbiguousFinalCallbackReadBackFailed",
+                    JSONObject()
+                        .put("write_id", writeId)
+                        .put("callback_status", outcome.failure.code ?: JSONObject.NULL)
+                        .put("callback_frame", outcome.failure.frame ?: JSONObject.NULL)
+                        .put("detail", it.message),
+                )
+                close(owner)
+                report("OUTCOME:PossiblyApplied; same-connection read-back failed; reconciliation required")
             },
         )
     }

@@ -317,6 +317,99 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `settings ambiguity convergence repeats the setting id at counter plus one`() {
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "ambiguous-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val unresolved = session.snapshot()!!.reservation!!
+        assertEquals(43, unresolved.counter)
+        coordinator.ownerDisconnected(gatt, "close after ambiguous final callback")
+        session.recordUnresolvedWriteEvidence(token, unresolved.id, evidenceHash, "reviewed settings selector remains unknown")
+
+        frames.clear()
+        callbacks.clear()
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "converge-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+
+        assertEquals(44, message.counter)
+        assertArrayEquals(YpsoGlb.encode(1), message.body)
+        assertEquals(unresolved.id, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.reservationId)
+        assertEquals(evidenceHash, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.evidenceHash)
+    }
+
+    @Test
+    fun `settings ambiguity convergence rejects a changed setting id`() {
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "ambiguous-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val unresolved = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close after ambiguous final callback")
+        session.recordUnresolvedWriteEvidence(token, unresolved.id, evidenceHash, "reviewed settings selector remains unknown")
+
+        callbacks.clear()
+        makeReady()
+        assertFalse(
+            coordinator.writeSelector(
+                writeId = "converge-setting-2",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(2),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE,
+                dispatch = { error("changed setting ID must not dispatch") },
+                onOutcome = callbacks::add,
+            ),
+        )
+        val failure = callbacks.single() as YpsoWriteOutcome.NotSent
+        assertEquals(YpsoWriteFailure.Layer.SESSION, failure.failure.layer)
+        assertEquals(unresolved, session.snapshot()!!.reservation)
+        assertFalse(session.snapshot()!!.benchAmbiguityConvergenceAttempted)
+    }
+
+    @Test
     fun `live reconciliation requires the original GATT connection and generation owner`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))
