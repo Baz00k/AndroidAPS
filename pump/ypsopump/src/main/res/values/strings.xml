@@ -10,8 +10,7 @@
     <string name="ypsopump_connecting">Connecting…</string>
     <string name="ypsopump_disconnected">Not connected</string>
     <string name="ypsopump_not_implemented">YpsoPump: not implemented yet</string>
-    <string name="ypsopump_read_only_profile_blocked">Insulin delivery is disabled: profile not sent to the pump</string>
-    <string name="ypsopump_profile_programmed_on_pump">YpsoPump: basal profile is programmed on the pump</string>
+    <string name="ypsopump_profile_unavailable">Basal profile programming is unavailable and the pump profile has not been verified</string>
     <string name="ypsopump_read_only_bolus_blocked">Insulin delivery is disabled: bolus blocked</string>
     <string name="ypsopump_reservoir_empty_notification">Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.</string>
     <string name="ypsopump_reservoir_low_notification">Pump reservoir low: %1$.0f U left. Change the cartridge soon.</string>

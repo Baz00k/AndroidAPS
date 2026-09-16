@@ -9,7 +9,6 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
-import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpEnactResult
@@ -56,7 +55,6 @@ class YpsoPumpPlugin @Inject constructor(
     private val bleManager: YpsoBleManager,
     private val pumpSync: PumpSync,
     private val rxBus: RxBus,
-    private val profileFunction: ProfileFunction,
     private val uiInteraction: UiInteraction,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>,
     private val provisioning: YpsoProvisioningService
@@ -82,6 +80,8 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
+        // Profile programming is unsupported independently of the broader therapy milestone.
+        isSetBasalProfileCapable = false
         if (YpsoPumpConst.READ_ONLY_MODE) {
             isBolusCapable = false
             isExtendedBolusCapable = false
@@ -164,9 +164,10 @@ class YpsoPumpPlugin @Inject constructor(
     override val lastDataTime: Long get() = pumpState.lastStatusTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump.
+    // Status-only remains zero so LoopPlugin cannot run. A future therapy build must use the fresh
+    // measured pump status, never mirror the desired AAPS profile as if it were pump configuration.
     override val baseBasalRate: Double get() =
-        if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
+        if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else pumpState.baseBasalRateIfFresh() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
     // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
     // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
@@ -176,18 +177,11 @@ class YpsoPumpPlugin @Inject constructor(
         pumpEnactResultProvider.get().success(false).enacted(false).comment(rh.gs(stringRes, *args))
 
     override fun setNewBasalProfile(profile: Profile): PumpEnactResult =
-        if (YpsoPumpConst.READ_ONLY_MODE) {
-            fail(R.string.ypsopump_read_only_profile_blocked)
-        } else {
-        // The YpsoPump's basal profile is programmed ON THE PUMP (mylife / pump UI); this driver does not
-        // write it. The loop steers with percent TBRs relative to the pump's basal, so the pump's programmed
-        // basal MUST match this AAPS profile — the user keeps them in sync. Report success accordingly.
-            pumpEnactResultProvider.get().success(true).enacted(true).comment(rh.gs(R.string.ypsopump_profile_programmed_on_pump))
-        }
+        fail(R.string.ypsopump_profile_unavailable)
 
-    // This driver does not verify the profile programmed directly on the pump. Treat it as satisfied so
-    // KeepAlive does not repeatedly queue a no-op or, in status-only mode, a blocked profile write.
-    override fun isThisProfileSet(profile: Profile): Boolean = true
+    // No target-qualified active-profile and 24-hour schedule read-back exists. Matching only the
+    // current rate would be unsafe because A/B or a later hourly segment may differ.
+    override fun isThisProfileSet(profile: Profile): Boolean = false
 
     // History identity and command origin are not yet wired into production therapy. Do not retain dormant
     // amount/recent-event or receipt-time fallbacks: later dosing tickets must snapshot a stable cursor before

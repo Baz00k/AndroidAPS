@@ -82,6 +82,85 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `completed legacy alarm recovery does not block a modern settings selector`() {
+        val legacyStore = MemoryStore()
+        PumpSession(legacyStore).provisionReadBaseline("pump", key, 21, 2_596)
+        val legacyReservation =
+            PumpSession.Reservation(
+                id = "historical-alarm-cursor",
+                counter = 33,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "alarm-cursor-1789567816",
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID.toString(),
+                purpose = YpsoRemoteWrite.HISTORY_SELECTOR.name,
+                payloadHash = "ab".repeat(32),
+                priorWrite = 32,
+                candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
+            )
+        val legacyEvidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(legacyReservation.operationId),
+                reservationId = legacyReservation.id,
+                counter = legacyReservation.counter,
+                characteristic = checkNotNull(legacyReservation.characteristic),
+                purpose = checkNotNull(legacyReservation.purpose),
+                payloadHash = checkNotNull(legacyReservation.payloadHash),
+                priorWrite = checkNotNull(legacyReservation.priorWrite),
+                candidate = legacyReservation.candidate,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "completed historical alarm cursor recovery",
+            )
+        legacyStore.saved =
+            legacyStore.saved.copy(
+                records =
+                    legacyStore.saved.records.map {
+                        it.copy(
+                            write = 33,
+                            reservation = legacyReservation,
+                            writeEvidence = listOf(legacyEvidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
+                    },
+            )
+        val legacySession = PumpSession(legacyStore)
+        val legacyToken = legacySession.open("pump", key)
+        val legacyOwner = YpsoBenchWriteCoordinator.Owner(gatt, "legacy-connection", legacyToken)
+        val legacyReadiness = YpsoCommandReadiness()
+        legacyReadiness.connected(legacyOwner.readinessOwner())
+        legacyReadiness.authenticated(legacyOwner.readinessOwner())
+        legacyReadiness.readVerified(legacyOwner.readinessOwner())
+        legacyReadiness.requiredSetupVerified(legacyOwner.readinessOwner())
+        val legacyFrames = mutableListOf<ByteArray>()
+        val legacyOutcomes = mutableListOf<YpsoWriteOutcome>()
+        val legacyCoordinator =
+            YpsoBenchWriteCoordinator(
+                legacySession,
+                crypto,
+                legacyReadiness,
+                YpsoSerializedWriteTransport({ _, _ -> }, {}),
+            )
+
+        assertTrue(
+            legacyCoordinator.writeSelector(
+                writeId = "setting-1",
+                owner = legacyOwner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> legacyFrames.add(frame.copyOf()) },
+                onOutcome = legacyOutcomes::add,
+            ),
+        )
+        assertTrue(legacyOutcomes.isEmpty())
+        assertTrue(legacyFrames.isNotEmpty())
+        assertEquals(34, legacySession.snapshot()!!.reservation!!.counter)
+        assertTrue(legacySession.snapshot()!!.writeEvidence.contains(legacyEvidence))
+    }
+
+    @Test
     fun `reservation encryption fragments ACK and semantic verification stay one transaction`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))

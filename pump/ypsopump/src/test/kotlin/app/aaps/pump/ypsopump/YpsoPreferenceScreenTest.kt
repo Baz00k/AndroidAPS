@@ -25,7 +25,6 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
             mock<YpsoBleManager>(),
             mock<PumpSync>(),
             rxBus,
-            profileFunction,
             mock<UiInteraction>(),
             pumpEnactResultProvider,
             mock<YpsoProvisioningService>()

@@ -39,7 +39,7 @@ class YpsoPumpPluginTest {
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, mock(), ui,
+        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
     )
 
@@ -59,6 +59,23 @@ class YpsoPumpPluginTest {
         assertFalse(plugin.pumpDescription.isBolusCapable)
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
         verifyNoInteractions(sync, manager)
+    }
+
+    @Test
+    fun `profile coherence fails closed even when status basal matches the requested current rate`() {
+        val profile: Profile = mock {
+            on { getBasal() } doReturn 0.6
+        }
+        state.publishStatus(
+            reservoirUnits = 80.0,
+            batteryPercent = 90,
+            isSuspended = false,
+            activeTbrPercent = 100,
+            timestamp = 4_000L,
+            activeBasalRate = 0.6,
+        )
+
+        assertFalse(plugin.isThisProfileSet(profile))
     }
 
     @Test

@@ -53,6 +53,45 @@ class YpsoPumpStateTest {
     }
 
     @Test
+    fun `fresh status derives base basal from measured current rate and TBR percent`() {
+        var elapsed = 10L
+        val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
+        state.publishStatus(
+            reservoirUnits = 42.5,
+            batteryPercent = 75,
+            isSuspended = false,
+            activeTbrPercent = 130,
+            timestamp = 1_234L,
+            activeBasalRate = 0.78,
+        )
+
+        assertEquals(0.6, state.baseBasalRateIfFresh()!!, 0.000_001)
+
+        state.publishStatus(
+            reservoirUnits = 42.5,
+            batteryPercent = 75,
+            isSuspended = false,
+            activeTbrPercent = 0,
+            timestamp = 1_235L,
+            activeBasalRate = 0.0,
+        )
+        assertNull(state.baseBasalRateIfFresh())
+
+        state.publishStatus(
+            reservoirUnits = 42.5,
+            batteryPercent = 75,
+            isSuspended = true,
+            activeTbrPercent = 100,
+            timestamp = 1_236L,
+            activeBasalRate = 0.0,
+        )
+        assertNull(state.baseBasalRateIfFresh())
+
+        elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
+        assertNull(state.baseBasalRateIfFresh())
+    }
+
+    @Test
     fun `successful status remains healthy while queue is idle`() {
         val state = YpsoPumpState()
         state.publishStatus(42.5, 75, false, 100, 1234L)

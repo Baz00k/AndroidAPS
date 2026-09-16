@@ -228,6 +228,8 @@ class PumpSession(private val store: Store) {
         val read: Long?,
         val write: Long?,
         val reservation: Reservation? = null,
+        /** Exact completed pre-Step-08 record after a current reservation supersedes its live slot. */
+        val retiredLegacyBenchAlarmCursorRecovery: Reservation? = null,
         val serial: String = "",
         val keyHex: String? = null,
         val createdAt: Long? = null,
@@ -776,7 +778,7 @@ class PumpSession(private val store: Store) {
                 ) { "Cannot transition with an unreviewed outstanding write record" }
             }
             val next =
-                old.copy(
+                retireLegacyReservation(old).copy(
                     reboot = message.reboot,
                     read = message.counter,
                     write = null,
@@ -1137,7 +1139,7 @@ class PumpSession(private val store: Store) {
         markNewEpochBootstrapAttempted: Boolean = false,
         historyBinding: HistoryWriteBinding? = null,
     ): Reservation {
-        val old = owned(origin)
+        val old = retireLegacyReservation(owned(origin))
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
         val last = bootstrapPriorWrite ?: old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
@@ -1348,6 +1350,19 @@ class PumpSession(private val store: Store) {
     }
 
     private fun priorWrite(reservation: Reservation): Long = reservation.priorWrite ?: reservation.counter - 1
+
+    /**
+     * The historical alarm-cursor record occupied the single live reservation slot. Once current
+     * code needs that slot, retain the exact completed tuple as audit state; never recreate it as a
+     * reservable or dispatchable candidate.
+     */
+    private fun retireLegacyReservation(record: Record): Record {
+        val legacy = record.reservation?.takeIf {
+            it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
+        } ?: return record
+        check(record.retiredLegacyBenchAlarmCursorRecovery == null) { "Legacy alarm recovery is already retired" }
+        return record.copy(reservation = null, retiredLegacyBenchAlarmCursorRecovery = legacy)
+    }
 
     private fun validCounterDistance(reservation: Reservation, priorWrite: Long): Boolean =
         when (reservation.candidate) {
@@ -1570,6 +1585,19 @@ class PumpSession(private val store: Store) {
                     require((it.candidate == WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR) == (it.acceptedPredecessor != null))
                     require((it.candidate == WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR) == (it.unresolvedPredecessor != null))
                 }
+                r.retiredLegacyBenchAlarmCursorRecovery?.let {
+                    require(
+                        it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR &&
+                            it.phase == Phase.VERIFIED &&
+                            it.counter == 33L &&
+                            it.priorWrite == 32L &&
+                            it.operationId != null &&
+                            historyFamilyFor(it.characteristic) == HistoryFamily.ALARM &&
+                            it.historyBinding == null &&
+                            it.acceptedPredecessor == null &&
+                            it.unresolvedPredecessor == null,
+                    )
+                }
                 require(
                     r.writeEvidence.map { it.reservationId to it.evidenceHash }.distinct().size == r.writeEvidence.size
                 )
@@ -1642,14 +1670,17 @@ class PumpSession(private val store: Store) {
                 val legacyReservation = r.reservation?.takeIf {
                     it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
                 }
+                val retiredLegacyReservation = r.retiredLegacyBenchAlarmCursorRecovery
                 val legacyEvidence = r.writeEvidence.filter {
                     it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
                 }
                 // The retired candidate is valid only as the exact completed reservation/evidence
-                // pair left by the old bench artifact. An orphaned audit entry, a different live
-                // reservation, or more than one historical entry cannot be recovered into work.
-                require((legacyReservation == null) == legacyEvidence.isEmpty())
-                legacyReservation?.let { reservation ->
+                // pair left by the old bench artifact. It may occupy the legacy live slot or its
+                // dedicated audit slot, but never both; neither form can be recovered into work.
+                require(legacyReservation == null || retiredLegacyReservation == null)
+                val preservedLegacyReservation = legacyReservation ?: retiredLegacyReservation
+                require((preservedLegacyReservation == null) == legacyEvidence.isEmpty())
+                preservedLegacyReservation?.let { reservation ->
                     require(legacyEvidence.size == 1)
                     require(
                         legacyEvidence.singleOrNull { evidence ->

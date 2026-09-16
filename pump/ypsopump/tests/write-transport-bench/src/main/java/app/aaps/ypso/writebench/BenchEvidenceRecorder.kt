@@ -46,6 +46,15 @@ internal class BenchEvidenceRecorder(
         values: JSONObject = JSONObject(),
     ) = append(values.put("event", name))
 
+    /** Coordinator-local failures occur before the transport recorder owns an operation. */
+    fun coordinatorOutcome(value: YpsoWriteOutcome) =
+        append(
+            JSONObject()
+                .put("event", "CoordinatorOutcome")
+                .put("write_id", value.writeId)
+                .put("outcome", outcome(value)),
+        )
+
     private fun outcome(value: YpsoWriteOutcome) =
         JSONObject()
             .put("type", value.javaClass.simpleName)

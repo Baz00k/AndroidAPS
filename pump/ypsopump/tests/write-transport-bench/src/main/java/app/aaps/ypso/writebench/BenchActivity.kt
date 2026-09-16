@@ -200,6 +200,7 @@ class BenchActivity : Activity() {
             val opened = session.open(doc.mac, doc.sharedKey)
             val record = checkNotNull(session.snapshot())
             val reservation = record.reservation
+            val retiredLegacy = record.retiredLegacyBenchAlarmCursorRecovery
             val historyCounts = record.benchHistoryCounts.joinToString(",") { "${it.family.name}:${it.count}@${it.reboot}" }.ifEmpty { "none" }
             val selectorStates = record.benchHistorySelectorStates.joinToString(",") { "${it.family.name}:${it.index}@${it.reboot}" }.ifEmpty { "none" }
             report(
@@ -209,7 +210,8 @@ class BenchActivity : Activity() {
                     "convergence_attempted=${record.benchAmbiguityConvergenceAttempted}," +
                     "convergence_ready=${session.benchAmbiguityConvergenceReady()}," +
                     "history_counts=$historyCounts,selector_states=$selectorStates," +
-                    "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
+                    "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}," +
+                    "retired_legacy=${retiredLegacy?.operationId ?: "none"}",
             )
         } finally {
             doc.sharedKey.fill(0)
@@ -1321,11 +1323,15 @@ class BenchActivity : Activity() {
                     accepted
                 },
                 onOutcome = { outcome ->
+                    recorder.coordinatorOutcome(outcome)
                     when (outcome) {
                         is YpsoWriteOutcome.AcceptedUnverified -> readBack(owner, selected, binding.value)
                         is YpsoWriteOutcome.NotSent -> {
                             close(owner)
-                            report("OUTCOME:NotSent")
+                            report(
+                                "OUTCOME:NotSent;layer=${outcome.failure.layer};" +
+                                    "detail=${outcome.failure.detail};counter=${outcome.counter ?: "none"}",
+                            )
                         }
                         is YpsoWriteOutcome.ProvenRejected -> {
                             close(owner)
@@ -1748,6 +1754,10 @@ class BenchActivity : Activity() {
             .put("session_write", record?.write ?: JSONObject.NULL)
             .put("pending_operation", reservation?.operationId ?: JSONObject.NULL)
             .put("pending_phase", reservation?.phase?.name ?: JSONObject.NULL)
+            .put(
+                "retired_legacy_operation",
+                record?.retiredLegacyBenchAlarmCursorRecovery?.operationId ?: JSONObject.NULL,
+            )
     }
 
     private fun android.content.Intent.intExtraOrNull(name: String): Int? =

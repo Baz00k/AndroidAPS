@@ -299,6 +299,10 @@ This proves the artifact's fail-closed readiness boundary. A real AUTH or CCCD c
 observed naturally, is separately recorded with layer, characteristic, firmware and raw status; do
 not induce it by changing the pump identity or sending an unreviewed AUTH payload.
 
+Every coordinator result is appended as `CoordinatorOutcome`, including failures before transport
+startup. `NotSent` also reports its failure layer, detail and optional counter in `result.txt`; do not
+retry a selector from a bare outcome string or infer pump rejection from a local session failure.
+
 ### One forward-gap candidate
 
 After one reconciled **accepted** strict-next selector, `--ei forward_gap 1` reserves exactly the

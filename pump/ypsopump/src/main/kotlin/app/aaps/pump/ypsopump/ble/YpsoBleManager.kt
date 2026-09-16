@@ -690,7 +690,8 @@ class YpsoBleManager @Inject constructor(
                         isSuspended = status.isSuspended,
                         activeTbrPercent = status.activeTbrPercent,
                         timestamp = System.currentTimeMillis(),
-                        batteryBars = status.batteryBars
+                        batteryBars = status.batteryBars,
+                        activeBasalRate = status.basalRate,
                     )
                     aapsLogger.info(LTag.PUMP, "YpsoPump encrypted status accepted")
                     if (diagnosticLoggingEnabled()) {

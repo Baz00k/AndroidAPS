@@ -28,6 +28,20 @@ Not published: serial (characteristic absent), active profile identity, measured
 terminal bolus outcomes (idle is ambiguous), delivery-halting alarms beyond the cartridge
 sentinel (hypothesized same sentinel, unconfirmed).
 
+## Settings selector observation (2026-09-16)
+
+A single bounded setting-ID `1` attempt on target firmware `V05.00.52` used the authenticated
+settings selector characteristic `669a0c20-0008-969e-e211-fcbeb3147bc5` at durable write counter
+34. Android accepted all four local frame dispatches. GATT callbacks succeeded for frames 1–3;
+frame 4 returned raw status `139`. The write therefore remains durably `POSSIBLY_SENT` rather
+than being classified as accepted or rejected.
+
+A fresh authenticated, read-only observation of the corresponding setting-value characteristic
+`669a0c20-0008-969e-e211-fcbeb4147bc5` returned raw status `131`, with no decryptable body.
+These observations do not establish active A/B decoding, setting-value framing, schedule units,
+or write-counter consumption. They block later selector writes pending explicit reconciliation and
+require profile coherence to remain unavailable/fail-closed.
+
 Responses rejected by envelope, AEAD, counter-tail or counter-freshness validation do not
 mutate session counters. Later CRC/schema/firmware rejection publishes no status; an
 authenticated fresh response advances its durable replay floor before publication. See

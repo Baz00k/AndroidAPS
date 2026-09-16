@@ -21,6 +21,10 @@ class YpsoPumpState @Inject constructor() {
         val reservoirUnits: Double,
         val batteryPercent: Int?,
         val batteryBars: Int?,
+        /** Current pump-reported basal after TBR scaling; not stored-profile evidence. */
+        val activeBasalRate: Double?,
+        val activeTbrPercent: Int,
+        val isSuspended: Boolean,
         val acquiredAt: Long,
         val elapsedAt: Long
     )
@@ -98,16 +102,40 @@ class YpsoPumpState @Inject constructor() {
         isSuspended: Boolean,
         activeTbrPercent: Int,
         timestamp: Long,
-        batteryBars: Int? = null
+        batteryBars: Int? = null,
+        activeBasalRate: Double? = null,
     ) {
         this.isSuspended = isSuspended
         this.activeTbrPercent = activeTbrPercent
-        sample = StatusSnapshot(reservoirUnits, batteryPercent, batteryBars, timestamp, elapsedRealtime())
+        this.activeBasalRate = activeBasalRate ?: 0.0
+        sample =
+            StatusSnapshot(
+                reservoirUnits,
+                batteryPercent,
+                batteryBars,
+                activeBasalRate,
+                activeTbrPercent,
+                isSuspended,
+                timestamp,
+                elapsedRealtime(),
+            )
         lastConnectionTime = timestamp
     }
 
     @Synchronized
     fun reservoirUnitsIfFresh(): Double? = statusSnapshot?.reservoirUnits
+
+    /**
+     * Derive the scheduled base rate only from a fresh measured status. A zero-percent TBR cannot
+     * reveal the underlying rate, and this current-rate observation never proves profile coherence.
+     */
+    @Synchronized
+    fun baseBasalRateIfFresh(): Double? =
+        statusSnapshot?.let { status ->
+            val rate = status.activeBasalRate ?: return@let null
+            val percent = status.activeTbrPercent
+            if (status.isSuspended || percent <= 0) null else rate * 100.0 / percent
+        }
 
     @Synchronized
     fun invalidateStatus() {
