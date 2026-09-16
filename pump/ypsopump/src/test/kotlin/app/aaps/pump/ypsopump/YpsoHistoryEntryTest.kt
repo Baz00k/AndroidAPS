@@ -28,6 +28,14 @@ class YpsoHistoryEntryTest {
     // implementations. This contract wire verifies that it uses the same strict 19-byte schema;
     // it is not represented as a transformed target capture.
     private val activeProfileChangedContractShape = "78563412060000000000006c00000000001319".hex()
+    // Reference-mapped families (combined bolus, TBR abort, alarm) with independently generated
+    // CRC. Type identities are published by two third-party Ypso protocol implementations; these
+    // wires exercise the strict common layout beyond the target-paired numbers.
+    private val referenceMappedContractShapes = mapOf(
+        "7856341212fa00000000006e00000000000698" to Triple(18, 250, 0),
+        "78563412209600000000006f00000000002ebf" to Triple(32, 150, 0),
+        "78563412690000000000007000000000000663" to Triple(105, 0, 0),
+    )
 
     @Test
     fun `strict fixture exposes unsigned little endian fields without inventing an epoch`() {
@@ -79,6 +87,17 @@ class YpsoHistoryEntryTest {
         assertEquals(0, entry.value2)
         assertEquals(0, entry.value3)
         assertEquals(0, entry.index)
+    }
+
+    @Test
+    fun `reference-mapped contract rows use the strict common wire layout`() {
+        for ((wire, expected) in referenceMappedContractShapes) {
+            val entry = checkNotNull(YpsoHistoryEntry.decodeWire(wire.hex()))
+            assertEquals(expected.first, entry.eventType)
+            assertEquals(expected.second, entry.value1)
+            assertEquals(expected.third, entry.value2)
+            assertEquals(0, entry.index)
+        }
     }
 
     @Test

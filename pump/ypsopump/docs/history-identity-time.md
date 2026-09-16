@@ -2,7 +2,8 @@
 
 > **Evidence scope:** one isolated YpsoPump running master/supervisor firmware V05.00.52,
 > control protocol 1.3 and history service 1.4, observed on 2026-09-15 and 2026-09-16. This defines the
-> Step 08 ingestion seam; it does not enable therapy or claim command attribution. It is a domain
+> Step 08 ingestion seam; it does not enable therapy or claim command attribution. Event type
+> identity follows the two-tier evidence policy in **Event semantics** below. It is a domain
 > contract: no production ingestion caller constructs snapshots yet, and the hardened stable-head
 > capture procedure has not been executed against the target (the protected captures predate it).
 > CRC validation uses the project's current CRC-16 interpretation, which is not an independently
@@ -25,8 +26,11 @@ and the target operator paired on-pump
 A→B and B→A actions one-to-one with two new therapy-data rows. Type 6 is therefore decoded as a
 profile-coherence invalidation event. Its value-field meaning is deliberately not inferred: the
 destination A/B profile must be read from the authoritative active-profile setting by Step 09.
-`YpsoHistoryEntryTest` includes an independently CRC-generated type-6 protocol-contract wire to
-exercise the strict common schema; it is not represented as a captured target wire.
+Both references also index that active program at setting 1 with values 3=A and 10=B, and place the
+hourly profile A/B ranges at indices 14–37 and 38–61; that corroborates the Step 09 read-back plan
+but does not alter this history contract. `YpsoHistoryEntryTest` includes independently
+CRC-generated type-6 and reference-mapped protocol-contract wires to exercise the strict common
+schema; they are not represented as captured target wires.
 
 ## Strict wire schema
 
@@ -135,23 +139,68 @@ No boot-time conversion is needed to identify or date these event rows. The refe
 `bootTimeToFactoryTime` field was not independently established on this target and is not used as a
 fallback. The authenticated reboot counter is retained only as snapshot/reset evidence.
 
-## Target-evidenced event semantics
+## Event semantics
 
-| Type | Values | Supported meaning | Paired evidence |
+Type identity (which number means what) is supported in two tiers:
+
+- **Target-paired** for the numbers this session observed against the pump's own display or actions:
+  2, 3, 4, 6, 9, 10, 14, 16.
+- **Reference-corroborated** for the remaining numbers in the published event table, where two
+  third-party protocol implementations agree
+  ([SandraK82/ypsopump-research@de7e867](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/ypsopump-test/app/src/main/java/com/ypsopump/test/data/PumpDataModels.kt#L34-L67),
+  [vicktor/ypsomed-pump@71ae55e](https://github.com/vicktor/ypsomed-pump/blob/71ae55e372cb7a4fe1c96bfdd536d3beccbbb8a2/sdk/ypso-sdk/src/main/java/com/ypsopump/sdk/internal/protocol/YpsoProtocolConstants.kt#L48-L95)).
+  All eight target-paired numbers agree with that table. vicktor additionally documents empirical
+  confirmation on firmware V05.02.03; the target runs V05.00.52 and the numbering agrees.
+
+Value layouts are claimed only where the target paired them, plus the centi-unit bolus convention
+shared by the paired rows and repeated by both references for the other bolus phases. Target rows
+always override reference claims: both references treat type-3 `value2` as a second amount in units,
+while the paired target row shows it is the programmed duration in minutes. `value2` of other bolus
+phases, backup rows, cap changes, date/time changes, rewind, daily totals, battery removal and alarm
+value fields stay unclaimed.
+
+| Type | Kind | Claimed values | Evidence |
 |---:|---|---|---|
-| 2 | value1 / 100 U | completed immediate bolus, origin unknown | manual 1.20, 1.50 and two independently confirmed 2.00 U pump-initiated rows |
-| 3 | value1 / 100 U, value2 minutes | completed delayed/square bolus | 3.00 U / 15 min and 3.50 U / 15 min |
-| 4 | value1 / 100 U | priming finished | 1.00 U priming at 16:15 |
-| 6 | values not interpreted | active basal profile changed; invalidate profile coherence and read active-profile setting | paired manual A→B and B→A actions plus two independent Ypso protocol type maps; strict target wires pending |
-| 9 | value1 percent, value2 requested minutes | TBR started/running | controlled 150% / 15 min start |
-| 10 | value1 percent, value2 elapsed/final minutes | paired against the same identity's type-9 requested duration: lower means cancel, equal means normal expiry; standalone or greater values unresolved (no requested duration is exposed) | controlled 150% / 15 min became 150% / 1 min on cancel; controlled 110% / 15 min became 110% / 15 min on expiry; historical standalone 200% / 30 min and 170% / 30 min unresolved |
-| 14 | value1=3 or 10 | Stop or Resume respectively | controlled Stop/Resume pair |
-| 16 | firmware-specific values unresolved | rewind finished | rewind at 16:13 |
+| 1 | DELAYED_BOLUS_RUNNING | value1 / 100 U | reference |
+| 2 | IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED | value1 / 100 U | target-paired: manual 1.20/1.50 U and two pump-initiated 2.00 U rows |
+| 3 | DELAYED_BOLUS_COMPLETED | value1 / 100 U, value2 minutes | target-paired: 3.00 U / 15 min; duration overrides the reference amount claim |
+| 4 | PRIMING_FINISHED | value1 / 100 U | target-paired: 1.00 U priming |
+| 5 | BOLUS_STEP_CHANGED | — | reference |
+| 6 | BASAL_PROFILE_CHANGED | — | target action pair + reference; A/B resolved by setting read-back |
+| 7 | BASAL_PROFILE_A_CHANGED | — | reference; hourly values of profile A were edited, active profile not implied |
+| 8 | BASAL_PROFILE_B_CHANGED | — | reference; hourly values of profile B were edited, active profile not implied |
+| 9 | TEMP_BASAL_STARTED | value1 percent, value2 requested minutes | target-paired: 150% / 15 min start |
+| 10 | TEMP_BASAL_COMPLETED / CANCELLED / TERMINAL_UNRESOLVED | value1 percent, value2 elapsed minutes versus the same identity's request | target-paired cancel and expiry; standalone or greater values unresolved |
+| 12 | DATE_CHANGED | — | reference |
+| 13 | TIME_CHANGED | — | reference |
+| 14 | PUMP_MODE_CHANGED | value1=3 Stop, 10 Resume | target-paired Stop/Resume |
+| 16 | REWIND_FINISHED | — | target-paired: rewind at 16:13 |
+| 17 | COMBINED_BOLUS_RUNNING | value1 / 100 U | reference |
+| 18 | COMBINED_BOLUS_COMPLETED | value1 / 100 U | reference |
+| 19 | IMMEDIATE_BOLUS_RUNNING | value1 / 100 U | reference |
+| 20 | DELAYED_BOLUS_BACKUP | — | reference |
+| 21 | COMBINED_BOLUS_BACKUP | — | reference |
+| 22 | TEMP_BASAL_BACKUP | — | reference |
+| 23 | DAILY_TOTAL_INSULIN | — | reference |
+| 24 | BATTERY_REMOVED | — | reference |
+| 25 | CANNULA_PRIMING_FINISHED | — | reference |
+| 26 | BLIND_BOLUS_COMPLETED | value1 / 100 U | reference |
+| 27 | BLIND_BOLUS_RUNNING | value1 / 100 U | reference |
+| 28 | BLIND_BOLUS_ABORTED | value1 / 100 U | reference |
+| 29 | IMMEDIATE_BOLUS_ABORTED | value1 / 100 U | reference |
+| 30 | DELAYED_BOLUS_ABORTED | value1 / 100 U | reference |
+| 31 | COMBINED_BOLUS_ABORTED | value1 / 100 U | reference |
+| 32 | TEMP_BASAL_ABORTED | value1 percent | reference; does not yet terminate tracked mutable TBR state |
+| 33 | BOLUS_AMOUNT_CAP_CHANGED | — | reference |
+| 34 | BASAL_RATE_CAP_CHANGED | — | reference |
+| 100–108 | ALARM | value fields unclaimed; explicit alarm code | reference |
+| 150 | DELIVERY_STATUS_CHANGED | — | reference |
 
-All other event types are unsupported until paired on the target. In particular, reference enums are
-not promoted to supported semantics by name alone. Priming is distinguishable from therapy history.
-Type 2 contains no qualified command-origin field, so manual and remote immediate boluses cannot yet
-be distinguished. Partial/cancelled bolus layouts remain unresolved. A TBR terminal state is
+Every other number, including unenumerated alert numbers 109–199, classifies `UNKNOWN` and still
+blocks command attribution. Priming is distinguishable from therapy history. Aborted-bolus rows
+classify by reference name with value1 claimed as the amount; which field is delivered versus
+requested remains unpaired and unclaimed. Type 2 contains no qualified command-origin field, so
+manual and remote immediate boluses cannot yet be distinguished. A TBR terminal state is
 distinguishable as cancel or normal expiry only when the earlier state of that exact identity was
 persisted; command origin is still not encoded and TBR command attribution remains blocked.
 
@@ -195,9 +244,11 @@ status-only controller was handed back enabled/running; mylife and the bench rem
 app data was cleared.
 
 The final unresolved selector operation remains protected evidence only and must not be interpreted
-as accepted or retried. Remote-command origin and partial/cancelled bolus layouts remain unobserved
-and blocked. Clock-change insertion behavior and repeated physical reboot persistence are evidenced,
-while clock-offset reconstruction and sequence-reset behavior remain fail-closed because those cases
-were not observed. TBR cancel versus the paired 15-minute normal expiry is evidenced, while other
-terminal values remain unresolved. These limitations do not receive inferred semantics from reference enums,
-receipt-time proximity, amount matching or selector position.
+as accepted or retried. Remote-command origin remains unobserved and blocked; which field of an
+aborted, combined or blind bolus row is delivered versus requested remains unclaimed, and no
+unpaired row may be used for attribution. Clock-change insertion behavior and repeated physical
+reboot persistence are evidenced, while clock-offset reconstruction and sequence-reset behavior
+remain fail-closed because those cases were not observed. TBR cancel versus the paired 15-minute
+normal expiry is evidenced, while other terminal values remain unresolved. Reference-corroborated
+type identities are admitted only as documented above; they never substitute for receipt-time
+proximity, amount matching or selector position, and they never claim command origin.

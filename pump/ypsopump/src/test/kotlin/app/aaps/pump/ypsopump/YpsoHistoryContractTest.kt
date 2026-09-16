@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.pump.ypsopump.history.YpsoAlarm
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryAttribution
 import app.aaps.pump.ypsopump.history.YpsoHistoryAttributor
@@ -58,6 +59,100 @@ class YpsoHistoryContractTest {
         assertEquals(listOf(101L, 102L), stable.newEventsOldestFirst.map { it.identity.sequence })
         assertTrue(stable.newEventsOldestFirst.all { it.semantics.kind == YpsoHistoryKind.BASAL_PROFILE_CHANGED })
         assertTrue(stable.newEventsOldestFirst.none { it.semantics.commandOriginAttributable })
+    }
+
+    @Test
+    fun `reference-corroborated event types classify to distinct kinds`() {
+        val expected = linkedMapOf(
+            1 to YpsoHistoryKind.DELAYED_BOLUS_RUNNING,
+            5 to YpsoHistoryKind.BOLUS_STEP_CHANGED,
+            7 to YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
+            8 to YpsoHistoryKind.BASAL_PROFILE_B_CHANGED,
+            12 to YpsoHistoryKind.DATE_CHANGED,
+            13 to YpsoHistoryKind.TIME_CHANGED,
+            17 to YpsoHistoryKind.COMBINED_BOLUS_RUNNING,
+            18 to YpsoHistoryKind.COMBINED_BOLUS_COMPLETED,
+            19 to YpsoHistoryKind.IMMEDIATE_BOLUS_RUNNING,
+            20 to YpsoHistoryKind.DELAYED_BOLUS_BACKUP,
+            21 to YpsoHistoryKind.COMBINED_BOLUS_BACKUP,
+            22 to YpsoHistoryKind.TEMP_BASAL_BACKUP,
+            23 to YpsoHistoryKind.DAILY_TOTAL_INSULIN,
+            24 to YpsoHistoryKind.BATTERY_REMOVED,
+            25 to YpsoHistoryKind.CANNULA_PRIMING_FINISHED,
+            26 to YpsoHistoryKind.BLIND_BOLUS_COMPLETED,
+            27 to YpsoHistoryKind.BLIND_BOLUS_RUNNING,
+            28 to YpsoHistoryKind.BLIND_BOLUS_ABORTED,
+            29 to YpsoHistoryKind.IMMEDIATE_BOLUS_ABORTED,
+            30 to YpsoHistoryKind.DELAYED_BOLUS_ABORTED,
+            31 to YpsoHistoryKind.COMBINED_BOLUS_ABORTED,
+            32 to YpsoHistoryKind.TEMP_BASAL_ABORTED,
+            33 to YpsoHistoryKind.BOLUS_AMOUNT_CAP_CHANGED,
+            34 to YpsoHistoryKind.BASAL_RATE_CAP_CHANGED,
+            150 to YpsoHistoryKind.DELIVERY_STATUS_CHANGED,
+        )
+        for ((type, kind) in expected) {
+            assertEquals(kind, YpsoHistoryClassifier.classify(entry(sequence = 100, type = type)).kind, "type $type")
+        }
+    }
+
+    @Test
+    fun `reference-mapped bolus rows claim only the paired centi-unit amount convention`() {
+        for (type in listOf(1, 17, 18, 19, 26, 27, 28, 29, 30, 31)) {
+            val semantics = YpsoHistoryClassifier.classify(entry(sequence = 100, type = type, v1 = 250, v2 = 99))
+            assertEquals(2.5, semantics.amountUnits, "type $type")
+            assertNull(semantics.durationMinutes, "type $type")
+            assertNull(semantics.requestedDurationMinutes, "type $type")
+            assertNull(semantics.elapsedDurationMinutes, "type $type")
+            assertNull(semantics.percent, "type $type")
+        }
+        // Target evidence overrides the reference claim that type 3 value2 is a second amount.
+        val delayed = YpsoHistoryClassifier.classify(entry(sequence = 100, type = 3, v1 = 300, v2 = 15))
+        assertEquals(3.0, delayed.amountUnits)
+        assertEquals(15, delayed.durationMinutes)
+        assertNull(delayed.elapsedDurationMinutes)
+        // Backup rows have no corroborated value layout at all.
+        for (type in listOf(20, 21, 22)) {
+            val backup = YpsoHistoryClassifier.classify(entry(sequence = 100, type = type, v1 = 250, v2 = 15))
+            assertNull(backup.amountUnits, "type $type")
+            assertNull(backup.durationMinutes, "type $type")
+            assertNull(backup.percent, "type $type")
+        }
+        // The TBR abort row claims the percent convention only; elapsed time stays unclaimed.
+        val abort = YpsoHistoryClassifier.classify(entry(sequence = 100, type = 32, v1 = 150, v2 = 7))
+        assertEquals(150, abort.percent)
+        assertNull(abort.elapsedDurationMinutes)
+        assertNull(abort.requestedDurationMinutes)
+    }
+
+    @Test
+    fun `alarm rows decode to an explicit alarm code`() {
+        val expected = linkedMapOf(
+            100 to YpsoAlarm.BATTERY_REMOVED,
+            101 to YpsoAlarm.BATTERY_EMPTY,
+            102 to YpsoAlarm.REUSABLE_ERROR,
+            103 to YpsoAlarm.NO_CARTRIDGE,
+            104 to YpsoAlarm.CARTRIDGE_EMPTY,
+            105 to YpsoAlarm.OCCLUSION,
+            106 to YpsoAlarm.AUTO_STOP,
+            107 to YpsoAlarm.LIPO_DISCHARGED,
+            108 to YpsoAlarm.BATTERY_REJECTED,
+        )
+        for ((type, alarm) in expected) {
+            val semantics = YpsoHistoryClassifier.classify(entry(sequence = 100, type = type))
+            assertEquals(YpsoHistoryKind.ALARM, semantics.kind, "type $type")
+            assertEquals(alarm, semantics.alarm, "type $type")
+            assertNull(semantics.amountUnits, "type $type")
+            assertEquals(false, semantics.commandOriginAttributable, "type $type")
+        }
+    }
+
+    @Test
+    fun `unmapped event numbers stay fail-closed`() {
+        for (type in listOf(0, 11, 15, 35, 99, 109, 149, 151, 255)) {
+            val semantics = YpsoHistoryClassifier.classify(entry(sequence = 100, type = type))
+            assertEquals(YpsoHistoryKind.UNKNOWN, semantics.kind, "type $type")
+            assertNull(semantics.alarm, "type $type")
+        }
     }
 
     @Test
