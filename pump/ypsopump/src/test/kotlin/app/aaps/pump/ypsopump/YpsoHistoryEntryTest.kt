@@ -24,6 +24,10 @@ class YpsoHistoryEntryTest {
         "785634120e0a00000000006a0000000000ce63" to Triple(14, 10, 0),
         "785634121091ff0000c9006b0000000000f3e8" to Triple(16, 65425, 0),
     )
+    // Type 6 is independently published as BASAL_PROFILE_CHANGED by two Ypso protocol
+    // implementations. This contract wire verifies that it uses the same strict 19-byte schema;
+    // it is not represented as a transformed target capture.
+    private val activeProfileChangedContractShape = "78563412060000000000006c00000000001319".hex()
 
     @Test
     fun `strict fixture exposes unsigned little endian fields without inventing an epoch`() {
@@ -65,6 +69,16 @@ class YpsoHistoryEntryTest {
             assertEquals(expected.third, entry.value2)
             assertEquals(0, entry.index)
         }
+    }
+
+    @Test
+    fun `active profile changed contract row uses the strict common wire layout`() {
+        val entry = checkNotNull(YpsoHistoryEntry.decodeWire(activeProfileChangedContractShape))
+        assertEquals(6, entry.eventType)
+        assertEquals(0, entry.value1)
+        assertEquals(0, entry.value2)
+        assertEquals(0, entry.value3)
+        assertEquals(0, entry.index)
     }
 
     @Test

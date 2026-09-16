@@ -5,6 +5,7 @@ enum class YpsoHistoryKind {
     IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
     DELAYED_BOLUS_COMPLETED,
     PRIMING_FINISHED,
+    BASAL_PROFILE_CHANGED,
     TEMP_BASAL_STARTED,
     TEMP_BASAL_COMPLETED,
     TEMP_BASAL_CANCELLED,
@@ -20,7 +21,12 @@ data class YpsoHistorySemantics(
     val kind: YpsoHistoryKind,
     val amountUnits: Double? = null,
     val percent: Int? = null,
+    /** Delayed/square bolus programmed duration (type 3); never a TBR request or elapsed value. */
     val durationMinutes: Int? = null,
+    /** Requested TBR minutes from the active type-9 row. */
+    val requestedDurationMinutes: Int? = null,
+    /** Elapsed/final TBR minutes from a terminal type-10 row or in-place rewrite. */
+    val elapsedDurationMinutes: Int? = null,
     val modeChange: YpsoPumpModeChange? = null,
     val commandOriginAttributable: Boolean = false,
 )
@@ -42,15 +48,16 @@ object YpsoHistoryClassifier {
                 durationMinutes = entry.value2,
             )
             4 -> YpsoHistorySemantics(YpsoHistoryKind.PRIMING_FINISHED, amountUnits = entry.value1 / 100.0)
+            6 -> YpsoHistorySemantics(YpsoHistoryKind.BASAL_PROFILE_CHANGED)
             9 -> YpsoHistorySemantics(
                 YpsoHistoryKind.TEMP_BASAL_STARTED,
                 percent = entry.value1,
-                durationMinutes = entry.value2,
+                requestedDurationMinutes = entry.value2,
             )
             10 -> YpsoHistorySemantics(
                 YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED,
                 percent = entry.value1,
-                durationMinutes = entry.value2,
+                elapsedDurationMinutes = entry.value2,
             )
             14 -> when (entry.value1) {
                 3 -> YpsoHistorySemantics(YpsoHistoryKind.PUMP_MODE_CHANGED, modeChange = YpsoPumpModeChange.STOPPED)
@@ -164,6 +171,8 @@ sealed interface YpsoHistoryReconciliation {
         INVALID_ORDER_OR_RESET,
         SEQUENCE_RESET_AFTER_REBOOT,
         SEQUENCE_GENERATION_OVERFLOW,
+        TRACKED_TBR_ROW_MISSING,
+        MULTIPLE_ACTIVE_TBR_ROWS,
     }
 }
 
@@ -218,13 +227,18 @@ object YpsoHistoryReconciler {
         val newEvents = mutableListOf<YpsoHistoryEvent>()
         val stateUpdates = mutableListOf<YpsoHistoryEvent>()
         var activeTbr = cursor.activeTbr
-        var trackedTbrCovered = activeTbr == null
         activeTbr?.let { tracked ->
             val current = snapshot.rowsNewestFirst.firstOrNull {
                 it.sequence == tracked.identity.sequence && it.fingerprint() == tracked.fingerprint
-            }
-            trackedTbrCovered = current != null
-            if (current != null && current.stateFingerprint() != tracked.stateFingerprint) {
+            } ?: return YpsoHistoryReconciliation.Gap(
+                if (snapshot.fullCoverage) {
+                    // Complete coverage proves the mutable row is gone; its terminal state is unknowable.
+                    YpsoHistoryReconciliation.Reason.TRACKED_TBR_ROW_MISSING
+                } else {
+                    YpsoHistoryReconciliation.Reason.COVERAGE_INCOMPLETE
+                },
+            )
+            if (current.stateFingerprint() != tracked.stateFingerprint) {
                 val update = YpsoHistoryEvent(
                     tracked.identity,
                     current,
@@ -238,7 +252,8 @@ object YpsoHistoryReconciler {
                                         else -> YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED
                                     },
                                 percent = current.value1,
-                                durationMinutes = current.value2,
+                                requestedDurationMinutes = tracked.requestedDurationMinutes,
+                                elapsedDurationMinutes = current.value2,
                             )
                         } else {
                             YpsoHistoryClassifier.classify(current)
@@ -272,9 +287,8 @@ object YpsoHistoryReconciler {
             val event = YpsoHistoryEvent(identity, entry)
             newEvents += event
             if (event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED) {
-                if (!trackedTbrCovered) {
-                    return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.COVERAGE_INCOMPLETE)
-                }
+                // The snapshot validator rejects more than one active row, and a tracked row was
+                // already verified above, so this can only be a legitimate replacement start.
                 activeTbr = YpsoMutableHistoryState(
                     identity,
                     entry.fingerprint(),
@@ -310,7 +324,7 @@ object YpsoHistoryReconciler {
         pumpSerial: String,
         sequenceGeneration: Int,
     ): YpsoMutableHistoryState? =
-        firstOrNull { YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED }?.let {
+        singleOrNull { YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED }?.let {
             YpsoMutableHistoryState(
                 YpsoEventIdentity(pumpSerial, sequenceGeneration, it.sequence),
                 it.fingerprint(),
@@ -322,6 +336,13 @@ object YpsoHistoryReconciler {
 
     private fun invalidStableSnapshot(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Gap? {
         val stableCount = snapshot.countAfter
+        val activeTbrRows = snapshot.rowsNewestFirst.count {
+            YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED
+        }
+        if (activeTbrRows > 1) {
+            // The pump permits one active TBR; two active rows mean the model cannot choose safely.
+            return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.MULTIPLE_ACTIVE_TBR_ROWS)
+        }
         val duplicateIdenticalSequence = snapshot.rowsNewestFirst
             .groupBy(YpsoHistoryEntry::sequence)
             .values
@@ -384,7 +405,9 @@ object YpsoHistoryAttributor {
         if (stable.previousCursor != attempt.cursor) {
             return YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.HISTORY_NOT_STABLE)
         }
-        val observed = stable.newEventsOldestFirst + stable.stateUpdates
+        // In-place state updates keep the previous identity and are not strictly newer events;
+        // they must never satisfy post-dispatch attribution.
+        val observed = stable.newEventsOldestFirst
         if (observed.any { it.semantics.kind == YpsoHistoryKind.UNKNOWN }) {
             return YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.UNSUPPORTED_EVENT_KIND)
         }

@@ -3,9 +3,10 @@ package app.aaps.pump.ypsopump
 import app.aaps.pump.ypsopump.comm.YpsoCommandCodes
 import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.comm.commands.CountCommand
-import app.aaps.pump.ypsopump.comm.commands.IndexCommand
+import app.aaps.pump.ypsopump.comm.commands.EventValueCommand
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -25,7 +26,16 @@ class HistoryCommandTest {
     }
 
     @Test
-    fun `index is an exact GLB selector`() {
-        assertEquals(YpsoGlb.encode(42).toList(), IndexCommand(YpsoCommandCodes.EVENT_ENTRY_INDEX, 42).encode().toList())
+    fun `event value rejects anything but an exact CRC-valid wire row`() {
+        val command = EventValueCommand()
+        command.decode(byteArrayOf(1, 2, 3))
+        assertFalse(command.success)
+        assertNull(command.entry)
+
+        command.decode("78563412060000000000006c00000000001319".hex())
+        assertTrue(command.success)
+        assertEquals(6, command.entry?.eventType)
     }
+
+    private fun String.hex(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

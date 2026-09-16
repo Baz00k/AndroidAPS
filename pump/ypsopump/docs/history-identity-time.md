@@ -2,16 +2,31 @@
 
 > **Evidence scope:** one isolated YpsoPump running master/supervisor firmware V05.00.52,
 > control protocol 1.3 and history service 1.4, observed on 2026-09-15 and 2026-09-16. This defines the
-> Step 08 ingestion seam; it does not enable therapy or claim command attribution.
+> Step 08 ingestion seam; it does not enable therapy or claim command attribution. It is a domain
+> contract: no production ingestion caller constructs snapshots yet, and the hardened stable-head
+> capture procedure has not been executed against the target (the protected captures predate it).
+> CRC validation uses the project's current CRC-16 interpretation, which is not an independently
+> qualified firmware contract; the paired target rows decoded with it are the empirical support.
 
 Protected capture provenance: the consolidated private target capture set has SHA-256
 `e3d8ae3d842e32c087a7597b50133cd02d88faeb725d4c0747082ce70b644b82`. Raw rows and real keys are
 not published. The 2026-09-15/16 read-only follow-up row bundle has SHA-256
 `ade9c3f6ea6676425e987f6d4b8f11228d61769d0998a4b58e8ab16672ea13b5`; it contains no key material
-and is also kept private. `YpsoHistoryEntryTest` contains shape-only transformed target fixtures for all seven
-supported kinds (types 2, 3, 4, 9, 10, 14, 16): identifying time/sequence fields were replaced and
+and is also kept private. `YpsoHistoryEntryTest` contains shape-only transformed target fixtures for
+the captured kinds (types 2, 3, 4, 9, 10, 14, 16): identifying time/sequence fields were replaced and
 each CRC recomputed with an independent script. `YpsoHistoryContractTest` decodes those wires and
 asserts their evidenced classification without command origin.
+
+Active-profile switching maps to protocol type 6 (`BASAL_PROFILE_CHANGED`). Two independently
+published Ypso protocol implementations agree on that type
+([SandraK82/ypsopump-research@de7e867](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/ypsopump-test/app/src/main/java/com/ypsopump/test/data/PumpDataModels.kt#L34-L44),
+[vicktor/ypsomed-pump@71ae55e](https://github.com/vicktor/ypsomed-pump/blob/71ae55e372cb7a4fe1c96bfdd536d3beccbbb8a2/sdk/ypso-sdk/src/main/java/com/ypsopump/sdk/internal/protocol/YpsoProtocolConstants.kt#L66-L72)),
+and the target operator paired on-pump
+A→B and B→A actions one-to-one with two new therapy-data rows. Type 6 is therefore decoded as a
+profile-coherence invalidation event. Its value-field meaning is deliberately not inferred: the
+destination A/B profile must be read from the authoritative active-profile setting by Step 09.
+`YpsoHistoryEntryTest` includes an independently CRC-generated type-6 protocol-contract wire to
+exercise the strict common schema; it is not represented as a captured target wire.
 
 ## Strict wire schema
 
@@ -51,10 +66,15 @@ Raw 17-byte values, bad CRC, short/long values and trailing fallbacks are reject
   normalizes type 9/10 to one TBR type and excludes value2/value3, while retaining factory time,
   percentage and sequence. A separate state fingerprint retains the exact type and values so the
   terminal rewrite is emitted once as an unordered state update under the original event identity.
+  Semantics keep the two meanings apart: the active row carries `requestedDurationMinutes`, a
+  terminal rewrite or standalone terminal row carries `elapsedDurationMinutes`, and
+  `durationMinutes` remains only the programmed duration of a delayed bolus.
   The cursor retains the pump's single active TBR independently of the newest sequence, because a
-  later bolus can make the mutable TBR row older than the cursor before cancellation. Other
-  conflicting content for one sequence blocks ingestion. A newer TBR start cannot replace tracked
-  mutable state unless the prior TBR row is covered by the scan; missing coverage produces a gap.
+  later bolus can make the mutable TBR row older than the cursor before cancellation. Every
+  reconciliation verifies that tracked row: absence under complete coverage emits
+  `TRACKED_TBR_ROW_MISSING`, absence under partial coverage emits `COVERAGE_INCOMPLETE`, and more
+  than one active type-9 row emits `MULTIPLE_ACTIVE_TBR_ROWS` instead of retaining or choosing stale
+  state. Other conflicting content for one sequence blocks ingestion.
 - A 32-bit sequence decrease is accepted as wrap only within the normal unsigned forward half-range
   and when the authenticated pump reboot counter has not changed. A decrease coincident with reboot
   is an unresolved reset/wrap ambiguity and produces a gap. A reboot with a continuing sequence does
@@ -122,8 +142,9 @@ fallback. The authenticated reboot counter is retained only as snapshot/reset ev
 | 2 | value1 / 100 U | completed immediate bolus, origin unknown | manual 1.20, 1.50 and two independently confirmed 2.00 U pump-initiated rows |
 | 3 | value1 / 100 U, value2 minutes | completed delayed/square bolus | 3.00 U / 15 min and 3.50 U / 15 min |
 | 4 | value1 / 100 U | priming finished | 1.00 U priming at 16:15 |
-| 9 | value1 percent, value2 minutes | TBR started/running | controlled 150% / 15 min start |
-| 10 | value1 percent, value2 elapsed/final minutes | paired against the same identity's type-9 requested duration: lower means cancel, equal means normal expiry; standalone or greater values unresolved | controlled 150% / 15 min became 150% / 1 min on cancel; controlled 110% / 15 min became 110% / 15 min on expiry; historical standalone 200% / 30 min and 170% / 30 min unresolved |
+| 6 | values not interpreted | active basal profile changed; invalidate profile coherence and read active-profile setting | paired manual A→B and B→A actions plus two independent Ypso protocol type maps; strict target wires pending |
+| 9 | value1 percent, value2 requested minutes | TBR started/running | controlled 150% / 15 min start |
+| 10 | value1 percent, value2 elapsed/final minutes | paired against the same identity's type-9 requested duration: lower means cancel, equal means normal expiry; standalone or greater values unresolved (no requested duration is exposed) | controlled 150% / 15 min became 150% / 1 min on cancel; controlled 110% / 15 min became 110% / 15 min on expiry; historical standalone 200% / 30 min and 170% / 30 min unresolved |
 | 14 | value1=3 or 10 | Stop or Resume respectively | controlled Stop/Resume pair |
 | 16 | firmware-specific values unresolved | rewind finished | rewind at 16:13 |
 
@@ -142,20 +163,20 @@ schema ticket.
 
 On 2026-09-16 the operator switched the active basal profile on-pump from A to B at pump-local 10:29,
 then from B back to A at 10:30, and observed exactly two new entries in the pump's history display.
-This establishes that manual active-profile switches are history-producing actions and must be
-considered by profile-coherence logic. It does **not** establish an event type or value layout: the
-persistent event iterator could not be safely repositioned while an earlier selector write remained
-unresolved, and an attempted read-only full-ring traversal was stopped as operationally unsuitable
-without producing a completed capture. No reference-enum type is assigned. Strict row pairing and
-active-profile conflict handling remain required by Step 09 before profile synchronization can be
-supported.
+The driver maps these history-producing actions to the independently corroborated type-6 profile
+change event. The persistent event iterator could not be safely repositioned while an earlier
+selector write remained unresolved, and an attempted read-only full-ring traversal was stopped as
+operationally unsuitable without producing strict target wires. Step 09 must consume type 6 to
+invalidate comparison evidence and resolve the active profile via settings read-back.
 
 ## Attempt attribution boundary
 
 A later therapy implementation must capture and durably persist a stable history cursor **before**
 dispatch. After the attempt it must obtain a stable scan and find exactly one strictly newer event
-compatible with the command-specific contract. No new event, multiple compatible events, unknown
-intervening event types, gaps, or an origin field not encoded by the event all block attribution.
+compatible with the command-specific contract. In-place state updates keep the previous identity and
+are never attribution evidence, however many are observed. No new event, multiple compatible events,
+unknown intervening event types, gaps, or an origin field not encoded by the event all block
+attribution.
 History freshness means this stable after-cursor proof, not proximity to the phone's receipt time.
 
 This Step 08 contract deliberately keeps remote bolus and TBR attribution blocked. Amount equality,
