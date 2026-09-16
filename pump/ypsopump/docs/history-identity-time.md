@@ -144,12 +144,13 @@ fallback. The authenticated reboot counter is retained only as snapshot/reset ev
 Type identity (which number means what) is supported in two tiers:
 
 - **Target-paired** for the numbers this session observed against the pump's own display or actions:
-  2, 3, 4, 6, 9, 10, 14, 16.
+  2, 3, 4, 6, 9, 10, 14, 16, and alarm codes 101, 103 and 104 (operator-confirmed against the pump's
+  displayed alarm history on 2026-09-16).
 - **Reference-corroborated** for the remaining numbers in the published event table, where two
   third-party protocol implementations agree
   ([SandraK82/ypsopump-research@de7e867](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/ypsopump-test/app/src/main/java/com/ypsopump/test/data/PumpDataModels.kt#L34-L67),
   [vicktor/ypsomed-pump@71ae55e](https://github.com/vicktor/ypsomed-pump/blob/71ae55e372cb7a4fe1c96bfdd536d3beccbbb8a2/sdk/ypso-sdk/src/main/java/com/ypsopump/sdk/internal/protocol/YpsoProtocolConstants.kt#L48-L95)).
-  All eight target-paired numbers agree with that table. vicktor additionally documents empirical
+  All target-paired numbers agree with that table. vicktor additionally documents empirical
   confirmation on firmware V05.02.03; the target runs V05.00.52 and the numbering agrees.
 
 Value layouts are claimed only where the target paired them, plus the centi-unit bolus convention
@@ -158,6 +159,14 @@ always override reference claims: both references treat type-3 `value2` as a sec
 while the paired target row shows it is the programmed duration in minutes. `value2` of other bolus
 phases, backup rows, cap changes, date/time changes, rewind, daily totals, battery removal and alarm
 value fields stay unclaimed.
+
+Alarm-family reads share the event family's cursor behavior: a value read returns the row at the
+persistent cursor and advances it, and a cursor advanced past the last occupied row is rejected by
+the pump until it is repositioned. On 2026-09-16 the newest eleven alarm rows were read with strict
+19-byte CRC validation: 7× type 101, 2× type 103 and 2× type 104, and the operator confirmed they
+match the pump's displayed alarm history. The private head-row and follow-up capture bundles have
+SHA-256 `e7673571f942650c30e67cb8b0ddbb62261f3ac7c72657933e7218957815949e` and
+`e4cf104763e4eac668548a58b3cf0855cfe29e25021d1c94a64f48f3ac2bab9b`.
 
 | Type | Kind | Claimed values | Evidence |
 |---:|---|---|---|
@@ -193,7 +202,7 @@ value fields stay unclaimed.
 | 32 | TEMP_BASAL_ABORTED | value1 percent | reference; does not yet terminate tracked mutable TBR state |
 | 33 | BOLUS_AMOUNT_CAP_CHANGED | — | reference |
 | 34 | BASAL_RATE_CAP_CHANGED | — | reference |
-| 100–108 | ALARM | value fields unclaimed; explicit alarm code | reference |
+| 100–108 | ALARM | value fields unclaimed; explicit alarm code | 101/103/104 target-paired: eleven strict target rows read on 2026-09-16 and operator-confirmed against the displayed alarm history; remaining codes reference |
 | 150 | DELIVERY_STATUS_CHANGED | — | reference |
 
 Every other number, including unenumerated alert numbers 109–199, classifies `UNKNOWN` and still
