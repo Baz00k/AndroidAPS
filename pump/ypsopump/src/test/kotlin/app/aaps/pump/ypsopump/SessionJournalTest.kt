@@ -97,7 +97,44 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(14, org.json.JSONObject(body).getInt("version"))
+        assertEquals(15, org.json.JSONObject(body).getInt("version"))
+    }
+
+    @Test
+    fun `version fifteen preserves nested unresolved selector bindings`() {
+        val first = PumpSession.UnresolvedWriteBinding(
+            reboot = 21, reservationId = "first", phase = PumpSession.Phase.POSSIBLY_SENT,
+            operationId = "setting-first", counter = 34,
+            characteristic = "669a0c20-0008-969e-e211-fcbeb3147bc5", purpose = "SETTINGS_SELECTOR",
+            payloadHash = "ab".repeat(32), priorWrite = 33,
+            candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR, evidenceHash = "cd".repeat(32),
+        )
+        val second = first.copy(reservationId = "second", operationId = "setting-second", counter = 35,
+            priorWrite = 34, candidate = PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
+            unresolvedPredecessor = first)
+        val recovery = PumpSession.Reservation(
+            id = "recovery", counter = 36, phase = PumpSession.Phase.POSSIBLY_SENT,
+            operationId = "recover", characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+            purpose = "HISTORY_SELECTOR", payloadHash = "ef".repeat(32), priorWrite = 35,
+            candidate = PumpSession.WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR,
+            unresolvedPredecessor = second,
+        )
+        fun evidence(binding: PumpSession.UnresolvedWriteBinding) = PumpSession.WriteEvidence(
+            operationId = binding.operationId, reservationId = binding.reservationId, counter = binding.counter,
+            characteristic = binding.characteristic, purpose = binding.purpose, payloadHash = binding.payloadHash,
+            priorWrite = binding.priorWrite, candidate = binding.candidate, resolution = null,
+            evidenceHash = binding.evidenceHash, detail = "reviewed unknown settings attempt",
+            unresolvedPredecessor = binding.unresolvedPredecessor,
+        )
+        val state = old.copy(records = old.records.map { it.copy(
+            reboot = 21, write = 36, reservation = recovery,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            benchAmbiguityConvergenceAttempted = true, writeEvidence = listOf(evidence(first), evidence(second)),
+        ) })
+        val journal = SessionJournal(Storage())
+        journal.commit(state)
+        assertEquals(state, journal.load())
+        assertEquals(second.reservation(), journal.load().records.single().reservation!!.unresolvedPredecessor!!.reservation())
     }
 
     @Test

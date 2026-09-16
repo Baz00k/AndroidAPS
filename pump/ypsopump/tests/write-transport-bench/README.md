@@ -225,6 +225,24 @@ classifier.
 
 ### One-shot ambiguity convergence without reboot
 
+The separate `recover-settings-counter` experiment permits one event selector after a reviewed
+unresolved settings convergence. It reserves the next value above both attempted settings counters;
+acceptance across the resulting gap is a hypothesis under test, not a pre-established pump limit.
+The bench first reads the current event row and rejects selecting that row or its next descending
+iterator row. Exact authenticated changed-index read-back is required for semantic acceptance.
+Journal v15 preserves the complete unresolved predecessor binding; no old outcome is
+rewritten as accepted. A not-sent attempt restores that binding. An ambiguous dispatched recovery
+blocks another recovery. This selector-only experiment does not permit therapy commands, settings
+value writes, counter scanning or journal reseeding.
+
+After that event recovery itself remains reviewed unknown, `jump-settings-counter` permits one
+explicit event-selector candidate at `4096`, provided the earlier attempted counter is lower. This
+separately tests whether the assumed low write position is stale. Its three-level predecessor chain
+preserves both settings attempts and the first event recovery. Exact changed-index read-back, not
+the numeric callback, establishes its result. The target accepted this jump and subsequent settings
+reads; it does not establish that every arbitrary jump is accepted. These qualification transitions
+remain bench-only and must not become therapy retry policy.
+
 If one strict-next **event or settings** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
 and review its evidence bundle and record exactly one hash-bound `UNKNOWN` reconciliation record. When
 that record is the sole exact match for the durable reservation, `converge-ambiguity` reserves exactly
@@ -320,8 +338,8 @@ retry a selector from a bare outcome string or infer pump rejection from a local
 
 If all selector frames were locally dispatched and only the final GATT callback is non-zero, the
 write remains `PossiblyApplied`, but the app performs one selector-value read on that same connection
-after the write callback has returned and before closing the connection. This mirrors the Nordic
-request queue used by the reference settings sequence and captures semantic evidence without treating
+after the write callback has returned and before closing the connection. This is an experimental
+timing variant, not a proven Nordic requirement, and captures semantic evidence without treating
 the numeric callback as acceptance or rejection. Earlier-frame failures still close without read-back
 because a complete selector request was not observed.
 

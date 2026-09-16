@@ -105,6 +105,8 @@ class BenchActivity : Activity() {
                 "inspect" -> inspect()
                 "run-selector" -> runConnection(RunKind.SELECTOR)
                 "converge-ambiguity" -> runConnection(RunKind.AMBIGUITY_CONVERGENCE)
+                "recover-settings-counter" -> runConnection(RunKind.SETTINGS_COUNTER_RECOVERY)
+                "jump-settings-counter" -> runConnection(RunKind.SETTINGS_COUNTER_JUMP)
                 "duplicate-counter-probe" -> runConnection(RunKind.DUPLICATE_COUNTER_PROBE)
                 "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
@@ -238,6 +240,8 @@ class BenchActivity : Activity() {
                 // Read-only; the unresolved reservation stays visible in the capture's session snapshot.
                 RunKind.CAPTURE_CURRENT_HISTORY,
                 RunKind.AMBIGUITY_CONVERGENCE,
+                RunKind.SETTINGS_COUNTER_RECOVERY,
+                RunKind.SETTINGS_COUNTER_JUMP,
             )
         ) {
             require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
@@ -298,7 +302,7 @@ class BenchActivity : Activity() {
         connectionId = UUID.randomUUID().toString()
         handshakePhase = HandshakePhase.CONNECTING
         // Keep callbacks and queued follow-up operations on one serialized queue. This makes
-        // after-callback reads equivalent to Nordic's request queue rather than re-entrant GATT calls.
+        // after-callback timing explicit; it is an experimental variant, not a Nordic requirement.
         gatt =
             device.connectGatt(
                 this,
@@ -890,6 +894,7 @@ class BenchActivity : Activity() {
                         RunKind.READINESS_PROBE ->
                             startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
+                        RunKind.SETTINGS_COUNTER_RECOVERY, RunKind.SETTINGS_COUNTER_JUMP -> prepareSettingsCounterRecovery(owner)
                         RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
                         RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
                         RunKind.READ_HISTORY_COUNTS -> readHistoryCounts(owner)
@@ -1324,6 +1329,8 @@ class BenchActivity : Activity() {
                     when (runKind) {
                         RunKind.BOOTSTRAP_NEW_EPOCH -> YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP
                         RunKind.AMBIGUITY_CONVERGENCE -> YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE
+                        RunKind.SETTINGS_COUNTER_RECOVERY -> YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_RECOVERY
+                        RunKind.SETTINGS_COUNTER_JUMP -> YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_JUMP
                         RunKind.DUPLICATE_COUNTER_PROBE -> YpsoBenchWriteCoordinator.BenchWriteMode.DUPLICATE_COUNTER
                         else ->
                             if (forwardGap == 1) {
@@ -1379,6 +1386,31 @@ class BenchActivity : Activity() {
                 },
             )
         if (!started) close(owner)
+    }
+
+    private fun prepareSettingsCounterRecovery(owner: BluetoothGatt) {
+        val selected = checkNotNull(selector)
+        require(selected.category == YpsoRemoteWrite.HISTORY_SELECTOR && selected.indexUuid == YpsoWritePolicy.EVENT_INDEX_UUID)
+        require(selected.value in 0 until checkNotNull(primeEventCount))
+        check(if (runKind == RunKind.SETTINGS_COUNTER_JUMP) session.benchSettingsCounterJumpReady() else session.benchSettingsCounterRecoveryReady())
+        val binding = resolveSelector(owner, selected) ?: return
+        readEncrypted(owner, binding.value, false) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val observed = BenchSelectorEvidenceDecoder.history(body, selected.value)
+                    val before = observed.embeddedHistoryIndex
+                    if (!observed.crcValid || before == null || kotlin.math.abs(before - selected.value) <= 1) {
+                        fail("Recovery requires a valid current event index distinct from requested and next iterator row")
+                        return@fold
+                    }
+                    recorder.fact("SettingsCounterRecoveryPreRead", JSONObject()
+                        .put("write_id", writeId).put("current_index", before)
+                        .put("requested_index", selected.value).put("body_sha256", hash(body)))
+                    handler.post { if (owner === gatt) startSelector(owner) }
+                },
+                onFailure = { fail("Recovery pre-read failed: ${it.message}") },
+            )
+        }
     }
 
     private fun observeSelector(owner: BluetoothGatt) {
@@ -1886,6 +1918,8 @@ class BenchActivity : Activity() {
         SELECTOR,
         BOOTSTRAP_NEW_EPOCH,
         AMBIGUITY_CONVERGENCE,
+        SETTINGS_COUNTER_RECOVERY,
+        SETTINGS_COUNTER_JUMP,
         DUPLICATE_COUNTER_PROBE,
         OBSERVE_SELECTOR,
         READ_SELECTOR_STATE,

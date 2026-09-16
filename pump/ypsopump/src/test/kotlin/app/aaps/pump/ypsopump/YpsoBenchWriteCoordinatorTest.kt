@@ -410,6 +410,84 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `settings counter recovery retains both unknown attempts and reserves above both counters`() {
+        `settings ambiguity convergence repeats the setting id at counter plus one`()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val predecessor = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close unresolved settings convergence")
+        session.recordUnresolvedWriteEvidence(token, predecessor.id, "ef".repeat(32), "second settings attempt unknown")
+        val priorEvidence = session.snapshot()!!.writeEvidence
+        assertTrue(session.benchSettingsCounterRecoveryReady())
+        frames.clear()
+        makeReady()
+        assertTrue(coordinator.writeSelector(
+            writeId = "recover-settings-counter",
+            owner = owner,
+            category = YpsoRemoteWrite.HISTORY_SELECTOR,
+            characteristic = YpsoWritePolicy.EVENT_INDEX_UUID,
+            plaintext = YpsoGlb.encode(17),
+            firmware = "V05.00.52",
+            deadlineMs = 8_000,
+            mode = YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_RECOVERY,
+            dispatch = { frames.add(it.copyOf()) },
+            onOutcome = callbacks::add,
+        ))
+        repeat(4) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+        assertEquals(45, message.counter)
+        assertArrayEquals(YpsoGlb.encode(17), message.body)
+        val binding = session.snapshot()!!.reservation!!.unresolvedPredecessor!!
+        assertEquals(predecessor, binding.reservation())
+        assertEquals(priorEvidence, session.snapshot()!!.writeEvidence)
+        assertFalse(session.benchSettingsCounterRecoveryReady())
+        // Reload validates the nested predecessor independently of live coordinator state.
+        assertEquals(binding, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.reservation!!.unresolvedPredecessor)
+    }
+
+    @Test
+    fun `large counter experiment reserves exactly 4096 and cannot repeat after dispatch`() {
+        `settings counter recovery retains both unknown attempts and reserves above both counters`()
+        val prior = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close after wrong event readback")
+        session.recordUnresolvedWriteEvidence(token, prior.id, "12".repeat(32), "event cursor did not change to requested row")
+        assertTrue(session.benchSettingsCounterJumpReady())
+        val tx = session.begin(token)
+        val next = session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+            PumpSession.WriteIntent("jump", YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR",
+                java.security.MessageDigest.getInstance("SHA-256").digest(YpsoGlb.encode(17)).joinToString("") { "%02x".format(it) }), jump = true)
+        assertEquals(4096, next.counter)
+        assertEquals(prior, next.unresolvedPredecessor!!.reservation())
+        assertFalse(session.benchSettingsCounterJumpReady())
+        assertEquals(next, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.reservation)
+        session.encryptReserved(token, tx, YpsoGlb.encode(17), crypto)
+        session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+        session.finish(token, tx)
+        session.resolveWrite(token, next.id, PumpSession.WriteResolution.ACCEPTED, "34".repeat(32), "changed index verified")
+        assertEquals(PumpSession.Phase.VERIFIED, session.snapshot()!!.reservation!!.phase)
+        assertEquals(4096, session.snapshot()!!.write)
+    }
+
+    @Test
+    fun `settings counter recovery refuses settings retry and restores predecessor when not sent`() {
+        `settings ambiguity convergence repeats the setting id at counter plus one`()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val predecessor = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close unresolved settings convergence")
+        session.recordUnresolvedWriteEvidence(token, predecessor.id, "ef".repeat(32), "second settings attempt unknown")
+        val tx = session.begin(token)
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+                PumpSession.WriteIntent("bad-retry", YpsoWritePolicy.SETTING_ID_UUID.toString(), "SETTINGS_SELECTOR", "ab".repeat(32)))
+        }
+        session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+            PumpSession.WriteIntent("event-recovery", YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR", "ab".repeat(32)))
+        session.markNotSent(token, tx)
+        session.finish(token, tx)
+        assertEquals(predecessor, session.snapshot()!!.reservation)
+        assertEquals(predecessor.counter, session.snapshot()!!.write)
+    }
+
+    @Test
     fun `live reconciliation requires the original GATT connection and generation owner`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))

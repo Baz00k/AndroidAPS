@@ -48,18 +48,88 @@ setting ID `1` at counter `35`. This candidate was safe whether the pump floor w
 because both strict-next and forward-gap-by-one selector behavior had already been measured on this
 target. Frames 1–3 again returned status `0`; frame 4 again returned `139`. The harness then read
 `SETTING_VALUE` on the same authenticated GATT connection, but it dispatched that read synchronously
-from the final `onCharacteristicWrite` call before the Android callback returned. The Nordic 2.8 queue
-used by the reference implementation instead serializes the next operation after callback processing.
-The observed raw status `131` maps to AOSP's internal `GATT_DB_FULL` value and is therefore not
-qualified evidence of pump-level acceptance, rejection, or firmware behavior. Counter `35` remains
+from the final `onCharacteristicWrite` call before the Android callback returned. This alone does not
+establish a sequencing defect: Nordic BLE 2.8.0 also calls `nextRequest(true)` inside its write callback,
+and that method directly dispatches queued reads/writes. The earlier claim that Nordic necessarily
+waits for callback return was incorrect. Likewise, `131` shares AOSP's `GATT_DB_FULL` numeric value,
+but the native GATT client also passes a peer ATT error byte through as the operation status. The
+numeric label does not establish local origin; a correlated HCI/ATT trace is needed. Counter `35` remains
 durably `POSSIBLY_SENT` with reviewed `UNKNOWN` evidence; the epoch's one-shot convergence gate is
 consumed and no third selector attempt is permitted.
 
 The bench harness now supplies a single handler to `connectGatt` and posts characteristic-write
 processing to that same queue, so every later frame and final value read starts only after the prior
-platform callback returns. This corrects the software sequence but has not been run against the target.
-It does not retroactively classify counter `35` and does not make counter `36` safe: with counters
-`34` and `35` unresolved, `36` could be strict-next, `floor + 2`, or the unmeasured `floor + 3`.
+platform callback returns. This is an untested timing variant, not a demonstrated fix for status `131`.
+It does not retroactively classify counter `35`. With counters `34` and `35` unresolved, `36` could
+be strict-next, `floor + 2`, or the unmeasured `floor + 3`. This limits the existing qualification gate;
+it is not counter scarcity or proof that further selector-only experiments are inherently unsafe.
+A new recovery experiment must explicitly define its non-therapy scope, evidence and recovery path.
+
+### Wire-level error origin and official-client error map
+
+A subsequent fresh-link value-only observation, with full phone HCI logging enabled, reproduced
+`131`. The capture contains an outgoing ATT Read Request for handle `0x001d` followed approximately
+47 ms later by an incoming ATT Error Response for that request/handle with byte `0x83`. No settings
+selector was written in this observation. This establishes peripheral origin for this reproduced
+failure, not Android-local database exhaustion. The HCI archive SHA-256 is
+`abda3254fa7146b0c980f28aa12c2b77495585d5ed0ec20103c70211c5537526`.
+
+The installed mylife APK (SHA-256
+`059e629365d50d1546bac6d49a72bb9463d2ca31436c50e637412e483043d501`) contains the
+`ePumpErrorCode` enum in its DeviceImport assembly. Its application-error map names `131`
+`APPERR_INVALID_ID`, `138` `APPERR_DECRYPT_ERROR`, `139` `APPERR_COUNTER_ERROR`, and `141`
+`APPERR_FRAGMENTATION_ERROR`. Its profile importer uses GLB setting ID `1` and reads hourly basal
+settings through the same selector/value UUIDs. These are official-client code observations, not
+proof of counter consumption or successful target profile reads. In particular, the counter-error
+label must be reconciled with the earlier history-selector observations before reclassifying them.
+
+The working hypothesis is that the value read lacks a valid selected setting because selector
+processing failed. Counter synchronization, selector framing and settings authorization remain
+testable causes; callback-return timing is not an established explanation.
+
+### Counter recovery and active-program read-back
+
+The handler-post variant at counter `36` did not change requested event selection: authenticated
+CRC-valid index `3` before became `4` afterward, not requested `17`. HCI confirmed a peripheral ATT
+error `0x8b` on the final write. Independent decryption of the captured request verified GLB `17`,
+reboot `21`, write counter `36`, and frame lengths `20/20/20/4`. This excludes a wrongly encoded
+counter or requested index for that attempt. It also demonstrates an ascending iterator here, so
+earlier read-back coincidences must not be treated as changed-selection evidence without a pre-read.
+
+A single deliberate counter jump to `4096` then produced four successful callbacks and an
+authenticated CRC-valid changed event index `5 → 17`. The journal retained all older unknown
+attempts and reconciled this new selector as accepted. No pump reboot or journal reset was used.
+The previously assumed low write position was unsuitable; the exact prior pump counter and how it
+advanced are not established. This result does not prove acceptance of every possible counter gap.
+
+From that verified position, setting `1` at counter `4097` succeeded and returned an authenticated
+exact 8-byte GLB `3`, paired with operator-confirmed active Profile A. After a manual A→B switch,
+counter `4098` returned exact GLB `10`, paired with operator-confirmed Profile B. Thus this target
+V05.00.52 supports active-program read-back; the earlier errors were not evidence of unsupported
+settings firmware. GLB redundancy is the value integrity check here; a separate CRC is not present.
+
+All 48 hourly slots were subsequently read and individually reconciled against operator-transcribed
+pump schedules. Profile A occupies settings `14–37`; B occupies `38–61`. Values are centi-units/hour:
+
+```
+A: 45 45 45 60 60 75 75 75 60 60 60 50 50 50 50 50 50 50 50 50 50 50 50 50
+B: 30 30 35 45 45 55 55 65 60 40 40 35 35 35 35 45 45 45 45 40 35 35 35 35
+```
+
+Active-program observations before/after and at every resumed segment returned `10`, with the
+operator leaving B active. The final accepted counter was `4152`. Four connection-establishment
+failures (`133`) occurred before authentication/reservation; pre/post journals were byte-identical
+and only those not-sent rows were resumed. This segmented capture qualifies layout and units; it is
+not evidence of one atomic uninterrupted production acquisition or of mid-read switch detection.
+Combined redacted hourly evidence SHA-256:
+`fed9c11bf388b4390f43c5d337e9f547da7f976dd32d49d10208ba56fab0365c`.
+
+The operator subsequently restored A; setting `1` returned GLB `3` at accepted counter `4153`,
+completing the reverse B→A pairing. An authenticated clock observation returned date bytes
+`ea070910` and time bytes `17351c`, decoding to 2026-09-16 23:53:28 pump-local. The operator
+confirmed the displayed pump date/time matched the phone. Precise automated skew bounds and
+cross-midnight/DST acquisition remain software/target qualification work, not established by that
+display comparison alone.
 
 The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
 require real-pump verification. A separate researcher reported viewing Profiles A and B on a real

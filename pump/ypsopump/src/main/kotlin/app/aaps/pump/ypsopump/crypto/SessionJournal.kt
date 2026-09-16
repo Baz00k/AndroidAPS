@@ -58,7 +58,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..14)
+        check(version in 1..6 || version in 8..15)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -337,8 +337,11 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("evidenceHash", value.evidenceHash)
             .put("unresolvedPredecessor", value.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
 
-    private fun unresolvedWriteBinding(value: JSONObject) =
-        PumpSession.UnresolvedWriteBinding(
+    private fun unresolvedWriteBinding(value: JSONObject): PumpSession.UnresolvedWriteBinding = unresolvedWriteBinding(value, 0)
+
+    private fun unresolvedWriteBinding(value: JSONObject, depth: Int): PumpSession.UnresolvedWriteBinding {
+        require(depth <= 2) { "Unsupported unresolved predecessor depth" }
+        return PumpSession.UnresolvedWriteBinding(
             reboot = value.getInt("reboot"),
             reservationId = value.getString("reservationId"),
             phase = PumpSession.Phase.valueOf(value.getString("phase")),
@@ -350,9 +353,11 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             priorWrite = value.getLong("priorWrite"),
             candidate = decodeWriteCandidate(value.getString("candidate")),
             evidenceHash = value.getString("evidenceHash"),
+            unresolvedPredecessor = value.optJSONObject("unresolvedPredecessor")?.let { unresolvedWriteBinding(it, depth + 1) },
         )
+    }
 
-    private fun unresolvedWriteBindingJson(value: PumpSession.UnresolvedWriteBinding) =
+    private fun unresolvedWriteBindingJson(value: PumpSession.UnresolvedWriteBinding): JSONObject =
         JSONObject()
             .put("reboot", value.reboot)
             .put("reservationId", value.reservationId)
@@ -365,6 +370,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("priorWrite", value.priorWrite)
             .put("candidate", encodeWriteCandidate(value.candidate))
             .put("evidenceHash", value.evidenceHash)
+            .put("unresolvedPredecessor", value.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
 
     private fun reservationJson(value: PumpSession.Reservation) =
         JSONObject().put("id", value.id).put("counter", value.counter).put("phase", value.phase.name)
@@ -452,7 +458,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 14).put("records", records)
+        val body = JSONObject().put("version", 15).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)
