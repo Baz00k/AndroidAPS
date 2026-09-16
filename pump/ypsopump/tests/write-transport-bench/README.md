@@ -190,6 +190,11 @@ reservation → exact-counter encryption → fragmented serialized write → val
 contains the reviewed selector intent, callback-visible facts and redacted response-body hashes, not
 keys, ciphertext or decrypted pump-response bodies.
 
+The app supplies one Android `Handler` to `connectGatt` and posts characteristic-write processing
+back to that same queue. Consequently the next frame or selector-value read cannot call another GATT
+operation until the platform's write callback has returned. `RunRequested` records this as
+`gatt_callback_dispatch=handler-post-after-callback`.
+
 After successful AUTH and before required CCCD or selector dispatch, every applicable connection
 reads master firmware, supervisor firmware and control protocol. Master and supervisor are accepted
 by the inclusive minimum rule `>= V05.00.52`; there is no exact-firmware allowlist. The observed
@@ -249,6 +254,11 @@ attempt. Proven not-sent or reviewed rejected/not-consumed evidence restores the
 predecessor reservation. Acceptance or consumed rejection establishes counter `N + 1` while retaining
 the older `UNKNOWN` evidence. Do not continue to the duplicate probe unless authenticated semantic
 read-back and reviewed counter evidence qualify the convergence write as accepted.
+
+Discovering a harness sequencing defect after a consumed convergence attempt does not authorize a
+third selector write. If counters `N` and `N + 1` both remain unresolved, `N + 2` may be strict-next,
+`floor + 2`, or an unmeasured `floor + 3`; preserve the journal and obtain counter-disposition or
+equivalent target-qualified evidence first.
 
 For the epoch-21 counter-2 uncertainty, this action therefore reserves exactly counter `3`; it replaces
 the previously proposed clean-reboot procedure.
@@ -310,9 +320,10 @@ retry a selector from a bare outcome string or infer pump rejection from a local
 
 If all selector frames were locally dispatched and only the final GATT callback is non-zero, the
 write remains `PossiblyApplied`, but the app performs one selector-value read on that same connection
-before closing it. This mirrors the reference settings read sequence and captures semantic evidence
-without treating the numeric callback as acceptance or rejection. Earlier-frame failures still close
-without read-back because a complete selector request was not observed.
+after the write callback has returned and before closing the connection. This mirrors the Nordic
+request queue used by the reference settings sequence and captures semantic evidence without treating
+the numeric callback as acceptance or rejection. Earlier-frame failures still close without read-back
+because a complete selector request was not observed.
 
 ### One forward-gap candidate
 

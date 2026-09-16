@@ -47,10 +47,19 @@ After preserving counter `34` as hash-bound `UNKNOWN`, a one-shot convergence se
 setting ID `1` at counter `35`. This candidate was safe whether the pump floor was `33` or `34`
 because both strict-next and forward-gap-by-one selector behavior had already been measured on this
 target. Frames 1–3 again returned status `0`; frame 4 again returned `139`. The harness then read
-`SETTING_VALUE` immediately on the same authenticated GATT connection, matching the reference
-implementation's ordering, and the read still returned raw status `131` with no body. Counter `35`
-therefore remains durably `POSSIBLY_SENT` with reviewed `UNKNOWN` evidence; the epoch's one-shot
-convergence gate is consumed and no third selector attempt is permitted.
+`SETTING_VALUE` on the same authenticated GATT connection, but it dispatched that read synchronously
+from the final `onCharacteristicWrite` call before the Android callback returned. The Nordic 2.8 queue
+used by the reference implementation instead serializes the next operation after callback processing.
+The observed raw status `131` maps to AOSP's internal `GATT_DB_FULL` value and is therefore not
+qualified evidence of pump-level acceptance, rejection, or firmware behavior. Counter `35` remains
+durably `POSSIBLY_SENT` with reviewed `UNKNOWN` evidence; the epoch's one-shot convergence gate is
+consumed and no third selector attempt is permitted.
+
+The bench harness now supplies a single handler to `connectGatt` and posts characteristic-write
+processing to that same queue, so every later frame and final value read starts only after the prior
+platform callback returns. This corrects the software sequence but has not been run against the target.
+It does not retroactively classify counter `35` and does not make counter `36` safe: with counters
+`34` and `35` unresolved, `36` could be strict-next, `floor + 2`, or the unmeasured `floor + 3`.
 
 The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
 require real-pump verification. A separate researcher reported viewing Profiles A and B on a real

@@ -51,6 +51,7 @@ class BenchActivity : Activity() {
     private val crypto = SessionCrypto()
     private val readiness = YpsoCommandReadiness()
     private val handler by lazy { android.os.Handler(mainLooper) }
+    private val callbackSequencer by lazy { GattCallbackSequencer(handler::post) }
     private val deadlines = mutableSetOf<Runnable>()
     private val transport by lazy {
         YpsoSerializedWriteTransport(
@@ -285,6 +286,7 @@ class BenchActivity : Activity() {
                 .put("selector", selector?.value ?: JSONObject.NULL)
                 .put("omit_stage", omittedReadinessStage ?: JSONObject.NULL)
                 .put("forward_gap", forwardGap)
+                .put("gatt_callback_dispatch", "handler-post-after-callback")
                 .put("disconnect_after_frame", injectedDisconnectAfterFrame ?: JSONObject.NULL)
                 .put("ignore_callback_frame", injectedIgnoredCallbackFrame ?: JSONObject.NULL)
                 .put("duplicate_callback_after_frame", injectedDuplicateCallbackAfterFrame ?: JSONObject.NULL),
@@ -295,7 +297,17 @@ class BenchActivity : Activity() {
         check(device.bondState == BluetoothDevice.BOND_BONDED) { "Existing OS bond required" }
         connectionId = UUID.randomUUID().toString()
         handshakePhase = HandshakePhase.CONNECTING
-        gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE)
+        // Keep callbacks and queued follow-up operations on one serialized queue. This makes
+        // after-callback reads equivalent to Nordic's request queue rather than re-entrant GATT calls.
+        gatt =
+            device.connectGatt(
+                this,
+                false,
+                callback,
+                BluetoothDevice.TRANSPORT_LE,
+                BluetoothDevice.PHY_LE_1M_MASK,
+                handler,
+            )
         checkNotNull(gatt) { "connectGatt returned null" }
         report("CONNECTING:write_id=$writeId")
     }
@@ -412,6 +424,16 @@ class BenchActivity : Activity() {
             }
 
             override fun onCharacteristicWrite(
+                owner: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int,
+            ) {
+                callbackSequencer.afterPlatformCallback {
+                    handleCharacteristicWrite(owner, characteristic, status)
+                }
+            }
+
+            private fun handleCharacteristicWrite(
                 owner: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
