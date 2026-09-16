@@ -39,7 +39,7 @@ class YpsoPumpPluginTest {
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), rxBus, mock(), ui,
+        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, mock(), ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
     )
 

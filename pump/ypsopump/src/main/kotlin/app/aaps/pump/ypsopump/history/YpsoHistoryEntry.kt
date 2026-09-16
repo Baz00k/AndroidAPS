@@ -5,6 +5,13 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
+ * Packed 120-bit history-row fingerprint: factorySeconds(32) | type(8) | value1(16) in [high],
+ * value2(16) | value3(16) | sequence(32) in [low]. Fixed-width fields make equality exact; no
+ * string or byte-array allocation is produced in scan loops.
+ */
+data class YpsoHistoryFingerprint internal constructor(val high: Long, val low: Long)
+
+/**
  * Strictly decoded 17-byte YpsoPump history value.
  *
  * The first field is deliberately named [factorySeconds], not timestamp. Paired target observations
@@ -37,39 +44,27 @@ data class YpsoHistoryEntry(
      * is rewritten in place to terminal type 10. Values may also change from the requested duration
      * to elapsed minutes on cancellation. Those fields are semantics, not event identity.
      */
-    fun fingerprint(): String {
+    fun fingerprint(): YpsoHistoryFingerprint {
         val mutableTbr = eventType == 9 || eventType == 10
-        return ByteBuffer
-            .allocate(IMMUTABLE_PAYLOAD_SIZE)
-            .order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(factorySeconds.toInt())
-            .put(if (mutableTbr) 9.toByte() else eventType.toByte())
-            .putShort(value1.toShort())
-            .putShort(if (mutableTbr) 0 else value2.toShort())
-            .putShort(if (mutableTbr) 0 else value3.toShort())
-            .putInt(sequence.toInt())
-            .array()
-            .joinToString("") { "%02x".format(it) }
+        return pack(
+            if (mutableTbr) 9 else eventType,
+            value1,
+            if (mutableTbr) 0 else value2,
+            if (mutableTbr) 0 else value3,
+        )
     }
 
     /** Exact semantic state fingerprint, excluding only the moving ring index. */
-    fun stateFingerprint(): String = encodePayload().joinToString("") { "%02x".format(it) }
+    fun stateFingerprint(): YpsoHistoryFingerprint = pack(eventType, value1, value2, value3)
 
-    private fun encodePayload(): ByteArray =
-        ByteBuffer
-            .allocate(IMMUTABLE_PAYLOAD_SIZE)
-            .order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(factorySeconds.toInt())
-            .put(eventType.toByte())
-            .putShort(value1.toShort())
-            .putShort(value2.toShort())
-            .putShort(value3.toShort())
-            .putInt(sequence.toInt())
-            .array()
+    private fun pack(type: Int, v1: Int, v2: Int, v3: Int): YpsoHistoryFingerprint =
+        YpsoHistoryFingerprint(
+            (factorySeconds shl 24) or (type.toLong() shl 16) or v1.toLong(),
+            (v2.toLong() shl 48) or (v3.toLong() shl 32) or sequence,
+        )
 
     companion object {
         const val PAYLOAD_SIZE = 17
-        private const val IMMUTABLE_PAYLOAD_SIZE = PAYLOAD_SIZE - 2
         const val WIRE_SIZE = PAYLOAD_SIZE + 2
 
         /** Decode one exact CRC-protected history value. Raw or trailing-byte fallbacks are rejected. */

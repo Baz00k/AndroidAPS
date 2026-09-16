@@ -823,6 +823,9 @@ class BenchActivity : Activity() {
     }
 
     private fun primeRead(owner: BluetoothGatt) {
+        primeEventCount = null
+        primeEventCountBody = null
+        primePumpReboot = null
         val eventCount = findUnique(owner, EVENT_COUNT_UUID)
         if (eventCount == null) {
             fail(
@@ -937,9 +940,10 @@ class BenchActivity : Activity() {
     }
 
     /**
-     * Capture two consecutive rows from the pump's current event-selector position without writes.
+     * Read the event head twice around the pump date/time and count reads, without writes.
      * This is protected wire evidence only: target observation shows reads advance a persistent
-     * selector, so it must not be interpreted as a logical-head cursor unless both rows prove index 0.
+     * selector, so the two head reads prove a stable logical head only if both decode as index 0
+     * with identical sequence and identity fingerprint.
      */
     private fun captureCurrentHistory(owner: BluetoothGatt) {
         val eventCount = findUnique(owner, EVENT_COUNT_UUID)

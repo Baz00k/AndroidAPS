@@ -744,8 +744,8 @@ class YpsoBleManager @Inject constructor(
         readMultiframe(CHAR_EVENT_COUNT, onFailure = { onResult(null) }) { _, fc ->
             val count = runCatching { app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(decryptOwned(fc)) }
                 .getOrElse {
-                aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
-            }
+                    aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
+                }
             aapsLogger.debug(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
             onResult(count)
         }

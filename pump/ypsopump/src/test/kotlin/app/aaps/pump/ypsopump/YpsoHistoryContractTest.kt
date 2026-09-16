@@ -11,7 +11,10 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import app.aaps.pump.ypsopump.history.YpsoHistoryReconciler
 import app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation
+import app.aaps.pump.ypsopump.history.YpsoHistorySemantics
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoHistoryEvent
+import app.aaps.pump.ypsopump.history.YpsoMutableHistoryState
 import app.aaps.pump.ypsopump.history.YpsoPumpModeChange
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -282,6 +285,153 @@ class YpsoHistoryContractTest {
     }
 
     @Test
+    fun `sequence jump beyond half range is an invalid order gap in both directions`() {
+        val old = entry(sequence = 100)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.INVALID_ORDER_OR_RESET,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.reconcile(cursor, snapshot(2, 2, listOf(entry(sequence = 50), old), fullCoverage = true)),
+            ).reason,
+        )
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.INVALID_ORDER_OR_RESET,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.reconcile(
+                    cursor,
+                    snapshot(2, 2, listOf(entry(sequence = 100 + 0x8000_0000L), old), fullCoverage = true),
+                ),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `wrap at the generation ceiling is a deterministic overflow gap`() {
+        val old = entry(sequence = 0xffff_ffffL)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", Int.MAX_VALUE, old.sequence), old.fingerprint(), 21)
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.SEQUENCE_GENERATION_OVERFLOW,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.reconcile(cursor, snapshot(2, 2, listOf(entry(sequence = 0), old), fullCoverage = true)),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `a second wrap within one window is impossible and gaps deterministically`() {
+        val old = entry(sequence = 0xffff_fffeL)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, old.sequence), old.fingerprint(), 21)
+        val rows = listOf(
+            entry(sequence = 0xffff_fff0L),
+            entry(sequence = 5),
+            entry(sequence = 0),
+            entry(sequence = 0xffff_ffffL),
+            old,
+        )
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.INVALID_ORDER_OR_RESET,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.reconcile(cursor, snapshot(5, 5, rows, fullCoverage = true)),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `bootstrap rejects conflicting duplicate sequences`() {
+        val rows = listOf(entry(sequence = 101), entry(sequence = 101, v1 = 1), entry(sequence = 100))
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.INVALID_SNAPSHOT,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.bootstrap("serial", 0, snapshot(3, 3, rows, fullCoverage = true)),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `attribution blocks on each precondition and accepts only a unique encoded-origin event`() {
+        val old = entry(sequence = 100)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
+        val attempt = YpsoHistoryAttemptCursor(cursor, capturedBeforeDispatch = true)
+        val bolusCompatible = { s: YpsoHistorySemantics -> s.kind == YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED }
+        val singleBolus = YpsoHistoryReconciler.reconcile(
+            cursor,
+            snapshot(2, 2, listOf(entry(sequence = 101, v1 = 120), old), fullCoverage = true),
+        )
+
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.CURSOR_NOT_CAPTURED_BEFORE_DISPATCH),
+            YpsoHistoryAttributor.attribute(
+                YpsoHistoryAttemptCursor(cursor, capturedBeforeDispatch = false),
+                singleBolus,
+                bolusCompatible,
+            ),
+        )
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.HISTORY_NOT_STABLE),
+            YpsoHistoryAttributor.attribute(
+                attempt,
+                YpsoHistoryReconciliation.Moving(1, 2, 21, 21, 100, 101),
+                bolusCompatible,
+            ),
+        )
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.UNSUPPORTED_EVENT_KIND),
+            YpsoHistoryAttributor.attribute(
+                attempt,
+                YpsoHistoryReconciler.reconcile(
+                    cursor,
+                    snapshot(2, 2, listOf(entry(sequence = 101, type = 200), old), fullCoverage = true),
+                ),
+            ) { true },
+        )
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.MULTIPLE_COMPATIBLE_EVENTS),
+            YpsoHistoryAttributor.attribute(
+                attempt,
+                YpsoHistoryReconciler.reconcile(
+                    cursor,
+                    snapshot(3, 3, listOf(entry(sequence = 102, v1 = 50), entry(sequence = 101, v1 = 120), old), fullCoverage = true),
+                ),
+                bolusCompatible,
+            ),
+        )
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.NO_NEW_EVENT),
+            YpsoHistoryAttributor.attribute(
+                attempt,
+                YpsoHistoryReconciler.reconcile(cursor, snapshot(1, 1, listOf(old), fullCoverage = true)),
+                bolusCompatible,
+            ),
+        )
+
+        // The classifier never sets commandOriginAttributable; the acceptance path is exercised with
+        // an explicitly attributable semantics to keep the attributor's full logic under test.
+        val attributableEvent = YpsoHistoryEvent(
+            YpsoEventIdentity("serial", 0, 101),
+            entry(sequence = 101, v1 = 120),
+            YpsoHistorySemantics(
+                YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
+                amountUnits = 1.2,
+                commandOriginAttributable = true,
+            ),
+        )
+        val syntheticStable = YpsoHistoryReconciliation.Stable(
+            cursor,
+            cursor.copy(identity = attributableEvent.identity, fingerprint = attributableEvent.entry.fingerprint()),
+            listOf(attributableEvent),
+        )
+        assertEquals(
+            YpsoHistoryAttribution.Attributed(attributableEvent),
+            YpsoHistoryAttributor.attribute(attempt, syntheticStable, bolusCompatible),
+        )
+    }
+
+    @Test
     fun `attribution requires pre-attempt cursor unique compatible event and encoded origin`() {
         val old = entry(sequence = 100)
         val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
@@ -470,6 +620,98 @@ class YpsoHistoryContractTest {
                 YpsoHistoryReconciler.reconcile(cursor, snapshot(2, 2, listOf(replacement, old.copy(index = 1)))),
             ).reason,
         )
+    }
+
+    @Test
+    fun `tracked active TBR plus a new start in the same window is a deterministic gap`() {
+        // The snapshot validator counts every active row in the window, including a still-active
+        // tracked row, so an in-window second start can never silently replace tracked state.
+        val active = entry(sequence = 99, type = 9, v1 = 150, v2 = 15)
+        val old = entry(sequence = 100)
+        val tracked = YpsoMutableHistoryState(
+            YpsoEventIdentity("serial", 0, 99),
+            active.fingerprint(),
+            active.stateFingerprint(),
+            active.value1,
+            active.value2,
+        )
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21, tracked)
+        val replacement = entry(sequence = 101, type = 9, v1 = 110, v2 = 15)
+        val rows = listOf(replacement, old, active)
+        for (coverage in listOf(true, false)) {
+            assertEquals(
+                YpsoHistoryReconciliation.Reason.MULTIPLE_ACTIVE_TBR_ROWS,
+                assertInstanceOf(
+                    YpsoHistoryReconciliation.Gap::class.java,
+                    YpsoHistoryReconciler.reconcile(cursor, snapshot(3, 3, rows, fullCoverage = coverage)),
+                ).reason,
+            )
+        }
+    }
+
+    @Test
+    fun `TBR abort event ends tracked state without fabricating a terminal row`() {
+        val active = entry(sequence = 99, type = 9, v1 = 150, v2 = 15)
+        val old = entry(sequence = 100)
+        val tracked = YpsoMutableHistoryState(
+            YpsoEventIdentity("serial", 0, 99),
+            active.fingerprint(),
+            active.stateFingerprint(),
+            active.value1,
+            active.value2,
+        )
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21, tracked)
+        val abort = entry(sequence = 101, type = 32, v1 = 150)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(3, 3, listOf(abort, old, active), fullCoverage = true)),
+        )
+        assertEquals(listOf(101L), stable.newEventsOldestFirst.map { it.identity.sequence })
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_ABORTED, stable.newEventsOldestFirst.single().semantics.kind)
+        assertEquals(150, stable.newEventsOldestFirst.single().semantics.percent)
+        assertEquals(emptyList<Any>(), stable.stateUpdates)
+        assertNull(stable.cursor.activeTbr)
+
+        // Tracking stays cleared: the unchanged historical start row is never re-adopted.
+        val next = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(stable.cursor, snapshot(3, 3, listOf(abort, old, active), fullCoverage = true)),
+        )
+        assertEquals(emptyList<Any>(), next.newEventsOldestFirst)
+        assertEquals(emptyList<Any>(), next.stateUpdates)
+        assertNull(next.cursor.activeTbr)
+    }
+
+    @Test
+    fun `TBR start followed by abort in one window leaves no tracked state`() {
+        val old = entry(sequence = 100)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
+        val started = entry(sequence = 101, type = 9, v1 = 150, v2 = 15)
+        val abort = entry(sequence = 102, type = 32, v1 = 150)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(3, 3, listOf(abort, started, old), fullCoverage = true)),
+        )
+        assertEquals(listOf(101L, 102L), stable.newEventsOldestFirst.map { it.identity.sequence })
+        assertNull(stable.cursor.activeTbr)
+    }
+
+    @Test
+    fun `bootstrap does not track a TBR that a newer abort row ended`() {
+        val active = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
+        val abort = entry(sequence = 101, type = 32, v1 = 150)
+        val aborted = assertInstanceOf(
+            YpsoHistoryReconciliation.Bootstrap::class.java,
+            YpsoHistoryReconciler.bootstrap("serial", 0, snapshot(2, 2, listOf(abort, active), fullCoverage = true)),
+        )
+        assertNull(aborted.cursor?.activeTbr)
+
+        // An abort older than the start does not suppress tracking.
+        val tracking = assertInstanceOf(
+            YpsoHistoryReconciliation.Bootstrap::class.java,
+            YpsoHistoryReconciler.bootstrap("serial", 0, snapshot(2, 2, listOf(active.copy(sequence = 102), abort), fullCoverage = true)),
+        )
+        assertEquals(102, tracking.cursor?.activeTbr?.identity?.sequence)
     }
 
     @Test

@@ -4,8 +4,10 @@ package app.aaps.pump.ypsopump.history
  * Event meanings for target firmware V05.00.52. Type identity is target-paired for the numbers this
  * evidence session exercised; every remaining number is admitted because two published third-party
  * Ypso protocol implementations agree on it, and all target-paired numbers agree with that table.
- * Value layouts are claimed only where the target paired them, plus the centi-unit bolus convention
- * shared by the paired rows. Unknown numbers and unclaimed fields stay fail-closed.
+ * The publications may share lineage (one cites a common Python reference), so they corroborate
+ * rather than independently confirm; target rows remain the empirical anchor. Value layouts are
+ * claimed only where the target paired them, plus the centi-unit bolus convention shared by the
+ * paired rows. Unknown numbers and unclaimed fields stay fail-closed.
  */
 enum class YpsoHistoryKind {
     // Bolus family
@@ -51,7 +53,7 @@ enum class YpsoHistoryKind {
     UNKNOWN,
 }
 
-enum class YpsoPumpModeChange { STOPPED, RESUMED, UNKNOWN }
+enum class YpsoPumpModeChange { STOPPED, RESUMED }
 
 /** Alarm codes published by both references; alarm-row value fields are deliberately unclaimed. */
 enum class YpsoAlarm {
@@ -181,7 +183,7 @@ data class YpsoEventIdentity(
 data class YpsoHistoryCursor(
     val identity: YpsoEventIdentity,
     /** Identity fingerprint; mutable terminal-state fields are deliberately excluded. */
-    val fingerprint: String,
+    val fingerprint: YpsoHistoryFingerprint,
     /** Authenticated pump reboot counter observed when this cursor was anchored. */
     val pumpReboot: Long,
     /** The pump permits one active TBR; its row may later be rewritten below the newest cursor. */
@@ -190,8 +192,8 @@ data class YpsoHistoryCursor(
 
 data class YpsoMutableHistoryState(
     val identity: YpsoEventIdentity,
-    val fingerprint: String,
-    val stateFingerprint: String,
+    val fingerprint: YpsoHistoryFingerprint,
+    val stateFingerprint: YpsoHistoryFingerprint,
     val percent: Int,
     val requestedDurationMinutes: Int,
 )
@@ -379,8 +381,9 @@ object YpsoHistoryReconciler {
             val event = YpsoHistoryEvent(identity, entry)
             newEvents += event
             if (event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED) {
-                // The snapshot validator rejects more than one active row, and a tracked row was
-                // already verified above, so this can only be a legitimate replacement start.
+                // The snapshot validator rejects more than one active row in the window, and a
+                // still-active tracked row is inside the window (verified above), so a start here
+                // can only follow its terminal rewrite: a legitimate replacement start.
                 activeTbr = YpsoMutableHistoryState(
                     identity,
                     entry.fingerprint(),
@@ -388,6 +391,12 @@ object YpsoHistoryReconciler {
                     entry.value1,
                     entry.value2,
                 )
+            } else if (event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_ABORTED) {
+                // Reference semantics: a TBR abort is a separate row, not an in-place rewrite of the
+                // tracked row. Retaining the tracked state would assert a live TBR indefinitely, so
+                // tracking ends here without fabricating a terminal row. Target verification of this
+                // wire interaction is still pending; the abort event itself carries the semantics.
+                activeTbr = null
             }
             priorSequence = entry.sequence
         }
@@ -415,8 +424,17 @@ object YpsoHistoryReconciler {
     private fun List<YpsoHistoryEntry>.singleActiveTbr(
         pumpSerial: String,
         sequenceGeneration: Int,
-    ): YpsoMutableHistoryState? =
-        singleOrNull { YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED }?.let {
+    ): YpsoMutableHistoryState? {
+        val candidate = withIndex().singleOrNull {
+            YpsoHistoryClassifier.classify(it.value).kind == YpsoHistoryKind.TEMP_BASAL_STARTED
+        } ?: return null
+        // A newer abort row (earlier in newest-first order) ends tracking for the same reason as in
+        // the reconcile loop; rows older than the candidate cannot affect it.
+        val abortedAfterStart = subList(0, candidate.index).any {
+            YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_ABORTED
+        }
+        if (abortedAfterStart) return null
+        return candidate.value.let {
             YpsoMutableHistoryState(
                 YpsoEventIdentity(pumpSerial, sequenceGeneration, it.sequence),
                 it.fingerprint(),
@@ -425,6 +443,7 @@ object YpsoHistoryReconciler {
                 it.value2,
             )
         }
+    }
 
     private fun invalidStableSnapshot(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Gap? {
         val stableCount = snapshot.countAfter

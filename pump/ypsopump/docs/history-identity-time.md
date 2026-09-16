@@ -63,8 +63,8 @@ Raw 17-byte values, bad CRC, short/long values and trailing fallbacks are reject
   `PumpSync` pump ID is `(sequence generation << 32) | sequence`; PumpSync also scopes it by pump
   type and serial. Receipt time, amount, ring index, BLE key generation and crypto counters are not
   identity.
-- The event fingerprint excludes the moving ring index. For ordinary rows it is the canonical hex
-  encoding of factory seconds, type, values and sequence. TBR rows are the evidenced exception: an
+- The event fingerprint excludes the moving ring index. For ordinary rows it packs factory seconds,
+  type, values and sequence into a fixed-width 120-bit value. TBR rows are the evidenced exception: an
   active type-9 row is rewritten in place to terminal type 10 with the same sequence and factory time;
   value2 may change from requested duration to elapsed minutes. Their fingerprint therefore
   normalizes type 9/10 to one TBR type and excludes value2/value3, while retaining factory time,
@@ -78,11 +78,20 @@ Raw 17-byte values, bad CRC, short/long values and trailing fallbacks are reject
   reconciliation verifies that tracked row: absence under complete coverage emits
   `TRACKED_TBR_ROW_MISSING`, absence under partial coverage emits `COVERAGE_INCOMPLETE`, and more
   than one active type-9 row emits `MULTIPLE_ACTIVE_TBR_ROWS` instead of retaining or choosing stale
-  state. Other conflicting content for one sequence blocks ingestion.
+  state. Other conflicting content for one sequence blocks ingestion. A reference-mapped abort row
+  (type 32) ends tracked TBR state when observed among newer events, without fabricating a terminal
+  row; at bootstrap, a start row that a newer abort row has passed is not tracked. This interaction
+  is reference-derived and not yet observed on the target.
 - A 32-bit sequence decrease is accepted as wrap only within the normal unsigned forward half-range
   and when the authenticated pump reboot counter has not changed. A decrease coincident with reboot
-  is an unresolved reset/wrap ambiguity and produces a gap. A reboot with a continuing sequence does
-  not change event identity generation. Key renewal alone does not change event identity.
+  is an unresolved reset/wrap ambiguity and produces a gap; reaching the identity generation ceiling
+  (`Int.MAX_VALUE`) is a deterministic `SEQUENCE_GENERATION_OVERFLOW` gap, and a jump beyond the
+  forward half-range in either direction is `INVALID_ORDER_OR_RESET`. A reboot with a continuing
+  sequence does not change event identity generation. Key renewal alone does not change event identity.
+- Legacy development builds before this contract wrote PumpSync rows with receipt-time `pumpId`
+  values. Those rows predate the `(generation << 32) | sequence` scheme, are not compatible with it,
+  and must not be migrated or mixed into the same PumpSync scope; collision is practically impossible
+  (receipt-time ids sit at generation ≈ 400), but the schemes are deliberately never combined.
 - Protected transport evidence contains four authenticated new-epoch adoptions through reboot
   counters 18, 19, 20 and 21. Each adoption reset the authenticated read counter to 1 or 2 while the
   same history service and older event rows remained readable afterward. Event history therefore
@@ -150,7 +159,10 @@ Type identity (which number means what) is supported in two tiers:
   third-party protocol implementations agree
   ([SandraK82/ypsopump-research@de7e867](https://github.com/SandraK82/ypsopump-research/blob/de7e867241fafd2fb8061ceeecf42af2883b9eb4/ypsopump-test/app/src/main/java/com/ypsopump/test/data/PumpDataModels.kt#L34-L67),
   [vicktor/ypsomed-pump@71ae55e](https://github.com/vicktor/ypsomed-pump/blob/71ae55e372cb7a4fe1c96bfdd536d3beccbbb8a2/sdk/ypso-sdk/src/main/java/com/ypsopump/sdk/internal/protocol/YpsoProtocolConstants.kt#L48-L95)).
-  All target-paired numbers agree with that table. vicktor additionally documents empirical
+  These publications are **not verifiably independent**: vicktor's file documents that its IDs match
+  a Python reference (`Ypso-main/pump/constants.py`, `EVENT_NAMES`), so the two may share lineage
+  rather than confirm each other. The target-paired numbers are the empirical anchor; every other
+  number is reference-only until a target row pairs it. vicktor additionally documents empirical
   confirmation on firmware V05.02.03; the target runs V05.00.52 and the numbering agrees.
 
 Value layouts are claimed only where the target paired them, plus the centi-unit bolus convention
@@ -199,7 +211,7 @@ SHA-256 `e7673571f942650c30e67cb8b0ddbb62261f3ac7c72657933e7218957815949e` and
 | 29 | IMMEDIATE_BOLUS_ABORTED | value1 / 100 U | reference |
 | 30 | DELAYED_BOLUS_ABORTED | value1 / 100 U | reference |
 | 31 | COMBINED_BOLUS_ABORTED | value1 / 100 U | reference |
-| 32 | TEMP_BASAL_ABORTED | value1 percent | reference; does not yet terminate tracked mutable TBR state |
+| 32 | TEMP_BASAL_ABORTED | value1 percent | reference; observing it ends tracked mutable TBR state without fabricating a terminal row — target wire interaction unverified |
 | 33 | BOLUS_AMOUNT_CAP_CHANGED | — | reference |
 | 34 | BASAL_RATE_CAP_CHANGED | — | reference |
 | 100–108 | ALARM | value fields unclaimed; explicit alarm code | 101/103/104 target-paired: eleven strict target rows read on 2026-09-16 and operator-confirmed against the displayed alarm history; remaining codes reference |

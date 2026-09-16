@@ -22,7 +22,6 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
@@ -56,7 +55,6 @@ class YpsoPumpPlugin @Inject constructor(
     private val pumpState: YpsoPumpState,
     private val bleManager: YpsoBleManager,
     private val pumpSync: PumpSync,
-    dateUtil: DateUtil,
     private val rxBus: RxBus,
     private val profileFunction: ProfileFunction,
     private val uiInteraction: UiInteraction,
