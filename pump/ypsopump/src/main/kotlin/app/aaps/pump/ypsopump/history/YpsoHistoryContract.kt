@@ -6,6 +6,8 @@ enum class YpsoHistoryKind {
     DELAYED_BOLUS_COMPLETED,
     PRIMING_FINISHED,
     TEMP_BASAL_STARTED,
+    TEMP_BASAL_COMPLETED,
+    TEMP_BASAL_CANCELLED,
     TEMP_BASAL_TERMINAL_UNRESOLVED,
     PUMP_MODE_CHANGED,
     REWIND_FINISHED,
@@ -79,9 +81,20 @@ data class YpsoEventIdentity(
 
 data class YpsoHistoryCursor(
     val identity: YpsoEventIdentity,
+    /** Identity fingerprint; mutable terminal-state fields are deliberately excluded. */
     val fingerprint: String,
     /** Authenticated pump reboot counter observed when this cursor was anchored. */
     val pumpReboot: Long,
+    /** The pump permits one active TBR; its row may later be rewritten below the newest cursor. */
+    val activeTbr: YpsoMutableHistoryState? = null,
+)
+
+data class YpsoMutableHistoryState(
+    val identity: YpsoEventIdentity,
+    val fingerprint: String,
+    val stateFingerprint: String,
+    val percent: Int,
+    val requestedDurationMinutes: Int,
 )
 
 data class YpsoHistoryEvent(
@@ -129,6 +142,8 @@ sealed interface YpsoHistoryReconciliation {
         val previousCursor: YpsoHistoryCursor,
         val cursor: YpsoHistoryCursor,
         val newEventsOldestFirst: List<YpsoHistoryEvent>,
+        /** In-place changes whose relative time versus newer events is not encoded by the row. */
+        val stateUpdates: List<YpsoHistoryEvent> = emptyList(),
     ) : YpsoHistoryReconciliation
     data class Moving(
         val countBefore: Int,
@@ -168,6 +183,7 @@ object YpsoHistoryReconciler {
                     YpsoEventIdentity(pumpSerial, sequenceGeneration, it.sequence),
                     it.fingerprint(),
                     snapshot.pumpRebootAfter,
+                    snapshot.rowsNewestFirst.singleActiveTbr(pumpSerial, sequenceGeneration),
                 )
             },
         )
@@ -176,14 +192,13 @@ object YpsoHistoryReconciler {
     fun reconcile(cursor: YpsoHistoryCursor, snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation {
         invalidCounts(snapshot)?.let { return it }
         moving(snapshot)?.let { return it }
+        if (hasConflictingSequencePayload(snapshot)) {
+            return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.CONFLICTING_SEQUENCE_PAYLOAD)
+        }
         invalidStableSnapshot(snapshot)?.let { return it }
         if (snapshot.rowsNewestFirst.isEmpty()) {
             return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.EMPTY_AFTER_CURSOR)
         }
-        val conflicts = snapshot.rowsNewestFirst.groupBy(YpsoHistoryEntry::sequence).values.any { rows ->
-            rows.map(YpsoHistoryEntry::fingerprint).distinct().size > 1
-        }
-        if (conflicts) return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.CONFLICTING_SEQUENCE_PAYLOAD)
 
         val cursorIndex = snapshot.rowsNewestFirst.indexOfFirst {
             it.sequence == cursor.identity.sequence && it.fingerprint() == cursor.fingerprint
@@ -201,6 +216,42 @@ object YpsoHistoryReconciler {
         var generation = cursor.identity.sequenceGeneration
         var priorSequence = cursor.identity.sequence
         val newEvents = mutableListOf<YpsoHistoryEvent>()
+        val stateUpdates = mutableListOf<YpsoHistoryEvent>()
+        var activeTbr = cursor.activeTbr
+        var trackedTbrCovered = activeTbr == null
+        activeTbr?.let { tracked ->
+            val current = snapshot.rowsNewestFirst.firstOrNull {
+                it.sequence == tracked.identity.sequence && it.fingerprint() == tracked.fingerprint
+            }
+            trackedTbrCovered = current != null
+            if (current != null && current.stateFingerprint() != tracked.stateFingerprint) {
+                val update = YpsoHistoryEvent(
+                    tracked.identity,
+                    current,
+                    semantics =
+                        if (current.eventType == 10) {
+                            YpsoHistorySemantics(
+                                kind =
+                                    when {
+                                        current.value2 < tracked.requestedDurationMinutes -> YpsoHistoryKind.TEMP_BASAL_CANCELLED
+                                        current.value2 == tracked.requestedDurationMinutes -> YpsoHistoryKind.TEMP_BASAL_COMPLETED
+                                        else -> YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED
+                                    },
+                                percent = current.value1,
+                                durationMinutes = current.value2,
+                            )
+                        } else {
+                            YpsoHistoryClassifier.classify(current)
+                        },
+                )
+                if (update.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED) {
+                    activeTbr = tracked.copy(stateFingerprint = current.stateFingerprint())
+                } else {
+                    stateUpdates += update
+                    activeTbr = null
+                }
+            }
+        }
         val chronological = snapshot.rowsNewestFirst.subList(0, cursorIndex).asReversed()
         for (entry in chronological) {
             val delta = (entry.sequence - priorSequence + MODULUS) % MODULUS
@@ -218,16 +269,29 @@ object YpsoHistoryReconciler {
                 generation++
             }
             val identity = YpsoEventIdentity(cursor.identity.pumpSerial, generation, entry.sequence)
-            newEvents += YpsoHistoryEvent(identity, entry)
+            val event = YpsoHistoryEvent(identity, entry)
+            newEvents += event
+            if (event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED) {
+                if (!trackedTbrCovered) {
+                    return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.COVERAGE_INCOMPLETE)
+                }
+                activeTbr = YpsoMutableHistoryState(
+                    identity,
+                    entry.fingerprint(),
+                    entry.stateFingerprint(),
+                    entry.value1,
+                    entry.value2,
+                )
+            }
             priorSequence = entry.sequence
         }
         val latest = newEvents.lastOrNull()
         // Do not absorb a reboot into an unchanged cursor. A later lower sequence may be a reset
         // caused by that reboot; retaining the cursor's original reboot keeps that ambiguity blocked.
         val nextCursor = latest?.let {
-            YpsoHistoryCursor(it.identity, it.entry.fingerprint(), snapshot.pumpRebootAfter)
-        } ?: cursor
-        return YpsoHistoryReconciliation.Stable(cursor, nextCursor, newEvents)
+            YpsoHistoryCursor(it.identity, it.entry.fingerprint(), snapshot.pumpRebootAfter, activeTbr)
+        } ?: cursor.copy(activeTbr = activeTbr)
+        return YpsoHistoryReconciliation.Stable(cursor, nextCursor, newEvents, stateUpdates)
     }
 
     private fun invalidCounts(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Gap? =
@@ -237,12 +301,31 @@ object YpsoHistoryReconciler {
             null
         }
 
+    private fun hasConflictingSequencePayload(snapshot: YpsoHistorySnapshot): Boolean =
+        snapshot.rowsNewestFirst.groupBy(YpsoHistoryEntry::sequence).values.any { rows ->
+            rows.map(YpsoHistoryEntry::fingerprint).distinct().size > 1
+        }
+
+    private fun List<YpsoHistoryEntry>.singleActiveTbr(
+        pumpSerial: String,
+        sequenceGeneration: Int,
+    ): YpsoMutableHistoryState? =
+        firstOrNull { YpsoHistoryClassifier.classify(it).kind == YpsoHistoryKind.TEMP_BASAL_STARTED }?.let {
+            YpsoMutableHistoryState(
+                YpsoEventIdentity(pumpSerial, sequenceGeneration, it.sequence),
+                it.fingerprint(),
+                it.stateFingerprint(),
+                it.value1,
+                it.value2,
+            )
+        }
+
     private fun invalidStableSnapshot(snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation.Gap? {
         val stableCount = snapshot.countAfter
         val duplicateIdenticalSequence = snapshot.rowsNewestFirst
             .groupBy(YpsoHistoryEntry::sequence)
             .values
-            .any { rows -> rows.size > 1 && rows.map(YpsoHistoryEntry::fingerprint).distinct().size == 1 }
+            .any { rows -> rows.size > 1 }
         val invalid =
             snapshot.rowsNewestFirst.size > stableCount ||
                 (snapshot.fullCoverage && snapshot.rowsNewestFirst.size != stableCount) ||
@@ -301,10 +384,11 @@ object YpsoHistoryAttributor {
         if (stable.previousCursor != attempt.cursor) {
             return YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.HISTORY_NOT_STABLE)
         }
-        if (stable.newEventsOldestFirst.any { it.semantics.kind == YpsoHistoryKind.UNKNOWN }) {
+        val observed = stable.newEventsOldestFirst + stable.stateUpdates
+        if (observed.any { it.semantics.kind == YpsoHistoryKind.UNKNOWN }) {
             return YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.UNSUPPORTED_EVENT_KIND)
         }
-        val matches = stable.newEventsOldestFirst.filter { compatible(it.semantics) }
+        val matches = observed.filter { compatible(it.semantics) }
         val event = when (matches.size) {
             0 -> return YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.NO_NEW_EVENT)
             1 -> matches.single()

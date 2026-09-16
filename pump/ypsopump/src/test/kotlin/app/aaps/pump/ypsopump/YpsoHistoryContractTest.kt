@@ -29,6 +29,10 @@ class YpsoHistoryContractTest {
         assertEquals(1.2, YpsoHistoryClassifier.classify(immediate).amountUnits)
         assertFalse(YpsoHistoryClassifier.classify(immediate).commandOriginAttributable)
         assertEquals(YpsoHistoryKind.TEMP_BASAL_STARTED, YpsoHistoryClassifier.classify(tbr).kind)
+        assertEquals(
+            YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED,
+            YpsoHistoryClassifier.classify(entry(sequence = 47881, type = 10, v1 = 150, v2 = 1)).kind,
+        )
         assertEquals(YpsoPumpModeChange.STOPPED, YpsoHistoryClassifier.classify(stop).modeChange)
         assertEquals(YpsoPumpModeChange.RESUMED, YpsoHistoryClassifier.classify(resume).modeChange)
         assertEquals(YpsoHistoryKind.UNKNOWN, YpsoHistoryClassifier.classify(entry(sequence = 47880, type = 14, v1 = 4)).kind)
@@ -188,6 +192,175 @@ class YpsoHistoryContractTest {
     }
 
     @Test
+    fun `TBR terminal rewrite is emitted once under the original stable identity`() {
+        val active = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
+        val terminal = entry(sequence = 100, type = 10, v1 = 150, v2 = 1)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 100),
+            active.fingerprint(),
+            21,
+            app.aaps.pump.ypsopump.history.YpsoMutableHistoryState(
+                YpsoEventIdentity("serial", 0, 100),
+                active.fingerprint(),
+                active.stateFingerprint(),
+                active.value1,
+                active.value2,
+            ),
+        )
+        val first = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(1, 1, listOf(terminal), fullCoverage = true)),
+        )
+        assertEquals(emptyList<Any>(), first.newEventsOldestFirst)
+        assertEquals(listOf(100L), first.stateUpdates.map { it.identity.sequence })
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_CANCELLED, first.stateUpdates.single().semantics.kind)
+        assertEquals(cursor.identity, first.cursor.identity)
+        assertEquals(null, first.cursor.activeTbr)
+
+        val duplicate = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(first.cursor, snapshot(1, 1, listOf(terminal), fullCoverage = true)),
+        )
+        assertEquals(emptyList<Any>(), duplicate.newEventsOldestFirst)
+        assertEquals(emptyList<Any>(), duplicate.stateUpdates)
+
+        assertEquals(
+            YpsoHistoryAttribution.Blocked(YpsoHistoryAttribution.Reason.ORIGIN_NOT_ENCODED),
+            YpsoHistoryAttributor.attribute(
+                YpsoHistoryAttemptCursor(cursor, capturedBeforeDispatch = true),
+                first,
+                compatible = { it.kind == YpsoHistoryKind.TEMP_BASAL_CANCELLED },
+            ),
+        )
+    }
+
+    @Test
+    fun `TBR expiry is classified only against the same identity's requested duration`() {
+        val active = entry(sequence = 100, type = 9, v1 = 110, v2 = 15)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 100),
+            active.fingerprint(),
+            21,
+            app.aaps.pump.ypsopump.history.YpsoMutableHistoryState(
+                YpsoEventIdentity("serial", 0, 100),
+                active.fingerprint(),
+                active.stateFingerprint(),
+                active.value1,
+                active.value2,
+            ),
+        )
+        val completed = active.copy(eventType = 10)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(1, 1, listOf(completed), fullCoverage = true)),
+        )
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_COMPLETED, stable.stateUpdates.single().semantics.kind)
+    }
+
+    @Test
+    fun `standalone terminal TBR and elapsed time beyond request stay unresolved`() {
+        val standalone = entry(sequence = 100, type = 10, v1 = 110, v2 = 15)
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED, YpsoHistoryClassifier.classify(standalone).kind)
+
+        val active = entry(sequence = 101, type = 9, v1 = 110, v2 = 15)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 101),
+            active.fingerprint(),
+            21,
+            app.aaps.pump.ypsopump.history.YpsoMutableHistoryState(
+                YpsoEventIdentity("serial", 0, 101),
+                active.fingerprint(),
+                active.stateFingerprint(),
+                active.value1,
+                active.value2,
+            ),
+        )
+        val invalidTerminal = active.copy(eventType = 10, value2 = 16)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(1, 1, listOf(invalidTerminal), fullCoverage = true)),
+        )
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED, stable.stateUpdates.single().semantics.kind)
+    }
+
+    @Test
+    fun `older active TBR remains tracked after a newer event and later terminates`() {
+        val active = entry(sequence = 100, type = 9, v1 = 150, v2 = 15)
+        val newerBolus = entry(sequence = 101, type = 2, v1 = 200)
+        val activeIdentity = YpsoEventIdentity("serial", 0, 100)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 101),
+            newerBolus.fingerprint(),
+            21,
+            app.aaps.pump.ypsopump.history.YpsoMutableHistoryState(
+                activeIdentity,
+                active.fingerprint(),
+                active.stateFingerprint(),
+                active.value1,
+                active.value2,
+            ),
+        )
+        val terminal = active.copy(eventType = 10, value2 = 1, index = 1)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                cursor,
+                snapshot(2, 2, listOf(newerBolus, terminal), fullCoverage = true),
+            ),
+        )
+        assertEquals(emptyList<Any>(), stable.newEventsOldestFirst)
+        assertEquals(activeIdentity, stable.stateUpdates.single().identity)
+        assertEquals(YpsoHistoryKind.TEMP_BASAL_CANCELLED, stable.stateUpdates.single().semantics.kind)
+        assertEquals(null, stable.cursor.activeTbr)
+    }
+
+    @Test
+    fun `new TBR cannot replace tracked state when the older mutable row is outside coverage`() {
+        val old = entry(sequence = 100, type = 2)
+        val active = entry(sequence = 99, type = 9, v1 = 150, v2 = 15)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 100),
+            old.fingerprint(),
+            21,
+            app.aaps.pump.ypsopump.history.YpsoMutableHistoryState(
+                YpsoEventIdentity("serial", 0, 99),
+                active.fingerprint(),
+                active.stateFingerprint(),
+                active.value1,
+                active.value2,
+            ),
+        )
+        val replacement = entry(sequence = 101, type = 9, v1 = 110, v2 = 15)
+        assertEquals(
+            YpsoHistoryReconciliation.Reason.COVERAGE_INCOMPLETE,
+            assertInstanceOf(
+                YpsoHistoryReconciliation.Gap::class.java,
+                YpsoHistoryReconciler.reconcile(cursor, snapshot(2, 2, listOf(replacement, old.copy(index = 1)))),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun `pump clock jumps do not replace sequence identity or receipt-time ordering`() {
+        val old = entry(sequence = 100).copy(factorySeconds = 842_900_000)
+        val cursor = YpsoHistoryCursor(
+            YpsoEventIdentity("serial", 0, 100),
+            old.fingerprint(),
+            21,
+        )
+        val afterClockBack = entry(sequence = 101).copy(factorySeconds = 842_899_880)
+        val stable = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                cursor,
+                snapshot(2, 2, listOf(afterClockBack, old.copy(index = 1)), fullCoverage = true),
+            ),
+        )
+        assertEquals(listOf(101L), stable.newEventsOldestFirst.map { it.identity.sequence })
+        assertEquals(842_899_880, stable.newEventsOldestFirst.single().entry.factorySeconds)
+    }
+
+    @Test
     fun `embedded logical indexes must match scan order`() {
         val old = entry(sequence = 100)
         val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
@@ -234,6 +407,10 @@ class YpsoHistoryContractTest {
             YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED,
             YpsoHistoryClassifier.classify(wire("785634120ac8001e000000690000000000808d")).kind,
         )
+
+        val active = entry(sequence = 47881, type = 9, v1 = 150, v2 = 15)
+        val cancelled = entry(sequence = 47881, type = 10, v1 = 150, v2 = 1)
+        assertEquals(active.fingerprint(), cancelled.fingerprint())
         assertEquals(
             YpsoHistoryKind.REWIND_FINISHED,
             YpsoHistoryClassifier.classify(wire("785634121091ff0000c9006b0000000000f3e8")).kind,

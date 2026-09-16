@@ -80,5 +80,13 @@ class YpsoHistoryEntryTest {
         }
     }
 
+    @Test
+    fun `identity fingerprint survives an in-place TBR terminal rewrite`() {
+        val active = YpsoHistoryEntry(842_796_897, 9, 150, 15, 0, 47_881, 0)
+        val cancelled = YpsoHistoryEntry(842_796_897, 10, 150, 1, 0, 47_881, 8)
+        assertEquals(active.fingerprint(), cancelled.fingerprint())
+        org.junit.jupiter.api.Assertions.assertNotEquals(active.stateFingerprint(), cancelled.stateFingerprint())
+    }
+
     private fun String.hex(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }

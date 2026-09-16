@@ -232,6 +232,8 @@ class BenchActivity : Activity() {
                 RunKind.OBSERVE_REBOOT,
                 RunKind.RECORD_BOOTSTRAP_REFERENCE,
                 RunKind.READ_HISTORY_COUNTS,
+                // Read-only; the unresolved reservation stays visible in the capture's session snapshot.
+                RunKind.CAPTURE_CURRENT_HISTORY,
                 RunKind.AMBIGUITY_CONVERGENCE,
             )
         ) {
@@ -934,7 +936,11 @@ class BenchActivity : Activity() {
         }
     }
 
-    /** Capture a stable logical-head cursor without selecting or mutating pump state. */
+    /**
+     * Capture two consecutive rows from the pump's current event-selector position without writes.
+     * This is protected wire evidence only: target observation shows reads advance a persistent
+     * selector, so it must not be interpreted as a logical-head cursor unless both rows prove index 0.
+     */
     private fun captureCurrentHistory(owner: BluetoothGatt) {
         val eventCount = findUnique(owner, EVENT_COUNT_UUID)
         val eventValue = findUnique(owner, EVENT_VALUE_UUID)
@@ -1046,7 +1052,7 @@ class BenchActivity : Activity() {
                 .putSessionSnapshot(),
         )
         recorder.fact(
-            if (stable) "CurrentHistoryCaptureVerified" else "CurrentHistoryCaptureRejected",
+            if (stable) "CurrentHistoryCaptureVerified" else "CurrentHistoryRowsObserved",
             eventCaptureJson(headBeforeBody, headBefore)
                 .put("pump_reboot_before", primePumpReboot ?: JSONObject.NULL)
                 .put("pump_reboot_after", rebootAfter ?: JSONObject.NULL)
@@ -1069,7 +1075,7 @@ class BenchActivity : Activity() {
             if (stable) {
                 "CAPTURE:count=$countAfter;index=0;sequence=${headBefore.sequence};factory_seconds=${headBefore.factorySeconds};type=${headBefore.eventType}"
             } else {
-                "CAPTURE:rejected; count, reboot and exact logical head must remain stable"
+                "CAPTURE:rows-observed; not a stable logical-head cursor"
             },
         )
     }

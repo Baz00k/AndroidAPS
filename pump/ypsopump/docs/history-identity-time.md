@@ -1,12 +1,14 @@
 # YpsoPump event-history identity and time contract
 
 > **Evidence scope:** one isolated YpsoPump running master/supervisor firmware V05.00.52,
-> control protocol 1.3 and history service 1.4, observed on 2026-09-15. This defines the
+> control protocol 1.3 and history service 1.4, observed on 2026-09-15 and 2026-09-16. This defines the
 > Step 08 ingestion seam; it does not enable therapy or claim command attribution.
 
 Protected capture provenance: the consolidated private target capture set has SHA-256
 `e3d8ae3d842e32c087a7597b50133cd02d88faeb725d4c0747082ce70b644b82`. Raw rows and real keys are
-not published. `YpsoHistoryEntryTest` contains shape-only transformed target fixtures for all seven
+not published. The 2026-09-15/16 read-only follow-up row bundle has SHA-256
+`ade9c3f6ea6676425e987f6d4b8f11228d61769d0998a4b58e8ab16672ea13b5`; it contains no key material
+and is also kept private. `YpsoHistoryEntryTest` contains shape-only transformed target fixtures for all seven
 supported kinds (types 2, 3, 4, 9, 10, 14, 16): identifying time/sequence fields were replaced and
 each CRC recomputed with an independent script. `YpsoHistoryContractTest` decodes those wires and
 asserts their evidenced classification without command origin.
@@ -42,13 +44,26 @@ Raw 17-byte values, bad CRC, short/long values and trailing fallbacks are reject
   `PumpSync` pump ID is `(sequence generation << 32) | sequence`; PumpSync also scopes it by pump
   type and serial. Receipt time, amount, ring index, BLE key generation and crypto counters are not
   identity.
-- The immutable event fingerprint is the canonical hex encoding of factory seconds, type, values and
-  sequence, excluding the moving ring index. Reusing one sequence with different immutable content is
-  a conflict and blocks ingestion.
+- The event fingerprint excludes the moving ring index. For ordinary rows it is the canonical hex
+  encoding of factory seconds, type, values and sequence. TBR rows are the evidenced exception: an
+  active type-9 row is rewritten in place to terminal type 10 with the same sequence and factory time;
+  value2 may change from requested duration to elapsed minutes. Their fingerprint therefore
+  normalizes type 9/10 to one TBR type and excludes value2/value3, while retaining factory time,
+  percentage and sequence. A separate state fingerprint retains the exact type and values so the
+  terminal rewrite is emitted once as an unordered state update under the original event identity.
+  The cursor retains the pump's single active TBR independently of the newest sequence, because a
+  later bolus can make the mutable TBR row older than the cursor before cancellation. Other
+  conflicting content for one sequence blocks ingestion. A newer TBR start cannot replace tracked
+  mutable state unless the prior TBR row is covered by the scan; missing coverage produces a gap.
 - A 32-bit sequence decrease is accepted as wrap only within the normal unsigned forward half-range
   and when the authenticated pump reboot counter has not changed. A decrease coincident with reboot
   is an unresolved reset/wrap ambiguity and produces a gap. A reboot with a continuing sequence does
   not change event identity generation. Key renewal alone does not change event identity.
+- Protected transport evidence contains four authenticated new-epoch adoptions through reboot
+  counters 18, 19, 20 and 21. Each adoption reset the authenticated read counter to 1 or 2 while the
+  same history service and older event rows remained readable afterward. Event history therefore
+  survives an ordinary power-cycle; reboot is snapshot/reset evidence, not an instruction to clear
+  the event cursor or start a new identity generation when sequence continuity is present.
 
 ## Stable snapshots, gaps and duplicates
 
@@ -87,6 +102,15 @@ unresolved; the implementation does not choose an offset from receipt time or de
 Clock/date-change event layouts were not independently paired, so historical offset reconstruction
 across a pump clock change remains blocked instead of guessed.
 
+A controlled +2-minute clock save followed by restoration on 2026-09-16 kept reboot epoch 21 and
+count 3000 but shifted an unchanged prior row from embedded index 8 to 10: each save inserted one
+newer event. BLE was temporarily unavailable after the forward save, and the unresolved event
+selector operation prevented a safe random-access read of those two new rows. This proves clock
+changes affect history ordering but does not establish their wire layout or an offset-reconstruction
+algorithm; reconstruction therefore remains blocked. Reconciliation orders and identifies rows by
+global sequence, never by factory time or receipt time, so forward/backward clock discontinuities are
+deterministic and cannot merge or reorder otherwise valid identities.
+
 No boot-time conversion is needed to identify or date these event rows. The reference
 `bootTimeToFactoryTime` field was not independently established on this target and is not used as a
 fallback. The authenticated reboot counter is retained only as snapshot/reset evidence.
@@ -95,18 +119,26 @@ fallback. The authenticated reboot counter is retained only as snapshot/reset ev
 
 | Type | Values | Supported meaning | Paired evidence |
 |---:|---|---|---|
-| 2 | value1 / 100 U | completed immediate bolus, origin unknown | manual 1.20, 2.00 and 1.50 U rows |
+| 2 | value1 / 100 U | completed immediate bolus, origin unknown | manual 1.20, 1.50 and two independently confirmed 2.00 U pump-initiated rows |
 | 3 | value1 / 100 U, value2 minutes | completed delayed/square bolus | 3.00 U / 15 min and 3.50 U / 15 min |
 | 4 | value1 / 100 U | priming finished | 1.00 U priming at 16:15 |
 | 9 | value1 percent, value2 minutes | TBR started/running | controlled 150% / 15 min start |
-| 10 | value1 percent, value2 minutes | TBR terminal row; completion vs cancel unresolved | historical 200% / 30 min and 170% / 30 min |
+| 10 | value1 percent, value2 elapsed/final minutes | paired against the same identity's type-9 requested duration: lower means cancel, equal means normal expiry; standalone or greater values unresolved | controlled 150% / 15 min became 150% / 1 min on cancel; controlled 110% / 15 min became 110% / 15 min on expiry; historical standalone 200% / 30 min and 170% / 30 min unresolved |
 | 14 | value1=3 or 10 | Stop or Resume respectively | controlled Stop/Resume pair |
 | 16 | firmware-specific values unresolved | rewind finished | rewind at 16:13 |
 
 All other event types are unsupported until paired on the target. In particular, reference enums are
 not promoted to supported semantics by name alone. Priming is distinguishable from therapy history.
 Type 2 contains no qualified command-origin field, so manual and remote immediate boluses cannot yet
-be distinguished. Partial/cancelled bolus and TBR cancellation layouts remain unresolved.
+be distinguished. Partial/cancelled bolus layouts remain unresolved. A TBR terminal state is
+distinguishable as cancel or normal expiry only when the earlier state of that exact identity was
+persisted; command origin is still not encoded and TBR command attribution remains blocked.
+
+The operator confirmed that the captured 2.00 U rows at 2026-09-15 15:53 and 17:23 were initiated on
+the pump, and that no bolus was interrupted during the observation window. A remote or partial/cancel
+layout was therefore not present to pair. Those cases remain explicitly unsupported and attribution
+fails closed; no deliberate insulin delivery or interruption is required merely to populate this
+schema ticket.
 
 ## Attempt attribution boundary
 
@@ -132,7 +164,9 @@ status-only controller was handed back enabled/running; mylife and the bench rem
 app data was cleared.
 
 The final unresolved selector operation remains protected evidence only and must not be interpreted
-as accepted or retried. Remote-command origin, partial/cancelled bolus, TBR cancellation,
-clock-change reconstruction and sequence behavior across a physical reboot are still unevidenced and
-therefore blocked. These limitations do not receive inferred semantics from reference enums,
+as accepted or retried. Remote-command origin and partial/cancelled bolus layouts remain unobserved
+and blocked. Clock-change insertion behavior and repeated physical reboot persistence are evidenced,
+while clock-offset reconstruction and sequence-reset behavior remain fail-closed because those cases
+were not observed. TBR cancel versus the paired 15-minute normal expiry is evidenced, while other
+terminal values remain unresolved. These limitations do not receive inferred semantics from reference enums,
 receipt-time proximity, amount matching or selector position.

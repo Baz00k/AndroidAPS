@@ -30,8 +30,30 @@ data class YpsoHistoryEntry(
         require(index in 0..0xffff)
     }
 
-    /** Stable event fingerprint. The moving ring index is deliberately excluded. */
-    fun fingerprint(): String = encodePayload().joinToString("") { "%02x".format(it) }
+    /**
+     * Stable identity fingerprint. The moving ring index and mutable event state are excluded.
+     *
+     * Target pairing shows that an active TBR row keeps its sequence and factory time while type 9
+     * is rewritten in place to terminal type 10. Values may also change from the requested duration
+     * to elapsed minutes on cancellation. Those fields are semantics, not event identity.
+     */
+    fun fingerprint(): String {
+        val mutableTbr = eventType == 9 || eventType == 10
+        return ByteBuffer
+            .allocate(IMMUTABLE_PAYLOAD_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(factorySeconds.toInt())
+            .put(if (mutableTbr) 9.toByte() else eventType.toByte())
+            .putShort(value1.toShort())
+            .putShort(if (mutableTbr) 0 else value2.toShort())
+            .putShort(if (mutableTbr) 0 else value3.toShort())
+            .putInt(sequence.toInt())
+            .array()
+            .joinToString("") { "%02x".format(it) }
+    }
+
+    /** Exact semantic state fingerprint, excluding only the moving ring index. */
+    fun stateFingerprint(): String = encodePayload().joinToString("") { "%02x".format(it) }
 
     private fun encodePayload(): ByteArray =
         ByteBuffer
