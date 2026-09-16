@@ -92,7 +92,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 val counter = it.getLong("counter")
                 val priorWrite = it.optLongOrNull("priorWrite") ?: (counter - 1).takeIf { version < 8 }
                 val candidate =
-                    it.stringOrNull("candidate")?.let(PumpSession.WriteCandidate::valueOf)
+                    it.stringOrNull("candidate")?.let(::decodeWriteCandidate)
                         ?: if (priorWrite != null && counter - priorWrite == 2L) {
                             PumpSession.WriteCandidate.BENCH_FORWARD_GAP_SELECTOR
                         } else {
@@ -153,7 +153,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                                 "Legacy write evidence has no recoverable prior-write binding"
                             },
                             candidate =
-                                evidence.stringOrNull("candidate")?.let(PumpSession.WriteCandidate::valueOf)
+                                evidence.stringOrNull("candidate")?.let(::decodeWriteCandidate)
                                     ?: boundReservation?.candidate
                                     ?: error("Legacy write evidence has no recoverable candidate binding"),
                             resolution = evidence.stringOrNull("resolution")?.let(PumpSession.WriteResolution::valueOf),
@@ -306,7 +306,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             purpose = value.getString("purpose"),
             payloadHash = value.getString("payloadHash"),
             priorWrite = value.getLong("priorWrite"),
-            candidate = PumpSession.WriteCandidate.valueOf(value.getString("candidate")),
+            candidate = decodeWriteCandidate(value.getString("candidate")),
             evidenceHash = value.getString("evidenceHash"),
             unresolvedPredecessor =
                 if (version >= 13) {
@@ -327,7 +327,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("purpose", value.purpose)
             .put("payloadHash", value.payloadHash)
             .put("priorWrite", value.priorWrite)
-            .put("candidate", value.candidate.name)
+            .put("candidate", encodeWriteCandidate(value.candidate))
             .put("evidenceHash", value.evidenceHash)
             .put("unresolvedPredecessor", value.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
 
@@ -342,7 +342,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             purpose = value.getString("purpose"),
             payloadHash = value.getString("payloadHash"),
             priorWrite = value.getLong("priorWrite"),
-            candidate = PumpSession.WriteCandidate.valueOf(value.getString("candidate")),
+            candidate = decodeWriteCandidate(value.getString("candidate")),
             evidenceHash = value.getString("evidenceHash"),
         )
 
@@ -357,8 +357,23 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("purpose", value.purpose)
             .put("payloadHash", value.payloadHash)
             .put("priorWrite", value.priorWrite)
-            .put("candidate", value.candidate.name)
+            .put("candidate", encodeWriteCandidate(value.candidate))
             .put("evidenceHash", value.evidenceHash)
+
+    /** The old identifier is accepted only while decoding its completed, fail-closed audit record. */
+    private fun decodeWriteCandidate(value: String): PumpSession.WriteCandidate =
+        when (value) {
+            "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR" ->
+                PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
+            else -> PumpSession.WriteCandidate.valueOf(value)
+        }
+
+    private fun encodeWriteCandidate(value: PumpSession.WriteCandidate): String =
+        when (value) {
+            PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR ->
+                "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR"
+            else -> value.name
+        }
 
     override fun commit(state: PumpSession.State) {
         PumpSession.validate(state)
@@ -373,7 +388,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("purpose", it.purpose ?: JSONObject.NULL)
                         .put("payloadHash", it.payloadHash ?: JSONObject.NULL)
                         .put("priorWrite", it.priorWrite ?: JSONObject.NULL)
-                        .put("candidate", it.candidate.name)
+                        .put("candidate", encodeWriteCandidate(it.candidate))
                         .put("historyBinding", it.historyBinding?.let(::historyBindingJson) ?: JSONObject.NULL)
                         .put("acceptedPredecessor", it.acceptedPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
                         .put("unresolvedPredecessor", it.unresolvedPredecessor?.let(::unresolvedWriteBindingJson) ?: JSONObject.NULL)
@@ -407,7 +422,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         .put("purpose", evidence.purpose)
                         .put("payloadHash", evidence.payloadHash)
                         .put("priorWrite", evidence.priorWrite)
-                        .put("candidate", evidence.candidate.name)
+                        .put("candidate", encodeWriteCandidate(evidence.candidate))
                         .put("resolution", evidence.resolution?.name ?: JSONObject.NULL)
                         .put("evidenceHash", evidence.evidenceHash)
                         .put("detail", evidence.detail)

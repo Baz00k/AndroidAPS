@@ -21,6 +21,12 @@ class PumpSession(private val store: Store) {
         BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
         BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
         BENCH_DUPLICATE_COUNTER_SELECTOR,
+        /**
+         * Read-only compatibility for the one completed alarm-cursor recovery experiment recorded
+         * before Step 08. No reservation API exposes this candidate, so a current artifact can
+         * preserve and account for that authenticated historical write but can never dispatch it.
+         */
+        LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
     }
     enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, ESTABLISHED }
     enum class HistoryFamily { ALARM, SYSTEM }
@@ -1534,11 +1540,20 @@ class PumpSession(private val store: Store) {
                             require(r.benchDuplicateCounterPredecessor == null || r.benchDuplicateCounterPredecessor == predecessor)
                             requireAcceptedPredecessor(r, predecessor, AcceptedPredecessorEpoch.CURRENT)
                         }
+                        WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR -> {
+                            // This candidate was emitted by a short-lived bench experiment before
+                            // Step 08. Accept only its completed audit record; no current code can
+                            // construct or dispatch it.
+                            require(it.phase == Phase.VERIFIED && it.counter == 33L && priorWrite == 32L)
+                            require(it.operationId != null)
+                        }
                     }
                     require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
                     require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
                     val family = historyFamilyFor(it.characteristic)
-                    if (family != null) {
+                    if (it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR) {
+                        require(family == HistoryFamily.ALARM && it.historyBinding == null)
+                    } else if (family != null) {
                         val binding = checkNotNull(it.historyBinding) { "Alarm/system selector reservation requires a history binding" }
                         require(binding.count.family == family)
                         require(r.reboot != null && binding.count.reboot == r.reboot)
@@ -1585,6 +1600,8 @@ class PumpSession(private val store: Store) {
                             require(it.counter == it.priorWrite)
                             requireAcceptedPredecessor(r, checkNotNull(it.acceptedPredecessor), AcceptedPredecessorEpoch.CURRENT_OR_PAST)
                         }
+                        WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR ->
+                            require(it.counter == 33L && it.priorWrite == 32L && it.resolution == WriteResolution.ACCEPTED)
                     }
                     r.reservation?.takeIf { reservation -> reservation.id == it.reservationId }?.let { reservation ->
                         require(
@@ -1602,7 +1619,9 @@ class PumpSession(private val store: Store) {
                     }
                     require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
                     val family = historyFamilyFor(it.characteristic)
-                    if (family != null) {
+                    if (it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR) {
+                        require(family == HistoryFamily.ALARM && it.historyBinding == null)
+                    } else if (family != null) {
                         val binding = checkNotNull(it.historyBinding) { "Alarm/system evidence requires a history binding" }
                         require(binding.count.family == family)
                         // History bindings are immutable audit evidence and survive exact-next reboot
@@ -1619,6 +1638,31 @@ class PumpSession(private val store: Store) {
                     }
                     require((it.candidate == WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR) == (it.acceptedPredecessor != null))
                     require((it.candidate == WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR) == (it.unresolvedPredecessor != null))
+                }
+                val legacyReservation = r.reservation?.takeIf {
+                    it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
+                }
+                val legacyEvidence = r.writeEvidence.filter {
+                    it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR
+                }
+                // The retired candidate is valid only as the exact completed reservation/evidence
+                // pair left by the old bench artifact. An orphaned audit entry, a different live
+                // reservation, or more than one historical entry cannot be recovered into work.
+                require((legacyReservation == null) == legacyEvidence.isEmpty())
+                legacyReservation?.let { reservation ->
+                    require(legacyEvidence.size == 1)
+                    require(
+                        legacyEvidence.singleOrNull { evidence ->
+                            evidence.reservationId == reservation.id &&
+                                evidence.operationId == reservation.operationId &&
+                                evidence.counter == reservation.counter &&
+                                evidence.characteristic == reservation.characteristic &&
+                                evidence.purpose == reservation.purpose &&
+                                evidence.payloadHash == reservation.payloadHash &&
+                                evidence.priorWrite == reservation.priorWrite &&
+                                evidence.resolution == WriteResolution.ACCEPTED
+                        } != null,
+                    )
                 }
             }
             require(state.activeGeneration == null || state.records.count { it.generation == state.activeGeneration } == 1)

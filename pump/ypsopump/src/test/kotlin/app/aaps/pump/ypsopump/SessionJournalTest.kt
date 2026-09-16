@@ -101,6 +101,131 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `completed historical alarm cursor recovery remains readable but cannot become live work`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "historical-alarm-cursor",
+                counter = 33,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "alarm-cursor-recovery",
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 32,
+                candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(reservation.operationId),
+                reservationId = reservation.id,
+                counter = reservation.counter,
+                characteristic = checkNotNull(reservation.characteristic),
+                purpose = checkNotNull(reservation.purpose),
+                payloadHash = checkNotNull(reservation.payloadHash),
+                priorWrite = checkNotNull(reservation.priorWrite),
+                candidate = reservation.candidate,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "completed historical alarm cursor recovery",
+            )
+        val state =
+            old.copy(
+                records = old.records.map {
+                    it.copy(
+                        reboot = 8,
+                        read = 100,
+                        write = 33,
+                        reservation = reservation,
+                        writeEvidence = listOf(evidence),
+                        benchHistoryCounts =
+                            listOf(
+                                PumpSession.HistoryCountEvidence(
+                                    family = PumpSession.HistoryFamily.ALARM,
+                                    reboot = 8,
+                                    read = 100,
+                                    count = 200,
+                                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                                    payloadHash = "ef".repeat(32),
+                                ),
+                            ),
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                    )
+                },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val legacyBody = committedBody(storage)
+        val legacyRecord = legacyBody.getJSONArray("records").getJSONObject(0)
+        legacyRecord.getJSONObject("reservation").put("candidate", "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR")
+        legacyRecord.getJSONArray("writeEvidence").getJSONObject(0).put("candidate", "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR")
+        replaceBody(storage, legacyBody)
+        assertEquals(state, journal.load())
+        journal.commit(state)
+        assertEquals(
+            "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR",
+            committedBody(storage).getJSONArray("records").getJSONObject(0).getJSONObject("reservation").getString("candidate"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(reservation = reservation.copy(phase = PumpSession.Phase.ACKED))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = listOf(evidence.copy(resolution = null)))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = emptyList())
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = listOf(evidence.copy(reservationId = "another-reservation")))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(
+                            writeEvidence =
+                                listOf(
+                                    evidence,
+                                    evidence.copy(
+                                        reservationId = "orphaned-reservation",
+                                        evidenceHash = "12".repeat(32),
+                                    ),
+                                ),
+                        )
+                    },
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `version eight roundtrip preserves the exact pre-gap write floor and epoch gates`() {
         val storage = Storage()
         val journal = SessionJournal(storage)

@@ -73,6 +73,15 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `current bench dispatcher has no historical alarm recovery mode`() {
+        assertFalse(
+            YpsoBenchWriteCoordinator.BenchWriteMode.entries.any {
+                it.name == "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR"
+            },
+        )
+    }
+
+    @Test
     fun `reservation encryption fragments ACK and semantic verification stay one transaction`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))
