@@ -140,6 +140,16 @@ layout was therefore not present to pair. Those cases remain explicitly unsuppor
 fails closed; no deliberate insulin delivery or interruption is required merely to populate this
 schema ticket.
 
+On 2026-09-16 the operator switched the active basal profile on-pump from A to B at pump-local 10:29,
+then from B back to A at 10:30, and observed exactly two new entries in the pump's history display.
+This establishes that manual active-profile switches are history-producing actions and must be
+considered by profile-coherence logic. It does **not** establish an event type or value layout: the
+persistent event iterator could not be safely repositioned while an earlier selector write remained
+unresolved, and an attempted read-only full-ring traversal was stopped as operationally unsuitable
+without producing a completed capture. No reference-enum type is assigned. Strict row pairing and
+active-profile conflict handling remain required by Step 09 before profile synchronization can be
+supported.
+
 ## Attempt attribution boundary
 
 A later therapy implementation must capture and durably persist a stable history cursor **before**
