@@ -45,6 +45,28 @@ and schedule read age; an unreported pump edit can leave this information outdat
 phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
 Therapy readiness remains a separate capability; reading configuration does not authorize delivery.
 
+### Divergence is reported, not tolerated
+
+Every comparison records one of three verdicts: *not read*, *matches*, or *mismatch*. A mismatch —
+typically a basal program switched by hand on the pump — raises an urgent notification and a banner
+at the top of the pump tab. The pump keeps delivering its own schedule; AAPS cannot correct that, so
+it names the program and the manual fix. Each configuration action also reports its own result as a
+toast when it finishes.
+
+`setNewBasalProfile()` still never writes to the pump. It succeeds, without enacting, only when the
+retained configuration already equals the requested effective schedule, which lets AAPS record the
+effective profile switch it needs to run a loop. Reporting failure in that case would leave
+`ProfileFunction` with no running profile and make the keepalive re-raise the failed-basal-update
+alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
+divergent configuration still fails, because neither proves what the pump is delivering.
+
+**Before therapy is enabled**, that confirmation must be strengthened. Retained configuration is
+scoped by pump-session generation and timezone only, so it can outlive an edit made on the pump
+between reads, and the recorded effective profile switch would then rest on a stale schedule. This is
+harmless while delivery is blocked — nothing doses from it — but enabling bolus/TBR requires bounding
+the confirmation with current pump-side evidence: at minimum active-program continuity plus detection
+of schedule edits.
+
 ## Protected setup
 
 The signed, non-debuggable status-only artifact provides **Pump connection setup** in the YpsoPump

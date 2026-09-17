@@ -86,6 +86,38 @@ class YpsoPumpStateTest {
     }
 
     @Test
+    fun `comparison distinguishes unread configuration from proven disagreement`() {
+        var zone = ZoneId.of("Europe/Warsaw")
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { 2_001L }
+            currentZone = { zone }
+        }
+        val matching = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.5))
+        val different = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.9))
+        assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison)
+
+        state.profileMatches(matching)
+        assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison, "no configuration was ever read")
+
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison, "a new read is not compared yet")
+        state.profileMatches(matching)
+        assertEquals(YpsoPumpState.ProfileComparison.MATCHES, state.profileComparison)
+        state.profileMatches(different)
+        assertEquals(YpsoPumpState.ProfileComparison.MISMATCH, state.profileComparison)
+
+        // A zone change makes the retained schedules incomparable; that is unproven, not disagreement.
+        zone = ZoneId.of("UTC")
+        state.profileMatches(different)
+        assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison)
+
+        zone = ZoneId.of("Europe/Warsaw")
+        state.profileMatches(different)
+        state.invalidateProfileEvidence()
+        assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison)
+    }
+
+    @Test
     fun `historical rows do not erase explicit last read configuration`() {
         val state = YpsoPumpState().apply {
             elapsedRealtime = { 2_001L }

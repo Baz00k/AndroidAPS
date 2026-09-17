@@ -13,6 +13,8 @@ data class PumpStatusState(
     val title: String = "YpsoPump",
     val connectionSummary: String = "",
     val connectionAction: String? = null,
+    /** Highest-priority condition needing a decision; outranks everything else on the screen. */
+    val alert: String? = null,
     val connectionHealthy: Boolean = false,
     val reservoir: Double? = null,
     val reservoirMax: Double = 200.0,

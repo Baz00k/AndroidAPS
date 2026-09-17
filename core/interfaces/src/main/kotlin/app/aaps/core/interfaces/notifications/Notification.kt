@@ -151,6 +151,10 @@ open class Notification {
         const val PUMP_RESERVOIR_EMPTY = 96
         const val YPSOPUMP_UNAVAILABLE = 97
 
+        // The pump's own basal schedule disagrees with the profile AAPS is dosing against. The pump
+        // programs manually, so nothing reconciles this automatically and it must not stay silent.
+        const val YPSOPUMP_PROFILE_MISMATCH = 98
+
         const val USER_MESSAGE = 1000
 
         const val IMPORTANCE_HIGH = 2

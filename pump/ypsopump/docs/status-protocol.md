@@ -378,6 +378,19 @@ new revision; a file whose own key is missing remains rejected. The phone recove
 482 evidence records, original reviewed handoff and retired legacy audit record. Authenticated
 status succeeded afterward. No counter reseeding or ownership reimport was performed.
 
+Follow-up qualification found the driver silently accepting a divergence: after a manual A→B switch,
+an explicit check observed program B correctly, yet nothing reported that the pump was no longer
+delivering the active AAPS profile. Comparison verdicts are now recorded and surfaced as an urgent
+notification and a pump-tab banner. Two further defects were fixed
+in the same area. `setNewBasalProfile()` previously failed unconditionally, so AAPS never recorded an
+effective profile switch; `ProfileFunction.getProfile()` then stayed null, the loop had no running
+profile, and `KeepAliveWorker` re-raised the failed-basal-update alarm every five minutes even when
+the pump matched. It now returns success without enacting when, and only when, the retained
+configuration equals the requested effective schedule. Separately, the shared Compose preferences
+renderer ignored `isEnabled`/`isSelectable`, so disabled and read-only rows across every plugin still
+accepted taps; those flags are now honoured. Each configuration action confirms its own tap by toast
+and states its own cost: the full read takes about a minute, the active-program check seconds.
+
 Redesign qualification completed two explicit production full reads in 60,908 and 63,350 ms,
 both Profile A, plus a refresh that yielded to another queued command. On final APK
 `4fd948bfe68c62ad77d47ec9a18a47c5107dcda1d2a18bcbe2bc08aa4974e717`, the status screen showed

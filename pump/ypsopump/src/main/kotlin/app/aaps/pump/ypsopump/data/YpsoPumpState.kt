@@ -86,9 +86,19 @@ class YpsoPumpState @Inject constructor() {
     val hasFreshProfileEvidence: Boolean
         get() = profileEvidence != null
 
-    val profileConfigurationReadAt: Long get() = verifiedProfile?.observedAt?.toEpochMilli() ?: 0
-    val lastReadProgram: String get() = verifiedProfile?.activeProgram?.name.orEmpty()
+    val profileConfigurationReadAt: Long get() = profileEvidence?.observedAt?.toEpochMilli() ?: 0
+    val lastReadProgram: String get() = profileEvidence?.activeProgram?.name.orEmpty()
     @Volatile var profileReadMessage: String = ""
+
+    /**
+     * Whether the last-read pump configuration agrees with the profile AAPS is dosing against.
+     * [UNREAD] also covers a configuration that a zone change has made incomparable: in both cases
+     * the pump's delivered basal is unproven, which is not the same as a proven disagreement.
+     */
+    enum class ProfileComparison { UNREAD, MATCHES, MISMATCH }
+
+    @Volatile var profileComparison: ProfileComparison = ProfileComparison.UNREAD
+        private set
 
     // -- Timestamps --
     @Volatile var lastConnectionTime: Long = 0L
@@ -157,11 +167,27 @@ class YpsoPumpState @Inject constructor() {
     @Synchronized
     internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback) {
         verifiedProfile = value
+        // A newly read configuration has not been compared against the AAPS profile yet, and the
+        // previous verdict may have been about a different program.
+        profileComparison = ProfileComparison.UNREAD
     }
 
+    /**
+     * Records the outcome so the UI and alerting can distinguish "not read yet" from "read, and it
+     * disagrees". AAPS asks this question on every keepalive, which is the only moment a manual
+     * pump-side A/B switch becomes visible against the retained configuration.
+     */
     @Synchronized
-    internal fun profileMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean =
-        profileEvidence?.activeSchedule?.matches(effective) == true
+    internal fun profileMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean {
+        val schedule = profileEvidence?.activeSchedule
+        val matches = schedule?.matches(effective) == true
+        profileComparison = when {
+            schedule == null -> ProfileComparison.UNREAD
+            matches          -> ProfileComparison.MATCHES
+            else             -> ProfileComparison.MISMATCH
+        }
+        return matches
+    }
 
     /** Scheduled base rate from last-read configuration, not a live observation or therapy readiness. */
     @Synchronized
@@ -175,6 +201,7 @@ class YpsoPumpState @Inject constructor() {
     fun invalidateProfileEvidence() {
         verifiedProfile = null
         profileReadMessage = ""
+        profileComparison = ProfileComparison.UNREAD
     }
 
     fun observeHistory(kind: YpsoHistoryKind) {

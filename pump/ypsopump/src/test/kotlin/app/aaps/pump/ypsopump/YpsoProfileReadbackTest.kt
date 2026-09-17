@@ -66,14 +66,18 @@ class YpsoProfileReadbackTest {
     }
 
     companion object {
-        internal fun verified(a: Int = 50, b: Int = 35): YpsoProfileReadback.VerifiedReadback {
+        internal fun verified(
+            active: YpsoBasalSchedule.Program = YpsoBasalSchedule.Program.A,
+            a: Int = 50,
+            b: Int = 35
+        ): YpsoProfileReadback.VerifiedReadback {
             val zone = ZoneId.of("Europe/Warsaw")
             val local = LocalDateTime.of(2026, 9, 16, 12, 0)
-            val read = YpsoProfileReadback("generation", 21, "connection", 1000, YpsoBasalSchedule.Program.A)
+            val read = YpsoProfileReadback("generation", 21, "connection", 1000, active)
             (14..61).forEach { id -> check(read.add(id, YpsoGlb.encode(if (id < 38) a else b))) }
             return checkNotNull(
                 read.finish(
-                    "generation", 21, "connection", 2000, YpsoGlb.encode(3), local,
+                    "generation", 21, "connection", 2000, YpsoGlb.encode(active.wireValue), local,
                     local.atZone(zone).toInstant(), zone, 60_000, Duration.ofSeconds(30), 3000,
                 ),
             )

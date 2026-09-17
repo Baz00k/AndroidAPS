@@ -27,13 +27,15 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
             rxBus,
             mock<UiInteraction>(),
             pumpEnactResultProvider,
-            mock<YpsoProvisioningService>()
+            mock<YpsoProvisioningService>(),
+            profileFunction
         )
         val screen = preferenceManager.createPreferenceScreen(context)
 
         plugin.addPreferenceScreen(preferenceManager, screen, context, null)
 
         assertThat(screen.preferenceCount).isEqualTo(2)
+        // Connection setup, then both explicit configuration read actions.
         assertThat((0 until screen.preferenceCount).map { (screen.getPreference(it) as PreferenceGroup).preferenceCount })
             .containsExactly(1, 2)
     }

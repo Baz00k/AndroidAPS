@@ -149,6 +149,10 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
     val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
     val sub = pref.summary?.toString()?.takeIf { it.isNotBlank() }
+    // `isEnabled` is how the tree expresses dependency and mode gating, so a disabled row must not
+    // write. On a screen that sets max basal and max IOB, accepting an edit the tree refused is a
+    // safety bug, not a cosmetic one.
+    val editable = pref.isEnabled
 
     when (typed) {
         is BooleanPreferenceKey -> {
@@ -159,7 +163,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
                     // Route through the Preference's own change listener first: that is where AAPS hangs
                     // cross-key consequences (a toggle that reveals or hides others). Refusing the change is
                     // meaningful — respect it rather than writing anyway.
-                    if (pref.callChangeListener(it)) { preferences.put(typed, it); on = it }
+                    if (editable && pref.callChangeListener(it)) { preferences.put(typed, it); on = it }
                 }
             )
         }
@@ -171,7 +175,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
                 value = v,
                 onValue = { nv ->
                     val c = nv.coerceIn(typed.min, typed.max)
-                    if (pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
+                    if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
                 },
                 step = pickStep(typed.min, typed.max),
                 min = typed.min, max = typed.max,
@@ -187,7 +191,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
                 value = v.toDouble(),
                 onValue = { nv ->
                     val c = nv.toInt().coerceIn(typed.min, typed.max)
-                    if (pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
+                    if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
                 },
                 step = 1.0, min = typed.min.toDouble(), max = typed.max.toDouble(), decimals = 0
             )
@@ -197,14 +201,23 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
         is StringPreferenceKey  -> {
             // Strings are free-form and some are secrets (URLs, API tokens) with their own masked dialogs.
             // Show the row and hand the tap to the existing preference rather than inventing an editor.
-            ListRow(title = title, sub = sub ?: preferences.get(typed), onClick = { pref.performClick() })
+            ListRow(title = title, sub = sub ?: preferences.get(typed), onClick = clickHandler(pref))
         }
 
         else                    ->
             // Unrecognised: click actions, intents, list pickers. The legacy dialog is still correct.
-            ListRow(title = title, sub = sub, onClick = { pref.performClick() })
+            ListRow(title = title, sub = sub, onClick = clickHandler(pref))
     }
 }
+
+/**
+ * A disabled or non-selectable preference must not react to taps. The tree already applies those
+ * flags — simple mode, APS/pump-control mode, `dependency` — and read-only rows use `isSelectable` to
+ * present a value rather than an action. Returning null also stops the row from advertising itself as
+ * clickable, instead of accepting a tap and doing nothing.
+ */
+private fun clickHandler(pref: Preference): (() -> Unit)? =
+    if (pref.isEnabled && pref.isSelectable) ({ pref.performClick() }) else null
 
 /** A step that feels right across the very different ranges these keys span (0.05 U vs 500 mg/dL). */
 private fun pickStep(min: Double, max: Double): Double {
