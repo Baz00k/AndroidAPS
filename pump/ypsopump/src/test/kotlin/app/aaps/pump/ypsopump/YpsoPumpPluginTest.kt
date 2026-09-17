@@ -82,7 +82,7 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `profile coherence compares effective full schedule and fails when stale`() {
+    fun `profile comparison uses complete retained schedule without timer expiry`() {
         var elapsed = 2_001L
         state.elapsedRealtime = { elapsed }
         state.currentZone = { ZoneId.of("Europe/Warsaw") }
@@ -98,8 +98,8 @@ class YpsoPumpPluginTest {
         assertEquals(0.5, plugin.baseBasalRate)
         assertFalse(plugin.isThisProfileSet(mismatch))
         elapsed = 2_000L + YpsoPumpState.PROFILE_MAX_AGE_MS
-        assertFalse(plugin.isThisProfileSet(matching))
-        assertEquals(0.0, plugin.baseBasalRate)
+        assertTrue(plugin.isThisProfileSet(matching))
+        assertEquals(0.5, plugin.baseBasalRate)
         assertFalse(plugin.setNewBasalProfile(matching).enacted)
     }
 
@@ -152,7 +152,7 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `status polling acquires profile only when durable selector accounting is ready`() {
+    fun `status polling never acquires configuration even with durable selectors ready`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.isConfigured()).thenReturn(true)
         whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
@@ -169,9 +169,32 @@ class YpsoPumpPluginTest {
 
         plugin.getPumpStatus("profile poll")
 
-        verify(manager).readProfile(any())
+        verify(manager, never()).readProfile(any())
+        verify(manager, never()).readProfileConfiguration(any(), any(), any())
         val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
         assertFalse(plugin.isThisProfileSet(profile))
+    }
+
+    @Test
+    fun `explicit configuration actions select the requested read mode`() {
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        val modes = mutableListOf<Boolean>()
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            modes.add(it.getArgument(0))
+            it.getArgument<(Boolean) -> Unit>(2)(true)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        plugin.getPumpStatus(YpsoPumpPlugin.ACTIVE_PROGRAM_REASON)
+        assertEquals(listOf(false, true), modes)
     }
 
     @Test
@@ -189,20 +212,15 @@ class YpsoPumpPluginTest {
             YpsoBleManager.StatusReadAttempt()
         }
 
-        whenever(manager.checkProfileEvidence(any())).thenAnswer {
-            it.getArgument<(Boolean) -> Unit>(0)(true)
-            YpsoBleManager.ProfileReadAttempt()
-        }
 
         plugin.getPumpStatus("profile still fresh")
 
-        verify(manager).checkProfileEvidence(any())
         verify(manager, never()).readProfile(any())
         assertTrue(state.hasFreshProfileEvidence)
     }
 
     @Test
-    fun `status polling reacquires after history sentinel invalidates the cached profile`() {
+    fun `status polling does not issue a history sentinel or configuration selectors`() {
         state.elapsedRealtime = { 2_001L }
         state.currentZone = { ZoneId.of("Europe/Warsaw") }
         state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
@@ -215,11 +233,6 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(true)
             YpsoBleManager.StatusReadAttempt()
         }
-        whenever(manager.checkProfileEvidence(any())).thenAnswer {
-            state.invalidateProfileEvidence()
-            it.getArgument<(Boolean) -> Unit>(0)(false)
-            YpsoBleManager.ProfileReadAttempt()
-        }
         whenever(manager.readProfile(any())).thenAnswer {
             assertFalse(state.hasFreshProfileEvidence)
             it.getArgument<(Boolean) -> Unit>(0)(false)
@@ -228,9 +241,9 @@ class YpsoPumpPluginTest {
 
         plugin.getPumpStatus("manual change")
 
-        verify(manager).checkProfileEvidence(any())
-        verify(manager).readProfile(any())
-        assertFalse(state.hasFreshProfileEvidence)
+        verify(manager, never()).readProfile(any())
+        verify(manager, never()).readProfileConfiguration(any(), any(), any())
+        assertTrue(state.hasFreshProfileEvidence)
     }
 
     @Test

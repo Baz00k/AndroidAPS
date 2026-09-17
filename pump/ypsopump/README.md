@@ -24,19 +24,26 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
 
-Profile programming and activation are manual. The driver compares the complete effective AAPS
-schedule against an uninterrupted active-before → all A/B rows → active-after → clock acquisition,
-bracketed by an unchanged authenticated event count. Cached evidence expires after five minutes and
-is invalidated on disconnect, zone changes, relevant history, or a changed/failed event-count check
-at status polling. A matching current basal rate alone does not establish profile equivalence.
+Profile programming and activation are manual. In **YpsoPump Preferences → Basal configuration**,
+use **Read pump basal profiles** during setup and
+after editing the pump's schedules. This explicitly reads active-before → all A/B rows → active-after
+→ clock on one connection. Keep the pump configuration unchanged during the read. The driver
+compares the complete effective AAPS schedule against the last successfully read pump configuration.
+It does not claim to detect every unreported manual change or a switch away and back during reading.
 
-On the qualified phone/pump, full acquisition took about 78 seconds: each of 50 selectors (plus
-an initial witness when needed) uses four encrypted write frames, authenticated selector-ID readback,
-and authenticated value readback. This reads the pump configuration; it does not load or enact a new
-AAPS profile. Fresh evidence can be reused only on the same connection. The normal command queue
-disconnect clears it, so the next connection performs a full acquisition. Manual changes are detected
-at the next authenticated history-count check, not instantaneously. Future therapy commands must
-establish their own current preflight evidence; this cache is not an authorization to deliver insulin.
+Complete schedules are persisted for the installed pump-session generation, with their read time,
+and survive disconnects and app restarts. They do not expire every five minutes. Routine status polls
+perform **zero profile-selector writes** and no history sentinel. After manually switching A/B,
+use **Check active pump profile**: it reads the active selector (plus an identity witness if needed)
+and reuses the stored schedules. AAPS profile edits rerun the comparison locally.
+
+Full acquisition takes about 60–78 seconds on the qualified setup. Each selector requires four
+encrypted frames and separate authenticated identity/value readbacks. This work is explicit and
+yields to newly queued commands after the current selector has been reconciled. An incomplete
+refresh leaves the previous complete configuration intact. The UI shows the last observed program
+and schedule read age; an unreported pump edit can leave this information outdated. A different
+phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
+Therapy readiness remains a separate capability; reading configuration does not authorize delivery.
 
 ## Protected setup
 

@@ -15,22 +15,21 @@ import org.junit.jupiter.api.Test
 class YpsoPumpStateTest {
 
     @Test
-    fun `changed owner permanently invalidates otherwise fresh profile`() {
-        var owned = true
+    fun `disconnect preserves last read configuration`() {
         val state = YpsoPumpState().apply {
             elapsedRealtime = { 2001L }
             currentZone = { ZoneId.of("Europe/Warsaw") }
         }
-        state.publishProfileEvidence(YpsoProfileReadbackTest.verified()) { owned }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
         assertTrue(state.hasFreshProfileEvidence)
-        owned = false
-        assertFalse(state.hasFreshProfileEvidence)
-        owned = true
-        assertFalse(state.hasFreshProfileEvidence)
+        state.connectionState = ConnectionState.DISCONNECTED
+        assertTrue(state.hasFreshProfileEvidence)
+        state.connectionState = ConnectionState.CONNECTED
+        assertTrue(state.hasFreshProfileEvidence)
     }
 
     @Test
-    fun `DST transition and phone clock jump invalidate before age expires`() {
+    fun `DST transition and phone clock jump do not erase pump configuration`() {
         for (start in listOf("2026-10-25T00:59:59Z", "2026-03-29T00:59:59Z", "2026-09-16T10:00:00Z")) {
             var instant = Instant.parse(start)
             var elapsed = 2001L
@@ -43,12 +42,12 @@ class YpsoPumpStateTest {
             assertTrue(state.hasFreshProfileEvidence)
             elapsed += 2000
             instant = instant.plusSeconds(if (start.contains("09-16")) 33 else 2)
-            assertFalse(state.hasFreshProfileEvidence)
+            assertTrue(state.hasFreshProfileEvidence)
         }
     }
 
     @Test
-    fun `profile evidence is fresh zone bound and independently invalidated`() {
+    fun `last read configuration is zone bound and does not expire with status`() {
         var elapsed = 2_001L
         val zone = ZoneId.of("Europe/Warsaw")
         val state = YpsoPumpState().apply {
@@ -65,9 +64,9 @@ class YpsoPumpStateTest {
         state.invalidateStatus()
         assertTrue(state.profileMatches(matching), "a status poll must not erase independently acquired profile evidence")
         elapsed = 2_000L + YpsoPumpState.PROFILE_MAX_AGE_MS
-        assertFalse(state.hasFreshProfileEvidence)
-        assertFalse(state.profileMatches(matching))
-        assertNull(state.scheduledBaseBasalRateIfFresh())
+        assertTrue(state.hasFreshProfileEvidence)
+        assertTrue(state.profileMatches(matching))
+        assertEquals(0.5, state.scheduledBaseBasalRateIfFresh())
     }
 
     @Test
@@ -87,7 +86,7 @@ class YpsoPumpStateTest {
     }
 
     @Test
-    fun `profile and clock history invalidate but unrelated history does not`() {
+    fun `historical rows do not erase explicit last read configuration`() {
         val state = YpsoPumpState().apply {
             elapsedRealtime = { 2_001L }
             currentZone = { ZoneId.of("Europe/Warsaw") }
@@ -97,11 +96,11 @@ class YpsoPumpStateTest {
         state.observeHistory(YpsoHistoryKind.BOLUS_STEP_CHANGED)
         assertTrue(state.profileMatches(matching))
         state.observeHistory(YpsoHistoryKind.BASAL_PROFILE_CHANGED)
-        assertFalse(state.profileMatches(matching))
+        assertTrue(state.profileMatches(matching))
 
         state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
         state.observeHistory(YpsoHistoryKind.TIME_CHANGED)
-        assertFalse(state.profileMatches(matching))
+        assertTrue(state.profileMatches(matching))
     }
     @Test
     fun `idle sample expires at five minutes and reconnect does not refresh it`() {

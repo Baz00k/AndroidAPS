@@ -360,6 +360,35 @@ TBR remaining minutes are decoder diagnostics, not published framework measureme
 Evidence covers one pump firmware and one Android device/OS, not all eligible versions.
 # Production acquisition integration — 2026-09-17
 
+**Historical policy below is superseded by infrequent explicit synchronization.** Routine polling
+now uses zero profile selectors and no event-count sentinel. The complete last-read A/B schedules
+persist across disconnect/restart, scoped to the installed session generation. Preferences →
+YpsoPump → Basal configuration offers a complete read and a short active-program check. Reads
+yield after a reconciled selector when another command queues. Interrupted candidates never
+replace the previous complete schedules. Configuration must remain unchanged during a full read;
+event-count equality is not continuity proof. Unreported manual changes are not instantly detected.
+
+During qualification of this redesign, the existing journal failed to load because Keystore held
+two revision keys including the file's current key. The loader had treated this as missing setup.
+An abrupt process termination before old-key invalidation reproduces the failure. Loading now
+authenticates the existing envelope with its own retained key, without rewriting the journal or
+deleting any keys. Commit ordering still invalidates all prior keys before writing/publishing a
+new revision; a file whose own key is missing remains rejected. The phone recovered generation
+`5acc3c60-e483-4303-beb1-08597c2d9a1f`, reboot 21, read 3616, write 4573, VERIFIED final selector,
+482 evidence records, original reviewed handoff and retired legacy audit record. Authenticated
+status succeeded afterward. No counter reseeding or ownership reimport was performed.
+
+Redesign qualification completed two explicit production full reads in 60,908 and 63,350 ms,
+both Profile A, plus a refresh that yielded to another queued command. On final APK
+`4fd948bfe68c62ad77d47ec9a18a47c5107dcda1d2a18bcbe2bc08aa4974e717`, the status screen showed
+the retained program and schedule age after process replacement, with the actions removed.
+The preferences hierarchy showed both actions at the same left alignment under Basal configuration.
+A routine authenticated status read advanced read 3850→3851 while write stayed 4683 and evidence
+stayed 592. An explicit active-program check used two selectors (identity witness plus setting 1),
+ending at write 4685/evidence 594 with both stored schedules retained. Generation, reboot, reviewed
+handoff and retired legacy audit record remained unchanged. Software checks: 376 module tests,
+debug/release GATT ownership verification, and clean fullLoop assembly passed.
+
 Final lifecycle hardening binds cached evidence to the live GATT/session/reboot owner at every
 lookup, independently of disconnect callbacks. Cached evidence also invalidates permanently on
 zone changes, DST-offset transitions, and phone wall-clock drift beyond 30 seconds relative to

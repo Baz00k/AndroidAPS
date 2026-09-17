@@ -18,7 +18,7 @@ class YpsoPumpState @Inject constructor() {
     companion object {
         /** Status viewer budget; this is not a therapy-readiness guarantee. */
         const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
-        /** Profile evidence is deliberately short-lived and is also cleared on every disconnect. */
+        /** Legacy test interval; configuration itself does not expire on a timer. */
         const val PROFILE_MAX_AGE_MS = 5 * 60 * 1000L
     }
 
@@ -39,9 +39,6 @@ class YpsoPumpState @Inject constructor() {
     internal var currentZone: () -> ZoneId = { ZoneId.systemDefault() }
     @Volatile private var sample: StatusSnapshot? = null
     @Volatile private var verifiedProfile: YpsoProfileReadback.VerifiedReadback? = null
-    private var profilePublishedAt: Instant = Instant.EPOCH
-    private var profilePublishedElapsedMs: Long = 0
-    private var profileOwnerCurrent: () -> Boolean = { false }
     val statusSnapshot: StatusSnapshot?
         get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
 
@@ -83,18 +80,15 @@ class YpsoPumpState @Inject constructor() {
     internal val profileEvidence: YpsoProfileReadback.VerifiedReadback?
         @Synchronized get() {
             val evidence = verifiedProfile ?: return null
-            val now = currentInstant()
-            val elapsed = elapsedRealtime()
-            val valid = elapsed - evidence.acquiredElapsedMs in 0 until PROFILE_MAX_AGE_MS &&
-                currentZone() == evidence.zone && profileOwnerCurrent() &&
-                evidence.zone.rules.getOffset(now) == evidence.zone.rules.getOffset(profilePublishedAt) &&
-                java.time.Duration.between(profilePublishedAt.plusMillis(elapsed - profilePublishedElapsedMs), now).abs() <= java.time.Duration.ofSeconds(30)
-            if (!valid) invalidateProfileEvidence()
-            return evidence.takeIf { valid }
+            return evidence.takeIf { currentZone() == it.zone }
         }
 
     val hasFreshProfileEvidence: Boolean
         get() = profileEvidence != null
+
+    val profileConfigurationReadAt: Long get() = verifiedProfile?.observedAt?.toEpochMilli() ?: 0
+    val lastReadProgram: String get() = verifiedProfile?.activeProgram?.name.orEmpty()
+    @Volatile var profileReadMessage: String = ""
 
     // -- Timestamps --
     @Volatile var lastConnectionTime: Long = 0L
@@ -161,10 +155,7 @@ class YpsoPumpState @Inject constructor() {
         }
 
     @Synchronized
-    internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback, ownerCurrent: () -> Boolean = { true }) {
-        profilePublishedAt = currentInstant()
-        profilePublishedElapsedMs = elapsedRealtime()
-        profileOwnerCurrent = ownerCurrent
+    internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback) {
         verifiedProfile = value
     }
 
@@ -172,7 +163,7 @@ class YpsoPumpState @Inject constructor() {
     internal fun profileMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean =
         profileEvidence?.activeSchedule?.matches(effective) == true
 
-    /** Scheduled pump base rate, independent of current TBR scaling and requested AAPS profile. */
+    /** Scheduled base rate from last-read configuration, not a live observation or therapy readiness. */
     @Synchronized
     fun scheduledBaseBasalRateIfFresh(): Double? {
         val evidence = profileEvidence ?: return null
@@ -183,11 +174,11 @@ class YpsoPumpState @Inject constructor() {
     @Synchronized
     fun invalidateProfileEvidence() {
         verifiedProfile = null
-        profileOwnerCurrent = { false }
+        profileReadMessage = ""
     }
 
     fun observeHistory(kind: YpsoHistoryKind) {
-        if (kind in PROFILE_INVALIDATING_HISTORY) invalidateProfileEvidence()
+        // Historical rows may predate the explicit read. They do not establish current configuration.
     }
 
     @Synchronized
@@ -216,11 +207,4 @@ class YpsoPumpState @Inject constructor() {
         lastErrorMessage = ""
     }
 
-    private val PROFILE_INVALIDATING_HISTORY = setOf(
-        YpsoHistoryKind.BASAL_PROFILE_CHANGED,
-        YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
-        YpsoHistoryKind.BASAL_PROFILE_B_CHANGED,
-        YpsoHistoryKind.DATE_CHANGED,
-        YpsoHistoryKind.TIME_CHANGED,
-    )
 }

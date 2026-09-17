@@ -127,6 +127,9 @@ class YpsoBleManager @Inject constructor(
             configuredAttemptId = installed.attemptId
             configuredConnection = installed
             session = provisioning.owner
+            val cached = profileStore.load(installed.generation)
+            pumpState.invalidateProfileEvidence()
+            if (cached != null) pumpState.publishProfileEvidence(cached)
         }
         return installed.mac.isNotBlank()
     }
@@ -140,6 +143,10 @@ class YpsoBleManager @Inject constructor(
     }
 
     private val ypsoPrefs by lazy { context.getSharedPreferences("ypso_ble_state", Context.MODE_PRIVATE) }
+    private val profileStore by lazy {
+        app.aaps.pump.ypsopump.data.YpsoProfileConfigurationStore(context.getSharedPreferences("ypso_profile_configuration", Context.MODE_PRIVATE))
+    }
+    internal var persistProfile: (YpsoProfileReadback.VerifiedReadback) -> Unit = { profileStore.save(it) }
 
     /** Debug/test migration seam retained for independently captured replay evidence. */
     internal fun importReadBaseline(mac: String, hex: String, reboot: Int, read: Long) = synchronized(opLock) {
@@ -223,7 +230,6 @@ class YpsoBleManager @Inject constructor(
             }
             bondedIdentitySerial = independentlyObservedSerial
             pumpState.observedIdentitySerial = independentlyObservedSerial.orEmpty()
-            pumpState.invalidateProfileEvidence()
             if (pumpState.pumpAddress != macAddress) pumpState.invalidateStatus()
             pumpState.connectionState = ConnectionState.CONNECTING
             queue.clear()
@@ -408,7 +414,6 @@ class YpsoBleManager @Inject constructor(
             session?.quiesce()
             sessionToken = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
-            pumpState.invalidateProfileEvidence()
             profileReadActive.set(false)
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
@@ -845,7 +850,9 @@ class YpsoBleManager @Inject constructor(
      * selector characteristic reads back the requested setting ID. The value is then read separately.
      * A failure publishes nothing and never retries an uncertain write.
      */
-    fun readProfile(onDone: (Boolean) -> Unit = {}): ProfileReadAttempt {
+    fun readProfile(onDone: (Boolean) -> Unit = {}): ProfileReadAttempt = readProfileConfiguration(false, { false }, onDone)
+
+    fun readProfileConfiguration(activeOnly: Boolean, shouldYield: () -> Boolean, onDone: (Boolean) -> Unit): ProfileReadAttempt {
         val attempt = ProfileReadAttempt()
         if (!profileReadActive.compareAndSet(false, true)) {
             attempt.tryComplete()
@@ -853,7 +860,6 @@ class YpsoBleManager @Inject constructor(
             return attempt
         }
         val captured = synchronized(opLock) {
-            pumpState.invalidateProfileEvidence()
             Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString())
         }
         val gatt = captured.first
@@ -861,7 +867,6 @@ class YpsoBleManager @Inject constructor(
         val connectionId = captured.third
         attempt.onCancel = {
             synchronized(opLock) {
-                pumpState.invalidateProfileEvidence()
                 if (bluetoothGatt === gatt) disconnect()
             }
             runCatching { onDone(false) }
@@ -901,7 +906,6 @@ class YpsoBleManager @Inject constructor(
         fun failProfile(detail: String) {
             if (!attempt.tryComplete()) return
             readback?.invalidate()
-            pumpState.invalidateProfileEvidence()
             aapsLogger.error(LTag.PUMP, "YpsoPump profile read failed: $detail")
             profileReadActive.set(false)
             onDone(false)
@@ -937,11 +941,12 @@ class YpsoBleManager @Inject constructor(
             synchronized(opLock) {
                 if (!owned()) return failProfile("profile ownership changed before publication")
                 if (!attempt.tryComplete()) return
-                // Do not acquire opLock from the state getter: publication already holds opLock
-                // before the state monitor. Identity reads here must preserve that lock ordering.
-                pumpState.publishProfileEvidence(evidence) {
-                    bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
+                runCatching { persistProfile(evidence) }.getOrElse {
+                    profileReadActive.set(false)
+                    onDone(false)
+                    return
                 }
+                pumpState.publishProfileEvidence(evidence)
                 profileReadActive.set(false)
             }
             aapsLogger.info(LTag.PUMP, "YpsoPump coherent profile accepted: program=${evidence.activeProgram}, eventCount=${evidence.eventCount}, elapsedMs=${evidence.acquiredElapsedMs - startedElapsed}")
@@ -949,17 +954,12 @@ class YpsoBleManager @Inject constructor(
         }
         fun readClock(activeAfter: ByteArray) = readEncrypted(CHAR_SYSTEM_DATE) { date ->
             readEncrypted(CHAR_SYSTEM_TIME) { time ->
-                readExactGlb(CHAR_EVENT_COUNT, "event count after") { countAfter, _ ->
-                    if (countAfter != eventCountBefore) {
-                        failProfile("history changed during profile acquisition")
-                    } else {
-                        finish(date, time, activeAfter)
-                    }
-                }
+                finish(date, time, activeAfter)
             }
         }
         fun select(settingId: Int, done: (ByteArray) -> Unit) {
             if (!attempt.isActive || !owned()) return failProfile("profile ownership changed before selector $settingId")
+            if (shouldYield()) return failProfile("configuration read yielded to queued command")
             if (selectedSettingId == settingId) return failProfile("selector $settingId lacks changed-identity evidence")
             val writeId = "profile-$connectionId-$settingId-${UUID.randomUUID()}"
             val started = profileSelectorCoordinator.write(
@@ -1011,12 +1011,27 @@ class YpsoBleManager @Inject constructor(
                     selectedSettingId = initialSettingId
                     fun readActiveBefore() = select(1) { activeBefore ->
                         val program = YpsoBasalSchedule.Program.decode(activeBefore) ?: return@select failProfile("active program is unsupported")
-                        readback = YpsoProfileReadback(token.generation, reboot, connectionId, startedElapsed, program)
-                        readExactGlb(CHAR_EVENT_COUNT, "event count before") { count, _ ->
-                            if (count < 0) return@readExactGlb failProfile("event count before is negative")
-                            eventCountBefore = count
-                            scheduleProfileContinuation(Runnable { readRows(14) })
+                        if (activeOnly) {
+                            val previous = pumpState.profileEvidence ?: return@select failProfile("read complete profiles first")
+                            if (previous.generation != token.generation) return@select failProfile("configuration belongs to another pump session")
+                            val updated = YpsoProfileReadback.VerifiedReadback(
+                                previous.generation, reboot, connectionId, program, previous.profileA, previous.profileB,
+                                previous.acquiredElapsedMs, previous.zone, 0, previous.observedAt,
+                            )
+                            synchronized(opLock) {
+                                if (!owned()) return@select failProfile("profile ownership changed before active-program publication")
+                                if (!attempt.tryComplete()) return@select
+                                val saved = runCatching { persistProfile(updated) }.isSuccess
+                                if (saved) pumpState.publishProfileEvidence(updated)
+                                profileReadActive.set(false)
+                                if (!saved) { onDone(false); return@select }
+                            }
+                            onDone(true)
+                            return@select
                         }
+                        readback = YpsoProfileReadback(token.generation, reboot, connectionId, startedElapsed, program)
+                        eventCountBefore = 0
+                        scheduleProfileContinuation(Runnable { readRows(14) })
                     }
                     if (initialSettingId == 1) {
                         // Establish a changed selector identity before setting 1. The witness is not
@@ -1027,43 +1042,6 @@ class YpsoBleManager @Inject constructor(
                     }
                 }
             })
-        }
-        return attempt
-    }
-
-    /**
-     * Read-only history sentinel for a cached profile. Ownership and evidence identity must survive
-     * the authenticated read; a failure/change discards the cache without extending its lifetime.
-     */
-    fun checkProfileEvidence(onDone: (Boolean) -> Unit): ProfileReadAttempt {
-        val attempt = ProfileReadAttempt()
-        val evidence = pumpState.profileEvidence
-        val gatt = bluetoothGatt
-        val token = sessionToken
-        attempt.onCancel = { pumpState.invalidateProfileEvidence() }
-        if (evidence == null || !isConnected || gatt == null || token == null ||
-            token.generation != evidence.generation || session?.snapshot()?.reboot != evidence.reboot
-        ) {
-            pumpState.invalidateProfileEvidence()
-            if (attempt.tryComplete()) onDone(false)
-            return attempt
-        }
-        fun complete(count: Int?) = synchronized(opLock) {
-            if (attempt.tryComplete()) {
-                val valid = bluetoothGatt === gatt && sessionToken == token &&
-                    session?.snapshot()?.reboot == evidence.reboot &&
-                    pumpState.profileEvidence === evidence && count == evidence.eventCount
-                if (!valid) pumpState.invalidateProfileEvidence()
-                aapsLogger.info(LTag.PUMP, "YpsoPump profile history sentinel: ${if (valid) "unchanged" else "invalidated"}")
-                onDone(valid)
-            }
-        }
-        readMultiframe(CHAR_EVENT_COUNT, expectedGatt = gatt, onFailure = { complete(null) }) { _, frame ->
-            if (!attempt.isActive) return@readMultiframe
-            val count = runCatching {
-                app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(decryptOwned(frame))?.takeIf { it >= 0 }
-            }.getOrNull()
-            complete(count)
         }
         return attempt
     }
@@ -1173,7 +1151,6 @@ class YpsoBleManager @Inject constructor(
                         bluetoothGatt = null
                         pumpState.connectionState = ConnectionState.DISCONNECTED
                         pumpState.invalidateStatus()
-                        pumpState.invalidateProfileEvidence()
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         profileReadActive.set(false)
                         controlNotificationsEnabled = false
@@ -1332,7 +1309,6 @@ class YpsoBleManager @Inject constructor(
             bluetoothGatt = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
             pumpState.invalidateStatus()
-            pumpState.invalidateProfileEvidence()
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             profileReadActive.set(false)
             controlNotificationsEnabled = false

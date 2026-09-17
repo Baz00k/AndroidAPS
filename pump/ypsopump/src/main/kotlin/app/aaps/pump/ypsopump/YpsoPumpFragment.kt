@@ -50,7 +50,11 @@ class YpsoPumpFragment : DaggerFragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
         ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { PumpStatusScreen(state.value) } }
+            setContent {
+                AapsTheme {
+                    PumpStatusScreen(state.value)
+                }
+            }
         }
 
     override fun onResume() {
@@ -77,6 +81,11 @@ internal fun buildPumpStatusState(
 ): PumpStatusState {
     val snapshot = pumpState.statusSnapshot
     val rows = buildList {
+        if (pumpState.profileConfigurationReadAt > 0) {
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_last_read_program), pumpState.lastReadProgram))
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_read_at), dateUtil.minOrSecAgo(rh, pumpState.profileConfigurationReadAt)))
+        }
+        if (pumpState.profileReadMessage.isNotBlank()) add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_result), pumpState.profileReadMessage))
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
         if (snapshot != null) {

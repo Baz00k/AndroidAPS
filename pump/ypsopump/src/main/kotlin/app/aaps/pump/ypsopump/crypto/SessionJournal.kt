@@ -43,7 +43,11 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         if (contents == null && anchors.isEmpty()) return PumpSession.State()
         val envelope = JSONObject(checkNotNull(contents))
         val alias = envelope.getString("anchor")
-        check(anchors == listOf(alias)) { "Incomplete or restored session journal" }
+        // A killed process can leave the next key beside the committed key before invalidation.
+        // Commit deletes all prior keys before writing/publishing the next revision, so a retained
+        // file whose own key still exists has not been superseded. Authenticate it below without
+        // modifying the file or keys. Missing own key still rejects rollback/restored revisions.
+        if (alias !in anchors) throw AnchorMismatch(anchors.size, false)
         val body = if (envelope.has("sealed")) storage.open(alias, envelope.getString("sealed")) else {
             val legacyBody = envelope.getString("body")
             val expectedMac = envelope.getString("mac")
@@ -542,4 +546,6 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         private val EVIDENCE_BINDING_FIELDS =
             setOf("characteristic", "purpose", "payloadHash", "priorWrite", "candidate")
     }
+
+    internal class AnchorMismatch(val count: Int, val containsCurrent: Boolean) : IllegalStateException("Incomplete or restored session journal")
 }

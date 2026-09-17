@@ -288,7 +288,12 @@ class PumpSession(private val store: Store) {
 
     // A completed attempt is feedback for the interaction that produced it, not durable state: a
     // fresh process renders the journaled availability instead of replaying the previous result.
-    private var state: State? = runCatching { store.load().also(::validate) }.getOrNull()?.copy(lastAttempt = null)
+    private val loadedState = runCatching { store.load().also(::validate) }
+    internal val loadFailureLocation: String? = loadedState.exceptionOrNull()?.let { error ->
+        if (error is SessionJournal.AnchorMismatch) "anchor_count=${error.count},contains_current=${error.containsCurrent}"
+        else error.javaClass.simpleName + ":" + error.stackTrace.firstOrNull { it.className.startsWith("app.aaps.pump.ypsopump") }
+    }
+    private var state: State? = loadedState.getOrNull()?.copy(lastAttempt = null)
     private var record: Record? = null
     private var token: Token? = null
     private var key: ByteArray? = null

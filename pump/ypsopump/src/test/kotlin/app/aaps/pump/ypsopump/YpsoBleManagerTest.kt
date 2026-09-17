@@ -58,10 +58,12 @@ class YpsoBleManagerTest {
         pumpState = YpsoPumpState()
         provisioning = mock()
         logger = mock()
+        whenever(context.getSharedPreferences(any(), any())).thenReturn(mock())
         manager =
             YpsoBleManager(context, logger, sessionCrypto, pumpState, provisioning).apply {
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
+                persistProfile = {}
             }
         whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any())).thenReturn(false)
         manager.session = PumpSession(object : PumpSession.Store {
@@ -166,7 +168,7 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `production acquisition rejects history change even when active program returns to A`() {
+    fun `explicit acquisition does not use history count as a configuration revision`() {
         acquireProfile(finalCount = 3002)
     }
 
@@ -180,7 +182,18 @@ class YpsoBleManagerTest {
         acquireProfile(cancelAfterFirstRow = true)
     }
 
-    private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false) {
+    @Test
+    fun `configuration refresh yields after reconciled selector and retains previous complete schedules`() {
+        acquireProfile(yieldAfterFirstRow = true)
+    }
+
+    @Test
+    fun `active program check reuses both stored schedules and uses one selector`() {
+        acquireProfile(activeOnly = true)
+    }
+
+    private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
+                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false) {
         val fixture = connectedGatt(eventCountPresent = true)
         val record = manager.session!!.snapshot()!!
         val profileStore = object : PumpSession.Store {
@@ -227,7 +240,9 @@ class YpsoBleManagerTest {
             respond(value, YpsoGlb.encode(settingValue))
         }
         val results = mutableListOf<Boolean>()
-        val attempt = manager.readProfile(results::add)
+        val previous = if (yieldAfterFirstRow || activeOnly) cachedProfile() else null
+        var yielding = false
+        val attempt = manager.readProfileConfiguration(activeOnly, { yielding }, results::add)
         manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
         respond(selector, YpsoGlb.encode(61))
         if (malformedIdentity) {
@@ -239,9 +254,19 @@ class YpsoBleManagerTest {
             assertEquals(PumpSession.Phase.ACKED, manager.session!!.snapshot()!!.reservation!!.phase)
             return
         }
-        selected(1, 3)
+        selected(1, if (activeOnly) 10 else 3)
+        if (activeOnly) {
+            assertEquals(listOf(true), results)
+            assertEquals("B", pumpState.lastReadProgram)
+            assertTrue(pumpState.profileEvidence!!.profileA === previous!!.profileA)
+            assertTrue(pumpState.profileEvidence!!.profileB === previous.profileB)
+            assertEquals(previous.observedAt, pumpState.profileEvidence!!.observedAt)
+            assertEquals(4281, manager.writeCounter)
+            return
+        }
         respond(fixture.eventCount!!, YpsoGlb.encode(3000))
         for (id in 14..61) {
+            if (yieldAfterFirstRow && id == 14) yielding = true
             val continuations = mutableListOf<Runnable>()
             if (cancelAfterFirstRow && id == 14) manager.scheduleProfileContinuation = { continuations.add(it) }
             if (cancelAfterFirstRow && id == 14) {
@@ -259,6 +284,13 @@ class YpsoBleManagerTest {
                 return
             }
             selected(id, if (id < 38) 50 else 35)
+            if (yieldAfterFirstRow) {
+                assertEquals(listOf(false), results)
+                assertTrue(pumpState.profileEvidence === previous)
+                assertEquals(4282, manager.writeCounter)
+                assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
+                return
+            }
             assertFalse(pumpState.hasFreshProfileEvidence)
         }
         selected(1, 3)
@@ -268,69 +300,10 @@ class YpsoBleManagerTest {
         respond(fixture.eventCount, YpsoGlb.encode(finalCount))
         val errors = argumentCaptor<String>()
         verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
-        assertEquals(listOf(finalCount == 3000), results, errors.allValues.joinToString())
-        assertEquals(finalCount == 3000, pumpState.hasFreshProfileEvidence)
-        if (finalCount == 3000) assertEquals(3000, pumpState.profileEvidence!!.eventCount)
+        assertEquals(listOf(true), results, errors.allValues.joinToString())
+        assertTrue(pumpState.hasFreshProfileEvidence)
         assertEquals(4330, manager.writeCounter)
         assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
-    }
-
-    @Test
-    fun `profile sentinel authenticates unchanged history without renewing profile age or writing`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val evidence = cachedProfile()
-        stubStatus(YpsoGlb.encode(3000))
-        val results = mutableListOf<Boolean>()
-        manager.checkProfileEvidence(results::add)
-        assertTrue(results.isEmpty())
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.eventCount!!, byteArrayOf(0x11, 0x55), 0)
-        assertEquals(listOf(true), results)
-        assertTrue(pumpState.profileEvidence === evidence)
-        assertEquals(2000L, pumpState.profileEvidence!!.acquiredElapsedMs)
-        verify(fixture.gatt, never()).writeCharacteristic(any(), any(), any())
-        assertEquals(1L, manager.session!!.snapshot()!!.read)
-    }
-
-    @Test
-    fun `profile sentinel rejects changed decreased negative or malformed event count`() {
-        for (body in listOf(YpsoGlb.encode(3001), YpsoGlb.encode(2999), YpsoGlb.encode(-1), byteArrayOf(1))) {
-            setUp()
-            val fixture = connectedGatt(eventCountPresent = true)
-            cachedProfile()
-            stubStatus(body)
-            val results = mutableListOf<Boolean>()
-            manager.checkProfileEvidence(results::add)
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.eventCount!!, byteArrayOf(0x11, 0x55), 0)
-            assertEquals(listOf(false), results)
-            assertFalse(pumpState.hasFreshProfileEvidence)
-        }
-    }
-
-    @Test
-    fun `cancelled sentinel cannot restore profile from a late successful callback`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        cachedProfile()
-        stubStatus(YpsoGlb.encode(3000))
-        val results = mutableListOf<Boolean>()
-        val attempt = manager.checkProfileEvidence(results::add)
-        assertTrue(attempt.cancel())
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.eventCount!!, byteArrayOf(0x11, 0x55), 0)
-        assertTrue(results.isEmpty())
-        assertFalse(pumpState.hasFreshProfileEvidence)
-        assertFalse(attempt.cancel())
-    }
-
-    @Test
-    fun `history invalidation while sentinel is pending cannot be undone by equal count`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        cachedProfile()
-        stubStatus(YpsoGlb.encode(3000))
-        val results = mutableListOf<Boolean>()
-        manager.checkProfileEvidence(results::add)
-        pumpState.invalidateProfileEvidence()
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.eventCount!!, byteArrayOf(0x11, 0x55), 0)
-        assertEquals(listOf(false), results)
-        assertFalse(pumpState.hasFreshProfileEvidence)
     }
 
     @Test

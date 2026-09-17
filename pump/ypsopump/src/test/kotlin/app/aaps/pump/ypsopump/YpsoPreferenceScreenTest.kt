@@ -33,7 +33,8 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
 
         plugin.addPreferenceScreen(preferenceManager, screen, context, null)
 
-        assertThat(screen.preferenceCount).isEqualTo(1)
-        assertThat((screen.getPreference(0) as PreferenceGroup).preferenceCount).isEqualTo(1)
+        assertThat(screen.preferenceCount).isEqualTo(2)
+        assertThat((0 until screen.preferenceCount).map { (screen.getPreference(it) as PreferenceGroup).preferenceCount })
+            .containsExactly(1, 2)
     }
 }

@@ -158,9 +158,10 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        if (readStatusBlocking() && bleManager.canReadProfile) {
-            if (pumpState.hasFreshProfileEvidence) readProfileBlocking(checkOnly = true)
-            if (!pumpState.hasFreshProfileEvidence) readProfileBlocking()
+        val statusRead = readStatusBlocking()
+        if (reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)) {
+            val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
+            pumpState.profileReadMessage = rh.gs(if (success) R.string.ypsopump_profile_read_complete else R.string.ypsopump_profile_read_incomplete)
         }
     }
 
@@ -279,21 +280,20 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    private fun readProfileBlocking(timeoutMs: Long = 120_000, checkOnly: Boolean = false): Boolean {
+    private fun readProfileBlocking(timeoutMs: Long = 120_000, activeOnly: Boolean = false): Boolean {
         var success = false
         val latch = java.util.concurrent.CountDownLatch(1)
         val onDone: (Boolean) -> Unit = {
             success = it
             latch.countDown()
         }
-        val attempt = if (checkOnly) bleManager.checkProfileEvidence(onDone) else bleManager.readProfile(onDone)
+        val attempt = bleManager.readProfileConfiguration(activeOnly, { commandQueue.size() > 0 || commandQueue.bolusInQueue() }, onDone)
         if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return success
         if (!attempt.cancel()) {
             latch.await()
             return success
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
-        pumpState.invalidateProfileEvidence()
         bleManager.disconnect()
         return false
     }
@@ -346,6 +346,40 @@ class YpsoPumpPlugin @Inject constructor(
                 }
             })
         }
+        val profiles = PreferenceCategory(context).apply {
+            key = "ypsopump_basal_configuration"
+            title = rh.gs(R.string.ypsopump_basal_configuration)
+        }
+        parent.addPreference(profiles)
+        for ((reason, titleId, summaryId) in listOf(
+            Triple(PROFILE_READ_REASON, R.string.ypsopump_read_profile, R.string.ypsopump_read_profile_summary),
+            Triple(ACTIVE_PROGRAM_REASON, R.string.ypsopump_check_program, R.string.ypsopump_check_program_summary),
+        )) {
+            profiles.addPreference(Preference(context).apply {
+                key = reason
+                title = rh.gs(titleId)
+                summary = rh.gs(summaryId)
+                isEnabled = provisioning.isConfigured()
+                setOnPreferenceClickListener {
+                    isEnabled = false
+                    summary = rh.gs(R.string.ypsopump_profile_read_pending)
+                    val accepted = commandQueue.readStatus(reason, object : app.aaps.core.interfaces.queue.Callback() {
+                        override fun run() {
+                            android.os.Handler(context.mainLooper).post {
+                                isEnabled = provisioning.isConfigured()
+                                summary = if (result.success) pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
+                                else rh.gs(R.string.ypsopump_profile_read_incomplete)
+                            }
+                        }
+                    })
+                    if (!accepted) {
+                        isEnabled = provisioning.isConfigured()
+                        summary = rh.gs(R.string.ypsopump_profile_read_not_queued)
+                    }
+                    true
+                }
+            })
+        }
     }
 
     @Synchronized
@@ -391,7 +425,8 @@ class YpsoPumpPlugin @Inject constructor(
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false
     override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {
-        pumpState.invalidateProfileEvidence()
+        // Configuration is pump-local and survives DST. A changed ZoneId inhibits comparison
+        // in pumpState without destroying either stored schedule.
     }
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
@@ -407,6 +442,8 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     companion object {
+        internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
+        internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 
         /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */
         private const val RESERVOIR_EMPTY_UNITS = 0.0

@@ -301,7 +301,7 @@ class YpsoProvisioningService internal constructor(
     }
 
     internal fun ownershipStatus(): String {
-        val record = owner.committedRecord() ?: return "UNCONFIGURED"
+        val record = owner.committedRecord() ?: return owner.loadFailureLocation?.let { "JOURNAL_UNAVAILABLE:$it" } ?: "UNCONFIGURED"
         val reservation = record.reservation
         return "generation=${record.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
             "bootstrap=${record.writeBootstrapState},pending=${reservation?.operationId ?: "none"}," +

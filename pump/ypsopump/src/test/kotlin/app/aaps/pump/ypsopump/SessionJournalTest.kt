@@ -14,7 +14,11 @@ class SessionJournalTest {
         val keys = mutableMapOf<String, ByteArray>()
         var fault = ""
         var failSeal = false
-        private fun boundary(name: String) { check(fault != name) { "Injected crash: $name" } }
+        var terminateAt = ""
+        private fun boundary(name: String) {
+            if (terminateAt == name) throw ThreadDeath()
+            check(fault != name) { "Injected crash: $name" }
+        }
         override fun read() = file
         override fun anchors() = keys.keys.toList()
         override fun create(alias: String) {
@@ -55,6 +59,26 @@ class SessionJournalTest {
 
     private val old = PumpSession.State(listOf(PumpSession.Record("pump", "00".repeat(32), "generation", 8, 100, null)))
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
+
+    @Test
+    fun `process termination before invalidation preserves exact committed journal with an extra key`() {
+        for (boundary in listOf("after-create", "before-delete")) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(old)
+            val original = storage.file
+            storage.terminateAt = boundary
+            assertThrows(ThreadDeath::class.java) { journal.commit(next) }
+            storage.terminateAt = ""
+            assertEquals(2, storage.anchors().size)
+            assertEquals(old, SessionJournal(storage).load())
+            assertEquals(original, storage.file)
+            assertEquals(2, storage.anchors().size)
+            journal.commit(next)
+            assertEquals(next, journal.load())
+            assertEquals(1, storage.anchors().size)
+        }
+    }
 
     @Test
     fun `roundtrip and restoring stale file rejects deleted anchor`() {
@@ -1270,7 +1294,7 @@ class SessionJournalTest {
             storage.fault = ""
             val loaded = runCatching { SessionJournal(storage).load() }.getOrNull()
             when (boundary) {
-                "before-create", "after-create" -> assertEquals(old, loaded) // No change and no publication/dispatch.
+                "before-create", "after-create", "before-delete" -> assertEquals(old, loaded) // No change and no publication/dispatch.
                 "before-sync", "after-sync" -> assertEquals(next, loaded)
                 else -> assertNull(loaded, boundary)
             }

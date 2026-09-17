@@ -1,4 +1,16 @@
 <resources>
+    <string name="ypsopump_basal_configuration">Basal configuration</string>
+    <string name="ypsopump_profile_read_pending">Queued or reading pump configuration…</string>
+    <string name="ypsopump_profile_read_not_queued">Not queued. Wait for the current pump command to finish and try again.</string>
+    <string name="ypsopump_read_profile">Read pump basal profiles</string>
+    <string name="ypsopump_read_profile_summary">Read both schedules after setup or manual pump edits. Takes about one minute. Results appear on the pump status screen.</string>
+    <string name="ypsopump_check_program_summary">Check which stored schedule is active after manually switching A/B on the pump.</string>
+    <string name="ypsopump_check_program">Check active pump profile</string>
+    <string name="ypsopump_last_read_program">Last observed pump profile</string>
+    <string name="ypsopump_profile_read_at">Schedules last read</string>
+    <string name="ypsopump_profile_result">Configuration read</string>
+    <string name="ypsopump_profile_read_complete">Completed</string>
+    <string name="ypsopump_profile_read_incomplete">Not completed; previous schedules retained</string>
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
     <string name="ypsopump_description">Shows YpsoPump status. Insulin delivery is disabled.</string>
