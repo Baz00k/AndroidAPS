@@ -13,7 +13,6 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.os.Build
 import android.os.Bundle
-import app.aaps.pump.ypsopump.ble.YpsoArtifactPolicy
 import app.aaps.pump.ypsopump.ble.YpsoAuthentication
 import app.aaps.pump.ypsopump.ble.YpsoBenchWriteCoordinator
 import app.aaps.pump.ypsopump.ble.YpsoCommandReadiness
@@ -728,7 +727,6 @@ class BenchActivity : Activity() {
         val password = YpsoAuthentication.password(checkNotNull(document).mac)
         check(
             YpsoWritePolicy.allowsCharacteristic(
-                YpsoArtifactPolicy.NON_THERAPY_BENCH,
                 YpsoRemoteWrite.AUTHENTICATION,
                 auth.uuid,
                 password,
@@ -889,7 +887,6 @@ class BenchActivity : Activity() {
         val enableNotification = byteArrayOf(1, 0)
         check(
             YpsoWritePolicy.allowsDescriptor(
-                YpsoArtifactPolicy.NON_THERAPY_BENCH,
                 YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR,
                 characteristic.uuid,
                 descriptor.uuid,

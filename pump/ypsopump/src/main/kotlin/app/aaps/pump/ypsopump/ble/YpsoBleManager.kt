@@ -1190,7 +1190,7 @@ class YpsoBleManager @Inject constructor(
                         aapsLogger.info(LTag.PUMP, "YpsoPump discovered service $serviceUuid custom characteristics=$characteristicUuids")
                     }
                 val auth = findChar(g, CHAR_AUTH) ?: return@synchronized "AUTH characteristic not found"
-                if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION, YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ)) {
+                if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
                     cause = null
                     return@synchronized "authentication write blocked by safety policy"
                 }
@@ -1377,7 +1377,7 @@ class YpsoBleManager @Inject constructor(
             bluetoothGatt === g && if (remoteWrite == YpsoRemoteWrite.SETTINGS_SELECTOR) {
                 characteristic.uuid == YpsoWritePolicy.SETTING_ID_UUID && authorizedProfileFrame === value
             } else YpsoWritePolicy.allowsCharacteristic(
-                YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ, remoteWrite, characteristic.uuid, value,
+                remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),
                 pumpState.connectionState == ConnectionState.READY
             )
@@ -1411,7 +1411,6 @@ class YpsoBleManager @Inject constructor(
         // AUTH is a characteristic, never a descriptor. No descriptor destination is authorized
         // in this artifact, including a caller deliberately labelling its payload AUTHENTICATION.
         if (!YpsoWritePolicy.allowsDescriptor(
-                YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ,
                 remoteWrite,
                 descriptor.characteristic?.uuid,
                 descriptor.uuid,

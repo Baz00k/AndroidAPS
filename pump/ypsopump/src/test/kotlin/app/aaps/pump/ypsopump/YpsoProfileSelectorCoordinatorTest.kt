@@ -102,6 +102,44 @@ class YpsoProfileSelectorCoordinatorTest {
     }
 
     @Test
+    fun `ambiguous callback ownership cannot reconcile selector identity`() {
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(write = 4_153, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+            },
+        )
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val gatt = Any()
+        val owner = YpsoProfileSelectorCoordinator.Owner(gatt, "connection", token)
+        val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
+        val coordinator = YpsoProfileSelectorCoordinator(session, SessionCrypto(), transport)
+
+        assertTrue(coordinator.write("profile-14", owner, 14, "V05.00.52", 8_000, { true }, {}))
+        assertTrue(
+            transport.markCallbackOwnershipAmbiguous(
+                gatt,
+                YpsoWritePolicy.SETTING_ID_UUID,
+                0,
+                "same-UUID callback could not be assigned",
+            ),
+        )
+
+        assertFalse(
+            coordinator.reconcileAccepted(
+                "profile-14",
+                owner,
+                "ab".repeat(32),
+                "same-link exact-GLB selector identity read-back matched setting 14",
+            ),
+        )
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
+        assertNull(session.snapshot()!!.writeEvidence.last().resolution)
+    }
+
+    @Test
     fun `profile selector rejects settings outside active and schedule allowlist`() {
         val store = MemoryStore()
         PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
