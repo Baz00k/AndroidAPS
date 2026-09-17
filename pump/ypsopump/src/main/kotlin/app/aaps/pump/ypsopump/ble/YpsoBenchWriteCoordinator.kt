@@ -23,6 +23,8 @@ internal class YpsoBenchWriteCoordinator(
         FORWARD_GAP,
         NEW_EPOCH_BOOTSTRAP,
         AMBIGUITY_CONVERGENCE,
+        SETTINGS_COUNTER_RECOVERY,
+        SETTINGS_COUNTER_JUMP,
         DUPLICATE_COUNTER,
     }
 
@@ -102,11 +104,13 @@ internal class YpsoBenchWriteCoordinator(
                 record.reservation == null &&
                 record.benchNewEpochBootstrapReference != null
         val convergenceReady = mode == BenchWriteMode.AMBIGUITY_CONVERGENCE && session.benchAmbiguityConvergenceReady()
+        val settingsRecoveryReady = mode == BenchWriteMode.SETTINGS_COUNTER_RECOVERY && session.benchSettingsCounterRecoveryReady() ||
+            mode == BenchWriteMode.SETTINGS_COUNTER_JUMP && session.benchSettingsCounterJumpReady()
         val counterCertain =
             record?.reboot != null &&
                 record.read != null &&
                 (record.write != null || bootstrapReady) &&
-                (convergenceReady || record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
+                (convergenceReady || settingsRecoveryReady || record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
         val ready = readiness.snapshot(owner.readinessOwner(), counterCertain, setupRequired = true)
         if (!ready.commandReady) {
             onOutcome(notSent(writeId, characteristic, firmware, YpsoWriteFailure.Layer.READINESS, checkNotNull(ready.reason)))
@@ -147,6 +151,10 @@ internal class YpsoBenchWriteCoordinator(
                         session.reserveBenchDuplicateCounterCandidate(owner.token, transaction, intent)
                     BenchWriteMode.AMBIGUITY_CONVERGENCE ->
                         session.reserveBenchAmbiguityConvergenceCandidate(owner.token, transaction, intent)
+                    BenchWriteMode.SETTINGS_COUNTER_RECOVERY ->
+                        session.reserveBenchSettingsCounterRecoveryCandidate(owner.token, transaction, intent)
+                    BenchWriteMode.SETTINGS_COUNTER_JUMP ->
+                        session.reserveBenchSettingsCounterRecoveryCandidate(owner.token, transaction, intent, jump = true)
                     BenchWriteMode.STRICT_NEXT, BenchWriteMode.FORWARD_GAP ->
                         session.reserveBenchCandidate(
                             owner.token,

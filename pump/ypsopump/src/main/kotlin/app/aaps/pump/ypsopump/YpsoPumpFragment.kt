@@ -50,7 +50,11 @@ class YpsoPumpFragment : DaggerFragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
         ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { PumpStatusScreen(state.value) } }
+            setContent {
+                AapsTheme {
+                    PumpStatusScreen(state.value)
+                }
+            }
         }
 
     override fun onResume() {
@@ -76,12 +80,18 @@ internal fun buildPumpStatusState(
     rh: ResourceHelper
 ): PumpStatusState {
     val snapshot = pumpState.statusSnapshot
+    // Ordered by how much the value can change what the user does next: what the pump is currently
+    // delivering, then how well that is known, then unchanging identity.
     val rows = buildList {
-        if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
-        if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
         if (snapshot != null) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_status), dateUtil.minOrSecAgo(rh, snapshot.acquiredAt)))
         }
+        if (pumpState.profileConfigurationReadAt > 0) {
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_last_read_program), pumpState.lastReadProgram))
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_read_at), dateUtil.minOrSecAgo(rh, pumpState.profileConfigurationReadAt)))
+        }
+        if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
+        if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
     }
     val queue = buildList {
         val running = commandQueue.performing()
@@ -102,6 +112,10 @@ internal fun buildPumpStatusState(
     return PumpStatusState(
         title = "YpsoPump",
         connectionSummary = connectionSummary,
+        alert = when (pumpState.profileComparison) {
+            YpsoPumpState.ProfileComparison.MISMATCH -> rh.gs(R.string.ypsopump_profile_mismatch_notification, pumpState.lastReadProgram)
+            else                                     -> null
+        },
         connectionAction = when {
             presentation != PumpSetupPresentation.READY -> rh.gs(presentation.message)
             pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null -> rh.gs(R.string.ypsopump_authenticated_no_status)

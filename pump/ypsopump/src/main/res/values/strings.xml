@@ -1,4 +1,18 @@
 <resources>
+    <string name="ypsopump_basal_configuration">Basal configuration</string>
+    <string name="ypsopump_read_profile_started">Reading both schedules from the pump. This takes about a minute.</string>
+    <string name="ypsopump_check_program_started">Checking which schedule the pump has active…</string>
+    <string name="ypsopump_profile_read_not_queued">Not queued. Wait for the current pump command to finish and try again.</string>
+    <string name="ypsopump_profile_read_matches">Pump profile %1$s matches the active AAPS profile.</string>
+    <string name="ypsopump_profile_read_mismatch">Pump profile %1$s does NOT match the active AAPS profile.</string>
+    <string name="ypsopump_read_profile">Read pump basal profiles</string>
+    <string name="ypsopump_read_profile_summary">Read both schedules after setup or manual pump edits. Takes about one minute.</string>
+    <string name="ypsopump_check_program_summary">Check which stored schedule is active after manually switching A/B on the pump. Takes a few seconds.</string>
+    <string name="ypsopump_check_program">Check active pump profile</string>
+    <string name="ypsopump_last_read_program">Last observed pump profile</string>
+    <string name="ypsopump_profile_read_at">Basal profiles last read</string>
+    <string name="ypsopump_profile_read_complete">Completed</string>
+    <string name="ypsopump_profile_read_incomplete">Not completed; previous schedules retained</string>
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
     <string name="ypsopump_description">Shows YpsoPump status. Insulin delivery is disabled.</string>
@@ -10,8 +24,10 @@
     <string name="ypsopump_connecting">Connecting…</string>
     <string name="ypsopump_disconnected">Not connected</string>
     <string name="ypsopump_not_implemented">YpsoPump: not implemented yet</string>
-    <string name="ypsopump_read_only_profile_blocked">Insulin delivery is disabled: profile not sent to the pump</string>
-    <string name="ypsopump_profile_programmed_on_pump">YpsoPump: basal profile is programmed on the pump</string>
+    <string name="ypsopump_profile_verified">Pump profile %1$s already matches this profile. Nothing was sent to the pump.</string>
+    <string name="ypsopump_profile_unread_action">The YpsoPump programs its basal profile by hand. AAPS cannot send this profile. Program it on the pump, then use YpsoPump Preferences → Basal configuration → Read pump basal profiles to confirm they agree.</string>
+    <string name="ypsopump_profile_mismatch_action">The pump\'s basal profile (%1$s) does not match the profile AAPS is using. Insulin is being delivered by the pump\'s schedule, not this one. Correct it on the pump, or switch AAPS to a matching profile.</string>
+    <string name="ypsopump_profile_mismatch_notification">Pump basal profile %1$s does not match the active AAPS profile. The pump is delivering its own schedule. Fix it on the pump or switch AAPS profiles.</string>
     <string name="ypsopump_read_only_bolus_blocked">Insulin delivery is disabled: bolus blocked</string>
     <string name="ypsopump_reservoir_empty_notification">Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.</string>
     <string name="ypsopump_reservoir_low_notification">Pump reservoir low: %1$.0f U left. Change the cartridge soon.</string>
@@ -47,6 +63,13 @@
     <string name="ypsopump_import_review">From file: %1$s · %2$s</string>
     <string name="ypsopump_apply_import">Use these details</string>
     <string name="ypsopump_import_invalid">That file isn’t a valid ypso-keys file.</string>
+    <string name="ypsopump_ownership_handoff_explanation">Advanced: transfer the complete reviewed selector-counter journal from the qualification bench. This does not accept a numeric counter by itself.</string>
+    <string name="ypsopump_ownership_handoff_hash">Reviewed ownership file SHA-256</string>
+    <string name="ypsopump_import_ownership_handoff">Choose ownership handoff file</string>
+    <string name="ypsopump_ownership_import_invalid">The ownership handoff, pump identity, authentication, or reviewed SHA-256 is invalid.</string>
+    <string name="ypsopump_ownership_handoff_review">Reviewed epoch: reboot %1$d · read %2$d · write %3$d · journal %4$s…</string>
+    <string name="ypsopump_apply_ownership_handoff">Transfer reviewed ownership</string>
+    <string name="ypsopump_ownership_install_failed">Couldn’t transfer ownership. The previous journal is unchanged.</string>
     <string name="ypsopump_invalid_serial">Check the serial number on your pump.</string>
     <string name="ypsopump_invalid_mac">Use the form AA:BB:CC:11:22:33.</string>
     <string name="ypsopump_invalid_key">Paste the 64-character key from ypso-keys.</string>

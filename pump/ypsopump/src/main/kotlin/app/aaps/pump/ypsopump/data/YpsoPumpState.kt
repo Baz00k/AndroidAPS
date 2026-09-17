@@ -2,6 +2,9 @@ package app.aaps.pump.ypsopump.data
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.history.YpsoHistoryKind
+import java.time.Instant
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,18 +18,27 @@ class YpsoPumpState @Inject constructor() {
     companion object {
         /** Status viewer budget; this is not a therapy-readiness guarantee. */
         const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
+        /** Legacy test interval; configuration itself does not expire on a timer. */
+        const val PROFILE_MAX_AGE_MS = 5 * 60 * 1000L
     }
 
     data class StatusSnapshot(
         val reservoirUnits: Double,
         val batteryPercent: Int?,
         val batteryBars: Int?,
+        /** Current pump-reported basal after TBR scaling; not stored-profile evidence. */
+        val activeBasalRate: Double?,
+        val activeTbrPercent: Int,
+        val isSuspended: Boolean,
         val acquiredAt: Long,
         val elapsedAt: Long
     )
 
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+    internal var currentInstant: () -> Instant = { Instant.now() }
+    internal var currentZone: () -> ZoneId = { ZoneId.systemDefault() }
     @Volatile private var sample: StatusSnapshot? = null
+    @Volatile private var verifiedProfile: YpsoProfileReadback.VerifiedReadback? = null
     val statusSnapshot: StatusSnapshot?
         get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
 
@@ -65,9 +77,28 @@ class YpsoPumpState @Inject constructor() {
     @Volatile var activeBolusRemaining: Double = 0.0
 
     // -- Profiles --
-    val profileA: FloatArray = FloatArray(24) // 24 hourly basal rates
-    val profileB: FloatArray = FloatArray(24) // alternate profile
-    @Volatile var isProfileAActive: Boolean = true
+    internal val profileEvidence: YpsoProfileReadback.VerifiedReadback?
+        @Synchronized get() {
+            val evidence = verifiedProfile ?: return null
+            return evidence.takeIf { currentZone() == it.zone }
+        }
+
+    val hasFreshProfileEvidence: Boolean
+        get() = profileEvidence != null
+
+    val profileConfigurationReadAt: Long get() = profileEvidence?.observedAt?.toEpochMilli() ?: 0
+    val lastReadProgram: String get() = profileEvidence?.activeProgram?.name.orEmpty()
+    @Volatile var profileReadMessage: String = ""
+
+    /**
+     * Whether the last-read pump configuration agrees with the profile AAPS is dosing against.
+     * [UNREAD] also covers a configuration that a zone change has made incomparable: in both cases
+     * the pump's delivered basal is unproven, which is not the same as a proven disagreement.
+     */
+    enum class ProfileComparison { UNREAD, MATCHES, MISMATCH }
+
+    @Volatile var profileComparison: ProfileComparison = ProfileComparison.UNREAD
+        private set
 
     // -- Timestamps --
     @Volatile var lastConnectionTime: Long = 0L
@@ -98,16 +129,84 @@ class YpsoPumpState @Inject constructor() {
         isSuspended: Boolean,
         activeTbrPercent: Int,
         timestamp: Long,
-        batteryBars: Int? = null
+        batteryBars: Int? = null,
+        activeBasalRate: Double? = null,
     ) {
         this.isSuspended = isSuspended
         this.activeTbrPercent = activeTbrPercent
-        sample = StatusSnapshot(reservoirUnits, batteryPercent, batteryBars, timestamp, elapsedRealtime())
+        this.activeBasalRate = activeBasalRate ?: 0.0
+        sample =
+            StatusSnapshot(
+                reservoirUnits,
+                batteryPercent,
+                batteryBars,
+                activeBasalRate,
+                activeTbrPercent,
+                isSuspended,
+                timestamp,
+                elapsedRealtime(),
+            )
         lastConnectionTime = timestamp
     }
 
     @Synchronized
     fun reservoirUnitsIfFresh(): Double? = statusSnapshot?.reservoirUnits
+
+    /**
+     * Derive the scheduled base rate only from a fresh measured status. A zero-percent TBR cannot
+     * reveal the underlying rate, and this current-rate observation never proves profile coherence.
+     */
+    @Synchronized
+    fun baseBasalRateIfFresh(): Double? =
+        statusSnapshot?.let { status ->
+            val rate = status.activeBasalRate ?: return@let null
+            val percent = status.activeTbrPercent
+            if (status.isSuspended || percent <= 0) null else rate * 100.0 / percent
+        }
+
+    @Synchronized
+    internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback) {
+        verifiedProfile = value
+        // A newly read configuration has not been compared against the AAPS profile yet, and the
+        // previous verdict may have been about a different program.
+        profileComparison = ProfileComparison.UNREAD
+    }
+
+    /**
+     * Records the outcome so the UI and alerting can distinguish "not read yet" from "read, and it
+     * disagrees". AAPS asks this question on every keepalive, which is the only moment a manual
+     * pump-side A/B switch becomes visible against the retained configuration.
+     */
+    @Synchronized
+    internal fun profileMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean {
+        val schedule = profileEvidence?.activeSchedule
+        val matches = schedule?.matches(effective) == true
+        profileComparison = when {
+            schedule == null -> ProfileComparison.UNREAD
+            matches          -> ProfileComparison.MATCHES
+            else             -> ProfileComparison.MISMATCH
+        }
+        return matches
+    }
+
+    /** Scheduled base rate from last-read configuration, not a live observation or therapy readiness. */
+    @Synchronized
+    fun scheduledBaseBasalRateIfFresh(): Double? {
+        val evidence = profileEvidence ?: return null
+        val local = currentInstant().atZone(evidence.zone).toLocalTime().toSecondOfDay()
+        return evidence.activeSchedule.rateAt(local)
+    }
+
+    @Synchronized
+    fun invalidateProfileEvidence() {
+        verifiedProfile = null
+        profileReadMessage = ""
+        profileComparison = ProfileComparison.UNREAD
+    }
+
+    fun observeHistory(kind: YpsoHistoryKind) {
+        // Historical rows may predate the explicit read. They do not establish current configuration.
+    }
 
     @Synchronized
     fun invalidateStatus() {
@@ -130,7 +229,9 @@ class YpsoPumpState @Inject constructor() {
     fun reset() {
         connectionState = ConnectionState.DISCONNECTED
         invalidateStatus()
+        invalidateProfileEvidence()
         lastErrorCode = 0
         lastErrorMessage = ""
     }
+
 }

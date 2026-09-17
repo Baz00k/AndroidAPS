@@ -18,8 +18,10 @@ the ADB shell, preventing ordinary installed applications from invoking its acti
 Use only with a target pump in the reviewed non-therapy bench state. A selector still mutates
 protocol and counter state. The app never retries a possibly effective write, never scans counters,
 and never interprets bare 134/138/139 as a safe recovery instruction. A GATT-successful fragmented
-write remains `AcceptedUnverified`; the app captures a value read-back but requires explicit,
-measured reconciliation before another selector can run.
+write remains `AcceptedUnverified`; the app captures read-back but requires explicit, measured
+reconciliation before another selector can run. For settings it first reads and decrypts the readable
+`SETTING_ID` characteristic and requires exact GLB identity equality before reading `SETTING_VALUE`;
+a valid or unchanged value alone is never treated as selector proof.
 
 ## Build and install
 
@@ -59,6 +61,62 @@ decoder; paired target observations
 now establish pump-local wall-clock seconds since 2000-01-01. Pump date/time bytes are retained verbatim
 with wall/elapsed phone observations. `history-captures.jsonl` contains decrypted pump data and may identify
 the operator's treatment history. Keep it protected like a raw Bluetooth trace; do not publish it.
+
+## Atomic profile acquisition
+
+After selector-ID read-back and strict-next accounting are qualified, acquire active-before, all 48
+hourly rows, active-after, pump date/time, and an event-count bracket on one authenticated connection:
+
+```sh
+PROFILE_ID="profile-$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action acquire-profile --es write_id "$PROFILE_ID"
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/profile-captures.jsonl \
+  > "profile-captures-$PROFILE_ID.jsonl"
+sha256sum "profile-captures-$PROFILE_ID.jsonl"
+```
+
+Each selector is strict-next and is reconciled only by an exact same-connection `SETTING_ID`
+read-back before its value is collected. The action publishes a capture only when the connection,
+generation, reboot, active program, event count, clock and all rows remain coherent for at most five
+minutes. Any interruption leaves the current reservation durable and stops without retry.
+
+For the manual switch rejection test, pause after a row and switch A↔B while paused:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action acquire-profile --es write_id "$PROFILE_ID" \
+  --ei pause_after_setting 37 --el pause_ms 60000
+```
+
+The expected result is rejection (active-before/after mismatch and/or changed event count), with no
+profile capture published for that action. Restore the intended profile manually after the test.
+
+## Reviewed ownership handoff to AndroidAPS
+
+After all physical runs are reviewed, create one canonical evidence manifest containing the final
+protected journal/evidence/history/profile hashes, APK and signer hashes, run IDs, outcomes, and the
+review decision. Review and record its SHA-256 independently. Then export the complete accounting
+record; a numeric write floor is deliberately not accepted:
+
+```sh
+EVIDENCE_SHA256="64-lowercase-hex-from-independent-review"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action export-ownership-handoff \
+  --es reviewed_evidence_sha256 "$EVIDENCE_SHA256"
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/ownership-handoff.json \
+  > ownership-handoff.json
+sha256sum ownership-handoff.json
+```
+
+The file is secret-free but HMAC-authenticated by the installed pump session key. It contains the
+complete current epoch record: reboot/read/write floors, verified reservation, write-evidence chain,
+retired legacy counter-33 audit record, and experimental attempt flags. It also binds the bench package,
+APK signer, APK, and all protected artifact hashes. AndroidAPS requires the separately reviewed file
+SHA-256 before parsing, verifies the HMAC with its already-installed pump key, checks pump/key/serial and
+epoch identity, rejects unresolved or conflicting local ownership, and commits the imported record under
+a fresh AndroidAPS Keystore journal revision. Copying only the numeric write counter is forbidden.
 
 ## Import the session; measured floors are optional validation evidence
 
@@ -190,6 +248,11 @@ reservation → exact-counter encryption → fragmented serialized write → val
 contains the reviewed selector intent, callback-visible facts and redacted response-body hashes, not
 keys, ciphertext or decrypted pump-response bodies.
 
+The app supplies one Android `Handler` to `connectGatt` and posts characteristic-write processing
+back to that same queue. Consequently the next frame or selector-value read cannot call another GATT
+operation until the platform's write callback has returned. `RunRequested` records this as
+`gatt_callback_dispatch=handler-post-after-callback`.
+
 After successful AUTH and before required CCCD or selector dispatch, every applicable connection
 reads master firmware, supervisor firmware and control protocol. Master and supervisor are accepted
 by the inclusive minimum rule `>= V05.00.52`; there is no exact-firmware allowlist. The observed
@@ -220,10 +283,29 @@ classifier.
 
 ### One-shot ambiguity convergence without reboot
 
-If one strict-next **event** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
+The separate `recover-settings-counter` experiment permits one event selector after a reviewed
+unresolved settings convergence. It reserves the next value above both attempted settings counters;
+acceptance across the resulting gap is a hypothesis under test, not a pre-established pump limit.
+The bench first reads the current event row and rejects selecting that row or its next descending
+iterator row. Exact authenticated changed-index read-back is required for semantic acceptance.
+Journal v15 preserves the complete unresolved predecessor binding; no old outcome is
+rewritten as accepted. A not-sent attempt restores that binding. An ambiguous dispatched recovery
+blocks another recovery. This selector-only experiment does not permit therapy commands, settings
+value writes, counter scanning or journal reseeding.
+
+After that event recovery itself remains reviewed unknown, `jump-settings-counter` permits one
+explicit event-selector candidate at `4096`, provided the earlier attempted counter is lower. This
+separately tests whether the assumed low write position is stale. Its three-level predecessor chain
+preserves both settings attempts and the first event recovery. Exact changed-index read-back, not
+the numeric callback, establishes its result. The target accepted this jump and subsequent settings
+reads; it does not establish that every arbitrary jump is accepted. These qualification transitions
+remain bench-only and must not become therapy retry policy.
+
+If one strict-next **event or settings** selector at counter `N` remains `POSSIBLY_SENT` or `ACKED`, first preserve
 and review its evidence bundle and record exactly one hash-bound `UNKNOWN` reconciliation record. When
 that record is the sole exact match for the durable reservation, `converge-ambiguity` reserves exactly
-`N + 1` with a new operation ID and different event payload:
+`N + 1` with a new operation ID. Event convergence requires a different event payload; settings
+convergence requires the exact same setting ID so the value can be read immediately on the same link:
 
 ```sh
 WRITE_ID="converge-$(uuidgen)"
@@ -237,6 +319,10 @@ authenticated current selector value. There is no counter extra: the candidate i
 to the unresolved reservation's counter plus one. If the actual pump floor is `N - 1`, this is the
 already measured `floor + 2`; if it is `N`, this is strict-next. No counter is scanned.
 
+For settings, use the same `selector_type setting` and selector value as the unresolved predecessor.
+The guard rejects a changed setting ID or selector family. This is still a non-mutating selector retry,
+not a setting-value write.
+
 The reservation durably binds the unresolved predecessor's operation ID, reservation ID, phase,
 counter, characteristic, purpose, plaintext hash, exact prior floor, candidate mode and reviewed
 evidence hash. The epoch's convergence marker is persisted before dispatch and permits only one
@@ -244,6 +330,11 @@ attempt. Proven not-sent or reviewed rejected/not-consumed evidence restores the
 predecessor reservation. Acceptance or consumed rejection establishes counter `N + 1` while retaining
 the older `UNKNOWN` evidence. Do not continue to the duplicate probe unless authenticated semantic
 read-back and reviewed counter evidence qualify the convergence write as accepted.
+
+Discovering a harness sequencing defect after a consumed convergence attempt does not authorize a
+third selector write. If counters `N` and `N + 1` both remain unresolved, `N + 2` may be strict-next,
+`floor + 2`, or an unmeasured `floor + 3`; preserve the journal and obtain counter-disposition or
+equivalent target-qualified evidence first.
 
 For the epoch-21 counter-2 uncertainty, this action therefore reserves exactly counter `3`; it replaces
 the previously proposed clean-reboot procedure.
@@ -298,6 +389,17 @@ done
 This proves the artifact's fail-closed readiness boundary. A real AUTH or CCCD callback failure, if
 observed naturally, is separately recorded with layer, characteristic, firmware and raw status; do
 not induce it by changing the pump identity or sending an unreviewed AUTH payload.
+
+Every coordinator result is appended as `CoordinatorOutcome`, including failures before transport
+startup. `NotSent` also reports its failure layer, detail and optional counter in `result.txt`; do not
+retry a selector from a bare outcome string or infer pump rejection from a local session failure.
+
+If all selector frames were locally dispatched and only the final GATT callback is non-zero, the
+write remains `PossiblyApplied`, but the app performs one selector-value read on that same connection
+after the write callback has returned and before closing the connection. This is an experimental
+timing variant, not a proven Nordic requirement, and captures semantic evidence without treating
+the numeric callback as acceptance or rejection. Earlier-frame failures still close without read-back
+because a complete selector request was not observed.
 
 ### One forward-gap candidate
 

@@ -5,8 +5,10 @@
 
 ## Supported artifact
 
-The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes are
-restricted to the access-authentication handshake (**AUTH-only**).
+The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes permit
+access authentication, the required control-notification CCCD, and profile setting selectors `1`
+and `14–61`. Selectors require an established durable write floor and strict-next accounting;
+an unknown floor or unresolved write blocks profile acquisition. They do not change configuration.
 
 After a successful verified encrypted status read, the UI shows reservoir values and battery percent.
 The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent. Status fields have bench
@@ -14,12 +16,56 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 
 - running and Stop are the observed operating states; other mode values reject the status;
 - battery percent is a coarse display mapping from reported bars, not a measured percentage;
-- basal rate, TBR duration, bolus progress and history are unavailable;
+- scheduled base basal is available only from fresh verified active-profile evidence;
+- TBR duration, bolus progress and production history-row ingestion are unavailable;
 - measurements expire five minutes after acquisition, including while disconnected;
 - a BLE MAC is never displayed or synthesized as a serial.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
+
+Profile programming and activation are manual. In **YpsoPump Preferences → Basal configuration**,
+use **Read pump basal profiles** during setup and
+after editing the pump's schedules. This explicitly reads active-before → all A/B rows → active-after
+→ clock on one connection. Keep the pump configuration unchanged during the read. The driver
+compares the complete effective AAPS schedule against the last successfully read pump configuration.
+It does not claim to detect every unreported manual change or a switch away and back during reading.
+
+Complete schedules are persisted for the installed pump-session generation, with their read time,
+and survive disconnects and app restarts. They do not expire every five minutes. Routine status polls
+perform **zero profile-selector writes** and no history sentinel. After manually switching A/B,
+use **Check active pump profile**: it reads the active selector (plus an identity witness if needed)
+and reuses the stored schedules. AAPS profile edits rerun the comparison locally.
+
+Full acquisition takes about 60–78 seconds on the qualified setup. Each selector requires four
+encrypted frames and separate authenticated identity/value readbacks. This work is explicit and
+yields to newly queued commands after the current selector has been reconciled. An incomplete
+refresh leaves the previous complete configuration intact. The UI shows the last observed program
+and schedule read age; an unreported pump edit can leave this information outdated. A different
+phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
+Therapy readiness remains a separate capability; reading configuration does not authorize delivery.
+
+### Divergence is reported, not tolerated
+
+Every comparison records one of three verdicts: *not read*, *matches*, or *mismatch*. A mismatch —
+typically a basal program switched by hand on the pump — raises an urgent notification and a banner
+at the top of the pump tab. The pump keeps delivering its own schedule; AAPS cannot correct that, so
+it names the program and the manual fix. Each configuration action also reports its own result as a
+toast when it finishes.
+
+`setNewBasalProfile()` still never writes to the pump. It succeeds, without enacting, only when the
+retained configuration already equals the requested effective schedule, which lets AAPS record the
+effective profile switch it needs to run a loop. Reporting failure in that case would leave
+`ProfileFunction` with no running profile and make the keepalive re-raise the failed-basal-update
+alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
+divergent configuration still fails, because neither proves what the pump is delivering.
+
+**Before therapy is enabled**, that confirmation must be strengthened. Retained configuration is
+scoped by pump-session generation and timezone only, so it can outlive an edit made on the pump
+between reads, and the recorded effective profile switch would then rest on a stale schedule. This is
+harmless while delivery is blocked — nothing doses from it — but enabling bolus/TBR requires bounding
+the confirmation with current pump-side evidence: at minimum active-program continuity plus detection
+of schedule edits.
 
 ## Protected setup
 

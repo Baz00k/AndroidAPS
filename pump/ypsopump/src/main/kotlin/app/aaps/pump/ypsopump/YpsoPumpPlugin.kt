@@ -22,11 +22,13 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import android.content.Context
@@ -56,10 +58,10 @@ class YpsoPumpPlugin @Inject constructor(
     private val bleManager: YpsoBleManager,
     private val pumpSync: PumpSync,
     private val rxBus: RxBus,
-    private val profileFunction: ProfileFunction,
     private val uiInteraction: UiInteraction,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>,
-    private val provisioning: YpsoProvisioningService
+    private val provisioning: YpsoProvisioningService,
+    private val profileFunction: ProfileFunction
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -76,12 +78,16 @@ class YpsoPumpPlugin @Inject constructor(
     private var publishedAvailabilityPresentation: PumpSetupPresentation? = null
     /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
     private var availabilityNotificationSynchronized = false
+    /** Last published mismatch text, or null when no mismatch is currently published. */
+    private var publishedProfileMismatch: String? = null
 
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
     }
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
+        // Profile programming is unsupported independently of the broader therapy milestone.
+        isSetBasalProfileCapable = false
         if (YpsoPumpConst.READ_ONLY_MODE) {
             isBolusCapable = false
             isExtendedBolusCapable = false
@@ -157,16 +163,30 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // Normal operation exposes only the supported authenticated status-only path.
-        readStatusBlocking()
+        val statusRead = readStatusBlocking()
+        if (reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)) {
+            val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
+            // Compare before publishing the message, so the result names the consequence of the read
+            // rather than only that the transfer finished.
+            reconcileProfileWithLoop()
+            pumpState.profileReadMessage = when {
+                !success                                                                -> rh.gs(R.string.ypsopump_profile_read_incomplete)
+                pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH ->
+                    rh.gs(R.string.ypsopump_profile_read_mismatch, pumpState.lastReadProgram)
+
+                pumpState.profileComparison == YpsoPumpState.ProfileComparison.MATCHES  ->
+                    rh.gs(R.string.ypsopump_profile_read_matches, pumpState.lastReadProgram)
+
+                else                                                                    -> rh.gs(R.string.ypsopump_profile_read_complete)
+            }
+        }
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    // Keep the status viewer's basal at zero so LoopPlugin cannot run against a non-dosing pump.
-    override val baseBasalRate: Double get() =
-        if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else profileFunction.getProfile()?.getBasal() ?: 0.0
+    // Stored-profile evidence is independent of current TBR scaling and the desired AAPS profile.
+    override val baseBasalRate: Double get() = pumpState.scheduledBaseBasalRateIfFresh() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
     // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
     // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
@@ -175,19 +195,78 @@ class YpsoPumpPlugin @Inject constructor(
     private fun fail(stringRes: Int, vararg args: Any): PumpEnactResult =
         pumpEnactResultProvider.get().success(false).enacted(false).comment(rh.gs(stringRes, *args))
 
-    override fun setNewBasalProfile(profile: Profile): PumpEnactResult =
-        if (YpsoPumpConst.READ_ONLY_MODE) {
-            fail(R.string.ypsopump_read_only_profile_blocked)
-        } else {
-        // The YpsoPump's basal profile is programmed ON THE PUMP (mylife / pump UI); this driver does not
-        // write it. The loop steers with percent TBRs relative to the pump's basal, so the pump's programmed
-        // basal MUST match this AAPS profile — the user keeps them in sync. Report success accordingly.
-            pumpEnactResultProvider.get().success(true).enacted(true).comment(rh.gs(R.string.ypsopump_profile_programmed_on_pump))
-        }
+    /**
+     * This pump is programmed by hand: AAPS never writes a schedule, so `enacted` is always false.
+     *
+     * Success here means "the pump was read, and it already holds exactly this schedule" — the whole
+     * 48-setting A/B configuration plus the active program, compared against the effective AAPS
+     * values. That is the same evidence a writing driver would have after reading back its own write,
+     * so AAPS may record the effective profile switch. Reporting failure instead would be actively
+     * harmful: without an effective profile switch [app.aaps.core.interfaces.profile.ProfileFunction]
+     * has no running profile, the loop cannot dose at all, and the keepalive retries this request
+     * every five minutes forever — sounding the failed-basal-update alarm each time, even while the
+     * pump is delivering precisely the requested schedule.
+     *
+     * The retained configuration is last-read, not live; an unreported manual pump edit can outdate
+     * it. That is the documented polling boundary, and it is why a divergence is surfaced loudly
+     * rather than being silently tolerated.
+     *
+     * THERAPY GATE: this evidence is scoped by pump-session generation and timezone only, so it can
+     * outlive an edit made on the pump between reads. That is acceptable while delivery is blocked
+     * ([YpsoPumpConst.READ_ONLY_MODE] clears every dosing capability above and the dosing entry
+     * points fail), because the recorded effective profile switch drives no insulin. Before enabling
+     * therapy, this confirmation must additionally be bounded by current pump-side evidence — at
+     * minimum active-program continuity plus detection of schedule edits — rather than by retained
+     * configuration alone. See issue #14 and the Ypsopump README.
+     */
+    override fun setNewBasalProfile(profile: Profile): PumpEnactResult {
+        if (isThisProfileSet(profile))
+            return pumpEnactResultProvider.get().success(true).enacted(false)
+                .comment(rh.gs(R.string.ypsopump_profile_verified, pumpState.lastReadProgram))
+        return if (pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH)
+            fail(R.string.ypsopump_profile_mismatch_action, pumpState.lastReadProgram)
+        else fail(R.string.ypsopump_profile_unread_action)
+    }
 
-    // This driver does not verify the profile programmed directly on the pump. Treat it as satisfied so
-    // KeepAlive does not repeatedly queue a no-op or, in status-only mode, a blocked profile write.
-    override fun isThisProfileSet(profile: Profile): Boolean = true
+    // The effective values already include AAPS percentage and time shift. Comparing only the
+    // current rate would be unsafe because A/B or a later/sub-hour interval may differ.
+    override fun isThisProfileSet(profile: Profile): Boolean {
+        val matches = pumpState.profileMatches(
+            profile.getBasalValues().map {
+                YpsoBasalSchedule.EffectiveSegment(it.timeAsSeconds, it.value)
+            },
+        )
+        publishProfileComparisonNotification()
+        return matches
+    }
+
+    /**
+     * Compare the retained pump configuration against the profile AAPS is dosing with. A manual A/B
+     * switch on the pump only becomes knowable here, so an explicit read/check must report its
+     * consequence immediately rather than waiting for the next keepalive comparison.
+     */
+    internal fun reconcileProfileWithLoop() {
+        val profile = profileFunction.getProfile()
+        if (profile == null) {
+            publishProfileComparisonNotification()
+            return
+        }
+        isThisProfileSet(profile)
+    }
+
+    @Synchronized
+    private fun publishProfileComparisonNotification() {
+        // Deduplicate on the message, not the verdict: a second read can stay MISMATCH while naming a
+        // different program, and NotificationStore keeps the existing text for a repeated ID. Keying on
+        // the verdict alone would leave a B mismatch still reading "A".
+        val message = if (pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH)
+            rh.gs(R.string.ypsopump_profile_mismatch_notification, pumpState.lastReadProgram) else null
+        if (message == publishedProfileMismatch) return
+        publishedProfileMismatch = message
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_PROFILE_MISMATCH))
+        message ?: return
+        uiInteraction.addNotification(Notification.YPSOPUMP_PROFILE_MISMATCH, message, Notification.URGENT)
+    }
 
     // History identity and command origin are not yet wired into production therapy. Do not retain dormant
     // amount/recent-event or receipt-time fallbacks: later dosing tickets must snapshot a stable cursor before
@@ -279,6 +358,24 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
+    private fun readProfileBlocking(timeoutMs: Long = 120_000, activeOnly: Boolean = false): Boolean {
+        var success = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val onDone: (Boolean) -> Unit = {
+            success = it
+            latch.countDown()
+        }
+        val attempt = bleManager.readProfileConfiguration(activeOnly, { commandQueue.size() > 0 || commandQueue.bolusInQueue() }, onDone)
+        if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return success
+        if (!attempt.cancel()) {
+            latch.await()
+            return success
+        }
+        aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
+        bleManager.disconnect()
+        return false
+    }
+
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =
         fail(R.string.ypsopump_read_only_tbr_blocked)
 
@@ -327,6 +424,56 @@ class YpsoPumpPlugin @Inject constructor(
                 }
             })
         }
+        val profiles = PreferenceCategory(context).apply {
+            key = "ypsopump_basal_configuration"
+            title = rh.gs(R.string.ypsopump_basal_configuration)
+        }
+        parent.addPreference(profiles)
+        for (action in listOf(
+            ConfigurationAction(
+                PROFILE_READ_REASON, R.string.ypsopump_read_profile,
+                R.string.ypsopump_read_profile_summary, R.string.ypsopump_read_profile_started
+            ),
+            ConfigurationAction(
+                ACTIVE_PROGRAM_REASON, R.string.ypsopump_check_program,
+                R.string.ypsopump_check_program_summary, R.string.ypsopump_check_program_started
+            ),
+        )) {
+            profiles.addPreference(Preference(context).apply {
+                key = action.reason
+                title = rh.gs(action.title)
+                summary = rh.gs(action.summary)
+                isEnabled = provisioning.isConfigured()
+                setOnPreferenceClickListener { startConfigurationRead(context, action) }
+            })
+        }
+    }
+
+    /** A configuration action and the three things the user is told about it. */
+    private data class ConfigurationAction(val reason: String, val title: Int, val summary: Int, val started: Int)
+
+    /**
+     * Reading takes noticeably longer than a tap, so silence is indistinguishable from a dead button:
+     * confirm the tap immediately and report the outcome when it lands. The queue rejects a duplicate
+     * itself, so a second tap is answered rather than silently dropped.
+     */
+    private fun startConfigurationRead(context: Context, action: ConfigurationAction): Boolean {
+        // A full read runs for about a minute, well past the life of the settings screen that started
+        // it. Report the outcome against the application context so the result still arrives, and a
+        // closed screen cannot be leaked or written to.
+        val appContext = context.applicationContext
+        val accepted = commandQueue.readStatus(action.reason, object : app.aaps.core.interfaces.queue.Callback() {
+            override fun run() {
+                val outcome = if (result.success) pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
+                else rh.gs(R.string.ypsopump_profile_read_incomplete)
+                if (pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH)
+                    ToastUtils.warnToast(appContext, outcome)
+                else ToastUtils.okToast(appContext, outcome)
+            }
+        })
+        if (accepted) ToastUtils.infoToast(appContext, rh.gs(action.started))
+        else ToastUtils.warnToast(appContext, rh.gs(R.string.ypsopump_profile_read_not_queued))
+        return true
     }
 
     @Synchronized
@@ -371,7 +518,10 @@ class YpsoPumpPlugin @Inject constructor(
     }
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false
-    override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}
+    override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {
+        // Configuration is pump-local and survives DST. A changed ZoneId inhibits comparison
+        // in pumpState without destroying either stored schedule.
+    }
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
         return if (snapshot != null) {
@@ -386,6 +536,8 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     companion object {
+        internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
+        internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 
         /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */
         private const val RESERVOIR_EMPTY_UNITS = 0.0

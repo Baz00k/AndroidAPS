@@ -73,6 +73,94 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
+    fun `current bench dispatcher has no historical alarm recovery mode`() {
+        assertFalse(
+            YpsoBenchWriteCoordinator.BenchWriteMode.entries.any {
+                it.name == "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR"
+            },
+        )
+    }
+
+    @Test
+    fun `completed legacy alarm recovery does not block a modern settings selector`() {
+        val legacyStore = MemoryStore()
+        PumpSession(legacyStore).provisionReadBaseline("pump", key, 21, 2_596)
+        val legacyReservation =
+            PumpSession.Reservation(
+                id = "historical-alarm-cursor",
+                counter = 33,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "alarm-cursor-1789567816",
+                characteristic = YpsoWritePolicy.ALARM_INDEX_UUID.toString(),
+                purpose = YpsoRemoteWrite.HISTORY_SELECTOR.name,
+                payloadHash = "ab".repeat(32),
+                priorWrite = 32,
+                candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
+            )
+        val legacyEvidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(legacyReservation.operationId),
+                reservationId = legacyReservation.id,
+                counter = legacyReservation.counter,
+                characteristic = checkNotNull(legacyReservation.characteristic),
+                purpose = checkNotNull(legacyReservation.purpose),
+                payloadHash = checkNotNull(legacyReservation.payloadHash),
+                priorWrite = checkNotNull(legacyReservation.priorWrite),
+                candidate = legacyReservation.candidate,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "completed historical alarm cursor recovery",
+            )
+        legacyStore.saved =
+            legacyStore.saved.copy(
+                records =
+                    legacyStore.saved.records.map {
+                        it.copy(
+                            write = 33,
+                            reservation = legacyReservation,
+                            writeEvidence = listOf(legacyEvidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
+                    },
+            )
+        val legacySession = PumpSession(legacyStore)
+        val legacyToken = legacySession.open("pump", key)
+        val legacyOwner = YpsoBenchWriteCoordinator.Owner(gatt, "legacy-connection", legacyToken)
+        val legacyReadiness = YpsoCommandReadiness()
+        legacyReadiness.connected(legacyOwner.readinessOwner())
+        legacyReadiness.authenticated(legacyOwner.readinessOwner())
+        legacyReadiness.readVerified(legacyOwner.readinessOwner())
+        legacyReadiness.requiredSetupVerified(legacyOwner.readinessOwner())
+        val legacyFrames = mutableListOf<ByteArray>()
+        val legacyOutcomes = mutableListOf<YpsoWriteOutcome>()
+        val legacyCoordinator =
+            YpsoBenchWriteCoordinator(
+                legacySession,
+                crypto,
+                legacyReadiness,
+                YpsoSerializedWriteTransport({ _, _ -> }, {}),
+            )
+
+        assertTrue(
+            legacyCoordinator.writeSelector(
+                writeId = "setting-1",
+                owner = legacyOwner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> legacyFrames.add(frame.copyOf()) },
+                onOutcome = legacyOutcomes::add,
+            ),
+        )
+        assertTrue(legacyOutcomes.isEmpty())
+        assertTrue(legacyFrames.isNotEmpty())
+        assertEquals(34, legacySession.snapshot()!!.reservation!!.counter)
+        assertTrue(legacySession.snapshot()!!.writeEvidence.contains(legacyEvidence))
+    }
+
+    @Test
     fun `reservation encryption fragments ACK and semantic verification stay one transaction`() {
         makeReady()
         assertTrue(write(YpsoGlb.encode(17)))
@@ -226,6 +314,177 @@ class YpsoBenchWriteCoordinatorTest {
         assertEquals(unresolved.id, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.reservationId)
         assertEquals(evidenceHash, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.evidenceHash)
         assertTrue(session.snapshot()!!.benchAmbiguityConvergenceAttempted)
+    }
+
+    @Test
+    fun `settings ambiguity convergence repeats the setting id at counter plus one`() {
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "ambiguous-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val unresolved = session.snapshot()!!.reservation!!
+        assertEquals(43, unresolved.counter)
+        coordinator.ownerDisconnected(gatt, "close after ambiguous final callback")
+        session.recordUnresolvedWriteEvidence(token, unresolved.id, evidenceHash, "reviewed settings selector remains unknown")
+
+        frames.clear()
+        callbacks.clear()
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "converge-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+
+        assertEquals(44, message.counter)
+        assertArrayEquals(YpsoGlb.encode(1), message.body)
+        assertEquals(unresolved.id, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.reservationId)
+        assertEquals(evidenceHash, session.snapshot()!!.reservation!!.unresolvedPredecessor!!.evidenceHash)
+    }
+
+    @Test
+    fun `settings ambiguity convergence rejects a changed setting id`() {
+        makeReady()
+        assertTrue(
+            coordinator.writeSelector(
+                writeId = "ambiguous-setting-1",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(1),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                dispatch = { frame -> frames.add(frame.copyOf()) },
+                onOutcome = callbacks::add,
+            ),
+        )
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val unresolved = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close after ambiguous final callback")
+        session.recordUnresolvedWriteEvidence(token, unresolved.id, evidenceHash, "reviewed settings selector remains unknown")
+
+        callbacks.clear()
+        makeReady()
+        assertFalse(
+            coordinator.writeSelector(
+                writeId = "converge-setting-2",
+                owner = owner,
+                category = YpsoRemoteWrite.SETTINGS_SELECTOR,
+                characteristic = YpsoWritePolicy.SETTING_ID_UUID,
+                plaintext = YpsoGlb.encode(2),
+                firmware = "V05.00.52",
+                deadlineMs = 8_000,
+                mode = YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE,
+                dispatch = { error("changed setting ID must not dispatch") },
+                onOutcome = callbacks::add,
+            ),
+        )
+        val failure = callbacks.single() as YpsoWriteOutcome.NotSent
+        assertEquals(YpsoWriteFailure.Layer.SESSION, failure.failure.layer)
+        assertEquals(unresolved, session.snapshot()!!.reservation)
+        assertFalse(session.snapshot()!!.benchAmbiguityConvergenceAttempted)
+    }
+
+    @Test
+    fun `settings counter recovery retains both unknown attempts and reserves above both counters`() {
+        `settings ambiguity convergence repeats the setting id at counter plus one`()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val predecessor = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close unresolved settings convergence")
+        session.recordUnresolvedWriteEvidence(token, predecessor.id, "ef".repeat(32), "second settings attempt unknown")
+        val priorEvidence = session.snapshot()!!.writeEvidence
+        assertTrue(session.benchSettingsCounterRecoveryReady())
+        frames.clear()
+        makeReady()
+        assertTrue(coordinator.writeSelector(
+            writeId = "recover-settings-counter",
+            owner = owner,
+            category = YpsoRemoteWrite.HISTORY_SELECTOR,
+            characteristic = YpsoWritePolicy.EVENT_INDEX_UUID,
+            plaintext = YpsoGlb.encode(17),
+            firmware = "V05.00.52",
+            deadlineMs = 8_000,
+            mode = YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_RECOVERY,
+            dispatch = { frames.add(it.copyOf()) },
+            onOutcome = callbacks::add,
+        ))
+        repeat(4) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
+        val message = crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key)
+        assertEquals(45, message.counter)
+        assertArrayEquals(YpsoGlb.encode(17), message.body)
+        val binding = session.snapshot()!!.reservation!!.unresolvedPredecessor!!
+        assertEquals(predecessor, binding.reservation())
+        assertEquals(priorEvidence, session.snapshot()!!.writeEvidence)
+        assertFalse(session.benchSettingsCounterRecoveryReady())
+        // Reload validates the nested predecessor independently of live coordinator state.
+        assertEquals(binding, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.reservation!!.unresolvedPredecessor)
+    }
+
+    @Test
+    fun `large counter experiment reserves exactly 4096 and cannot repeat after dispatch`() {
+        `settings counter recovery retains both unknown attempts and reserves above both counters`()
+        val prior = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close after wrong event readback")
+        session.recordUnresolvedWriteEvidence(token, prior.id, "12".repeat(32), "event cursor did not change to requested row")
+        assertTrue(session.benchSettingsCounterJumpReady())
+        val tx = session.begin(token)
+        val next = session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+            PumpSession.WriteIntent("jump", YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR",
+                java.security.MessageDigest.getInstance("SHA-256").digest(YpsoGlb.encode(17)).joinToString("") { "%02x".format(it) }), jump = true)
+        assertEquals(4096, next.counter)
+        assertEquals(prior, next.unresolvedPredecessor!!.reservation())
+        assertFalse(session.benchSettingsCounterJumpReady())
+        assertEquals(next, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.reservation)
+        session.encryptReserved(token, tx, YpsoGlb.encode(17), crypto)
+        session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+        session.finish(token, tx)
+        session.resolveWrite(token, next.id, PumpSession.WriteResolution.ACCEPTED, "34".repeat(32), "changed index verified")
+        assertEquals(PumpSession.Phase.VERIFIED, session.snapshot()!!.reservation!!.phase)
+        assertEquals(4096, session.snapshot()!!.write)
+    }
+
+    @Test
+    fun `settings counter recovery refuses settings retry and restores predecessor when not sent`() {
+        `settings ambiguity convergence repeats the setting id at counter plus one`()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
+        val predecessor = session.snapshot()!!.reservation!!
+        coordinator.ownerDisconnected(gatt, "close unresolved settings convergence")
+        session.recordUnresolvedWriteEvidence(token, predecessor.id, "ef".repeat(32), "second settings attempt unknown")
+        val tx = session.begin(token)
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+                PumpSession.WriteIntent("bad-retry", YpsoWritePolicy.SETTING_ID_UUID.toString(), "SETTINGS_SELECTOR", "ab".repeat(32)))
+        }
+        session.reserveBenchSettingsCounterRecoveryCandidate(token, tx,
+            PumpSession.WriteIntent("event-recovery", YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR", "ab".repeat(32)))
+        session.markNotSent(token, tx)
+        session.finish(token, tx)
+        assertEquals(predecessor, session.snapshot()!!.reservation)
+        assertEquals(predecessor.counter, session.snapshot()!!.write)
     }
 
     @Test

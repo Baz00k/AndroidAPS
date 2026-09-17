@@ -12,10 +12,47 @@ import java.util.UUID
 
 class YpsoWritePolicyTest {
     @Test
-    fun `distributed artifact permits authentication only`() {
-        val permitted = YpsoRemoteWrite.entries.filter { YpsoWritePolicy.allows(it, YpsoArtifactPolicy.STATUS_ONLY) }
+    fun `distributed artifact permits authentication settings selectors and their setup only`() {
+        val permitted = YpsoRemoteWrite.entries.filter { YpsoWritePolicy.allows(it, YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ) }
 
-        assertEquals(listOf(YpsoRemoteWrite.AUTHENTICATION), permitted)
+        assertEquals(
+            listOf(
+                YpsoRemoteWrite.AUTHENTICATION,
+                YpsoRemoteWrite.SETTINGS_SELECTOR,
+                YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR,
+            ),
+            permitted,
+        )
+        assertTrue(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ,
+                YpsoRemoteWrite.SETTINGS_SELECTOR,
+                YpsoWritePolicy.SETTING_ID_UUID,
+                YpsoGlb.encode(1),
+                byteArrayOf(),
+                false,
+            ),
+        )
+        assertTrue(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ,
+                YpsoRemoteWrite.SETTINGS_SELECTOR,
+                YpsoWritePolicy.SETTING_ID_UUID,
+                YpsoGlb.encode(61),
+                byteArrayOf(),
+                false,
+            ),
+        )
+        assertFalse(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ,
+                YpsoRemoteWrite.SETTINGS_SELECTOR,
+                YpsoWritePolicy.SETTING_ID_UUID,
+                YpsoGlb.encode(62),
+                byteArrayOf(),
+                false,
+            ),
+        )
     }
 
     @Test

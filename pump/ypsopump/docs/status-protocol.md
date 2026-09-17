@@ -28,6 +28,154 @@ Not published: serial (characteristic absent), active profile identity, measured
 terminal bolus outcomes (idle is ambiguous), delivery-halting alarms beyond the cartridge
 sentinel (hypothesized same sentinel, unconfirmed).
 
+## Settings selector observation (2026-09-16)
+
+The preserved Android GATT cache declares setting ID `669a0c20-0008-969e-e211-fcbeb3147bc5`
+at value handle `0x001b` with properties `0x0a` (`READ | WRITE`), and setting value at handle
+`0x001d` with the same properties. Production reconciliation therefore requires an authenticated,
+same-connection exact-GLB read-back of the requested setting ID before accepting its separately read
+value. This avoids treating an equal or stale hourly value as proof of selector acceptance. Physical
+qualification of the encrypted setting-ID read-back remains required; the declaration alone proves
+capability, not semantics.
+
+A single bounded setting-ID `1` attempt on target firmware `V05.00.52` used the authenticated
+settings selector characteristic `669a0c20-0008-969e-e211-fcbeb3147bc5` at durable write counter
+34. Android accepted all four local frame dispatches. GATT callbacks succeeded for frames 1–3;
+frame 4 returned raw status `139`. The write therefore remains durably `POSSIBLY_SENT` rather
+than being classified as accepted or rejected.
+
+A fresh authenticated, read-only observation of the corresponding setting-value characteristic
+`669a0c20-0008-969e-e211-fcbeb4147bc5` returned raw status `131`, with no decryptable body.
+The first harness version had already closed the selector connection before that read. A second
+fresh-connection read reproduced status `131`; neither observation reproduces the reference
+implementation's immediate same-connection selector-value read and therefore cannot determine
+whether the selected setting is connection-scoped.
+
+After preserving counter `34` as hash-bound `UNKNOWN`, a one-shot convergence selector repeated
+setting ID `1` at counter `35`. This candidate was safe whether the pump floor was `33` or `34`
+because both strict-next and forward-gap-by-one selector behavior had already been measured on this
+target. Frames 1–3 again returned status `0`; frame 4 again returned `139`. The harness then read
+`SETTING_VALUE` on the same authenticated GATT connection, but it dispatched that read synchronously
+from the final `onCharacteristicWrite` call before the Android callback returned. This alone does not
+establish a sequencing defect: Nordic BLE 2.8.0 also calls `nextRequest(true)` inside its write callback,
+and that method directly dispatches queued reads/writes. The earlier claim that Nordic necessarily
+waits for callback return was incorrect. Likewise, `131` shares AOSP's `GATT_DB_FULL` numeric value,
+but the native GATT client also passes a peer ATT error byte through as the operation status. The
+numeric label does not establish local origin; a correlated HCI/ATT trace is needed. Counter `35` remains
+durably `POSSIBLY_SENT` with reviewed `UNKNOWN` evidence; the epoch's one-shot convergence gate is
+consumed and no third selector attempt is permitted.
+
+The bench harness now supplies a single handler to `connectGatt` and posts characteristic-write
+processing to that same queue, so every later frame and final value read starts only after the prior
+platform callback returns. This is an untested timing variant, not a demonstrated fix for status `131`.
+It does not retroactively classify counter `35`. With counters `34` and `35` unresolved, `36` could
+be strict-next, `floor + 2`, or the unmeasured `floor + 3`. This limits the existing qualification gate;
+it is not counter scarcity or proof that further selector-only experiments are inherently unsafe.
+A new recovery experiment must explicitly define its non-therapy scope, evidence and recovery path.
+
+### Wire-level error origin and official-client error map
+
+A subsequent fresh-link value-only observation, with full phone HCI logging enabled, reproduced
+`131`. The capture contains an outgoing ATT Read Request for handle `0x001d` followed approximately
+47 ms later by an incoming ATT Error Response for that request/handle with byte `0x83`. No settings
+selector was written in this observation. This establishes peripheral origin for this reproduced
+failure, not Android-local database exhaustion. The HCI archive SHA-256 is
+`abda3254fa7146b0c980f28aa12c2b77495585d5ed0ec20103c70211c5537526`.
+
+The installed mylife APK (SHA-256
+`059e629365d50d1546bac6d49a72bb9463d2ca31436c50e637412e483043d501`) contains the
+`ePumpErrorCode` enum in its DeviceImport assembly. Its application-error map names `131`
+`APPERR_INVALID_ID`, `138` `APPERR_DECRYPT_ERROR`, `139` `APPERR_COUNTER_ERROR`, and `141`
+`APPERR_FRAGMENTATION_ERROR`. Its profile importer uses GLB setting ID `1` and reads hourly basal
+settings through the same selector/value UUIDs. These are official-client code observations, not
+proof of counter consumption or successful target profile reads. In particular, the counter-error
+label must be reconciled with the earlier history-selector observations before reclassifying them.
+
+The working hypothesis is that the value read lacks a valid selected setting because selector
+processing failed. Counter synchronization, selector framing and settings authorization remain
+testable causes; callback-return timing is not an established explanation.
+
+### Counter recovery and active-program read-back
+
+The handler-post variant at counter `36` did not change requested event selection: authenticated
+CRC-valid index `3` before became `4` afterward, not requested `17`. HCI confirmed a peripheral ATT
+error `0x8b` on the final write. Independent decryption of the captured request verified GLB `17`,
+reboot `21`, write counter `36`, and frame lengths `20/20/20/4`. This excludes a wrongly encoded
+counter or requested index for that attempt. It also demonstrates an ascending iterator here, so
+earlier read-back coincidences must not be treated as changed-selection evidence without a pre-read.
+
+A single deliberate counter jump to `4096` then produced four successful callbacks and an
+authenticated CRC-valid changed event index `5 → 17`. The journal retained all older unknown
+attempts and reconciled this new selector as accepted. No pump reboot or journal reset was used.
+The previously assumed low write position was unsuitable; the exact prior pump counter and how it
+advanced are not established. This result does not prove acceptance of every possible counter gap.
+
+From that verified position, setting `1` at counter `4097` succeeded and returned an authenticated
+exact 8-byte GLB `3`, paired with operator-confirmed active Profile A. After a manual A→B switch,
+counter `4098` returned exact GLB `10`, paired with operator-confirmed Profile B. Thus this target
+V05.00.52 supports active-program read-back; the earlier errors were not evidence of unsupported
+settings firmware. GLB redundancy is the value integrity check here; a separate CRC is not present.
+
+All 48 hourly slots were subsequently read and individually reconciled against operator-transcribed
+pump schedules. Profile A occupies settings `14–37`; B occupies `38–61`. Values are centi-units/hour:
+
+```
+A: 45 45 45 60 60 75 75 75 60 60 60 50 50 50 50 50 50 50 50 50 50 50 50 50
+B: 30 30 35 45 45 55 55 65 60 40 40 35 35 35 35 45 45 45 45 40 35 35 35 35
+```
+
+Active-program observations before/after and at every resumed segment returned `10`, with the
+operator leaving B active. The final accepted counter was `4152`. Four connection-establishment
+failures (`133`) occurred before authentication/reservation; pre/post journals were byte-identical
+and only those not-sent rows were resumed. This segmented capture qualifies layout and units; it is
+not evidence of one atomic uninterrupted production acquisition or of mid-read switch detection.
+Combined redacted hourly evidence SHA-256:
+`fed9c11bf388b4390f43c5d337e9f547da7f976dd32d49d10208ba56fab0365c`.
+
+The operator subsequently restored A; setting `1` returned GLB `3` at accepted counter `4153`,
+completing the reverse B→A pairing. An authenticated clock observation returned date bytes
+`ea070910` and time bytes `17351c`, decoding to 2026-09-16 23:53:28 pump-local. The operator
+confirmed the displayed pump date/time matched the phone. Precise automated skew bounds and
+cross-midnight/DST acquisition remain software/target qualification work, not established by that
+display comparison alone.
+
+### Production selector identity and atomic profile qualification (2026-09-17)
+
+The journal-preserving bench first qualified encrypted same-link `SETTING_ID` read-back at strict-next
+counter `4154`: requested ID `14`, exact GLB ID read-back `14`, then exact GLB value `45`. The accepted
+resolution is bound to reviewed evidence SHA-256
+`b613af4207a7de13a9e984b224c9414ac36427932d2877d1db2ba6f8c9f44f83`; GATT callbacks were retained
+only as transport evidence and did not establish semantic acceptance.
+
+An uninterrupted one-connection acquisition then verified active A before/after, settings `14–61`,
+pump date/time, and stable event count `3000` in 71 seconds. It ended at write counter `4204`; the
+protected profile-capture hash is
+`99fac0802b8fc7b960a979bb0c150af1637e052a6777c84cdd598ac93bae2360`. The decoded A and B schedules
+exactly matched the previously qualified 24-hour centi-U/h schedules.
+
+A second valid same-connection run bracketed active B, paused after setting `37`, and the operator
+manually switched B→A. The run resumed and rejected with `atomic profile coherence validation failed`;
+the profile-capture file remained byte-identical at the hash above, proving no incoherent publication.
+The final selector was verified at counter `4280`, the pump was left stopped on Profile A, and other
+controllers were force-stopped. Final protected hashes were journal
+`fef03d2cd68b4cbabbe1bfe8921bb79bf3fc4c5694626249f4949577f4b13e43`, evidence
+`e0d846ed4d19df7f8f9f1caffcec157b20613b5825fdc2d51fc6165b0865e54e`, history
+`bbad34be816f1d2f7b81b395925db3331c9e6158100cca8e2c42fc27308ca60d`, and profile capture as above.
+
+Production ownership is transferred only through the reviewed, HMAC-authenticated complete journal
+record. AndroidAPS requires an independently supplied file SHA-256 and validates pump/key/serial, epoch,
+verified reservation, evidence chain, and local non-conflict before committing under its own Keystore.
+Importing or seeding numeric floor `4280` alone is explicitly unsupported.
+
+The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
+require real-pump verification. A separate researcher reported viewing Profiles A and B on a real
+pump, but published neither firmware identity nor raw selector/value traces. The target result here
+therefore differs from that reported success and is not the same as the separately reported
+configuration-write authorization error `8`.
+These observations do not establish active A/B decoding, setting-value framing, schedule units,
+or write-counter consumption. They block later selector writes pending explicit reconciliation and
+require profile coherence to remain unavailable/fail-closed.
+
 Responses rejected by envelope, AEAD, counter-tail or counter-freshness validation do not
 mutate session counters. Later CRC/schema/firmware rejection publishes no status; an
 authenticated fresh response advances its durable replay floor before publication. See
@@ -210,3 +358,100 @@ observations above; other fault states remain unobserved. Independent real-crypt
 cover stopped and zero-TBR publication as well as decoder/rejection cases. Basal rate and
 TBR remaining minutes are decoder diagnostics, not published framework measurements.
 Evidence covers one pump firmware and one Android device/OS, not all eligible versions.
+# Production acquisition integration — 2026-09-17
+
+**Historical policy below is superseded by infrequent explicit synchronization.** Routine polling
+now uses zero profile selectors and no event-count sentinel. The complete last-read A/B schedules
+persist across disconnect/restart, scoped to the installed session generation. Preferences →
+YpsoPump → Basal configuration offers a complete read and a short active-program check. Reads
+yield after a reconciled selector when another command queues. Interrupted candidates never
+replace the previous complete schedules. Configuration must remain unchanged during a full read;
+event-count equality is not continuity proof. Unreported manual changes are not instantly detected.
+
+During qualification of this redesign, the existing journal failed to load because Keystore held
+two revision keys including the file's current key. The loader had treated this as missing setup.
+An abrupt process termination before old-key invalidation reproduces the failure. Loading now
+authenticates the existing envelope with its own retained key, without rewriting the journal or
+deleting any keys. Commit ordering still invalidates all prior keys before writing/publishing a
+new revision; a file whose own key is missing remains rejected. The phone recovered generation
+`5acc3c60-e483-4303-beb1-08597c2d9a1f`, reboot 21, read 3616, write 4573, VERIFIED final selector,
+482 evidence records, original reviewed handoff and retired legacy audit record. Authenticated
+status succeeded afterward. No counter reseeding or ownership reimport was performed.
+
+Follow-up qualification found the driver silently accepting a divergence: after a manual A→B switch,
+an explicit check observed program B correctly, yet nothing reported that the pump was no longer
+delivering the active AAPS profile. Comparison verdicts are now recorded and surfaced as an urgent
+notification and a pump-tab banner. Two further defects were fixed
+in the same area. `setNewBasalProfile()` previously failed unconditionally, so AAPS never recorded an
+effective profile switch; `ProfileFunction.getProfile()` then stayed null, the loop had no running
+profile, and `KeepAliveWorker` re-raised the failed-basal-update alarm every five minutes even when
+the pump matched. It now returns success without enacting when, and only when, the retained
+configuration equals the requested effective schedule. Separately, the shared Compose preferences
+renderer ignored `isEnabled`/`isSelectable`, so disabled and read-only rows across every plugin still
+accepted taps; those flags are now honoured. Each configuration action confirms its own tap by toast
+and states its own cost: the full read takes about a minute, the active-program check seconds.
+
+Redesign qualification completed two explicit production full reads in 60,908 and 63,350 ms,
+both Profile A, plus a refresh that yielded to another queued command. On final APK
+`4fd948bfe68c62ad77d47ec9a18a47c5107dcda1d2a18bcbe2bc08aa4974e717`, the status screen showed
+the retained program and schedule age after process replacement, with the actions removed.
+The preferences hierarchy showed both actions at the same left alignment under Basal configuration.
+A routine authenticated status read advanced read 3850→3851 while write stayed 4683 and evidence
+stayed 592. An explicit active-program check used two selectors (identity witness plus setting 1),
+ending at write 4685/evidence 594 with both stored schedules retained. Generation, reboot, reviewed
+handoff and retired legacy audit record remained unchanged. Software checks: 376 module tests,
+debug/release GATT ownership verification, and clean fullLoop assembly passed.
+
+Final lifecycle hardening binds cached evidence to the live GATT/session/reboot owner at every
+lookup, independently of disconnect callbacks. Cached evidence also invalidates permanently on
+zone changes, DST-offset transitions, and phone wall-clock drift beyond 30 seconds relative to
+monotonic elapsed time. Tests cover owner loss/restoration, both DST transitions, clock jumps,
+and status-poll reacquisition after sentinel invalidation. Polling remains the detection boundary
+for a manual change; no push-history or instantaneous remote-change detection is claimed.
+
+The lifecycle-hardened APK `44f4b7ec2944881f4dc8a148e9f1251e2d03d3dcb549306fd59aa9ebe6875764`
+repeated production coherent acquisition at 12:16:55 phone-local: Profile A, event count 3000,
+60,052 ms. Ownership inspection after normal disconnect showed reboot 21, read 3538, write 4535,
+final selector VERIFIED, and 444 evidence records. The preceding candidate also ran another
+automatic acquisition at 12:03:21 (62,912 ms); both runs account for the additional 102 selectors.
+The bench's four protected hashes remained unchanged; AAPS was force-stopped after the final run.
+Final software suite: 375 tests, zero failures/errors/skips. DST/clock faults and cached-sentinel
+changes are injected test evidence; physical evidence covers complete acquisition, manual program
+switching and mid-read switch rejection, plus production restart/reconnect acquisition.
+
+The subsequent production candidate explicitly published coherent Profile A at 12:00:06 phone-local
+time, with stable authenticated event count 3000 and acquisition duration 77,554 ms. Its APK SHA-256
+was `ed8c68fe6064edba8e473dd1e2e4d9d854d2a0993e647f6dee954d09bbfb28f6`.
+An ownership inspection immediately before publication showed reboot 21, write floor 4433, final
+selector VERIFIED, 342 evidence records, and the original reviewed handoff/retired record intact.
+Two additional 51-selector sequences followed the initial run: one automatic app restart on the
+preceding candidate and the explicitly logged final candidate. No counter gap or recovery was used.
+The operator confirmed the pump disconnected from a person, stopped, on Profile A. The loop was
+disabled; mylife and the bench were quiescent. AAPS was force-stopped after capture to prevent further
+automatic acquisition. This proves production publication; cached-sentinel physical fault injection
+has not yet been performed. Software tests cover sentinel changes/failures/cancellation.
+
+The production acquisition now carries its authenticated event count into immutable profile
+evidence. Status polling checks that count before reusing fresh evidence; a changed or failed check
+invalidates the cache. This is a conservative polling sentinel, not production history-row ingestion.
+Disconnect still invalidates evidence, so a normal command-queue disconnect requires a complete
+acquisition on the next connection. The sentinel does not extend the original freshness deadline.
+
+The full manager acquisition test exposed an integration error in the final GATT guard: encrypted
+selector frames were being checked as plaintext GLB. Plaintext selector allowlisting now remains at
+the coordinator boundary before reservation/encryption; the GATT boundary permits only the exact
+frame during that coordinator's synchronous dispatch. Cancellation disconnects the owned GATT and
+prevents queued continuations from reserving more selectors.
+
+Software validation: 372 module tests passed with zero failures/errors/skips, including the complete
+50-selector sequence with real encryption and mocked GATT, changed-history rejection, malformed
+identity rejection, cancellation, and authenticated cache-sentinel tests. Standalone bench tests and
+APK build passed. Both debug and release GATT write-ownership checks passed.
+
+An initial production-phone run advanced the imported strict-next write floor from 4280 to 4331
+(50 acquisition selectors plus a changed-identity witness), with the last reservation VERIFIED and
+the evidence chain growing from 189 to 240 entries. Read floor became 3106, reboot remained 21,
+and the reviewed handoff plus retired legacy record remained present. This records selector
+reconciliation only: the first candidate lacked explicit successful profile-publication logging,
+so final coherent publication is not claimed from the counter progression alone. The command queue
+disconnected normally after the run. All four protected bench hashes matched their pre-run values.

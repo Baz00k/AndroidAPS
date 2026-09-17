@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -12,7 +13,10 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
+import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.core.interfaces.profile.Profile.ProfileValue
+import java.time.ZoneId
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
@@ -38,15 +42,16 @@ class YpsoPumpPluginTest {
         "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
+    private val profileFunction: ProfileFunction = mock()
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, mock(), ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning
+        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction
     )
 
     @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {
         state.publishStatus(80.0, 90, false, 100, 4000L)
-        val profile: Profile = mock()
+        val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
         val results = listOf(
             plugin.deliverTreatment(DetailedBolusInfo().apply { insulin = 1.25 }),
             plugin.setNewBasalProfile(profile),
@@ -59,6 +64,48 @@ class YpsoPumpPluginTest {
         assertFalse(plugin.pumpDescription.isBolusCapable)
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
         verifyNoInteractions(sync, manager)
+    }
+
+    @Test
+    fun `profile coherence fails closed even when status basal matches the requested current rate`() {
+        val profile: Profile = mock {
+            on { getBasal() } doReturn 0.6
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.6))
+        }
+        state.publishStatus(
+            reservoirUnits = 80.0,
+            batteryPercent = 90,
+            isSuspended = false,
+            activeTbrPercent = 100,
+            timestamp = 4_000L,
+            activeBasalRate = 0.6,
+        )
+
+        assertFalse(plugin.isThisProfileSet(profile))
+    }
+
+    @Test
+    fun `profile comparison uses complete retained schedule without timer expiry`() {
+        var elapsed = 2_001L
+        state.elapsedRealtime = { elapsed }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val matching: Profile = mock {
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5))
+        }
+        val mismatch: Profile = mock {
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5), ProfileValue(23 * 3600, 0.51))
+        }
+
+        assertTrue(plugin.isThisProfileSet(matching))
+        assertEquals(0.5, plugin.baseBasalRate)
+        assertFalse(plugin.isThisProfileSet(mismatch))
+        elapsed = 2_000L + YpsoPumpState.PROFILE_MAX_AGE_MS
+        assertTrue(plugin.isThisProfileSet(matching))
+        assertEquals(0.5, plugin.baseBasalRate)
+        // A verified match confirms the profile, but this driver never writes a schedule.
+        assertFalse(plugin.setNewBasalProfile(matching).enacted)
+        assertTrue(plugin.setNewBasalProfile(matching).success)
     }
 
     @Test
@@ -107,6 +154,223 @@ class YpsoPumpPluginTest {
         verify(ui, times(1)).addNotificationWithSound(eq(Notification.PUMP_RESERVOIR_EMPTY), any(), eq(Notification.URGENT), any())
         assertEquals(8.0, plugin.reservoirLevel)
         verifyNoInteractions(sync)
+    }
+
+    @Test
+    fun `status polling never acquires configuration even with durable selectors ready`() {
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        whenever(manager.readProfile(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus("profile poll")
+
+        verify(manager, never()).readProfile(any())
+        verify(manager, never()).readProfileConfiguration(any(), any(), any())
+        val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        assertFalse(plugin.isThisProfileSet(profile))
+    }
+
+    @Test
+    fun `explicit configuration actions select the requested read mode`() {
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        val modes = mutableListOf<Boolean>()
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            modes.add(it.getArgument(0))
+            it.getArgument<(Boolean) -> Unit>(2)(true)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        plugin.getPumpStatus(YpsoPumpPlugin.ACTIVE_PROGRAM_REASON)
+        assertEquals(listOf(false, true), modes)
+    }
+
+    @Test
+    fun `status polling reuses fresh profile evidence without consuming fifty selectors again`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+
+
+        plugin.getPumpStatus("profile still fresh")
+
+        verify(manager, never()).readProfile(any())
+        assertTrue(state.hasFreshProfileEvidence)
+    }
+
+    @Test
+    fun `status polling does not issue a history sentinel or configuration selectors`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        whenever(manager.readProfile(any())).thenAnswer {
+            assertFalse(state.hasFreshProfileEvidence)
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus("manual change")
+
+        verify(manager, never()).readProfile(any())
+        verify(manager, never()).readProfileConfiguration(any(), any(), any())
+        assertTrue(state.hasFreshProfileEvidence)
+    }
+
+    @Test
+    fun `a pump side program switch raises a mismatch alert and clears it when it agrees again`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val matching: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        val switched: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+
+        assertTrue(plugin.isThisProfileSet(matching))
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), any())
+
+        assertFalse(plugin.isThisProfileSet(switched))
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
+        // Repeating the same verdict must not re-raise the alert.
+        assertFalse(plugin.isThisProfileSet(switched))
+        verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
+
+        assertTrue(plugin.isThisProfileSet(matching))
+        verify(rxBus, atLeastOnce()).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_PROFILE_MISMATCH, it.id) })
+    }
+
+    @Test
+    fun `a mismatch that moves to another program replaces the text naming the old one`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        whenever(rh.gs(eq(R.string.ypsopump_profile_mismatch_notification), anyVararg()))
+            .thenAnswer { "pump profile ${it.getArgument<Any>(1)} differs" }
+        val switched: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        plugin.isThisProfileSet(switched)
+        // A later read finds a different program still disagreeing; the verdict is unchanged.
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified(YpsoBasalSchedule.Program.B))
+        plugin.isThisProfileSet(switched)
+
+        val published = argumentCaptor<String>()
+        verify(ui, times(2)).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), published.capture(), eq(Notification.URGENT))
+        assertEquals(listOf("pump profile A differs", "pump profile B differs"), published.allValues)
+    }
+
+    @Test
+    fun `a verified matching pump schedule confirms the profile without ever enacting a write`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val matching: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+
+        val result = plugin.setNewBasalProfile(matching)
+
+        // Success lets AAPS record the effective profile switch, so the loop has a running profile
+        // and the keepalive stops re-raising the failed-basal-update alarm every five minutes.
+        assertTrue(result.success)
+        // Nothing is ever written to this pump; the schedule was programmed by hand.
+        assertFalse(result.enacted)
+        verifyNoInteractions(manager)
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), any())
+    }
+
+    @Test
+    fun `an unread or divergent configuration never confirms a profile AAPS cannot prove`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        val matching: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        val switched: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+
+        assertFalse(plugin.setNewBasalProfile(matching).success, "nothing was read from the pump")
+
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        assertFalse(plugin.setNewBasalProfile(switched).success, "the pump holds a different schedule")
+        assertTrue(plugin.setNewBasalProfile(matching).success)
+    }
+
+    @Test
+    fun `a rejected profile update explains the divergence instead of claiming nothing is verified`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        val switched: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+        whenever(rh.gs(eq(R.string.ypsopump_profile_unread_action), anyVararg())).thenReturn("not read yet")
+        whenever(rh.gs(eq(R.string.ypsopump_profile_mismatch_action), anyVararg())).thenReturn("pump profile A differs")
+
+        assertEquals("not read yet", plugin.setNewBasalProfile(switched).comment)
+
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val result = plugin.setNewBasalProfile(switched)
+
+        assertFalse(result.success)
+        assertFalse(result.enacted)
+        assertEquals("pump profile A differs", result.comment)
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
+    }
+
+    @Test
+    fun `an explicit active program check reports a divergence without waiting for the next keepalive`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            state.publishStatus(80.0, 90, false, 100, 7_000L)
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(2)(true)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+        // The loop is dosing a profile the pump's retained schedule does not deliver.
+        val loopProfile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+        whenever(profileFunction.getProfile()).thenReturn(loopProfile)
+        whenever(rh.gs(eq(R.string.ypsopump_profile_read_mismatch), anyVararg())).thenReturn("does not match")
+
+        plugin.getPumpStatus(YpsoPumpPlugin.ACTIVE_PROGRAM_REASON)
+
+        assertEquals(YpsoPumpState.ProfileComparison.MISMATCH, state.profileComparison)
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
+        assertEquals("does not match", state.profileReadMessage)
     }
 
     @Test

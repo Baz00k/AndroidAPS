@@ -45,6 +45,15 @@ fun PumpStatusScreen(state: PumpStatusState) {
             )
         }
 
+        state.alert?.let { alert ->
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(colors.low))
+                    Text(alert, style = AapsTheme.type.body, color = colors.textPrimary, modifier = Modifier.padding(start = 10.dp))
+                }
+            }
+        }
+
         state.connectionAction?.let { action ->
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Text(action, style = AapsTheme.type.body, color = colors.textPrimary)

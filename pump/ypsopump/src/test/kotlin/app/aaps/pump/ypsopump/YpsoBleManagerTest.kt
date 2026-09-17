@@ -20,6 +20,7 @@ import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.data.YpsoProfileReadback
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -57,10 +58,12 @@ class YpsoBleManagerTest {
         pumpState = YpsoPumpState()
         provisioning = mock()
         logger = mock()
+        whenever(context.getSharedPreferences(any(), any())).thenReturn(mock())
         manager =
             YpsoBleManager(context, logger, sessionCrypto, pumpState, provisioning).apply {
                 scheduleOpTimeout = { _, _ -> }
                 cancelOpTimeout = {}
+                persistProfile = {}
             }
         whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any())).thenReturn(false)
         manager.session = PumpSession(object : PumpSession.Store {
@@ -100,6 +103,207 @@ class YpsoBleManagerTest {
         assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         assertEquals("1.3", pumpState.controlServiceVersion)
         verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(byteArrayOf(0x55)), any())
+    }
+
+    @Test
+    fun `profile read fails closed before any selector when durable write floor is unknown`() {
+        connectedGatt()
+        val results = mutableListOf<Boolean>()
+
+        manager.readProfile(results::add)
+
+        assertEquals(listOf(false), results)
+        assertFalse(manager.canReadProfile)
+        assertEquals(null, pumpState.profileEvidence)
+    }
+
+    @Test
+    fun `profile read refuses a write ready session when selector identity is not readable`() {
+        val fixture = connectedGatt()
+        val record = manager.session!!.snapshot()!!
+        val store = object : PumpSession.Store {
+            var saved = PumpSession.State(
+                records = listOf(
+                    record.copy(
+                        write = 4_153,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                    ),
+                ),
+                activeGeneration = record.generation,
+            )
+            override fun load() = saved
+            override fun commit(state: PumpSession.State) {
+                saved = state
+            }
+        }
+        manager.session = PumpSession(store)
+        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
+        pumpState.masterVersion = "V05.00.52"
+        pumpState.supervisorVersion = "V05.00.52"
+        pumpState.controlServiceVersion = "1.3"
+        val results = mutableListOf<Boolean>()
+
+        manager.readProfile(results::add)
+
+        assertTrue(manager.canReadProfile)
+        assertEquals(listOf(false), results)
+        assertEquals(4_153, manager.writeCounter)
+        assertEquals(null, manager.session!!.snapshot()!!.reservation)
+    }
+
+    private fun cachedProfile(): YpsoProfileReadback.VerifiedReadback {
+        val template = YpsoProfileReadbackTest.verified()
+        val record = manager.session!!.snapshot()!!
+        pumpState.elapsedRealtime = { 2001L }
+        pumpState.currentZone = { template.zone }
+        return YpsoProfileReadback.VerifiedReadback(
+            record.generation, record.reboot!!, "connection", template.activeProgram,
+            template.profileA, template.profileB, 2000L, template.zone, 3000,
+        ).also(pumpState::publishProfileEvidence)
+    }
+
+    @Test
+    fun `production acquisition reconciles all fifty selectors before publishing profile`() {
+        acquireProfile()
+    }
+
+    @Test
+    fun `explicit acquisition does not use history count as a configuration revision`() {
+        acquireProfile(finalCount = 3002)
+    }
+
+    @Test
+    fun `production acquisition rejects malformed selector identity without reading its value`() {
+        acquireProfile(malformedIdentity = true)
+    }
+
+    @Test
+    fun `production acquisition cancellation prevents queued continuation from reserving another selector`() {
+        acquireProfile(cancelAfterFirstRow = true)
+    }
+
+    @Test
+    fun `configuration refresh yields after reconciled selector and retains previous complete schedules`() {
+        acquireProfile(yieldAfterFirstRow = true)
+    }
+
+    @Test
+    fun `active program check reuses both stored schedules and uses one selector`() {
+        acquireProfile(activeOnly = true)
+    }
+
+    private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
+                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false) {
+        val fixture = connectedGatt(eventCountPresent = true)
+        val record = manager.session!!.snapshot()!!
+        val profileStore = object : PumpSession.Store {
+            var state = PumpSession.State(
+                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
+                activeGeneration = record.generation,
+            )
+            override fun load() = state
+            override fun commit(state: PumpSession.State) { this.state = state }
+        }
+        manager.session = PumpSession(profileStore)
+        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
+        pumpState.masterVersion = "V05.00.52"
+        pumpState.supervisorVersion = "V05.00.52"
+        pumpState.controlServiceVersion = "1.3"
+        manager.scheduleProfileContinuation = { it.run() }
+        manager.sdkInt = 33
+        val service = fixture.gatt.services.first()
+        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
+            val ch: BluetoothGattCharacteristic = mock()
+            whenever(ch.uuid).thenReturn(uuid)
+            whenever(ch.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
+            whenever(service.getCharacteristic(uuid)).thenReturn(ch)
+            whenever(fixture.gatt.readCharacteristic(ch)).thenReturn(true)
+            return ch
+        }
+        val selector = characteristic(YpsoWritePolicy.SETTING_ID_UUID)
+        val value = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbeb4147bc5"))
+        val date = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbedc3b7bc5"))
+        val time = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbedd3b7bc5"))
+        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
+        val descriptor: BluetoothGattDescriptor = mock()
+        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
+        whenever(descriptor.characteristic).thenReturn(notify)
+        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
+        var readCounter = 0L
+        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
+        }
+        fun selected(id: Int, settingValue: Int) {
+            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
+            respond(selector, YpsoGlb.encode(id))
+            respond(value, YpsoGlb.encode(settingValue))
+        }
+        val results = mutableListOf<Boolean>()
+        val previous = if (yieldAfterFirstRow || activeOnly) cachedProfile() else null
+        var yielding = false
+        val attempt = manager.readProfileConfiguration(activeOnly, { yielding }, results::add)
+        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
+        respond(selector, YpsoGlb.encode(61))
+        if (malformedIdentity) {
+            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
+            respond(selector, YpsoGlb.encode(1) + byteArrayOf(0))
+            assertEquals(listOf(false), results)
+            assertFalse(pumpState.hasFreshProfileEvidence)
+            verify(fixture.gatt, never()).readCharacteristic(value)
+            assertEquals(PumpSession.Phase.ACKED, manager.session!!.snapshot()!!.reservation!!.phase)
+            return
+        }
+        selected(1, if (activeOnly) 10 else 3)
+        if (activeOnly) {
+            assertEquals(listOf(true), results)
+            assertEquals("B", pumpState.lastReadProgram)
+            assertTrue(pumpState.profileEvidence!!.profileA === previous!!.profileA)
+            assertTrue(pumpState.profileEvidence!!.profileB === previous.profileB)
+            assertEquals(previous.observedAt, pumpState.profileEvidence!!.observedAt)
+            assertEquals(4281, manager.writeCounter)
+            return
+        }
+        respond(fixture.eventCount!!, YpsoGlb.encode(3000))
+        for (id in 14..61) {
+            if (yieldAfterFirstRow && id == 14) yielding = true
+            val continuations = mutableListOf<Runnable>()
+            if (cancelAfterFirstRow && id == 14) manager.scheduleProfileContinuation = { continuations.add(it) }
+            if (cancelAfterFirstRow && id == 14) {
+                repeat(4) {
+                    manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0)
+                    continuations.removeAt(0).run()
+                }
+                respond(selector, YpsoGlb.encode(id))
+                respond(value, YpsoGlb.encode(50))
+                assertTrue(attempt.cancel())
+                continuations.forEach(Runnable::run)
+                assertEquals(listOf(false), results)
+                assertEquals(4282L, profileStore.state.records.single().write)
+                assertFalse(pumpState.hasFreshProfileEvidence)
+                return
+            }
+            selected(id, if (id < 38) 50 else 35)
+            if (yieldAfterFirstRow) {
+                assertEquals(listOf(false), results)
+                assertTrue(pumpState.profileEvidence === previous)
+                assertEquals(4282, manager.writeCounter)
+                assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
+                return
+            }
+            assertFalse(pumpState.hasFreshProfileEvidence)
+        }
+        selected(1, 3)
+        val now = java.time.LocalDateTime.now()
+        respond(date, byteArrayOf((now.year and 255).toByte(), (now.year shr 8).toByte(), now.monthValue.toByte(), now.dayOfMonth.toByte()))
+        respond(time, byteArrayOf(now.hour.toByte(), now.minute.toByte(), now.second.toByte()))
+        respond(fixture.eventCount, YpsoGlb.encode(finalCount))
+        val errors = argumentCaptor<String>()
+        verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
+        assertEquals(listOf(true), results, errors.allValues.joinToString())
+        assertTrue(pumpState.hasFreshProfileEvidence)
+        assertEquals(4330, manager.writeCounter)
+        assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
     }
 
     @Test

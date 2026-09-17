@@ -11,7 +11,6 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import app.aaps.pump.ypsopump.ble.YpsoArtifactPolicy
@@ -31,13 +30,20 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
+import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
+import app.aaps.pump.ypsopump.data.YpsoProfileReadback
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocumentParser
+import app.aaps.pump.ypsopump.provisioning.YpsoOwnershipHandoff
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import android.content.pm.PackageManager
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -51,6 +57,7 @@ class BenchActivity : Activity() {
     private val crypto = SessionCrypto()
     private val readiness = YpsoCommandReadiness()
     private val handler by lazy { android.os.Handler(mainLooper) }
+    private val callbackSequencer by lazy { GattCallbackSequencer(handler::post) }
     private val deadlines = mutableSetOf<Runnable>()
     private val transport by lazy {
         YpsoSerializedWriteTransport(
@@ -95,6 +102,11 @@ class BenchActivity : Activity() {
     private var primeEventCount: Int? = null
     private var primeEventCountBody: ByteArray? = null
     private var primePumpReboot: Int? = null
+    private var profileReadback: YpsoProfileReadback? = null
+    private var profileSelectedSettingId: Int? = null
+    private var profileStartedElapsed = 0L
+    private var profileRows = linkedMapOf<Int, Int>()
+    private var profilePaused = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,6 +116,8 @@ class BenchActivity : Activity() {
                 "inspect" -> inspect()
                 "run-selector" -> runConnection(RunKind.SELECTOR)
                 "converge-ambiguity" -> runConnection(RunKind.AMBIGUITY_CONVERGENCE)
+                "recover-settings-counter" -> runConnection(RunKind.SETTINGS_COUNTER_RECOVERY)
+                "jump-settings-counter" -> runConnection(RunKind.SETTINGS_COUNTER_JUMP)
                 "duplicate-counter-probe" -> runConnection(RunKind.DUPLICATE_COUNTER_PROBE)
                 "bootstrap-new-epoch" -> runConnection(RunKind.BOOTSTRAP_NEW_EPOCH)
                 "observe-selector" -> runConnection(RunKind.OBSERVE_SELECTOR)
@@ -113,6 +127,8 @@ class BenchActivity : Activity() {
                 "read-history-counts" -> runConnection(RunKind.READ_HISTORY_COUNTS)
                 "capture-current-history" -> runConnection(RunKind.CAPTURE_CURRENT_HISTORY)
                 "readiness-probe" -> runConnection(RunKind.READINESS_PROBE)
+                "acquire-profile" -> runConnection(RunKind.PROFILE_ACQUISITION)
+                "export-ownership-handoff" -> exportOwnershipHandoff()
                 "reconcile" -> reconcile()
                 else -> error("Unknown action")
             }
@@ -200,6 +216,7 @@ class BenchActivity : Activity() {
             val opened = session.open(doc.mac, doc.sharedKey)
             val record = checkNotNull(session.snapshot())
             val reservation = record.reservation
+            val retiredLegacy = record.retiredLegacyBenchAlarmCursorRecovery
             val historyCounts = record.benchHistoryCounts.joinToString(",") { "${it.family.name}:${it.count}@${it.reboot}" }.ifEmpty { "none" }
             val selectorStates = record.benchHistorySelectorStates.joinToString(",") { "${it.family.name}:${it.index}@${it.reboot}" }.ifEmpty { "none" }
             report(
@@ -209,8 +226,68 @@ class BenchActivity : Activity() {
                     "convergence_attempted=${record.benchAmbiguityConvergenceAttempted}," +
                     "convergence_ready=${session.benchAmbiguityConvergenceReady()}," +
                     "history_counts=$historyCounts,selector_states=$selectorStates," +
-                    "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}",
+                    "pending=${reservation?.operationId ?: "none"},phase=${reservation?.phase ?: "none"}," +
+                    "retired_legacy=${retiredLegacy?.operationId ?: "none"}",
             )
+        } finally {
+            doc.sharedKey.fill(0)
+            session.quiesce()
+        }
+    }
+
+    private fun exportOwnershipHandoff() {
+        val expectedEvidence =
+            intent.getStringExtra("reviewed_evidence_sha256")
+                ?.lowercase()
+                ?.takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+                ?: error("reviewed_evidence_sha256 must be the independently reviewed SHA-256")
+        val doc = loadDocument()
+        try {
+            session.open(doc.mac, doc.sharedKey)
+            val record = checkNotNull(session.snapshot())
+            require(record.reservation?.phase == PumpSession.Phase.VERIFIED) { "Current write ownership is not verified" }
+            require(record.pump == doc.mac) { "Session document belongs to another pump" }
+            val portableRecord = record.copy(serial = doc.serial)
+            val journal = File(noBackupFilesDir, "ypso-session.json")
+            val evidence = File(filesDir, "write-evidence.jsonl")
+            val history = File(filesDir, "history-captures.jsonl")
+            val profile = File(filesDir, "profile-captures.jsonl")
+            listOf(journal, evidence, history, profile).forEach { require(it.isFile) { "Missing protected artifact ${it.name}" } }
+            val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
+            val apk = File(applicationInfo.sourceDir)
+            val signer =
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
+                    .signingInfo
+                    ?.apkContentsSigners
+                    ?.singleOrNull()
+                    ?: error("Bench signer identity is unavailable or ambiguous")
+            val bytes =
+                YpsoOwnershipHandoff.encode(
+                    record = portableRecord,
+                    sharedKey = doc.sharedKey,
+                    createdAt = System.currentTimeMillis(),
+                    reviewedEvidenceSha256 = expectedEvidence,
+                    source =
+                        YpsoOwnershipHandoff.SourceArtifacts(
+                            packageName = packageName,
+                            apkSha256 = hash(apk),
+                            signerSha256 = hash(signer.toByteArray()),
+                            journalSha256 = hash(journal),
+                            evidenceSha256 = hash(evidence),
+                            historySha256 = hash(history),
+                            profileSha256 = hash(profile),
+                        ),
+                )
+            val reviewed = YpsoOwnershipHandoff.parse(bytes, doc.sharedKey)
+            require(reviewed.record == portableRecord.copy(keyHex = null)) { "Ownership handoff self-check changed the accounting record" }
+            require(reviewed.reviewedEvidenceSha256 == expectedEvidence) { "Ownership handoff self-check lost the review binding" }
+            val output = File(filesDir, "ownership-handoff.json")
+            FileOutputStream(output).use { stream ->
+                stream.write(bytes)
+                stream.fd.sync()
+            }
+            bytes.fill(0)
+            report("OWNERSHIP_HANDOFF:sha256=${hash(output)};write=${record.write};read=${record.read};reboot=${record.reboot}")
         } finally {
             doc.sharedKey.fill(0)
             session.quiesce()
@@ -235,6 +312,8 @@ class BenchActivity : Activity() {
                 // Read-only; the unresolved reservation stays visible in the capture's session snapshot.
                 RunKind.CAPTURE_CURRENT_HISTORY,
                 RunKind.AMBIGUITY_CONVERGENCE,
+                RunKind.SETTINGS_COUNTER_RECOVERY,
+                RunKind.SETTINGS_COUNTER_JUMP,
             )
         ) {
             require(session.snapshot()?.reservation == null || session.snapshot()?.reservation?.phase == PumpSession.Phase.VERIFIED) {
@@ -242,7 +321,7 @@ class BenchActivity : Activity() {
             }
         }
         selector =
-            if (kind in setOf(RunKind.OBSERVE_REBOOT, RunKind.READ_HISTORY_COUNTS, RunKind.CAPTURE_CURRENT_HISTORY)) {
+            if (kind in setOf(RunKind.OBSERVE_REBOOT, RunKind.READ_HISTORY_COUNTS, RunKind.CAPTURE_CURRENT_HISTORY, RunKind.PROFILE_ACQUISITION)) {
                 null
             } else {
                 Selector.parse(
@@ -283,6 +362,7 @@ class BenchActivity : Activity() {
                 .put("selector", selector?.value ?: JSONObject.NULL)
                 .put("omit_stage", omittedReadinessStage ?: JSONObject.NULL)
                 .put("forward_gap", forwardGap)
+                .put("gatt_callback_dispatch", "handler-post-after-callback")
                 .put("disconnect_after_frame", injectedDisconnectAfterFrame ?: JSONObject.NULL)
                 .put("ignore_callback_frame", injectedIgnoredCallbackFrame ?: JSONObject.NULL)
                 .put("duplicate_callback_after_frame", injectedDuplicateCallbackAfterFrame ?: JSONObject.NULL),
@@ -293,7 +373,17 @@ class BenchActivity : Activity() {
         check(device.bondState == BluetoothDevice.BOND_BONDED) { "Existing OS bond required" }
         connectionId = UUID.randomUUID().toString()
         handshakePhase = HandshakePhase.CONNECTING
-        gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE)
+        // Keep callbacks and queued follow-up operations on one serialized queue. This makes
+        // after-callback timing explicit; it is an experimental variant, not a Nordic requirement.
+        gatt =
+            device.connectGatt(
+                this,
+                false,
+                callback,
+                BluetoothDevice.TRANSPORT_LE,
+                BluetoothDevice.PHY_LE_1M_MASK,
+                handler,
+            )
         checkNotNull(gatt) { "connectGatt returned null" }
         report("CONNECTING:write_id=$writeId")
     }
@@ -410,6 +500,16 @@ class BenchActivity : Activity() {
             }
 
             override fun onCharacteristicWrite(
+                owner: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int,
+            ) {
+                callbackSequencer.afterPlatformCallback {
+                    handleCharacteristicWrite(owner, characteristic, status)
+                }
+            }
+
+            private fun handleCharacteristicWrite(
                 owner: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
                 status: Int,
@@ -866,10 +966,12 @@ class BenchActivity : Activity() {
                         RunKind.READINESS_PROBE ->
                             startSelector(owner)
                         RunKind.OBSERVE_SELECTOR -> observeSelector(owner)
+                        RunKind.SETTINGS_COUNTER_RECOVERY, RunKind.SETTINGS_COUNTER_JUMP -> prepareSettingsCounterRecovery(owner)
                         RunKind.READ_SELECTOR_STATE -> readSelectorState(owner)
                         RunKind.RECORD_BOOTSTRAP_REFERENCE -> recordBootstrapReference(owner)
                         RunKind.READ_HISTORY_COUNTS -> readHistoryCounts(owner)
                         RunKind.CAPTURE_CURRENT_HISTORY -> captureCurrentHistory(owner)
+                        RunKind.PROFILE_ACQUISITION -> startProfileAcquisition(owner)
                         RunKind.OBSERVE_REBOOT -> {
                             close(owner)
                             report("REBOOT:not-observed; authenticated read remained in current epoch")
@@ -1300,6 +1402,8 @@ class BenchActivity : Activity() {
                     when (runKind) {
                         RunKind.BOOTSTRAP_NEW_EPOCH -> YpsoBenchWriteCoordinator.BenchWriteMode.NEW_EPOCH_BOOTSTRAP
                         RunKind.AMBIGUITY_CONVERGENCE -> YpsoBenchWriteCoordinator.BenchWriteMode.AMBIGUITY_CONVERGENCE
+                        RunKind.SETTINGS_COUNTER_RECOVERY -> YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_RECOVERY
+                        RunKind.SETTINGS_COUNTER_JUMP -> YpsoBenchWriteCoordinator.BenchWriteMode.SETTINGS_COUNTER_JUMP
                         RunKind.DUPLICATE_COUNTER_PROBE -> YpsoBenchWriteCoordinator.BenchWriteMode.DUPLICATE_COUNTER
                         else ->
                             if (forwardGap == 1) {
@@ -1321,19 +1425,31 @@ class BenchActivity : Activity() {
                     accepted
                 },
                 onOutcome = { outcome ->
+                    recorder.coordinatorOutcome(outcome)
                     when (outcome) {
-                        is YpsoWriteOutcome.AcceptedUnverified -> readBack(owner, selected, binding.value)
+                        is YpsoWriteOutcome.AcceptedUnverified -> readBack(owner, selected, binding)
                         is YpsoWriteOutcome.NotSent -> {
                             close(owner)
-                            report("OUTCOME:NotSent")
+                            report(
+                                "OUTCOME:NotSent;layer=${outcome.failure.layer};" +
+                                    "detail=${outcome.failure.detail};counter=${outcome.counter ?: "none"}",
+                            )
                         }
                         is YpsoWriteOutcome.ProvenRejected -> {
                             close(owner)
                             report("OUTCOME:ProvenRejected; reconciliation required")
                         }
                         is YpsoWriteOutcome.PossiblyApplied -> {
-                            close(owner)
-                            report("OUTCOME:PossiblyApplied; reconciliation required")
+                            if (
+                                outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK &&
+                                outcome.failure.frame == EXPECTED_SELECTOR_FRAME_COUNT &&
+                                dispatchedFrames == EXPECTED_SELECTOR_FRAME_COUNT
+                            ) {
+                                readBackAfterAmbiguousFinalCallback(owner, selected, binding, outcome)
+                            } else {
+                                close(owner)
+                                report("OUTCOME:PossiblyApplied; reconciliation required")
+                            }
                         }
                         is YpsoWriteOutcome.Verified -> {
                             close(owner)
@@ -1343,6 +1459,375 @@ class BenchActivity : Activity() {
                 },
             )
         if (!started) close(owner)
+    }
+
+    private fun startProfileAcquisition(owner: BluetoothGatt) {
+        val settingId = findUnique(owner, YpsoWritePolicy.SETTING_ID_UUID)
+        val settingValue = findUnique(owner, SETTING_VALUE_UUID)
+        if (settingId == null || settingValue == null || settingId.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0) {
+            fail(
+                "profile selector identity/value characteristic missing, ambiguous, or unreadable",
+                YpsoWriteFailure.Layer.READINESS,
+                settingId?.uuid ?: settingValue?.uuid,
+                stage = "PROFILE_ACQUISITION",
+            )
+            return
+        }
+        profileReadback = null
+        profileSelectedSettingId = null
+        profileStartedElapsed = android.os.SystemClock.elapsedRealtime()
+        profileRows = linkedMapOf()
+        profilePaused = false
+        readEncrypted(owner, settingId) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val initial = YpsoGlb.decodeExact(body)
+                    if (initial == null || initial < 0) {
+                        fail("initial setting selector identity is not exact non-negative GLB")
+                        return@fold
+                    }
+                    profileSelectedSettingId = initial
+                    recorder.fact(
+                        "ProfileInitialSelectorIdentity",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("setting_id", initial)
+                            .put("body_sha256", hash(body))
+                            .putSessionSnapshot(),
+                    )
+                    if (initial == 1) {
+                        profileSelect(owner, 14, discardValue = true) { profileReadActiveBefore(owner) }
+                    } else {
+                        profileReadActiveBefore(owner)
+                    }
+                },
+                onFailure = { fail("initial setting selector identity read failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun profileReadActiveBefore(owner: BluetoothGatt) {
+        profileSelect(owner, 1) { body ->
+            val program = YpsoBasalSchedule.Program.decode(body)
+            if (program == null) {
+                fail("active profile before acquisition is unsupported")
+                return@profileSelect
+            }
+            val snapshot = checkNotNull(session.snapshot())
+            profileReadback =
+                YpsoProfileReadback(
+                    checkNotNull(token).generation,
+                    checkNotNull(snapshot.reboot),
+                    connectionId,
+                    profileStartedElapsed,
+                    program,
+                )
+            recorder.fact(
+                "ProfileActiveBefore",
+                JSONObject()
+                    .put("write_id", writeId)
+                    .put("active_program", program.name)
+                    .put("body_sha256", hash(body))
+                    .putSessionSnapshot(),
+            )
+            profileReadRow(owner, 14)
+        }
+    }
+
+    private fun profileReadRow(owner: BluetoothGatt, settingId: Int) {
+        if (settingId > 61) {
+            profileSelect(owner, 1) { activeAfter -> profileReadClock(owner, activeAfter) }
+            return
+        }
+        profileSelect(owner, settingId) { body ->
+            val value = YpsoGlb.decodeExact(body)
+            if (value == null || value < 0 || profileReadback?.add(settingId, body) != true) {
+                fail("profile setting $settingId is invalid or duplicated")
+                return@profileSelect
+            }
+            profileRows[settingId] = value
+            recorder.fact(
+                "ProfileSettingRead",
+                JSONObject()
+                    .put("write_id", writeId)
+                    .put("setting_id", settingId)
+                    .put("centi_units_per_hour", value)
+                    .put("body_sha256", hash(body))
+                    .putSessionSnapshot(),
+            )
+            val pauseAfter = intent.getIntExtra("pause_after_setting", Int.MIN_VALUE)
+            val pauseMs = intent.getLongExtra("pause_ms", 0L)
+            if (!profilePaused && settingId == pauseAfter) {
+                require(pauseMs in 1_000L..120_000L) { "pause_ms must be within 1000..120000" }
+                profilePaused = true
+                recorder.fact(
+                    "ProfileAcquisitionPaused",
+                    JSONObject().put("write_id", writeId).put("after_setting", settingId).put("pause_ms", pauseMs),
+                )
+                progress("PAUSED:profile acquisition after setting $settingId for ${pauseMs}ms")
+                handler.postDelayed({ if (gatt === owner) profileReadRow(owner, settingId + 1) }, pauseMs)
+            } else {
+                handler.post { if (gatt === owner) profileReadRow(owner, settingId + 1) }
+            }
+        }
+    }
+
+    private fun profileReadClock(owner: BluetoothGatt, activeAfter: ByteArray) {
+        val systemDate = findUnique(owner, SYSTEM_DATE_UUID)
+        val systemTime = findUnique(owner, SYSTEM_TIME_UUID)
+        val eventCount = findUnique(owner, EVENT_COUNT_UUID)
+        if (systemDate == null || systemTime == null || eventCount == null) {
+            fail("profile clock/history bracket characteristic missing or ambiguous")
+            return
+        }
+        readEncrypted(owner, systemDate) { dateResult ->
+            dateResult.fold(
+                onSuccess = { dateBody ->
+                    readEncrypted(owner, systemTime) { timeResult ->
+                        timeResult.fold(
+                            onSuccess = { timeBody ->
+                                readEncrypted(owner, eventCount) { countResult ->
+                                    countResult.fold(
+                                        onSuccess = { countBody ->
+                                            finishProfileAcquisition(owner, activeAfter, dateBody, timeBody, countBody)
+                                        },
+                                        onFailure = { fail("event count after profile acquisition failed: ${it.message}") },
+                                    )
+                                }
+                            },
+                            onFailure = { fail("system time after profile acquisition failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("system date after profile acquisition failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun finishProfileAcquisition(
+        owner: BluetoothGatt,
+        activeAfter: ByteArray,
+        dateBody: ByteArray,
+        timeBody: ByteArray,
+        countBody: ByteArray,
+    ) {
+        val countAfter = BenchHistoryCount.decode(countBody)
+        if (countAfter == null || countAfter != primeEventCount) {
+            profileReadback?.invalidate()
+            fail("event count changed during profile acquisition")
+            return
+        }
+        val local = YpsoProfileReadback.decodeClock(dateBody, timeBody)
+        if (local == null) {
+            profileReadback?.invalidate()
+            fail("pump clock after profile acquisition is malformed")
+            return
+        }
+        val snapshot = checkNotNull(session.snapshot())
+        val zone = ZoneId.systemDefault()
+        val verified =
+            profileReadback?.finish(
+                checkNotNull(token).generation,
+                checkNotNull(snapshot.reboot),
+                connectionId,
+                android.os.SystemClock.elapsedRealtime(),
+                activeAfter,
+                local,
+                Instant.now(),
+                zone,
+                maxAcquisitionMs = 5 * 60 * 1000L,
+                maxClockSkew = Duration.ofSeconds(30),
+                eventCount = countAfter,
+            )
+        if (verified == null) {
+            fail("atomic profile coherence validation failed")
+            return
+        }
+        val capture =
+            JSONObject()
+                .put("capture_id", writeId)
+                .put("capture_kind", "ATOMIC_PROFILE_ACQUISITION")
+                .put("session_generation", verified.generation)
+                .put("pump_reboot", verified.reboot)
+                .put("connection_id", verified.connectionId)
+                .put("active_program", verified.activeProgram.name)
+                .put("profile_a_centi_units_per_hour", org.json.JSONArray((14..37).map { profileRows[it] }))
+                .put("profile_b_centi_units_per_hour", org.json.JSONArray((38..61).map { profileRows[it] }))
+                .put("event_count_before", primeEventCount)
+                .put("event_count_after", countAfter)
+                .put("system_date_hex", dateBody.toHex())
+                .put("system_time_hex", timeBody.toHex())
+                .put("pump_local_time", local.toString())
+                .put("zone", zone.id)
+                .put("acquired_elapsed_ms", verified.acquiredElapsedMs)
+                .putSessionSnapshot()
+        appendProfileCapture(capture)
+        recorder.fact(
+            "AtomicProfileAcquisitionVerified",
+            JSONObject()
+                .put("write_id", writeId)
+                .put("capture_sha256", hash(capture.toString().toByteArray()))
+                .put("active_program", verified.activeProgram.name)
+                .put("row_count", profileRows.size)
+                .put("event_count", countAfter)
+                .putSessionSnapshot(),
+        )
+        close(owner)
+        report("PROFILE:Verified;active=${verified.activeProgram.name};rows=${profileRows.size};event_count=$countAfter")
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun profileSelect(
+        owner: BluetoothGatt,
+        settingId: Int,
+        discardValue: Boolean = false,
+        done: (ByteArray) -> Unit,
+    ) {
+        if (profileSelectedSettingId == settingId) {
+            fail("setting $settingId lacks changed-selector identity evidence")
+            return
+        }
+        val selected = Selector.parse("setting", settingId)
+        selector = selected
+        val binding = resolveSelector(owner, selected) ?: return
+        expectedSelectorCharacteristic = binding.index
+        dispatchedFrames = 0
+        observedWriteCallbacks = 0
+        val operationId = "$writeId-setting-$settingId-${UUID.randomUUID()}"
+        val operationOwner = YpsoBenchWriteCoordinator.Owner(owner, connectionId, checkNotNull(token))
+        val started =
+            coordinator.writeSelector(
+                operationId,
+                operationOwner,
+                selected.category,
+                selected.indexUuid,
+                YpsoGlb.encode(settingId),
+                firmware,
+                intent.getLongExtra("deadline_ms", 8_000L),
+                dispatch = { frame ->
+                    dispatchedFrames++
+                    writeCharacteristic(owner, binding.index, frame)
+                },
+                onOutcome = { outcome ->
+                    recorder.coordinatorOutcome(outcome)
+                    when (outcome) {
+                        is YpsoWriteOutcome.Verified -> Unit
+                        is YpsoWriteOutcome.AcceptedUnverified ->
+                            profileReconcileSelector(owner, operationOwner, operationId, settingId, binding, discardValue, done)
+                        is YpsoWriteOutcome.PossiblyApplied -> {
+                            if (outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK &&
+                                outcome.failure.frame == EXPECTED_SELECTOR_FRAME_COUNT &&
+                                dispatchedFrames == EXPECTED_SELECTOR_FRAME_COUNT
+                            ) {
+                                profileReconcileSelector(owner, operationOwner, operationId, settingId, binding, discardValue, done)
+                            } else {
+                                fail("profile selector $settingId became uncertain before semantic read-back")
+                            }
+                        }
+                        else -> fail("profile selector $settingId failed before semantic read-back: $outcome")
+                    }
+                },
+            )
+        if (!started && gatt === owner) fail("profile selector $settingId could not start")
+    }
+
+    private fun profileReconcileSelector(
+        owner: BluetoothGatt,
+        operationOwner: YpsoBenchWriteCoordinator.Owner,
+        operationId: String,
+        settingId: Int,
+        binding: SelectorBinding,
+        discardValue: Boolean,
+        done: (ByteArray) -> Unit,
+    ) {
+        readEncrypted(owner, binding.index) { identityResult ->
+            identityResult.fold(
+                onSuccess = { identityBody ->
+                    val observed = YpsoGlb.decodeExact(identityBody)
+                    if (observed != settingId) {
+                        fail("profile selector identity mismatch: requested $settingId, read $observed")
+                        return@fold
+                    }
+                    val snapshot = checkNotNull(session.snapshot())
+                    val evidenceHash = hash(
+                        "${checkNotNull(token).generation}|${snapshot.reboot}|$connectionId|$settingId|${hash(identityBody)}".toByteArray(),
+                    )
+                    val detail = "same-link exact-GLB selector identity read-back matched setting $settingId"
+                    if (!coordinator.reconcile(
+                            operationId,
+                            operationOwner,
+                            YpsoBenchWriteCoordinator.Reconciliation(
+                                YpsoSemanticEvidence.ACCEPTED,
+                                PumpSession.WriteResolution.ACCEPTED,
+                                evidenceHash,
+                                detail,
+                            ),
+                        )
+                    ) {
+                        fail("profile selector $settingId reconciliation lost live ownership")
+                        return@fold
+                    }
+                    profileSelectedSettingId = settingId
+                    recorder.fact(
+                        "ProfileSelectorIdentityVerified",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("operation_id", operationId)
+                            .put("setting_id", settingId)
+                            .put("body_sha256", hash(identityBody))
+                            .put("evidence_sha256", evidenceHash)
+                            .putSessionSnapshot(),
+                    )
+                    readEncrypted(owner, binding.value) { valueResult ->
+                        valueResult.fold(
+                            onSuccess = { body ->
+                                if (YpsoGlb.decodeExact(body) == null) {
+                                    fail("profile setting $settingId value is not exact GLB")
+                                } else if (discardValue) {
+                                    handler.post { if (gatt === owner) done(body) }
+                                } else {
+                                    done(body)
+                                }
+                            },
+                            onFailure = { fail("profile setting $settingId value read failed: ${it.message}") },
+                        )
+                    }
+                },
+                onFailure = { fail("profile selector $settingId identity read failed: ${it.message}") },
+            )
+        }
+    }
+
+    private fun appendProfileCapture(capture: JSONObject) {
+        FileOutputStream(File(filesDir, "profile-captures.jsonl"), true).use { out ->
+            out.write((capture.toString() + "\n").toByteArray())
+            out.fd.sync()
+        }
+    }
+
+    private fun prepareSettingsCounterRecovery(owner: BluetoothGatt) {
+        val selected = checkNotNull(selector)
+        require(selected.category == YpsoRemoteWrite.HISTORY_SELECTOR && selected.indexUuid == YpsoWritePolicy.EVENT_INDEX_UUID)
+        require(selected.value in 0 until checkNotNull(primeEventCount))
+        check(if (runKind == RunKind.SETTINGS_COUNTER_JUMP) session.benchSettingsCounterJumpReady() else session.benchSettingsCounterRecoveryReady())
+        val binding = resolveSelector(owner, selected) ?: return
+        readEncrypted(owner, binding.value, false) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val observed = BenchSelectorEvidenceDecoder.history(body, selected.value)
+                    val before = observed.embeddedHistoryIndex
+                    if (!observed.crcValid || before == null || kotlin.math.abs(before - selected.value) <= 1) {
+                        fail("Recovery requires a valid current event index distinct from requested and next iterator row")
+                        return@fold
+                    }
+                    recorder.fact("SettingsCounterRecoveryPreRead", JSONObject()
+                        .put("write_id", writeId).put("current_index", before)
+                        .put("requested_index", selected.value).put("body_sha256", hash(body)))
+                    handler.post { if (owner === gatt) startSelector(owner) }
+                },
+                onFailure = { fail("Recovery pre-read failed: ${it.message}") },
+            )
+        }
     }
 
     private fun observeSelector(owner: BluetoothGatt) {
@@ -1394,35 +1879,145 @@ class BenchActivity : Activity() {
     private fun readBack(
         owner: BluetoothGatt,
         selected: Selector,
-        valueCharacteristic: BluetoothGattCharacteristic,
-    ) = readEncrypted(owner, valueCharacteristic) { result ->
-        result.fold(
-            onSuccess = { body ->
-                val evidence = selectorEvidence(selected, body)
-                if (selected.name == "event") appendSelectedEventCapture(selected, body)
-                recorder.fact(
-                    "SelectorReadBack",
-                    JSONObject()
-                        .put("write_id", writeId)
-                        .put("selector_type", selected.name)
-                        .put("selector", selected.value)
-                        .put("body_size", body.size)
-                        .put("body_sha256", hash(body))
-                        .put("glb", evidence.glb ?: JSONObject.NULL)
-                        .put("crc_valid", evidence.crcValid)
-                        .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
-                        .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
-                        .putSessionSnapshot(),
-                )
-                close(owner)
-                report("OUTCOME:AcceptedUnverified; read-back captured; explicit reconciliation required")
-            },
-            onFailure = {
-                recorder.fact("SelectorReadBackFailed", JSONObject().put("write_id", writeId).put("detail", it.message))
-                close(owner)
-                report("OUTCOME:AcceptedUnverified; read-back failed; explicit reconciliation required")
-            },
-        )
+        binding: SelectorBinding,
+    ) = readSelectorIdentity(owner, selected, binding) { identityMatches ->
+        if (!identityMatches) {
+            close(owner)
+            report("OUTCOME:AcceptedUnverified; selector identity mismatch; explicit reconciliation required")
+            return@readSelectorIdentity
+        }
+        readEncrypted(owner, binding.value) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val evidence = selectorEvidence(selected, body)
+                    if (selected.name == "event") appendSelectedEventCapture(selected, body)
+                    recorder.fact(
+                        "SelectorReadBack",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector_type", selected.name)
+                            .put("selector", selected.value)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("glb", evidence.glb ?: JSONObject.NULL)
+                            .put("crc_valid", evidence.crcValid)
+                            .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                            .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
+                            .putSessionSnapshot(),
+                    )
+                    close(owner)
+                    report("OUTCOME:AcceptedUnverified; read-back captured; explicit reconciliation required")
+                },
+                onFailure = {
+                    recorder.fact("SelectorReadBackFailed", JSONObject().put("write_id", writeId).put("detail", it.message))
+                    close(owner)
+                    report("OUTCOME:AcceptedUnverified; read-back failed; explicit reconciliation required")
+                },
+            )
+        }
+    }
+
+    /**
+     * A non-zero final callback does not prove rejection: target selector writes with raw status 139
+     * have later been semantically verified. Preserve the uncertain write outcome, but use the still-
+     * owned connection for the same selector-value read performed by the reference implementation.
+     */
+    private fun readBackAfterAmbiguousFinalCallback(
+        owner: BluetoothGatt,
+        selected: Selector,
+        binding: SelectorBinding,
+        outcome: YpsoWriteOutcome.PossiblyApplied,
+    ) = readSelectorIdentity(owner, selected, binding) { identityMatches ->
+        if (!identityMatches) {
+            close(owner)
+            report("OUTCOME:PossiblyApplied; selector identity mismatch; reconciliation required")
+            return@readSelectorIdentity
+        }
+        readEncrypted(owner, binding.value) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val evidence = selectorEvidence(selected, body)
+                    recorder.fact(
+                        "AmbiguousFinalCallbackReadBack",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector_type", selected.name)
+                            .put("selector", selected.value)
+                            .put("callback_status", outcome.failure.code ?: JSONObject.NULL)
+                            .put("callback_frame", outcome.failure.frame ?: JSONObject.NULL)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("glb", evidence.glb ?: JSONObject.NULL)
+                            .put("crc_valid", evidence.crcValid)
+                            .put("embedded_history_index", evidence.embeddedHistoryIndex ?: JSONObject.NULL)
+                            .put("semantic_match", evidence.semanticMatch ?: JSONObject.NULL)
+                            .putSessionSnapshot(),
+                    )
+                    close(owner)
+                    report("OUTCOME:PossiblyApplied; same-connection read-back captured; reconciliation required")
+                },
+                onFailure = {
+                    recorder.fact(
+                        "AmbiguousFinalCallbackReadBackFailed",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("callback_status", outcome.failure.code ?: JSONObject.NULL)
+                            .put("callback_frame", outcome.failure.frame ?: JSONObject.NULL)
+                            .put("detail", it.message),
+                    )
+                    close(owner)
+                    report("OUTCOME:PossiblyApplied; same-connection read-back failed; reconciliation required")
+                },
+            )
+        }
+    }
+
+    /** A setting value has no embedded setting ID, so identity must be read separately. */
+    private fun readSelectorIdentity(
+        owner: BluetoothGatt,
+        selected: Selector,
+        binding: SelectorBinding,
+        done: (Boolean) -> Unit,
+    ) {
+        if (selected.name != "setting") {
+            done(true)
+            return
+        }
+        if (binding.index.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0) {
+            recorder.fact(
+                "SettingSelectorIdentityReadBackUnavailable",
+                JSONObject().put("write_id", writeId).put("selector", selected.value).put("properties", binding.index.properties),
+            )
+            done(false)
+            return
+        }
+        readEncrypted(owner, binding.index) { result ->
+            result.fold(
+                onSuccess = { body ->
+                    val observed = YpsoGlb.decodeExact(body)
+                    val matches = observed == selected.value
+                    recorder.fact(
+                        "SettingSelectorIdentityReadBack",
+                        JSONObject()
+                            .put("write_id", writeId)
+                            .put("selector", selected.value)
+                            .put("body_size", body.size)
+                            .put("body_sha256", hash(body))
+                            .put("glb", observed ?: JSONObject.NULL)
+                            .put("semantic_match", matches)
+                            .putSessionSnapshot(),
+                    )
+                    done(matches)
+                },
+                onFailure = {
+                    recorder.fact(
+                        "SettingSelectorIdentityReadBackFailed",
+                        JSONObject().put("write_id", writeId).put("selector", selected.value).put("detail", it.message),
+                    )
+                    done(false)
+                },
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -1748,18 +2343,26 @@ class BenchActivity : Activity() {
             .put("session_write", record?.write ?: JSONObject.NULL)
             .put("pending_operation", reservation?.operationId ?: JSONObject.NULL)
             .put("pending_phase", reservation?.phase?.name ?: JSONObject.NULL)
+            .put(
+                "retired_legacy_operation",
+                record?.retiredLegacyBenchAlarmCursorRecovery?.operationId ?: JSONObject.NULL,
+            )
     }
 
     private fun android.content.Intent.intExtraOrNull(name: String): Int? =
         takeIf { hasExtra(name) }?.getIntExtra(name, -1)?.also { require(it > 0) { "$name must be positive" } }
 
     private fun report(value: String) {
+        progress(value)
+        if (!value.startsWith("CONNECTING:")) finish()
+    }
+
+    private fun progress(value: String) {
         File(filesDir, "result.txt").outputStream().use { out ->
             out.write(value.toByteArray())
             out.fd.sync()
         }
         android.util.Log.i("YpsoWriteBench", value)
-        if (!value.startsWith("CONNECTING:")) finish()
     }
 
     private data class ReadTransaction(
@@ -1798,6 +2401,8 @@ class BenchActivity : Activity() {
         SELECTOR,
         BOOTSTRAP_NEW_EPOCH,
         AMBIGUITY_CONVERGENCE,
+        SETTINGS_COUNTER_RECOVERY,
+        SETTINGS_COUNTER_JUMP,
         DUPLICATE_COUNTER_PROBE,
         OBSERVE_SELECTOR,
         READ_SELECTOR_STATE,
@@ -1805,6 +2410,7 @@ class BenchActivity : Activity() {
         RECORD_BOOTSTRAP_REFERENCE,
         READ_HISTORY_COUNTS,
         CAPTURE_CURRENT_HISTORY,
+        PROFILE_ACQUISITION,
         READINESS_PROBE,
     }
 

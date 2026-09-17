@@ -14,7 +14,11 @@ class SessionJournalTest {
         val keys = mutableMapOf<String, ByteArray>()
         var fault = ""
         var failSeal = false
-        private fun boundary(name: String) { check(fault != name) { "Injected crash: $name" } }
+        var terminateAt = ""
+        private fun boundary(name: String) {
+            if (terminateAt == name) throw ThreadDeath()
+            check(fault != name) { "Injected crash: $name" }
+        }
         override fun read() = file
         override fun anchors() = keys.keys.toList()
         override fun create(alias: String) {
@@ -57,6 +61,26 @@ class SessionJournalTest {
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
 
     @Test
+    fun `process termination before invalidation preserves exact committed journal with an extra key`() {
+        for (boundary in listOf("after-create", "before-delete")) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(old)
+            val original = storage.file
+            storage.terminateAt = boundary
+            assertThrows(ThreadDeath::class.java) { journal.commit(next) }
+            storage.terminateAt = ""
+            assertEquals(2, storage.anchors().size)
+            assertEquals(old, SessionJournal(storage).load())
+            assertEquals(original, storage.file)
+            assertEquals(2, storage.anchors().size)
+            journal.commit(next)
+            assertEquals(next, journal.load())
+            assertEquals(1, storage.anchors().size)
+        }
+    }
+
+    @Test
     fun `roundtrip and restoring stale file rejects deleted anchor`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
@@ -97,7 +121,238 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(13, org.json.JSONObject(body).getInt("version"))
+        assertEquals(15, org.json.JSONObject(body).getInt("version"))
+    }
+
+    @Test
+    fun `version fifteen preserves nested unresolved selector bindings`() {
+        val first = PumpSession.UnresolvedWriteBinding(
+            reboot = 21, reservationId = "first", phase = PumpSession.Phase.POSSIBLY_SENT,
+            operationId = "setting-first", counter = 34,
+            characteristic = "669a0c20-0008-969e-e211-fcbeb3147bc5", purpose = "SETTINGS_SELECTOR",
+            payloadHash = "ab".repeat(32), priorWrite = 33,
+            candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR, evidenceHash = "cd".repeat(32),
+        )
+        val second = first.copy(reservationId = "second", operationId = "setting-second", counter = 35,
+            priorWrite = 34, candidate = PumpSession.WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
+            unresolvedPredecessor = first)
+        val recovery = PumpSession.Reservation(
+            id = "recovery", counter = 36, phase = PumpSession.Phase.POSSIBLY_SENT,
+            operationId = "recover", characteristic = "669a0c20-0008-969e-e211-fcbecc3b7bc5",
+            purpose = "HISTORY_SELECTOR", payloadHash = "ef".repeat(32), priorWrite = 35,
+            candidate = PumpSession.WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR,
+            unresolvedPredecessor = second,
+        )
+        fun evidence(binding: PumpSession.UnresolvedWriteBinding) = PumpSession.WriteEvidence(
+            operationId = binding.operationId, reservationId = binding.reservationId, counter = binding.counter,
+            characteristic = binding.characteristic, purpose = binding.purpose, payloadHash = binding.payloadHash,
+            priorWrite = binding.priorWrite, candidate = binding.candidate, resolution = null,
+            evidenceHash = binding.evidenceHash, detail = "reviewed unknown settings attempt",
+            unresolvedPredecessor = binding.unresolvedPredecessor,
+        )
+        val state = old.copy(records = old.records.map { it.copy(
+            reboot = 21, write = 36, reservation = recovery,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            benchAmbiguityConvergenceAttempted = true, writeEvidence = listOf(evidence(first), evidence(second)),
+        ) })
+        val journal = SessionJournal(Storage())
+        journal.commit(state)
+        assertEquals(state, journal.load())
+        assertEquals(second.reservation(), journal.load().records.single().reservation!!.unresolvedPredecessor!!.reservation())
+    }
+
+    @Test
+    fun `completed historical alarm cursor recovery remains readable but cannot become live work`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val reservation =
+            PumpSession.Reservation(
+                id = "historical-alarm-cursor",
+                counter = 33,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "alarm-cursor-recovery",
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 32,
+                candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(reservation.operationId),
+                reservationId = reservation.id,
+                counter = reservation.counter,
+                characteristic = checkNotNull(reservation.characteristic),
+                purpose = checkNotNull(reservation.purpose),
+                payloadHash = checkNotNull(reservation.payloadHash),
+                priorWrite = checkNotNull(reservation.priorWrite),
+                candidate = reservation.candidate,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "completed historical alarm cursor recovery",
+            )
+        val state =
+            old.copy(
+                records = old.records.map {
+                    it.copy(
+                        reboot = 8,
+                        read = 100,
+                        write = 33,
+                        reservation = reservation,
+                        writeEvidence = listOf(evidence),
+                        benchHistoryCounts =
+                            listOf(
+                                PumpSession.HistoryCountEvidence(
+                                    family = PumpSession.HistoryFamily.ALARM,
+                                    reboot = 8,
+                                    read = 100,
+                                    count = 200,
+                                    characteristic = "669a0c20-0008-969e-e211-fcbec83b7bc5",
+                                    payloadHash = "ef".repeat(32),
+                                ),
+                            ),
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                    )
+                },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val legacyBody = committedBody(storage)
+        val legacyRecord = legacyBody.getJSONArray("records").getJSONObject(0)
+        legacyRecord.getJSONObject("reservation").put("candidate", "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR")
+        legacyRecord.getJSONArray("writeEvidence").getJSONObject(0).put("candidate", "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR")
+        replaceBody(storage, legacyBody)
+        assertEquals(state, journal.load())
+        journal.commit(state)
+        assertEquals(
+            "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR",
+            committedBody(storage).getJSONArray("records").getJSONObject(0).getJSONObject("reservation").getString("candidate"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(reservation = reservation.copy(phase = PumpSession.Phase.ACKED))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = listOf(evidence.copy(resolution = null)))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = emptyList())
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(writeEvidence = listOf(evidence.copy(reservationId = "another-reservation")))
+                    },
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PumpSession.validate(
+                state.copy(
+                    records = state.records.map {
+                        it.copy(
+                            writeEvidence =
+                                listOf(
+                                    evidence,
+                                    evidence.copy(
+                                        reservationId = "orphaned-reservation",
+                                        evidenceHash = "12".repeat(32),
+                                    ),
+                                ),
+                        )
+                    },
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `superseded historical alarm recovery roundtrips only in its retired audit slot`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val legacy =
+            PumpSession.Reservation(
+                id = "historical-alarm-cursor",
+                counter = 33,
+                phase = PumpSession.Phase.VERIFIED,
+                operationId = "alarm-cursor-recovery",
+                characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
+                purpose = "HISTORY_SELECTOR",
+                payloadHash = "ab".repeat(32),
+                priorWrite = 32,
+                candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
+            )
+        val evidence =
+            PumpSession.WriteEvidence(
+                operationId = checkNotNull(legacy.operationId),
+                reservationId = legacy.id,
+                counter = legacy.counter,
+                characteristic = checkNotNull(legacy.characteristic),
+                purpose = checkNotNull(legacy.purpose),
+                payloadHash = checkNotNull(legacy.payloadHash),
+                priorWrite = checkNotNull(legacy.priorWrite),
+                candidate = legacy.candidate,
+                resolution = PumpSession.WriteResolution.ACCEPTED,
+                evidenceHash = "cd".repeat(32),
+                detail = "completed historical alarm cursor recovery",
+            )
+        val current =
+            PumpSession.Reservation(
+                id = "setting-1",
+                counter = 34,
+                phase = PumpSession.Phase.RESERVED,
+                operationId = "setting-1",
+                characteristic = "669a0c20-0008-969e-e211-fcbeb3147bc5",
+                purpose = "SETTINGS_SELECTOR",
+                payloadHash = "ef".repeat(32),
+                priorWrite = 33,
+                candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+            )
+        val state =
+            old.copy(
+                records =
+                    old.records.map {
+                        it.copy(
+                            reboot = 21,
+                            read = 2_596,
+                            write = 34,
+                            reservation = current,
+                            retiredLegacyBenchAlarmCursorRecovery = legacy,
+                            writeEvidence = listOf(evidence),
+                            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        )
+                    },
+            )
+
+        journal.commit(state)
+
+        assertEquals(state, journal.load())
+        val record = committedBody(storage).getJSONArray("records").getJSONObject(0)
+        assertEquals("setting-1", record.getJSONObject("reservation").getString("id"))
+        assertEquals(
+            "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR",
+            record.getJSONObject("retiredLegacyBenchAlarmCursorRecovery").getString("candidate"),
+        )
     }
 
     @Test
@@ -1039,7 +1294,7 @@ class SessionJournalTest {
             storage.fault = ""
             val loaded = runCatching { SessionJournal(storage).load() }.getOrNull()
             when (boundary) {
-                "before-create", "after-create" -> assertEquals(old, loaded) // No change and no publication/dispatch.
+                "before-create", "after-create", "before-delete" -> assertEquals(old, loaded) // No change and no publication/dispatch.
                 "before-sync", "after-sync" -> assertEquals(next, loaded)
                 else -> assertNull(loaded, boundary)
             }

@@ -76,8 +76,8 @@ class YpsoStatusIntegrationTest {
             whenever(preferences.get(IntKey.OverviewResCritical)).thenReturn(10)
             val sync: PumpSync = mock()
             val ui: UiInteraction = mock()
-            val plugin = YpsoPumpPlugin(AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), mock(), ui,
-                                        Provider { PumpEnactResultObject(rh) }, provisioning)
+            val plugin = YpsoPumpPlugin(AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), ui,
+                                        Provider { PumpEnactResultObject(rh) }, provisioning, mock())
             val writes = mutableListOf<Pair<UUID, List<Byte>>>()
             var readSucceeds = true
             fun authenticate() {

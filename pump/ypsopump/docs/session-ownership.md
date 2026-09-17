@@ -2,7 +2,10 @@
 
 ## Supported contract
 
-The distributed status-only artifact permits AUTH-only app-initiated GATT writes. `SessionCrypto` is
+The distributed non-therapy artifact permits authentication, required control CCCD setup, and
+allowlisted profile selectors under durable strict-next accounting. Configuration and therapy writes
+remain blocked. Unknown write floors require reviewed complete ownership evidence; a numeric floor
+alone is not an ownership transfer. `SessionCrypto` is
 a stateless XChaCha20-Poly1305 codec: ciphertext/tag followed by a 24-byte nonce, with
 a mandatory authenticated 12-byte little-endian reboot/read-counter tail. `PumpSession`
 owns acceptance. AEAD failure, incomplete tails, unsupported signed counter ranges,
