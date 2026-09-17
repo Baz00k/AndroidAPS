@@ -10,6 +10,7 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import java.io.InputStream
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -243,6 +244,70 @@ class YpsoProvisioningService internal constructor(
         } finally {
             document.sharedKey.fill(0)
         }
+    }
+
+    internal fun reviewOwnershipHandoff(
+        stream: InputStream,
+        expectedSha256: String,
+    ): YpsoOwnershipHandoff.Reviewed {
+        require(expectedSha256.matches(Regex("[0-9a-f]{64}"))) { "A reviewed lowercase SHA-256 is required" }
+        val data = boundedRead(stream, YpsoOwnershipHandoff.MAX_DOCUMENT_BYTES)
+        return try {
+            val observed = MessageDigest.getInstance("SHA-256").digest(data)
+            require(MessageDigest.isEqual(observed, expectedSha256.hexBytes())) { "Ownership handoff hash does not match review" }
+            val active = owner.committedRecord() ?: throw SecurityException("Install and verify the pump key before importing ownership")
+            val key = active.keyHex?.hexBytes() ?: throw SecurityException("Protected pump key is unavailable")
+            try {
+                YpsoOwnershipHandoff.parse(data, key).also { reviewed ->
+                    require(reviewed.documentSha256 == expectedSha256)
+                    require(reviewed.record.pump == active.pump && reviewed.record.keyId == active.keyId && reviewed.record.serial == active.serial) {
+                        "Ownership handoff belongs to another installed pump"
+                    }
+                }
+            } finally {
+                key.fill(0)
+            }
+        } finally {
+            data.fill(0)
+        }
+    }
+
+    internal fun installOwnershipHandoff(
+        reviewed: YpsoOwnershipHandoff.Reviewed,
+        now: Instant = Instant.now(),
+    ) = synchronized(provisioningLock) {
+        synchronized(this) { mutationEpoch.incrementAndGet() }
+        try {
+            quiesceConnection()
+            synchronized(this) {
+                owner.adoptOwnershipHandoff(
+                    reviewed.record,
+                    now.toEpochMilli(),
+                    mapOf(
+                        "ownership_handoff_sha256" to reviewed.documentSha256,
+                        "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
+                        "ownership_source_apk_sha256" to reviewed.source.apkSha256,
+                        "ownership_source_journal_sha256" to reviewed.source.journalSha256,
+                    ),
+                )
+                pumpState.invalidateStatus()
+                pumpState.invalidateProfileEvidence()
+                refreshState()
+                publishAvailability()
+            }
+        } finally {
+            completeMutationEpoch()
+        }
+    }
+
+    internal fun ownershipStatus(): String {
+        val record = owner.committedRecord() ?: return "UNCONFIGURED"
+        val reservation = record.reservation
+        return "generation=${record.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
+            "bootstrap=${record.writeBootstrapState},pending=${reservation?.operationId ?: "none"}," +
+            "phase=${reservation?.phase ?: "none"},evidence=${record.writeEvidence.size}," +
+            "retired_legacy=${record.retiredLegacyBenchAlarmCursorRecovery?.operationId ?: "none"}," +
+            "handoff=${record.source["ownership_handoff_sha256"] ?: "none"}"
     }
 
     /** Document equivalent of [installManualAndStartVerification], including secret destruction. */
@@ -667,7 +732,9 @@ class YpsoProvisioningService internal constructor(
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private fun boundedRead(stream: InputStream): ByteArray {
+    private fun String.hexBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    private fun boundedRead(stream: InputStream, maximum: Int = YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES): ByteArray {
         val buffer = ByteArray(4096)
         var data = ByteArray(0)
         var size = 0
@@ -675,9 +742,9 @@ class YpsoProvisioningService internal constructor(
             while (true) {
                 val read = stream.read(buffer)
                 if (read < 0) break
-                require(size + read <= YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES) { "Session file is larger than 64 KiB" }
+                require(size + read <= maximum) { "Session file is larger than the supported limit" }
                 if (size + read > data.size) {
-                    val grown = ByteArray(minOf(YpsoSessionDocumentParser.MAX_DOCUMENT_BYTES, maxOf(4096, size + read)))
+                    val grown = ByteArray(minOf(maximum, maxOf(4096, size + read)))
                     data.copyInto(grown, 0, 0, size)
                     data.fill(0)
                     data = grown

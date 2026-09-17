@@ -9,7 +9,8 @@
     <application>
         <activity
             android:name=".YpsoProvisioningActivity"
-            android:exported="false"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
             android:label="@string/ypsopump_connection_setup" />
     </application>
 

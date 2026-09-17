@@ -13,6 +13,8 @@ import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.core.interfaces.profile.Profile.ProfileValue
+import java.time.ZoneId
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
@@ -65,6 +67,7 @@ class YpsoPumpPluginTest {
     fun `profile coherence fails closed even when status basal matches the requested current rate`() {
         val profile: Profile = mock {
             on { getBasal() } doReturn 0.6
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.6))
         }
         state.publishStatus(
             reservoirUnits = 80.0,
@@ -76,6 +79,28 @@ class YpsoPumpPluginTest {
         )
 
         assertFalse(plugin.isThisProfileSet(profile))
+    }
+
+    @Test
+    fun `profile coherence compares effective full schedule and fails when stale`() {
+        var elapsed = 2_001L
+        state.elapsedRealtime = { elapsed }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val matching: Profile = mock {
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5))
+        }
+        val mismatch: Profile = mock {
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5), ProfileValue(23 * 3600, 0.51))
+        }
+
+        assertTrue(plugin.isThisProfileSet(matching))
+        assertEquals(0.5, plugin.baseBasalRate)
+        assertFalse(plugin.isThisProfileSet(mismatch))
+        elapsed = 2_000L + YpsoPumpState.PROFILE_MAX_AGE_MS
+        assertFalse(plugin.isThisProfileSet(matching))
+        assertEquals(0.0, plugin.baseBasalRate)
+        assertFalse(plugin.setNewBasalProfile(matching).enacted)
     }
 
     @Test
@@ -124,6 +149,56 @@ class YpsoPumpPluginTest {
         verify(ui, times(1)).addNotificationWithSound(eq(Notification.PUMP_RESERVOIR_EMPTY), any(), eq(Notification.URGENT), any())
         assertEquals(8.0, plugin.reservoirLevel)
         verifyNoInteractions(sync)
+    }
+
+    @Test
+    fun `status polling acquires profile only when durable selector accounting is ready`() {
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        whenever(manager.readProfile(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus("profile poll")
+
+        verify(manager).readProfile(any())
+        val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        assertFalse(plugin.isThisProfileSet(profile))
+    }
+
+    @Test
+    fun `status polling reuses fresh profile evidence without consuming fifty selectors again`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+
+        whenever(manager.checkProfileEvidence(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus("profile still fresh")
+
+        verify(manager).checkProfileEvidence(any())
+        verify(manager, never()).readProfile(any())
+        assertTrue(state.hasFreshProfileEvidence)
     }
 
     @Test

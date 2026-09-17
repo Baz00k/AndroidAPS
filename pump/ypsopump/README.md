@@ -5,8 +5,10 @@
 
 ## Supported artifact
 
-The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes are
-restricted to the access-authentication handshake (**AUTH-only**).
+The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes permit
+access authentication, the required control-notification CCCD, and profile setting selectors `1`
+and `14–61`. Selectors require an established durable write floor and strict-next accounting;
+an unknown floor or unresolved write blocks profile acquisition. They do not change configuration.
 
 After a successful verified encrypted status read, the UI shows reservoir values and battery percent.
 The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent. Status fields have bench
@@ -14,12 +16,19 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 
 - running and Stop are the observed operating states; other mode values reject the status;
 - battery percent is a coarse display mapping from reported bars, not a measured percentage;
-- basal rate, TBR duration, bolus progress and history are unavailable;
+- scheduled base basal is available only from fresh verified active-profile evidence;
+- TBR duration, bolus progress and production history-row ingestion are unavailable;
 - measurements expire five minutes after acquisition, including while disconnected;
 - a BLE MAC is never displayed or synthesized as a serial.
 
 Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
 treatment reconciliation and loop/SMB actuation are blocked.
+
+Profile programming and activation are manual. The driver compares the complete effective AAPS
+schedule against an uninterrupted active-before → all A/B rows → active-after → clock acquisition,
+bracketed by an unchanged authenticated event count. Cached evidence expires after five minutes and
+is invalidated on disconnect, zone changes, relevant history, or a changed/failed event-count check
+at status polling. A matching current basal rate alone does not establish profile equivalence.
 
 ## Protected setup
 

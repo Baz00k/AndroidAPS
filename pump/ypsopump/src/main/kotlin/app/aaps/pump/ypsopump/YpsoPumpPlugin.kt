@@ -26,6 +26,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import android.content.Context
@@ -157,17 +158,17 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // Normal operation exposes only the supported authenticated status-only path.
-        readStatusBlocking()
+        if (readStatusBlocking() && bleManager.canReadProfile) {
+            if (pumpState.hasFreshProfileEvidence) readProfileBlocking(checkOnly = true)
+            if (!pumpState.hasFreshProfileEvidence) readProfileBlocking()
+        }
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    // Status-only remains zero so LoopPlugin cannot run. A future therapy build must use the fresh
-    // measured pump status, never mirror the desired AAPS profile as if it were pump configuration.
-    override val baseBasalRate: Double get() =
-        if (YpsoPumpConst.READ_ONLY_MODE) 0.0 else pumpState.baseBasalRateIfFresh() ?: 0.0
+    // Stored-profile evidence is independent of current TBR scaling and the desired AAPS profile.
+    override val baseBasalRate: Double get() = pumpState.scheduledBaseBasalRateIfFresh() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
     // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
     // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
@@ -179,9 +180,14 @@ class YpsoPumpPlugin @Inject constructor(
     override fun setNewBasalProfile(profile: Profile): PumpEnactResult =
         fail(R.string.ypsopump_profile_unavailable)
 
-    // No target-qualified active-profile and 24-hour schedule read-back exists. Matching only the
-    // current rate would be unsafe because A/B or a later hourly segment may differ.
-    override fun isThisProfileSet(profile: Profile): Boolean = false
+    // The effective values already include AAPS percentage and time shift. Comparing only the
+    // current rate would be unsafe because A/B or a later/sub-hour interval may differ.
+    override fun isThisProfileSet(profile: Profile): Boolean =
+        pumpState.profileMatches(
+            profile.getBasalValues().map {
+                YpsoBasalSchedule.EffectiveSegment(it.timeAsSeconds, it.value)
+            },
+        )
 
     // History identity and command origin are not yet wired into production therapy. Do not retain dormant
     // amount/recent-event or receipt-time fallbacks: later dosing tickets must snapshot a stable cursor before
@@ -269,6 +275,25 @@ class YpsoPumpPlugin @Inject constructor(
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump status read timed out after ${timeoutMs}ms")
         pumpState.invalidateStatus()
+        bleManager.disconnect()
+        return false
+    }
+
+    private fun readProfileBlocking(timeoutMs: Long = 120_000, checkOnly: Boolean = false): Boolean {
+        var success = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val onDone: (Boolean) -> Unit = {
+            success = it
+            latch.countDown()
+        }
+        val attempt = if (checkOnly) bleManager.checkProfileEvidence(onDone) else bleManager.readProfile(onDone)
+        if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return success
+        if (!attempt.cancel()) {
+            latch.await()
+            return success
+        }
+        aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
+        pumpState.invalidateProfileEvidence()
         bleManager.disconnect()
         return false
     }
@@ -365,7 +390,9 @@ class YpsoPumpPlugin @Inject constructor(
     }
     override val isFakingTempsByExtendedBoluses: Boolean = false
     override fun canHandleDST(): Boolean = false
-    override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}
+    override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {
+        pumpState.invalidateProfileEvidence()
+    }
     override fun pumpSpecificShortStatus(veryShort: Boolean): String {
         val snapshot = pumpState.statusSnapshot
         return if (snapshot != null) {

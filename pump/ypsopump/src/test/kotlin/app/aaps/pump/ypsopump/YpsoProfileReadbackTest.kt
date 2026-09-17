@@ -14,11 +14,11 @@ class YpsoProfileReadbackTest {
     private val zone = ZoneId.of("Europe/Warsaw")
     private val local = LocalDateTime.of(2026,9,16,12,0)
     private val instant = local.atZone(zone).toInstant()
-    private fun acquisition() = YpsoProfileReadback("generation",21,"connection",1000,YpsoBasalSchedule.Program.A).also {
-        (14..61).forEach { id -> assertTrue(it.add(id,YpsoGlb.encode(if (id < 38) 50 else 35))) }
+    private fun acquisition(a: Int = 50, b: Int = 35) = YpsoProfileReadback("generation",21,"connection",1000,YpsoBasalSchedule.Program.A).also {
+        (14..61).forEach { id -> assertTrue(it.add(id,YpsoGlb.encode(if (id < 38) a else b))) }
     }
     private fun finish(read: YpsoProfileReadback, active: Int = 3, connection: String = "connection", clock: LocalDateTime = local, at: Instant = instant) =
-        read.finish("generation",21,connection,2000,YpsoGlb.encode(active),clock,at,zone,60_000,Duration.ofSeconds(30))
+        read.finish("generation",21,connection,2000,YpsoGlb.encode(active),clock,at,zone,60_000,Duration.ofSeconds(30),3000)
 
     @Test
     fun `target clock bytes decode and malformed calendar dates fail`() {
@@ -63,5 +63,20 @@ class YpsoProfileReadbackTest {
         val read = acquisition()
         assertFalse(read.add(14,YpsoGlb.encode(60)))
         assertNull(finish(read))
+    }
+
+    companion object {
+        internal fun verified(a: Int = 50, b: Int = 35): YpsoProfileReadback.VerifiedReadback {
+            val zone = ZoneId.of("Europe/Warsaw")
+            val local = LocalDateTime.of(2026, 9, 16, 12, 0)
+            val read = YpsoProfileReadback("generation", 21, "connection", 1000, YpsoBasalSchedule.Program.A)
+            (14..61).forEach { id -> check(read.add(id, YpsoGlb.encode(if (id < 38) a else b))) }
+            return checkNotNull(
+                read.finish(
+                    "generation", 21, "connection", 2000, YpsoGlb.encode(3), local,
+                    local.atZone(zone).toInstant(), zone, 60_000, Duration.ofSeconds(30), 3000,
+                ),
+            )
+        }
     }
 }

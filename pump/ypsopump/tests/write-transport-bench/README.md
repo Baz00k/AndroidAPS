@@ -18,8 +18,10 @@ the ADB shell, preventing ordinary installed applications from invoking its acti
 Use only with a target pump in the reviewed non-therapy bench state. A selector still mutates
 protocol and counter state. The app never retries a possibly effective write, never scans counters,
 and never interprets bare 134/138/139 as a safe recovery instruction. A GATT-successful fragmented
-write remains `AcceptedUnverified`; the app captures a value read-back but requires explicit,
-measured reconciliation before another selector can run.
+write remains `AcceptedUnverified`; the app captures read-back but requires explicit, measured
+reconciliation before another selector can run. For settings it first reads and decrypts the readable
+`SETTING_ID` characteristic and requires exact GLB identity equality before reading `SETTING_VALUE`;
+a valid or unchanged value alone is never treated as selector proof.
 
 ## Build and install
 
@@ -59,6 +61,62 @@ decoder; paired target observations
 now establish pump-local wall-clock seconds since 2000-01-01. Pump date/time bytes are retained verbatim
 with wall/elapsed phone observations. `history-captures.jsonl` contains decrypted pump data and may identify
 the operator's treatment history. Keep it protected like a raw Bluetooth trace; do not publish it.
+
+## Atomic profile acquisition
+
+After selector-ID read-back and strict-next accounting are qualified, acquire active-before, all 48
+hourly rows, active-after, pump date/time, and an event-count bracket on one authenticated connection:
+
+```sh
+PROFILE_ID="profile-$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action acquire-profile --es write_id "$PROFILE_ID"
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/profile-captures.jsonl \
+  > "profile-captures-$PROFILE_ID.jsonl"
+sha256sum "profile-captures-$PROFILE_ID.jsonl"
+```
+
+Each selector is strict-next and is reconciled only by an exact same-connection `SETTING_ID`
+read-back before its value is collected. The action publishes a capture only when the connection,
+generation, reboot, active program, event count, clock and all rows remain coherent for at most five
+minutes. Any interruption leaves the current reservation durable and stops without retry.
+
+For the manual switch rejection test, pause after a row and switch A↔B while paused:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action acquire-profile --es write_id "$PROFILE_ID" \
+  --ei pause_after_setting 37 --el pause_ms 60000
+```
+
+The expected result is rejection (active-before/after mismatch and/or changed event count), with no
+profile capture published for that action. Restore the intended profile manually after the test.
+
+## Reviewed ownership handoff to AndroidAPS
+
+After all physical runs are reviewed, create one canonical evidence manifest containing the final
+protected journal/evidence/history/profile hashes, APK and signer hashes, run IDs, outcomes, and the
+review decision. Review and record its SHA-256 independently. Then export the complete accounting
+record; a numeric write floor is deliberately not accepted:
+
+```sh
+EVIDENCE_SHA256="64-lowercase-hex-from-independent-review"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BenchActivity \
+  --es action export-ownership-handoff \
+  --es reviewed_evidence_sha256 "$EVIDENCE_SHA256"
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/ownership-handoff.json \
+  > ownership-handoff.json
+sha256sum ownership-handoff.json
+```
+
+The file is secret-free but HMAC-authenticated by the installed pump session key. It contains the
+complete current epoch record: reboot/read/write floors, verified reservation, write-evidence chain,
+retired legacy counter-33 audit record, and experimental attempt flags. It also binds the bench package,
+APK signer, APK, and all protected artifact hashes. AndroidAPS requires the separately reviewed file
+SHA-256 before parsing, verifies the HMAC with its already-installed pump key, checks pump/key/serial and
+epoch identity, rejects unresolved or conflicting local ownership, and commits the imported record under
+a fresh AndroidAPS Keystore journal revision. Copying only the numeric write counter is forbidden.
 
 ## Import the session; measured floors are optional validation evidence
 

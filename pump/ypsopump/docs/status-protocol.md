@@ -30,6 +30,14 @@ sentinel (hypothesized same sentinel, unconfirmed).
 
 ## Settings selector observation (2026-09-16)
 
+The preserved Android GATT cache declares setting ID `669a0c20-0008-969e-e211-fcbeb3147bc5`
+at value handle `0x001b` with properties `0x0a` (`READ | WRITE`), and setting value at handle
+`0x001d` with the same properties. Production reconciliation therefore requires an authenticated,
+same-connection exact-GLB read-back of the requested setting ID before accepting its separately read
+value. This avoids treating an equal or stale hourly value as proof of selector acceptance. Physical
+qualification of the encrypted setting-ID read-back remains required; the declaration alone proves
+capability, not semantics.
+
 A single bounded setting-ID `1` attempt on target firmware `V05.00.52` used the authenticated
 settings selector characteristic `669a0c20-0008-969e-e211-fcbeb3147bc5` at durable write counter
 34. Android accepted all four local frame dispatches. GATT callbacks succeeded for frames 1–3;
@@ -130,6 +138,34 @@ completing the reverse B→A pairing. An authenticated clock observation returne
 confirmed the displayed pump date/time matched the phone. Precise automated skew bounds and
 cross-midnight/DST acquisition remain software/target qualification work, not established by that
 display comparison alone.
+
+### Production selector identity and atomic profile qualification (2026-09-17)
+
+The journal-preserving bench first qualified encrypted same-link `SETTING_ID` read-back at strict-next
+counter `4154`: requested ID `14`, exact GLB ID read-back `14`, then exact GLB value `45`. The accepted
+resolution is bound to reviewed evidence SHA-256
+`b613af4207a7de13a9e984b224c9414ac36427932d2877d1db2ba6f8c9f44f83`; GATT callbacks were retained
+only as transport evidence and did not establish semantic acceptance.
+
+An uninterrupted one-connection acquisition then verified active A before/after, settings `14–61`,
+pump date/time, and stable event count `3000` in 71 seconds. It ended at write counter `4204`; the
+protected profile-capture hash is
+`99fac0802b8fc7b960a979bb0c150af1637e052a6777c84cdd598ac93bae2360`. The decoded A and B schedules
+exactly matched the previously qualified 24-hour centi-U/h schedules.
+
+A second valid same-connection run bracketed active B, paused after setting `37`, and the operator
+manually switched B→A. The run resumed and rejected with `atomic profile coherence validation failed`;
+the profile-capture file remained byte-identical at the hash above, proving no incoherent publication.
+The final selector was verified at counter `4280`, the pump was left stopped on Profile A, and other
+controllers were force-stopped. Final protected hashes were journal
+`fef03d2cd68b4cbabbe1bfe8921bb79bf3fc4c5694626249f4949577f4b13e43`, evidence
+`e0d846ed4d19df7f8f9f1caffcec157b20613b5825fdc2d51fc6165b0865e54e`, history
+`bbad34be816f1d2f7b81b395925db3331c9e6158100cca8e2c42fc27308ca60d`, and profile capture as above.
+
+Production ownership is transferred only through the reviewed, HMAC-authenticated complete journal
+record. AndroidAPS requires an independently supplied file SHA-256 and validates pump/key/serial, epoch,
+verified reservation, evidence chain, and local non-conflict before committing under its own Keystore.
+Importing or seeding numeric floor `4280` alone is explicitly unsupported.
 
 The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
 require real-pump verification. A separate researcher reported viewing Profiles A and B on a real
@@ -322,3 +358,41 @@ observations above; other fault states remain unobserved. Independent real-crypt
 cover stopped and zero-TBR publication as well as decoder/rejection cases. Basal rate and
 TBR remaining minutes are decoder diagnostics, not published framework measurements.
 Evidence covers one pump firmware and one Android device/OS, not all eligible versions.
+# Production acquisition integration — 2026-09-17
+
+The subsequent production candidate explicitly published coherent Profile A at 12:00:06 phone-local
+time, with stable authenticated event count 3000 and acquisition duration 77,554 ms. Its APK SHA-256
+was `ed8c68fe6064edba8e473dd1e2e4d9d854d2a0993e647f6dee954d09bbfb28f6`.
+An ownership inspection immediately before publication showed reboot 21, write floor 4433, final
+selector VERIFIED, 342 evidence records, and the original reviewed handoff/retired record intact.
+Two additional 51-selector sequences followed the initial run: one automatic app restart on the
+preceding candidate and the explicitly logged final candidate. No counter gap or recovery was used.
+The operator confirmed the pump disconnected from a person, stopped, on Profile A. The loop was
+disabled; mylife and the bench were quiescent. AAPS was force-stopped after capture to prevent further
+automatic acquisition. This proves production publication; cached-sentinel physical fault injection
+has not yet been performed. Software tests cover sentinel changes/failures/cancellation.
+
+The production acquisition now carries its authenticated event count into immutable profile
+evidence. Status polling checks that count before reusing fresh evidence; a changed or failed check
+invalidates the cache. This is a conservative polling sentinel, not production history-row ingestion.
+Disconnect still invalidates evidence, so a normal command-queue disconnect requires a complete
+acquisition on the next connection. The sentinel does not extend the original freshness deadline.
+
+The full manager acquisition test exposed an integration error in the final GATT guard: encrypted
+selector frames were being checked as plaintext GLB. Plaintext selector allowlisting now remains at
+the coordinator boundary before reservation/encryption; the GATT boundary permits only the exact
+frame during that coordinator's synchronous dispatch. Cancellation disconnects the owned GATT and
+prevents queued continuations from reserving more selectors.
+
+Software validation: 372 module tests passed with zero failures/errors/skips, including the complete
+50-selector sequence with real encryption and mocked GATT, changed-history rejection, malformed
+identity rejection, cancellation, and authenticated cache-sentinel tests. Standalone bench tests and
+APK build passed. Both debug and release GATT write-ownership checks passed.
+
+An initial production-phone run advanced the imported strict-next write floor from 4280 to 4331
+(50 acquisition selectors plus a changed-identity witness), with the last reservation VERIFIED and
+the evidence chain growing from 189 to 240 entries. Read floor became 3106, reboot remained 21,
+and the reviewed handoff plus retired legacy record remained present. This records selector
+reconciliation only: the first candidate lacked explicit successful profile-publication logging,
+so final coherent publication is not claimed from the counter progression alone. The command queue
+disconnected normally after the run. All four protected bench hashes matched their pre-run values.

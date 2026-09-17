@@ -2,6 +2,10 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
+import app.aaps.pump.ypsopump.history.YpsoHistoryKind
+import java.time.Instant
+import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -9,6 +13,63 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoPumpStateTest {
+
+    @Test
+    fun `profile evidence is fresh zone bound and independently invalidated`() {
+        var elapsed = 2_001L
+        val zone = ZoneId.of("Europe/Warsaw")
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { elapsed }
+            currentZone = { zone }
+            currentInstant = { Instant.parse("2026-09-16T10:30:00Z") }
+        }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        assertTrue(state.hasFreshProfileEvidence)
+        val matching = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.5))
+
+        assertTrue(state.profileMatches(matching))
+        assertEquals(0.5, state.scheduledBaseBasalRateIfFresh())
+        state.invalidateStatus()
+        assertTrue(state.profileMatches(matching), "a status poll must not erase independently acquired profile evidence")
+        elapsed = 2_000L + YpsoPumpState.PROFILE_MAX_AGE_MS
+        assertFalse(state.hasFreshProfileEvidence)
+        assertFalse(state.profileMatches(matching))
+        assertNull(state.scheduledBaseBasalRateIfFresh())
+    }
+
+    @Test
+    fun `timezone change and disconnect invalidate profile evidence`() {
+        var zone = ZoneId.of("Europe/Warsaw")
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { 2_001L }
+            currentZone = { zone }
+        }
+        val matching = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.5))
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        zone = ZoneId.of("UTC")
+        assertFalse(state.profileMatches(matching))
+        zone = ZoneId.of("Europe/Warsaw")
+        state.invalidateProfileEvidence()
+        assertFalse(state.profileMatches(matching))
+    }
+
+    @Test
+    fun `profile and clock history invalidate but unrelated history does not`() {
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { 2_001L }
+            currentZone = { ZoneId.of("Europe/Warsaw") }
+        }
+        val matching = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.5))
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        state.observeHistory(YpsoHistoryKind.BOLUS_STEP_CHANGED)
+        assertTrue(state.profileMatches(matching))
+        state.observeHistory(YpsoHistoryKind.BASAL_PROFILE_CHANGED)
+        assertFalse(state.profileMatches(matching))
+
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        state.observeHistory(YpsoHistoryKind.TIME_CHANGED)
+        assertFalse(state.profileMatches(matching))
+    }
     @Test
     fun `idle sample expires at five minutes and reconnect does not refresh it`() {
         var elapsed = 20_000L

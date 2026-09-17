@@ -564,6 +564,66 @@ class PumpSession(private val store: Store) {
         quiesce()
     }
 
+    /**
+     * Adopt a reviewed accounting record produced by another protected artifact using the same pump
+     * identity and key. This transfers the complete epoch/audit tuple; no numeric floor can enter by
+     * itself, and an unresolved local or imported write blocks the operation.
+     */
+    @Synchronized
+    internal fun adoptOwnershipHandoff(imported: Record, importedAt: Long, source: Map<String, String>) {
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        check(current.candidateGeneration == null) { "Cannot import ownership while credential verification is pending" }
+        val active = current.records.singleOrNull { it.generation == current.activeGeneration }
+            ?: throw SecurityException("No installed pump session")
+        check(active.reservation == null || active.reservation.phase == Phase.VERIFIED) {
+            "Local write accounting is unresolved"
+        }
+        check(imported.reservation?.phase == Phase.VERIFIED) { "Imported write accounting is not verified" }
+        check(imported.pump == active.pump && imported.keyId == active.keyId) { "Ownership handoff belongs to another pump or key" }
+        check(imported.serial == active.serial && imported.serial.isNotBlank()) { "Ownership handoff pump identity does not match" }
+        check(imported.reboot != null && imported.read != null && imported.write != null) { "Ownership handoff has no complete replay floor" }
+        check(imported.writeBootstrapState == WriteBootstrapState.ESTABLISHED) { "Ownership handoff write floor is not established" }
+        val sameEpoch = active.reboot == null || active.reboot == imported.reboot
+        check(active.reboot == null || imported.reboot >= active.reboot) { "Ownership handoff would roll back the pump epoch" }
+        if (sameEpoch) {
+            check(
+                active.write == null ||
+                    active.write == imported.write && active.reservation == imported.reservation &&
+                    active.writeEvidence.all { it in imported.writeEvidence },
+            ) { "Local write ownership conflicts with the handoff" }
+        }
+        val retired = when {
+            active.retiredLegacyBenchAlarmCursorRecovery == null -> imported.retiredLegacyBenchAlarmCursorRecovery
+            imported.retiredLegacyBenchAlarmCursorRecovery == null -> active.retiredLegacyBenchAlarmCursorRecovery
+            else -> active.retiredLegacyBenchAlarmCursorRecovery.also {
+                check(it == imported.retiredLegacyBenchAlarmCursorRecovery) { "Retired legacy audit records conflict" }
+            }
+        }
+        val adopted = imported.copy(
+            generation = active.generation,
+            keyHex = active.keyHex,
+            createdAt = active.createdAt,
+            importedAt = importedAt,
+            source = imported.source + active.source + source,
+            verifiedAt = active.verifiedAt,
+            verifiedSerial = active.verifiedSerial,
+            // Counters reset on reboot. Never numerically merge floors across epochs.
+            read = if (sameEpoch) maxOf(active.read ?: 0L, imported.read) else imported.read,
+            writeEvidence = mergeWriteEvidence(active.writeEvidence, imported.writeEvidence),
+            retiredLegacyBenchAlarmCursorRecovery = retired,
+        )
+        persist(
+            current.copy(
+                records = current.records.map { if (it.generation == active.generation) adopted else it },
+                availability = current.availability.copy(
+                    causes = current.availability.causes - AvailabilityCause.COUNTER_UNCERTAIN,
+                    since = importedAt,
+                ),
+            ),
+        )
+        quiesce()
+    }
+
     /** Atomically rejects precisely this candidate and retains its actionable failure on the restored bundle. */
     @Synchronized
     fun failCandidate(generation: String, attemptId: String?, availability: Availability): Boolean {

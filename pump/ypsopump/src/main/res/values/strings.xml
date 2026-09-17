@@ -46,6 +46,13 @@
     <string name="ypsopump_import_review">From file: %1$s · %2$s</string>
     <string name="ypsopump_apply_import">Use these details</string>
     <string name="ypsopump_import_invalid">That file isn’t a valid ypso-keys file.</string>
+    <string name="ypsopump_ownership_handoff_explanation">Advanced: transfer the complete reviewed selector-counter journal from the qualification bench. This does not accept a numeric counter by itself.</string>
+    <string name="ypsopump_ownership_handoff_hash">Reviewed ownership file SHA-256</string>
+    <string name="ypsopump_import_ownership_handoff">Choose ownership handoff file</string>
+    <string name="ypsopump_ownership_import_invalid">The ownership handoff, pump identity, authentication, or reviewed SHA-256 is invalid.</string>
+    <string name="ypsopump_ownership_handoff_review">Reviewed epoch: reboot %1$d · read %2$d · write %3$d · journal %4$s…</string>
+    <string name="ypsopump_apply_ownership_handoff">Transfer reviewed ownership</string>
+    <string name="ypsopump_ownership_install_failed">Couldn’t transfer ownership. The previous journal is unchanged.</string>
     <string name="ypsopump_invalid_serial">Check the serial number on your pump.</string>
     <string name="ypsopump_invalid_mac">Use the form AA:BB:CC:11:22:33.</string>
     <string name="ypsopump_invalid_key">Paste the 64-character key from ypso-keys.</string>

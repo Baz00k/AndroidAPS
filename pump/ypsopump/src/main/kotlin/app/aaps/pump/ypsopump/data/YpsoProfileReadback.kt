@@ -59,8 +59,9 @@ internal class YpsoProfileReadback(
         zone: ZoneId,
         maxAcquisitionMs: Long,
         maxClockSkew: Duration,
+        eventCount: Int,
     ): VerifiedReadback? {
-        if (invalidated) return null
+        if (invalidated || eventCount < 0) return null
         invalidated = true
         if (generation != sessionGeneration || currentReboot != reboot || currentConnectionId != connectionId) return null
         if (maxAcquisitionMs <= 0 || finishedElapsedMs - startedElapsedMs !in 0..maxAcquisitionMs) return null
@@ -72,7 +73,7 @@ internal class YpsoProfileReadback(
         if (Duration.between(pumpInstant, observedAt).abs() > maxClockSkew) return null
         val a = YpsoBasalSchedule.decode((14..37).map { rows[it] ?: return null }) ?: return null
         val b = YpsoBasalSchedule.decode((38..61).map { rows[it] ?: return null }) ?: return null
-        return VerifiedReadback(sessionGeneration, reboot, connectionId, activeBefore, a, b, finishedElapsedMs, zone)
+        return VerifiedReadback(sessionGeneration, reboot, connectionId, activeBefore, a, b, finishedElapsedMs, zone, eventCount)
     }
 
     class VerifiedReadback internal constructor(
@@ -84,6 +85,7 @@ internal class YpsoProfileReadback(
         val profileB: YpsoBasalSchedule,
         val acquiredElapsedMs: Long,
         val zone: ZoneId,
+        val eventCount: Int,
     ) {
         val activeSchedule: YpsoBasalSchedule
             get() = if (activeProgram == YpsoBasalSchedule.Program.A) profileA else profileB
