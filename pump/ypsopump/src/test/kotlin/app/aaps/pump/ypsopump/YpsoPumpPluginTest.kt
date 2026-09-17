@@ -202,6 +202,38 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `status polling reacquires after history sentinel invalidates the cached profile`() {
+        state.elapsedRealtime = { 2_001L }
+        state.currentZone = { ZoneId.of("Europe/Warsaw") }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        whenever(manager.checkProfileEvidence(any())).thenAnswer {
+            state.invalidateProfileEvidence()
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+        whenever(manager.readProfile(any())).thenAnswer {
+            assertFalse(state.hasFreshProfileEvidence)
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus("manual change")
+
+        verify(manager).checkProfileEvidence(any())
+        verify(manager).readProfile(any())
+        assertFalse(state.hasFreshProfileEvidence)
+    }
+
+    @Test
     fun `availability notification replaces stale or changed text but does not churn identical state`() {
         whenever(provisioning.notificationRequired()).thenReturn(true)
         whenever(provisioning.installed()).thenReturn(installed)

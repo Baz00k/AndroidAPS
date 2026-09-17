@@ -360,6 +360,23 @@ TBR remaining minutes are decoder diagnostics, not published framework measureme
 Evidence covers one pump firmware and one Android device/OS, not all eligible versions.
 # Production acquisition integration — 2026-09-17
 
+Final lifecycle hardening binds cached evidence to the live GATT/session/reboot owner at every
+lookup, independently of disconnect callbacks. Cached evidence also invalidates permanently on
+zone changes, DST-offset transitions, and phone wall-clock drift beyond 30 seconds relative to
+monotonic elapsed time. Tests cover owner loss/restoration, both DST transitions, clock jumps,
+and status-poll reacquisition after sentinel invalidation. Polling remains the detection boundary
+for a manual change; no push-history or instantaneous remote-change detection is claimed.
+
+The lifecycle-hardened APK `44f4b7ec2944881f4dc8a148e9f1251e2d03d3dcb549306fd59aa9ebe6875764`
+repeated production coherent acquisition at 12:16:55 phone-local: Profile A, event count 3000,
+60,052 ms. Ownership inspection after normal disconnect showed reboot 21, read 3538, write 4535,
+final selector VERIFIED, and 444 evidence records. The preceding candidate also ran another
+automatic acquisition at 12:03:21 (62,912 ms); both runs account for the additional 102 selectors.
+The bench's four protected hashes remained unchanged; AAPS was force-stopped after the final run.
+Final software suite: 375 tests, zero failures/errors/skips. DST/clock faults and cached-sentinel
+changes are injected test evidence; physical evidence covers complete acquisition, manual program
+switching and mid-read switch rejection, plus production restart/reconnect acquisition.
+
 The subsequent production candidate explicitly published coherent Profile A at 12:00:06 phone-local
 time, with stable authenticated event count 3000 and acquisition duration 77,554 ms. Its APK SHA-256
 was `ed8c68fe6064edba8e473dd1e2e4d9d854d2a0993e647f6dee954d09bbfb28f6`.

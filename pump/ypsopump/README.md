@@ -30,6 +30,14 @@ bracketed by an unchanged authenticated event count. Cached evidence expires aft
 is invalidated on disconnect, zone changes, relevant history, or a changed/failed event-count check
 at status polling. A matching current basal rate alone does not establish profile equivalence.
 
+On the qualified phone/pump, full acquisition took about 78 seconds: each of 50 selectors (plus
+an initial witness when needed) uses four encrypted write frames, authenticated selector-ID readback,
+and authenticated value readback. This reads the pump configuration; it does not load or enact a new
+AAPS profile. Fresh evidence can be reused only on the same connection. The normal command queue
+disconnect clears it, so the next connection performs a full acquisition. Manual changes are detected
+at the next authenticated history-count check, not instantaneously. Future therapy commands must
+establish their own current preflight evidence; this cache is not an authorization to deliver insulin.
+
 ## Protected setup
 
 The signed, non-debuggable status-only artifact provides **Pump connection setup** in the YpsoPump

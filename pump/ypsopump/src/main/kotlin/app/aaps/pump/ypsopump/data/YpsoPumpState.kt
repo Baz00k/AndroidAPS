@@ -39,6 +39,9 @@ class YpsoPumpState @Inject constructor() {
     internal var currentZone: () -> ZoneId = { ZoneId.systemDefault() }
     @Volatile private var sample: StatusSnapshot? = null
     @Volatile private var verifiedProfile: YpsoProfileReadback.VerifiedReadback? = null
+    private var profilePublishedAt: Instant = Instant.EPOCH
+    private var profilePublishedElapsedMs: Long = 0
+    private var profileOwnerCurrent: () -> Boolean = { false }
     val statusSnapshot: StatusSnapshot?
         get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
 
@@ -78,8 +81,16 @@ class YpsoPumpState @Inject constructor() {
 
     // -- Profiles --
     internal val profileEvidence: YpsoProfileReadback.VerifiedReadback?
-        get() = verifiedProfile?.takeIf {
-            elapsedRealtime() - it.acquiredElapsedMs in 0 until PROFILE_MAX_AGE_MS && currentZone() == it.zone
+        @Synchronized get() {
+            val evidence = verifiedProfile ?: return null
+            val now = currentInstant()
+            val elapsed = elapsedRealtime()
+            val valid = elapsed - evidence.acquiredElapsedMs in 0 until PROFILE_MAX_AGE_MS &&
+                currentZone() == evidence.zone && profileOwnerCurrent() &&
+                evidence.zone.rules.getOffset(now) == evidence.zone.rules.getOffset(profilePublishedAt) &&
+                java.time.Duration.between(profilePublishedAt.plusMillis(elapsed - profilePublishedElapsedMs), now).abs() <= java.time.Duration.ofSeconds(30)
+            if (!valid) invalidateProfileEvidence()
+            return evidence.takeIf { valid }
         }
 
     val hasFreshProfileEvidence: Boolean
@@ -150,7 +161,10 @@ class YpsoPumpState @Inject constructor() {
         }
 
     @Synchronized
-    internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback) {
+    internal fun publishProfileEvidence(value: YpsoProfileReadback.VerifiedReadback, ownerCurrent: () -> Boolean = { true }) {
+        profilePublishedAt = currentInstant()
+        profilePublishedElapsedMs = elapsedRealtime()
+        profileOwnerCurrent = ownerCurrent
         verifiedProfile = value
     }
 
@@ -169,6 +183,7 @@ class YpsoPumpState @Inject constructor() {
     @Synchronized
     fun invalidateProfileEvidence() {
         verifiedProfile = null
+        profileOwnerCurrent = { false }
     }
 
     fun observeHistory(kind: YpsoHistoryKind) {

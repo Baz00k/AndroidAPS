@@ -55,7 +55,7 @@ class YpsoBleManager @Inject constructor(
 
     enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, DISCOVERING, READY, CONNECTED }
 
-    private var bluetoothGatt: BluetoothGatt? = null
+    @Volatile private var bluetoothGatt: BluetoothGatt? = null
     val isConnected: Boolean get() = pumpState.connectionState == ConnectionState.CONNECTED
     val canReadProfile: Boolean
         get() = session?.snapshot()?.let {
@@ -63,8 +63,8 @@ class YpsoBleManager @Inject constructor(
                 it.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED &&
                 (it.reservation == null || it.reservation.phase == PumpSession.Phase.VERIFIED)
         } == true
-    internal var session: PumpSession? = null
-    private var sessionToken: PumpSession.Token? = null
+    @Volatile internal var session: PumpSession? = null
+    @Volatile private var sessionToken: PumpSession.Token? = null
     @Volatile private var configuredKey: ByteArray? = null
     @Volatile private var configuredGeneration: String? = null
     @Volatile private var configuredAttemptId: String? = null
@@ -937,7 +937,11 @@ class YpsoBleManager @Inject constructor(
             synchronized(opLock) {
                 if (!owned()) return failProfile("profile ownership changed before publication")
                 if (!attempt.tryComplete()) return
-                pumpState.publishProfileEvidence(evidence)
+                // Do not acquire opLock from the state getter: publication already holds opLock
+                // before the state monitor. Identity reads here must preserve that lock ordering.
+                pumpState.publishProfileEvidence(evidence) {
+                    bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
+                }
                 profileReadActive.set(false)
             }
             aapsLogger.info(LTag.PUMP, "YpsoPump coherent profile accepted: program=${evidence.activeProgram}, eventCount=${evidence.eventCount}, elapsedMs=${evidence.acquiredElapsedMs - startedElapsed}")

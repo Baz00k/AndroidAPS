@@ -15,6 +15,39 @@ import org.junit.jupiter.api.Test
 class YpsoPumpStateTest {
 
     @Test
+    fun `changed owner permanently invalidates otherwise fresh profile`() {
+        var owned = true
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { 2001L }
+            currentZone = { ZoneId.of("Europe/Warsaw") }
+        }
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified()) { owned }
+        assertTrue(state.hasFreshProfileEvidence)
+        owned = false
+        assertFalse(state.hasFreshProfileEvidence)
+        owned = true
+        assertFalse(state.hasFreshProfileEvidence)
+    }
+
+    @Test
+    fun `DST transition and phone clock jump invalidate before age expires`() {
+        for (start in listOf("2026-10-25T00:59:59Z", "2026-03-29T00:59:59Z", "2026-09-16T10:00:00Z")) {
+            var instant = Instant.parse(start)
+            var elapsed = 2001L
+            val state = YpsoPumpState().apply {
+                elapsedRealtime = { elapsed }
+                currentZone = { ZoneId.of("Europe/Warsaw") }
+                currentInstant = { instant }
+            }
+            state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+            assertTrue(state.hasFreshProfileEvidence)
+            elapsed += 2000
+            instant = instant.plusSeconds(if (start.contains("09-16")) 33 else 2)
+            assertFalse(state.hasFreshProfileEvidence)
+        }
+    }
+
+    @Test
     fun `profile evidence is fresh zone bound and independently invalidated`() {
         var elapsed = 2_001L
         val zone = ZoneId.of("Europe/Warsaw")
