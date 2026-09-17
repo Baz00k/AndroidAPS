@@ -12,9 +12,6 @@ internal enum class YpsoRemoteWrite {
     CONTROL_NOTIFICATION_DESCRIPTOR
 }
 
-/** Distributed profile reads are non-therapy writes; the bench additionally owns qualification probes. */
-internal enum class YpsoArtifactPolicy { DISTRIBUTED_PROFILE_READ, NON_THERAPY_BENCH }
-
 internal object YpsoWritePolicy {
     val AUTH_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
     val EVENT_INDEX_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecc3b7bc5")
@@ -28,7 +25,6 @@ internal object YpsoWritePolicy {
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     fun allowsCharacteristic(
-        artifact: YpsoArtifactPolicy,
         write: YpsoRemoteWrite,
         destination: UUID,
         payload: ByteArray,
@@ -37,11 +33,10 @@ internal object YpsoWritePolicy {
     ): Boolean = when (write) {
         YpsoRemoteWrite.AUTHENTICATION -> destination == AUTH_UUID && authenticating &&
             payload.size == 16 && payload.contentEquals(expectedAuthentication)
-        YpsoRemoteWrite.HISTORY_SELECTOR -> artifact == YpsoArtifactPolicy.NON_THERAPY_BENCH &&
-            destination in setOf(EVENT_INDEX_UUID, ALARM_INDEX_UUID, SYSTEM_INDEX_UUID) && YpsoGlb.decodeExact(payload) != null
+        YpsoRemoteWrite.HISTORY_SELECTOR -> false
         YpsoRemoteWrite.SETTINGS_SELECTOR -> destination == SETTING_ID_UUID &&
             YpsoGlb.decodeExact(payload)?.let { settingId ->
-                settingId >= 0 && (artifact == YpsoArtifactPolicy.NON_THERAPY_BENCH || settingId == 1 || settingId in 14..61)
+                settingId == 1 || settingId in 14..61
             } == true
         YpsoRemoteWrite.THERAPY_COMMAND,
         YpsoRemoteWrite.CONFIGURATION_MUTATION,
@@ -49,22 +44,20 @@ internal object YpsoWritePolicy {
     }
 
     fun allowsDescriptor(
-        artifact: YpsoArtifactPolicy,
         write: YpsoRemoteWrite,
         characteristic: UUID?,
         descriptor: UUID,
         payload: ByteArray
-    ): Boolean = artifact in setOf(YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ, YpsoArtifactPolicy.NON_THERAPY_BENCH) &&
-        write == YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR &&
+    ): Boolean = write == YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR &&
         characteristic == CONTROL_NOTIFY_UUID && descriptor == CCCD_UUID &&
         payload.contentEquals(byteArrayOf(1, 0))
 
-    fun allows(write: YpsoRemoteWrite, artifact: YpsoArtifactPolicy): Boolean = when (write) {
+    fun allows(write: YpsoRemoteWrite): Boolean = when (write) {
         YpsoRemoteWrite.AUTHENTICATION -> true
-        YpsoRemoteWrite.HISTORY_SELECTOR -> artifact == YpsoArtifactPolicy.NON_THERAPY_BENCH
+        YpsoRemoteWrite.HISTORY_SELECTOR -> false
         YpsoRemoteWrite.SETTINGS_SELECTOR,
         YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR ->
-            artifact in setOf(YpsoArtifactPolicy.DISTRIBUTED_PROFILE_READ, YpsoArtifactPolicy.NON_THERAPY_BENCH)
+            true
         YpsoRemoteWrite.THERAPY_COMMAND,
         YpsoRemoteWrite.CONFIGURATION_MUTATION -> false
     }

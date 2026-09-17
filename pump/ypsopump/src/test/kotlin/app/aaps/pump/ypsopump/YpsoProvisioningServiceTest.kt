@@ -368,21 +368,25 @@ class YpsoProvisioningServiceTest {
 
     @Test
     fun `failed same-key candidate merge retains candidate write evidence`() {
-        val (service) = service()
-        install(service)
-        acceptFirst(service.owner, mac, key)
-        service.markVerified(serial, 1_500)
-        service.owner.provisionBenchWriteBaseline(mac, key, reboot = 8, write = 42)
+        val (initialService, store) = service()
+        install(initialService)
+        acceptFirst(initialService.owner, mac, key)
+        initialService.markVerified(serial, 1_500)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(write = 42, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+            },
+        )
+        val service = service(store).first
         service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000))
         val candidate = service.connectionSession()!!
         val token = service.owner.openGeneration(candidate.generation, mac, key)
         val transaction = service.owner.begin(token)
         val reservation =
-            service.owner.reserveBenchCandidate(
+            service.owner.reserve(
                 token,
                 transaction,
                 PumpSession.WriteIntent("selector", "characteristic", "HISTORY_SELECTOR", "ab".repeat(32)),
-                forwardGap = 0,
             )
         service.owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
         service.owner.finish(token, transaction)

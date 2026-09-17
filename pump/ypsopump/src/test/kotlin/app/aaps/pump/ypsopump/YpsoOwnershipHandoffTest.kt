@@ -24,18 +24,24 @@ class YpsoOwnershipHandoffTest {
         val store = MemoryStore()
         val owner = PumpSession(store)
         owner.provisionReadBaseline(pump, key, reboot = 21, read = 2_999)
-        owner.provisionBenchWriteBaseline(pump, key, reboot = 21, write = 4_279)
         store.saved = store.saved.copy(
-            records = store.saved.records.map { it.copy(serial = serial, verifiedAt = 10, verifiedSerial = serial) },
+            records = store.saved.records.map {
+                it.copy(
+                    write = 4_279,
+                    writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                    serial = serial,
+                    verifiedAt = 10,
+                    verifiedSerial = serial,
+                )
+            },
         )
         val session = PumpSession(store)
         val token = session.open(pump, key)
         val transaction = session.begin(token)
-        val reservation = session.reserveBenchCandidate(
+        val reservation = session.reserve(
             token,
             transaction,
             PumpSession.WriteIntent("profile-setting-1", "setting-id", "SETTINGS_SELECTOR", "ab".repeat(32)),
-            forwardGap = 0,
         )
         session.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
         session.advance(token, transaction, PumpSession.Phase.ACKED)
