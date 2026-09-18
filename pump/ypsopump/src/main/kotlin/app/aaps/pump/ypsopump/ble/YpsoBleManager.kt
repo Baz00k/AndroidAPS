@@ -909,6 +909,12 @@ class YpsoBleManager @Inject constructor(
             onDone(false)
             return attempt
         }
+        if (historyReadActive.get()) {
+            profileReadActive.set(false)
+            attempt.tryComplete()
+            onDone(false)
+            return attempt
+        }
         val captured = synchronized(opLock) {
             Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString())
         }
@@ -1076,7 +1082,8 @@ class YpsoBleManager @Inject constructor(
                                     if (previous.zone != ZoneId.systemDefault()) return@readExactGlb failProfile("configuration belongs to another time zone")
                                     val updated = YpsoProfileReadback.VerifiedReadback(
                                         previous.generation, reboot, connectionId, program, previous.profileA, previous.profileB,
-                                        android.os.SystemClock.elapsedRealtime(), previous.zone, eventCountAfter, Instant.now(),
+                                        previous.acquiredElapsedMs, previous.zone, eventCountAfter, Instant.now(),
+                                        activeProgramObservedElapsedMs = android.os.SystemClock.elapsedRealtime(),
                                     )
                                     synchronized(opLock) {
                                         if (!owned()) return@readExactGlb failProfile("profile ownership changed before active-program publication")
@@ -1133,7 +1140,13 @@ class YpsoBleManager @Inject constructor(
     ): HistoryReadAttempt {
         require(maxRows > 0)
         val attempt = HistoryReadAttempt()
-        if (!historyReadActive.compareAndSet(false, true) || profileReadActive.get()) {
+        if (!historyReadActive.compareAndSet(false, true)) {
+            attempt.tryComplete()
+            onResult(null)
+            return attempt
+        }
+        if (profileReadActive.get()) {
+            historyReadActive.set(false)
             attempt.tryComplete()
             onResult(null)
             return attempt
@@ -1294,17 +1307,20 @@ class YpsoBleManager @Inject constructor(
                 if (foundCursor && cursor.activeTbr == null) finishScan() else readRows(index + 1, limit)
             }
         }
-        readCount { count ->
-            countBefore = count
-            if (count == 0) {
-                finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
-                return@readCount
-            }
-            select(0) { head ->
-                headBefore = head
-                val limit = minOf(count, maxRows)
-                rows += head
-                readRows(1, limit)
+        enableProfileSetup(gatt) { setup ->
+            if (!setup) return@enableProfileSetup failHistory("required control notification setup failed")
+            readCount { count ->
+                countBefore = count
+                if (count == 0) {
+                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
+                    return@readCount
+                }
+                select(0) { head ->
+                    headBefore = head
+                    val limit = minOf(count, maxRows)
+                    rows += head
+                    readRows(1, limit)
+                }
             }
         }
         return attempt

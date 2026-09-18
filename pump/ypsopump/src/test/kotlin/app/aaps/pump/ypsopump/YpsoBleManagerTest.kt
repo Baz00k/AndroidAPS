@@ -216,6 +216,12 @@ class YpsoBleManagerTest {
         }
         val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
         val eventValue = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
+        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
+        val descriptor: BluetoothGattDescriptor = mock()
+        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
+        whenever(descriptor.characteristic).thenReturn(notify)
+        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
+        whenever(fixture.gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
         var readCounter = 0L
         fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
             whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
@@ -236,6 +242,7 @@ class YpsoBleManagerTest {
         val results = mutableListOf<YpsoHistorySnapshot?>()
 
         manager.readStableHistory(null, maxRows = 2, onResult = results::add)
+        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
         respond(fixture.eventCount!!, YpsoGlb.encode(2))
         respond(selector, YpsoGlb.encode(9))
         selected(0, 101)

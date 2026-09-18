@@ -38,17 +38,7 @@ class YpsoBolusAttemptFileStoreTest {
     fun `version 2 journals remain readable as immediate attempts`() {
         val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
         val file = directory.resolve("attempt.json")
-        file.writeText(
-            """
-            {"version":2,"requestId":"request-1","pumpSerial":"10000001","sessionGeneration":"generation-1",
-            "treatment":"NORMAL","requestedCentiUnits":100,"payloadHash":"${"ab".repeat(32)}",
-            "createdAt":1500,"outcome":"PROVEN_REJECTED","dispatchCounter":4810,"dispatchedAt":2000,
-            "pumpFastSequence":null,"pumpHistoryId":null,"confirmedCentiUnits":null,"deliveryTimestamp":null,
-            "cancelRequestId":null,"cancelCounter":null,"detail":"pre-upgrade rejection",
-            "baseline":{"fastSequence":44,"slowSequence":9,"historyPumpId":100,
-            "historyFingerprintHigh":10,"historyFingerprintLow":20,"pumpReboot":21,"observedAt":1000}}
-            """.trimIndent(),
-        )
+        file.writeText(version2Json())
 
         val loaded = YpsoBolusAttemptFileStore(file).load()
 
@@ -58,6 +48,24 @@ class YpsoBolusAttemptFileStoreTest {
         assertEquals(null, loaded?.pumpSlowSequence)
         assertEquals(null, loaded?.cancelBlock)
         assertEquals("pre-upgrade rejection", loaded?.detail)
+    }
+
+    @Test
+    fun `version 2 cancellation ownership migrates to the fast block`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        file.writeText(
+            version2Json()
+                .replace("\"outcome\":\"PROVEN_REJECTED\"", "\"outcome\":\"CANCEL_PENDING\"")
+                .replace("\"cancelRequestId\":null", "\"cancelRequestId\":\"cancel-1\"")
+                .replace("\"cancelCounter\":null", "\"cancelCounter\":4811"),
+        )
+
+        val loaded = YpsoBolusAttemptFileStore(file).load()
+
+        assertEquals(YpsoBolusBlock.FAST, loaded?.cancelBlock)
+        assertEquals("cancel-1", loaded?.cancelRequestId)
+        assertEquals(4811, loaded?.cancelCounter)
     }
 
     @Test
@@ -73,6 +81,16 @@ class YpsoBolusAttemptFileStoreTest {
         file.writeText(file.readText().replace("\"requestedCentiUnits\":100", "\"requestedCentiUnits\":0"))
         assertThrows(IllegalArgumentException::class.java) { store.load() }
     }
+
+    private fun version2Json() = """
+        {"version":2,"requestId":"request-1","pumpSerial":"10000001","sessionGeneration":"generation-1",
+        "treatment":"NORMAL","requestedCentiUnits":100,"payloadHash":"${"ab".repeat(32)}",
+        "createdAt":1500,"outcome":"PROVEN_REJECTED","dispatchCounter":4810,"dispatchedAt":2000,
+        "pumpFastSequence":null,"pumpHistoryId":null,"confirmedCentiUnits":null,"deliveryTimestamp":null,
+        "cancelRequestId":null,"cancelCounter":null,"detail":"pre-upgrade rejection",
+        "baseline":{"fastSequence":44,"slowSequence":9,"historyPumpId":100,
+        "historyFingerprintHigh":10,"historyFingerprintLow":20,"pumpReboot":21,"observedAt":1000}}
+    """.trimIndent()
 
     private fun attempt() = YpsoBolusAttempt(
         requestId = "request-1",

@@ -124,36 +124,18 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
-    fun `cancelled square bolus history is ingested with its delivered amount`() {
+    fun `square and combination terminal rows stay unaccounted until timing semantics exist`() {
         val store = Store()
         val sync: PumpSync = mock()
-        whenever(sync.syncBolusWithPumpIdDetailed(any(), eq(0.08), any(), any(), any(), eq("10000001")))
-            .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
         val ingestion = YpsoHistoryIngestion(store, sync)
         ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 3, 8), row(100, 2, 80))))
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(102, 3, 8), row(101, 18, 40), row(100, 2, 80))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
-        assertEquals(101, store.value.cursor?.identity?.sequence)
+        assertEquals(102, store.value.cursor?.identity?.sequence)
         assertNull(store.value.pendingBolus)
-        verify(sync).syncBolusWithPumpIdDetailed(any(), eq(0.08), any(), eq(101L), any(), eq("10000001"))
-    }
-
-    @Test
-    fun `cancelled combination history is ingested with its delivered amount`() {
-        val store = Store()
-        val sync: PumpSync = mock()
-        whenever(sync.syncBolusWithPumpIdDetailed(any(), eq(0.4), any(), any(), any(), eq("10000001")))
-            .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
-        val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
-
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 18, 40), row(100, 2, 80))))
-
-        assertTrue(result is YpsoHistoryIngestionResult.Applied)
-        assertEquals(101, store.value.cursor?.identity?.sequence)
-        verify(sync).syncBolusWithPumpIdDetailed(any(), eq(0.4), any(), eq(101L), any(), eq("10000001"))
+        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
     private fun row(sequence: Long, type: Int, value1: Int): YpsoHistoryEntry = YpsoHistoryEntry(
