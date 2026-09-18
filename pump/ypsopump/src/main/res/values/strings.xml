@@ -15,7 +15,7 @@
     <string name="ypsopump_profile_read_incomplete">Not completed; previous schedules retained</string>
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
-    <string name="ypsopump_description">Shows YpsoPump status. Insulin delivery is disabled.</string>
+    <string name="ypsopump_description">YpsoPump status and immediate bolus delivery.</string>
     <string name="ypsopump_last_status">Last updated</string>
     <string name="ypsopump_serial">Serial</string>
     <string name="ypsopump_firmware">Firmware</string>
@@ -29,6 +29,11 @@
     <string name="ypsopump_profile_mismatch_action">The pump\'s basal profile (%1$s) does not match the profile AAPS is using. Insulin is being delivered by the pump\'s schedule, not this one. Correct it on the pump, or switch AAPS to a matching profile.</string>
     <string name="ypsopump_profile_mismatch_notification">Pump basal profile %1$s does not match the active AAPS profile. The pump is delivering its own schedule. Fix it on the pump or switch AAPS profiles.</string>
     <string name="ypsopump_read_only_bolus_blocked">Insulin delivery is disabled: bolus blocked</string>
+    <string name="ypsopump_bolus_invalid">Bolus rejected: %1$s</string>
+    <string name="ypsopump_bolus_failed">Bolus not delivered: %1$s</string>
+    <string name="ypsopump_bolus_uncertain">Bolus delivery is uncertain. Do not retry: %1$s</string>
+    <string name="ypsopump_bolus_started">Bolus accepted and matched to the pump delivery.</string>
+    <string name="ypsopump_bolus_completed">Pump-confirmed bolus delivered: %1$.2f U.</string>
     <string name="ypsopump_reservoir_empty_notification">Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.</string>
     <string name="ypsopump_reservoir_low_notification">Pump reservoir low: %1$.0f U left. Change the cartridge soon.</string>
     <string name="ypsopump_read_only_tbr_blocked">Insulin delivery is disabled: temporary basal blocked</string>

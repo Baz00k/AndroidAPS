@@ -22,7 +22,7 @@ internal class YpsoBolusWriteCoordinator(
         request: YpsoValidatedBolusRequest,
         firmware: String?,
         deadlineMs: Long,
-        beforeDispatch: (PumpSession.Reservation) -> Unit = {},
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
         dispatch: (ByteArray) -> Boolean,
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean = write(writeId, owner, YpsoCrc.appendCrc(request.payload()), firmware, deadlineMs, beforeDispatch, dispatch, onOutcome)
@@ -33,7 +33,7 @@ internal class YpsoBolusWriteCoordinator(
         block: YpsoBolusBlock,
         firmware: String?,
         deadlineMs: Long,
-        beforeDispatch: (PumpSession.Reservation) -> Unit = {},
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
         dispatch: (ByteArray) -> Boolean,
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean = write(
@@ -110,4 +110,6 @@ internal class YpsoBolusWriteCoordinator(
             evidenceHash,
             detail,
         )
+
+    fun ownerDisconnected(gatt: Any, detail: String): Boolean = accounting.ownerDisconnected(gatt, detail)
 }

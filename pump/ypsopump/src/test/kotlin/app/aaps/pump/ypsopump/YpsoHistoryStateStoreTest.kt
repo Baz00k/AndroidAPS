@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.core.data.model.BS
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
@@ -25,7 +26,7 @@ class YpsoHistoryStateStoreTest {
                 21,
                 YpsoMutableHistoryState(identity, row.fingerprint(), row.stateFingerprint(), 150, 15),
             ),
-            YpsoPendingBolusSync("10000001", (3L shl 32) or 51, 1_700_000_000_000, 100, 51),
+            YpsoPendingBolusSync("10000001", (3L shl 32) or 51, 1_700_000_000_000, 100, 51, BS.Type.SMB),
         )
 
         YpsoHistoryStateFileStore(file).commit(expected)

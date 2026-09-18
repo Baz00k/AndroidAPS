@@ -41,6 +41,7 @@ class YpsoBolusWriteCoordinatorTest {
                 YpsoBolusRequestValidator.validate(1.0, YpsoBolusTreatment.NORMAL, 30.0),
                 null,
                 5_000,
+                beforeDispatch = {},
                 dispatch = { error("dispatch") },
                 onOutcome = outcomes::add,
             ),

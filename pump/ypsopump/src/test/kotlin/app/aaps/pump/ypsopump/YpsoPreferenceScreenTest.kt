@@ -28,7 +28,8 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
             mock<UiInteraction>(),
             pumpEnactResultProvider,
             mock<YpsoProvisioningService>(),
-            profileFunction
+            profileFunction,
+            mock()
         )
         val screen = preferenceManager.createPreferenceScreen(context)
 

@@ -952,15 +952,23 @@ class YpsoBleManagerTest {
             assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
 
             val outcomes = mutableListOf<Boolean>()
-            manager.deliverBolus(1.25, 0, 1.25) { outcomes.add(true) }
-            manager.startBolus(1.25, 731) { outcome, _ -> outcomes.add(outcome == YpsoBleManager.BolusStart.NOT_SENT) }
-            manager.testBolusCanary(1.25, 731) { sent, _ -> outcomes.add(!sent) }
-            manager.cancelBolus(731, false) { sent, _ -> outcomes.add(!sent) }
-            manager.testTbrCanary(150, 30, 731) { sent, _ -> outcomes.add(!sent) }
+            manager.startBolus(
+                "therapy-blocked",
+                app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator.validate(
+                    1.2,
+                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL,
+                    30.0,
+                ),
+                "blocked",
+                {},
+            ) { outcome, _ -> outcomes.add(outcome is app.aaps.pump.ypsopump.ble.YpsoWriteOutcome.NotSent) }
+            manager.cancelBolus("cancel-blocked", app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.FAST, "blocked", {}) { outcome, _ ->
+                outcomes.add(outcome is app.aaps.pump.ypsopump.ble.YpsoWriteOutcome.NotSent)
+            }
             for (category in YpsoRemoteWrite.entries) {
                 assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
             }
-            assertEquals(List(5) { true }, outcomes)
+            assertEquals(List(2) { true }, outcomes)
             assertEquals(0L, manager.writeCounter)
             assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
         }

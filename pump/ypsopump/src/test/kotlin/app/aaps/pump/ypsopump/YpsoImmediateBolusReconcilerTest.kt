@@ -24,13 +24,16 @@ class YpsoImmediateBolusReconcilerTest {
     }
 
     @Test
-    fun `strictly newer exact status identity links the pump event to the request`() {
+    fun `retained non-cleared status does not close the attempt`() {
         val result = YpsoImmediateBolusReconciler.reconcile(
             attempt(provenFastSequence = 45),
             YpsoImmediateBolusStatus(45, 0, 100, 100),
             listOf(completedEvent(45, 100)),
         )
-        assertTrue(result is YpsoImmediateBolusReconciliation.AttemptCompleted)
+        assertEquals(
+            YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED,
+            (result as YpsoImmediateBolusReconciliation.Unresolved).reason,
+        )
     }
 
     @Test
@@ -50,7 +53,7 @@ class YpsoImmediateBolusReconcilerTest {
     fun `duplicate rows for the proven sequence remain unresolved`() {
         val result = YpsoImmediateBolusReconciler.reconcile(
             attempt(provenFastSequence = 45),
-            YpsoImmediateBolusStatus(45, 0, 100, 100),
+            YpsoImmediateBolusStatus(0, 0, 0, 0),
             listOf(completedEvent(45, 100), completedEvent(45, 100)),
         )
         assertEquals(
@@ -60,16 +63,16 @@ class YpsoImmediateBolusReconcilerTest {
     }
 
     @Test
-    fun `different size manual bolus does not make the exact delivered amount ambiguous`() {
+    fun `different size manual bolus does not close while status is not terminal cleared`() {
         val result = YpsoImmediateBolusReconciler.reconcile(
             attempt(provenFastSequence = 45),
             YpsoImmediateBolusStatus(45, 0, 100, 100),
             listOf(completedEvent(44, 50), completedEvent(45, 100)),
         )
 
-        val completed = result as YpsoImmediateBolusReconciliation.AttemptCompleted
-        assertEquals(45, completed.event.identity.sequence)
-        assertEquals(100, completed.amountCentiUnits)
+        val unresolved = result as YpsoImmediateBolusReconciliation.Unresolved
+        assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED, unresolved.reason)
+        assertEquals(100, unresolved.confirmedInsulin?.amountCentiUnits)
     }
 
     @Test
@@ -79,7 +82,7 @@ class YpsoImmediateBolusReconcilerTest {
         assertEquals(100, stale.confirmedInsulin?.amountCentiUnits)
 
         val mismatch = YpsoImmediateBolusReconciler.reconcile(attempt(provenFastSequence = 45), YpsoImmediateBolusStatus(45, 0, 90, 90), listOf(completedEvent(45, 90)))
-        assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_AMOUNT_MISMATCH, (mismatch as YpsoImmediateBolusReconciliation.Unresolved).reason)
+        assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED, (mismatch as YpsoImmediateBolusReconciliation.Unresolved).reason)
     }
 
     @Test

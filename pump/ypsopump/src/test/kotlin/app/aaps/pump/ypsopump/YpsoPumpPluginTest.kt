@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpSync
@@ -43,9 +44,10 @@ class YpsoPumpPluginTest {
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val profileFunction: ProfileFunction = mock()
+    private val constraintsChecker: ConstraintsChecker = mock()
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker
     )
 
     @Test

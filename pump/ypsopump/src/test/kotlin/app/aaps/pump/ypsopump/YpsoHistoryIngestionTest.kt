@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.core.data.model.BS
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
@@ -88,6 +89,26 @@ class YpsoHistoryIngestionTest {
         assertEquals(101, store.value.cursor?.identity?.sequence)
         assertNull(store.value.pendingBolus)
         verify(sync).syncBolusWithPumpIdDetailed(any(), eq(1.0), any(), eq(101L), any(), eq("10000001"))
+    }
+
+    @Test
+    fun `attributed SMB type is retained by the durable PumpSync outbox`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        whenever(sync.syncBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), any(), any(), eq("10000001")))
+            .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+
+        val result = ingestion.ingest(
+            "10000001",
+            ZoneId.of("UTC"),
+            21,
+            snapshot(listOf(row(101, 2, 100), row(100, 2, 80))),
+        ) { BS.Type.SMB }
+
+        assertTrue(result is YpsoHistoryIngestionResult.Applied)
+        verify(sync).syncBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), eq(101L), any(), eq("10000001"))
     }
 
     @Test

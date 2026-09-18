@@ -7,6 +7,7 @@ import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.pump.defs.TimeChangeType
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -30,9 +31,22 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptJournal
+import app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator
+import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusController
+import app.aaps.pump.ypsopump.bolus.toYpsoTreatment
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoHistoryReconciler
+import app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation
+import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
+import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciler
+import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation
+import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusStatus
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
+import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import android.content.Context
@@ -48,9 +62,8 @@ import javax.inject.Singleton
 /**
  * AndroidAPS pump plugin for the Ypsomed YpsoPump.
  *
- * Read-only milestone: exposes connection state, reservoir level and battery from [YpsoPumpState]
- * (populated by the BLE layer). All dosing operations return "not implemented" — deliberately
- * stubbed until the write/dosing path is finished and safety-validated.
+ * Exposes connection/status data and a durable immediate-bolus path. Other therapy features remain
+ * unsupported and [YpsoPumpConst.READ_ONLY_MODE] remains the final deployment gate.
  */
 @Singleton
 class YpsoPumpPlugin @Inject constructor(
@@ -65,7 +78,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val uiInteraction: UiInteraction,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>,
     private val provisioning: YpsoProvisioningService,
-    private val profileFunction: ProfileFunction
+    private val profileFunction: ProfileFunction,
+    private val constraintsChecker: ConstraintsChecker,
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -90,21 +104,31 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
         )
     }
+    private val bolusController by lazy {
+        YpsoImmediateBolusController(
+            bleManager,
+            YpsoBolusAttemptJournal(
+                YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json")),
+            ),
+            ::serialNumber,
+            historyIngestion::currentCursor,
+        )
+    }
 
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
     }
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
-        // Profile programming is unsupported independently of the broader therapy milestone.
+        isBolusCapable = !YpsoPumpConst.READ_ONLY_MODE
+        // These capabilities remain unsupported independently of immediate-bolus therapy.
+        isExtendedBolusCapable = false
+        isTempBasalCapable = false
         isSetBasalProfileCapable = false
+        supportsTDDs = false
+        needsManualTDDLoad = false
         if (YpsoPumpConst.READ_ONLY_MODE) {
             isBolusCapable = false
-            isExtendedBolusCapable = false
-            isTempBasalCapable = false
-            isSetBasalProfileCapable = false
-            supportsTDDs = false
-            needsManualTDDLoad = false
         }
     }
 
@@ -116,7 +140,7 @@ class YpsoPumpPlugin @Inject constructor(
     // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
-    override fun isBusy(): Boolean = false
+    override fun isBusy(): Boolean = bolusController.isBusy
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -281,13 +305,94 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_PROFILE_MISMATCH, message, Notification.URGENT)
     }
 
-    // History identity and command origin are not yet wired into production therapy. Do not retain dormant
-    // amount/recent-event or receipt-time fallbacks: later dosing tickets must snapshot a stable cursor before
-    // dispatch and reconcile a uniquely attributable newer history event.
-    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult =
-        fail(R.string.ypsopump_read_only_bolus_blocked)
+    @Synchronized
+    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
+        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus is active")
+        try {
+        if (detailedBolusInfo.carbs != 0.0) return fail(R.string.ypsopump_bolus_invalid, "carbohydrates are not stored on this pump")
+        val constrainedMaximum = constraintsChecker.getMaxBolusAllowed().value()
+        val request = runCatching {
+            YpsoBolusRequestValidator.validate(
+                detailedBolusInfo.insulin,
+                detailedBolusInfo.bolusType.toYpsoTreatment(),
+                constrainedMaximum,
+            )
+        }.getOrElse { return fail(R.string.ypsopump_bolus_invalid, it.message ?: "invalid request") }
+        if (!readStatusBlocking(stopWhen = { bolusController.cancellationRequested })) {
+            return fail(R.string.ypsopump_bolus_failed, if (bolusController.cancellationRequested) "bolus cancelled before dispatch" else "fresh pump status is unavailable")
+        }
+        if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
+        if (!bleManager.canReadProfile || !readProfileBlocking(
+                activeOnly = false,
+                yieldForQueue = false,
+                stopWhen = { bolusController.cancellationRequested },
+            )) {
+            return fail(R.string.ypsopump_bolus_failed, "current pump profile could not be verified")
+        }
+        reconcileProfileWithLoop()
+        if (pumpState.profileComparison != YpsoPumpState.ProfileComparison.MATCHES) {
+            return fail(R.string.ypsopump_bolus_failed, "pump profile does not match the active AAPS profile")
+        }
+        val history = readHistoryBlocking(stopWhen = { bolusController.cancellationRequested })
+            ?: return fail(R.string.ypsopump_bolus_failed, if (bolusController.cancellationRequested) "bolus cancelled before dispatch" else "stable pump history baseline is unavailable")
+        when (val ingestion = ingestHistory(history)) {
+            is YpsoHistoryIngestionResult.Applied -> Unit
+            is YpsoHistoryIngestionResult.Blocked -> return fail(R.string.ypsopump_bolus_failed, ingestion.reason)
+        }
+        return when (val result = bolusController.deliver(request)) {
+            is YpsoImmediateBolusController.DeliveryResult.Started ->
+                awaitBolusTerminal(result.attempt.requestId)
+            is YpsoImmediateBolusController.DeliveryResult.NotSent ->
+                fail(R.string.ypsopump_bolus_failed, result.detail)
+            is YpsoImmediateBolusController.DeliveryResult.Uncertain ->
+                pumpEnactResultProvider.get()
+                    .success(false)
+                    .enacted(true)
+                    .bolusDelivered(0.0)
+                    .comment(rh.gs(R.string.ypsopump_bolus_uncertain, result.detail))
+        }
+        } finally {
+            bolusController.finishDelivery()
+        }
+    }
 
-    override fun stopBolusDelivering() = Unit
+    override fun stopBolusDelivering() {
+        if (!YpsoPumpConst.READ_ONLY_MODE) bolusController.requestStop()
+    }
+
+    private fun awaitBolusTerminal(requestId: String, timeoutMs: Long = 90_000): PumpEnactResult {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            val attempt = bolusController.currentAttempt()
+            if (attempt?.requestId != requestId) return fail(R.string.ypsopump_bolus_failed, "durable bolus identity changed")
+            if (attempt.confirmedCentiUnits != null) {
+                val pumpHistoryId = attempt.pumpHistoryId
+                if (pumpHistoryId == null || !historyIngestion.isAccounted(pumpHistoryId)) {
+                    readHistoryBlocking()?.let(::ingestHistory)
+                    Thread.sleep(250L)
+                    continue
+                }
+                val delivered = attempt.confirmedUnits ?: 0.0
+                return pumpEnactResultProvider.get()
+                    .success(attempt.outcome == app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED || attempt.cancelRequestId != null)
+                    .enacted(delivered > 0.0)
+                    .bolusDelivered(delivered)
+                    .comment(rh.gs(R.string.ypsopump_bolus_completed, delivered))
+            }
+            val status = readBolusStatusBlocking()
+            if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
+                readHistoryBlocking()?.let(::ingestHistory)
+            }
+            Thread.sleep(250L)
+        }
+        bolusController.markUnresolved("terminal bolus status/history was not confirmed before timeout")
+        return pumpEnactResultProvider.get()
+            .success(false)
+            .enacted(true)
+            .bolusDelivered(0.0)
+            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "terminal delivery was not confirmed"))
+    }
 
     /** Everything that must happen after a status read lands in the status-only artifact. */
     private fun onStatusRead() {
@@ -351,7 +456,7 @@ class YpsoPumpPlugin @Inject constructor(
     private fun reservoirEmpty(): Boolean = pumpState.reservoirUnitsIfFresh()?.let { it <= RESERVOIR_EMPTY_UNITS } == true
 
     /** One blocking status read, so a pre-flight check tests the pump's state now, not minutes ago. */
-    private fun readStatusBlocking(timeoutMs: Long = 30_000): Boolean {
+    private fun readStatusBlocking(timeoutMs: Long = 30_000, stopWhen: () -> Boolean = { false }): Boolean {
         var success = false
         val l = java.util.concurrent.CountDownLatch(1)
         val attempt = bleManager.readStatus {
@@ -359,7 +464,11 @@ class YpsoPumpPlugin @Inject constructor(
             l.countDown()
             if (it) onStatusRead()
         }
-        if (l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return success
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (!l.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
+        }
+        if (l.count == 0L) return success
         if (!attempt.cancel()) {
             // The BLE callback won the completion race and is publishing the validated sample now.
             l.await()
@@ -371,15 +480,28 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    private fun readProfileBlocking(timeoutMs: Long = 120_000, activeOnly: Boolean = false): Boolean {
+    private fun readProfileBlocking(
+        timeoutMs: Long = 120_000,
+        activeOnly: Boolean = false,
+        yieldForQueue: Boolean = true,
+        stopWhen: () -> Boolean = { false },
+    ): Boolean {
         var success = false
         val latch = java.util.concurrent.CountDownLatch(1)
         val onDone: (Boolean) -> Unit = {
             success = it
             latch.countDown()
         }
-        val attempt = bleManager.readProfileConfiguration(activeOnly, { commandQueue.size() > 0 || commandQueue.bolusInQueue() }, onDone)
-        if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return success
+        val attempt = bleManager.readProfileConfiguration(
+            activeOnly,
+            { stopWhen() || (yieldForQueue && (commandQueue.size() > 0 || commandQueue.bolusInQueue())) },
+            onDone,
+        )
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
+        }
+        if (latch.count == 0L) return success
         if (!attempt.cancel()) {
             latch.await()
             return success
@@ -389,14 +511,18 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    private fun readHistoryBlocking(timeoutMs: Long = 120_000): YpsoHistorySnapshot? {
+    private fun readHistoryBlocking(timeoutMs: Long = 120_000, stopWhen: () -> Boolean = { false }): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
         val attempt = bleManager.readStableHistory(historyIngestion.currentCursor()) {
             snapshot = it
             latch.countDown()
         }
-        if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
+        }
+        if (latch.count == 0L) return snapshot
         if (!attempt.cancel()) {
             latch.await()
             return snapshot
@@ -406,19 +532,86 @@ class YpsoPumpPlugin @Inject constructor(
         return null
     }
 
-    private fun ingestHistory(snapshot: YpsoHistorySnapshot) {
+    private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
         val serial = serialNumber()
         val evidence = pumpState.profileEvidence
         val reboot = bleManager.session?.snapshot()?.reboot
         if (serial.isBlank() || evidence == null || reboot == null || evidence.generation != bleManager.session?.activeRecord()?.generation) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity, zone or session evidence unavailable")
-            return
+            return YpsoHistoryIngestionResult.Blocked("pump identity, zone or session evidence unavailable")
         }
-        when (val result = historyIngestion.ingest(serial, evidence.zone, reboot.toLong(), snapshot)) {
+        reconcileBolusAttempt(serial, evidence.zone, reboot, snapshot)
+        val attempt = bolusController.currentAttempt()
+        if (attempt?.inhibitsAutomatedDelivery == true && attempt.pumpFastSequence != null && snapshot.rowsNewestFirst.any {
+                it.sequence == attempt.pumpFastSequence &&
+                    app.aaps.pump.ypsopump.history.YpsoHistoryClassifier.classify(it).kind ==
+                    app.aaps.pump.ypsopump.history.YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED
+            }) {
+            return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")
+        }
+        val result = historyIngestion.ingest(serial, evidence.zone, reboot.toLong(), snapshot) { event ->
+            if (attempt?.pumpHistoryId == event.identity.aapsPumpId) {
+                when (attempt.treatment) {
+                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> app.aaps.core.data.model.BS.Type.NORMAL
+                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.SMB -> app.aaps.core.data.model.BS.Type.SMB
+                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.PRIME -> app.aaps.core.data.model.BS.Type.PRIMING
+                }
+            } else app.aaps.core.data.model.BS.Type.NORMAL
+        }
+        when (result) {
             is YpsoHistoryIngestionResult.Applied -> Unit
             is YpsoHistoryIngestionResult.Blocked ->
                 aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }
+        return result
+    }
+
+    private fun reconcileBolusAttempt(serial: String, zone: java.time.ZoneId, reboot: Int, snapshot: YpsoHistorySnapshot) {
+        val attempt = bolusController.currentAttempt() ?: return
+        if (!attempt.inhibitsAutomatedDelivery || attempt.pumpSerial != serial ||
+            attempt.sessionGeneration != bleManager.session?.activeRecord()?.generation || attempt.baseline.pumpReboot != reboot) return
+        val cursor = app.aaps.pump.ypsopump.history.YpsoHistoryCursor(
+            app.aaps.pump.ypsopump.history.YpsoEventIdentity(
+                serial,
+                (attempt.baseline.historyPumpId ushr 32).toInt(),
+                attempt.baseline.historyPumpId and 0xffffffffL,
+            ),
+            app.aaps.pump.ypsopump.history.YpsoHistoryFingerprint(attempt.baseline.historyFingerprintHigh, attempt.baseline.historyFingerprintLow),
+            reboot.toLong(),
+        )
+        val stable = YpsoHistoryReconciler.reconcile(cursor, snapshot) as? YpsoHistoryReconciliation.Stable ?: return
+        val status = readBolusStatusBlocking()?.let {
+            YpsoImmediateBolusStatus(
+                it.fastSequence,
+                it.bolusStatusCode,
+                Math.round(it.totalProgrammedUnits * 100.0).toInt(),
+                Math.round(it.deliveredUnits * 100.0).toInt(),
+            )
+        }
+        when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.newEventsOldestFirst)) {
+            is YpsoImmediateBolusReconciliation.AttemptCompleted -> {
+                val timestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
+                    ?.instant?.toEpochMilli() ?: return
+                bolusController.confirmTerminal(
+                    resolution.amountCentiUnits,
+                    timestamp,
+                    resolution.event.identity.sequence,
+                    resolution.event.identity.aapsPumpId,
+                    cancelled = resolution.amountCentiUnits < attempt.requestedCentiUnits || attempt.cancelRequestId != null,
+                )
+            }
+            is YpsoImmediateBolusReconciliation.Unresolved ->
+                if (resolution.reason != YpsoImmediateBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY)
+                    bolusController.markUnresolved("history reconciliation: ${resolution.reason}")
+            is YpsoImmediateBolusReconciliation.ConfirmedInsulin -> Unit
+        }
+    }
+
+    private fun readBolusStatusBlocking(timeoutMs: Long = 15_000): BolusCommand? {
+        var status: BolusCommand? = null
+        val latch = java.util.concurrent.CountDownLatch(1)
+        bleManager.readBolusStatus { status = it; latch.countDown() }
+        return if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) status else null
     }
 
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =

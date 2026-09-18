@@ -13,10 +13,13 @@ import android.content.Context
 import android.os.Build
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.pump.ypsopump.YpsoPumpConst
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
+import app.aaps.pump.ypsopump.bolus.YpsoValidatedBolusRequest
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
@@ -78,6 +81,7 @@ class YpsoBleManager @Inject constructor(
     private val readCounter: Long get() = session?.snapshot()?.read ?: 0L
     private val profileReadActive = AtomicBoolean(false)
     private val historyReadActive = AtomicBoolean(false)
+    private val bolusWriteActive = AtomicBoolean(false)
     @Volatile private var controlNotificationsEnabled = false
 
     companion object {
@@ -430,12 +434,14 @@ class YpsoBleManager @Inject constructor(
             val ownedGatt = bluetoothGatt
             ownedGatt?.let { profileSelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             ownedGatt?.let { historySelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
+            ownedGatt?.let { bolusWriteCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             bluetoothGatt = null
             session?.quiesce()
             sessionToken = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
             profileReadActive.set(false)
             historyReadActive.set(false)
+            bolusWriteActive.set(false)
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
@@ -457,6 +463,7 @@ class YpsoBleManager @Inject constructor(
     private class Op(
         val gatt: BluetoothGatt,
         val uuid: UUID,
+        val bolusOwner: Boolean = false,
         val action: (BluetoothGatt, Op) -> Unit,
         val onResult: (BluetoothGatt?, ByteArray?, Int) -> Unit
     )
@@ -488,6 +495,9 @@ class YpsoBleManager @Inject constructor(
     private var historyWriteTransportInstance: YpsoSerializedWriteTransport? = null
     private var historySelectorCoordinatorInstance: YpsoHistorySelectorCoordinator? = null
     private var historySelectorSession: PumpSession? = null
+    private var bolusWriteTransportInstance: YpsoSerializedWriteTransport? = null
+    private var bolusWriteCoordinatorInstance: YpsoBolusWriteCoordinator? = null
+    private var bolusWriteSession: PumpSession? = null
     private val profileWriteTransport: YpsoSerializedWriteTransport
         get() = profileWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
             profileWriteTransportInstance = it
@@ -516,6 +526,20 @@ class YpsoBleManager @Inject constructor(
             return checkNotNull(historySelectorCoordinatorInstance)
         }
 
+    private val bolusWriteTransport: YpsoSerializedWriteTransport
+        get() = bolusWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
+            bolusWriteTransportInstance = it
+        }
+    private val bolusWriteCoordinator: YpsoBolusWriteCoordinator
+        get() {
+            val owner = checkNotNull(session)
+            if (bolusWriteCoordinatorInstance == null || bolusWriteSession !== owner) {
+                bolusWriteSession = owner
+                bolusWriteCoordinatorInstance = YpsoBolusWriteCoordinator(owner, sessionCrypto, bolusWriteTransport)
+            }
+            return checkNotNull(bolusWriteCoordinatorInstance)
+        }
+
     private fun armHandshakeTimeout(gatt: BluetoothGatt, phase: ConnectionState) {
         handshakeTimeout?.let(cancelOpTimeout)
         val timeout = Runnable {
@@ -532,7 +556,11 @@ class YpsoBleManager @Inject constructor(
     private fun pumpOps() {
         val start = synchronized(opLock) {
             if (current != null) return
-            val op = queue.removeFirstOrNull() ?: return
+            val op = if (bolusWriteActive.get()) {
+                val index = queue.indexOfFirst { it.bolusOwner }
+                if (index < 0) return
+                queue.removeAt(index)
+            } else queue.removeFirstOrNull() ?: return
             val gatt = bluetoothGatt
             if (gatt == null || gatt !== op.gatt) return@synchronized Triple(op, null, null)
             val timeout = Runnable {
@@ -597,8 +625,12 @@ class YpsoBleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    private fun readOp(gatt: BluetoothGatt, uuid: UUID, onResult: (BluetoothGatt?, ByteArray?, Int) -> Unit) =
-        enqueue(Op(gatt, uuid, { g, op ->
+    private fun readOp(
+        gatt: BluetoothGatt,
+        uuid: UUID,
+        bolusOwner: Boolean = false,
+        onResult: (BluetoothGatt?, ByteArray?, Int) -> Unit,
+    ) = enqueue(Op(gatt, uuid, bolusOwner, { g, op ->
             val characteristic = findChar(g, uuid)
             if (characteristic == null || !g.readCharacteristic(characteristic)) {
                 complete(op, g, uuid, null, -1)
@@ -609,6 +641,7 @@ class YpsoBleManager @Inject constructor(
     // GATT boundary admits only the exact frame during that coordinator's synchronous dispatch.
     private var authorizedProfileFrame: ByteArray? = null
     private var authorizedHistoryFrame: ByteArray? = null
+    private var authorizedBolusFrame: ByteArray? = null
 
     private fun writeProfileFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
         if (bluetoothGatt !== gatt || current != null || !profileReadActive.get()) return@synchronized false
@@ -632,6 +665,22 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    private fun writeBolusFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
+        if (bluetoothGatt !== gatt || current != null || !bolusWriteActive.get()) return@synchronized false
+        val characteristic = findChar(gatt, YpsoWritePolicy.BOLUS_START_STOP_UUID) ?: return@synchronized false
+        authorizedBolusFrame = value
+        try {
+            writeCharacteristic(gatt, characteristic, value, YpsoRemoteWrite.THERAPY_COMMAND)
+        } finally {
+            authorizedBolusFrame = null
+        }
+    }
+
+    private fun releaseBolusWrite() {
+        bolusWriteActive.set(false)
+        pumpOps()
+    }
+
     @SuppressLint("MissingPermission")
     private fun enableProfileSetup(gatt: BluetoothGatt, done: (Boolean) -> Unit) {
         if (controlNotificationsEnabled) {
@@ -648,6 +697,7 @@ class YpsoBleManager @Inject constructor(
             Op(
                 gatt,
                 descriptor.uuid,
+                bolusOwner = bolusWriteActive.get(),
                 { owner, op ->
                     if (!writeDescriptor(owner, descriptor, byteArrayOf(1, 0), YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR)) {
                         complete(op, owner, descriptor.uuid, null, -1)
@@ -671,6 +721,7 @@ class YpsoBleManager @Inject constructor(
         uuid: UUID,
         expectedGatt: BluetoothGatt? = bluetoothGatt,
         failureOwner: ReadOwnership? = null,
+        bolusOwner: Boolean = false,
         onFailure: () -> Unit = {},
         done: (BluetoothGatt, ByteArray) -> Unit
     ) {
@@ -693,7 +744,7 @@ class YpsoBleManager @Inject constructor(
             }
             return true
         }
-        fun step(now: UUID, expectedFrame: Int): Unit = readOp(originGatt, now) { gatt, v, s ->
+        fun step(now: UUID, expectedFrame: Int): Unit = readOp(originGatt, now, bolusOwner) { gatt, v, s ->
             if (diagnosticLoggingEnabled())
                 aapsLogger.debug(LTag.PUMP, "YpsoPump frame[${frames.size}] from $now: status=$s ${v?.joinToString("") { "%02x".format(it) } ?: "null"}")
             val reportedTotal = v?.let { YpsoFraming.validateFrame(it, expectedFrame, totalFrames) }
@@ -909,7 +960,7 @@ class YpsoBleManager @Inject constructor(
             onDone(false)
             return attempt
         }
-        if (historyReadActive.get()) {
+        if (historyReadActive.get() || bolusWriteActive.get()) {
             profileReadActive.set(false)
             attempt.tryComplete()
             onDone(false)
@@ -1145,7 +1196,7 @@ class YpsoBleManager @Inject constructor(
             onResult(null)
             return attempt
         }
-        if (profileReadActive.get()) {
+        if (profileReadActive.get() || bolusWriteActive.get()) {
             historyReadActive.set(false)
             attempt.tryComplete()
             onResult(null)
@@ -1328,6 +1379,7 @@ class YpsoBleManager @Inject constructor(
 
     /** Read CHAR_BOLUS_STATUS and parse the immediate-delivery block via [BolusCommand.decode]. */
     fun readBolusStatus(onResult: (BolusCommand?) -> Unit) {
+        if (bolusWriteActive.get()) { onResult(null); return }
         if (!isConnected || bluetoothGatt == null) { onResult(null); return }
         readMultiframe(CHAR_BOLUS_STATUS, onFailure = { onResult(null) }) { _, f ->
             val cmd = runCatching {
@@ -1340,54 +1392,179 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
-    /** Status-only compatibility stub; normal AAPS cannot deliver therapy. */
-    fun deliverBolus(units: Double, durationMinutes: Int, immediateUnits: Double, onResult: (String) -> Unit) {
-        onResult("bolus unavailable in status-only mode")
+    internal fun readBolusStatus(owner: BolusCommandOwner, onResult: (BolusCommand?) -> Unit) {
+        val expected = owner.owner
+        val validOwner = synchronized(opLock) {
+            bluetoothGatt === expected.gatt && sessionToken?.generation == expected.token.generation
+        }
+        if (!validOwner) {
+            onResult(null)
+            return
+        }
+        readMultiframe(
+            CHAR_BOLUS_STATUS,
+            expectedGatt = expected.gatt as BluetoothGatt,
+            bolusOwner = true,
+            onFailure = { onResult(null) },
+        ) { gatt, frames ->
+            if (gatt !== expected.gatt || sessionToken?.generation != expected.token.generation) {
+                onResult(null)
+                return@readMultiframe
+            }
+            val command = runCatching {
+                val body = decryptOwned(frames)
+                val payload = YpsoCrc.validatedPayload(body) ?: error("invalid bolus-status CRC")
+                BolusCommand(0.0).apply { decode(payload); require(success) }
+            }.getOrNull()
+            onResult(command)
+        }
     }
 
-    /** Status-only compatibility stub; no canary or therapy write is attempted. */
-    fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) =
-        startBolus(units, seedW) { outcome, msg -> onResult(outcome == BolusStart.SENT, msg) }
+    class BolusCommandOwner internal constructor(
+        internal val owner: YpsoBolusWriteCoordinator.Owner,
+    )
+
+    internal fun currentBolusConnectionKey(): String? = synchronized(opLock) {
+        val gatt = bluetoothGatt ?: return@synchronized null
+        val token = sessionToken ?: return@synchronized null
+        "${System.identityHashCode(gatt)}:${token.generation}"
+    }
+
+    internal fun connectionKey(owner: BolusCommandOwner): String =
+        "${System.identityHashCode(owner.owner.gatt)}:${owner.owner.token.generation}"
 
     /**
-     * How far a bolus attempt got. The caller needs this to decide how long to keep confirming: only
-     * [NOT_SENT] is a *certain* no-op, and it is the state a stopped/empty pump lands in — knowing that
-     * is what lets the bolus fail in seconds instead of polling a dead pump for five minutes.
+     * Dispatch one validated bolus command on the currently authenticated connection. The required
+     * [beforeDispatch] hook is the durable domain boundary and runs before the first frame can leave.
      */
-    enum class BolusStart {
-        /** The bolus characteristic was written and the pump acked it. Confirm-by-read as usual. */
-        SENT,
+    internal fun startBolus(
+        writeId: String,
+        request: YpsoValidatedBolusRequest,
+        expectedConnectionKey: String,
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
+        onOutcome: (YpsoWriteOutcome, BolusCommandOwner?) -> Unit,
+    ) = dispatchBolus(writeId, request, null, expectedConnectionKey, beforeDispatch, onOutcome)
 
-        /** We aborted BEFORE writing the bolus characteristic — the pump cannot have delivered. */
-        NOT_SENT,
+    internal fun cancelBolus(
+        writeId: String,
+        block: YpsoBolusBlock,
+        expectedConnectionKey: String,
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
+        onOutcome: (YpsoWriteOutcome, BolusCommandOwner?) -> Unit,
+    ) = dispatchBolus(writeId, null, block, expectedConnectionKey, beforeDispatch, onOutcome)
 
-        /** The bolus characteristic WAS written but the ack didn't come back clean. The pump may have
-         *  delivered; the caller MUST confirm by reading the pump's own bolus status/history. */
-        UNCERTAIN
+    private fun dispatchBolus(
+        writeId: String,
+        request: YpsoValidatedBolusRequest?,
+        cancelBlock: YpsoBolusBlock?,
+        expectedConnectionKey: String?,
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
+        onOutcome: (YpsoWriteOutcome, BolusCommandOwner?) -> Unit,
+    ) {
+        if (YpsoPumpConst.READ_ONLY_MODE) {
+            onOutcome(
+                YpsoWriteOutcome.NotSent(
+                    writeId,
+                    null,
+                    YpsoWriteFailure(
+                        YpsoWriteFailure.Layer.POLICY,
+                        YpsoWritePolicy.BOLUS_START_STOP_UUID,
+                        pumpState.masterVersion.takeIf(String::isNotBlank),
+                        detail = "therapy is disabled by READ_ONLY_MODE",
+                    ),
+                ),
+                null,
+            )
+            return
+        }
+        val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
+        val gatt = captured.first
+        val token = captured.second
+        fun notSent(detail: String) = onOutcome(
+            YpsoWriteOutcome.NotSent(
+                writeId,
+                null,
+                YpsoWriteFailure(
+                    YpsoWriteFailure.Layer.READINESS,
+                    YpsoWritePolicy.BOLUS_START_STOP_UUID,
+                    pumpState.masterVersion.takeIf(String::isNotBlank),
+                    detail = detail,
+                ),
+            ),
+            null,
+        )
+        if (!isConnected || gatt == null || token == null || !canReadProfile || !hasCompatibleStatusProtocol()) {
+            notSent("authenticated write-ready session is unavailable")
+            return
+        }
+        if (expectedConnectionKey != null && "${System.identityHashCode(gatt)}:${token.generation}" != expectedConnectionKey) {
+            notSent("connection changed after bolus preflight")
+            return
+        }
+        val therapyCharacteristic = findChar(gatt, YpsoWritePolicy.BOLUS_START_STOP_UUID)
+        if (therapyCharacteristic == null ||
+            therapyCharacteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
+            notSent("bolus command characteristic is unavailable or not writable")
+            return
+        }
+        if (!bolusWriteActive.compareAndSet(false, true)) {
+            notSent("another bolus command owns the connection")
+            return
+        }
+        if (profileReadActive.get() || historyReadActive.get()) {
+            releaseBolusWrite()
+            notSent("another pump operation owns the connection")
+            return
+        }
+        val owner = YpsoBolusWriteCoordinator.Owner(gatt, captured.third, token)
+        val publicOwner = BolusCommandOwner(owner)
+        enableProfileSetup(gatt) { setup ->
+            if (!setup || bluetoothGatt !== gatt || sessionToken?.generation != token.generation) {
+                releaseBolusWrite()
+                notSent("required control notification setup failed")
+                return@enableProfileSetup
+            }
+            val outcome: (YpsoWriteOutcome) -> Unit = {
+                if (it !is YpsoWriteOutcome.AcceptedUnverified && it !is YpsoWriteOutcome.PossiblyApplied) releaseBolusWrite()
+                onOutcome(it, publicOwner)
+            }
+            val started = if (request != null) {
+                bolusWriteCoordinator.start(
+                    writeId,
+                    owner,
+                    request,
+                    pumpState.masterVersion.takeIf(String::isNotBlank),
+                    30_000,
+                    beforeDispatch,
+                    { frame -> writeBolusFrame(gatt, frame) },
+                    outcome,
+                )
+            } else {
+                bolusWriteCoordinator.cancel(
+                    writeId,
+                    owner,
+                    checkNotNull(cancelBlock),
+                    pumpState.masterVersion.takeIf(String::isNotBlank),
+                    30_000,
+                    beforeDispatch,
+                    { frame -> writeBolusFrame(gatt, frame) },
+                    outcome,
+                )
+            }
+            if (!started) releaseBolusWrite()
+        }
     }
 
-    /** Status-only compatibility stub with a typed certain-not-sent result. */
-    fun startBolus(units: Double, seedW: Long, onResult: (BolusStart, String) -> Unit) {
-        onResult(BolusStart.NOT_SENT, "bolus unavailable in status-only mode")
+    internal fun verifyBolusAccepted(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean {
+        val verified = bolusWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail)
+        if (verified) releaseBolusWrite()
+        return verified
     }
 
-    /**
-     * Cancel a running bolus: canary-lock the write counter (same benign event-index gate as the bolus),
-     * then write the all-zero START_STOP payload EXACTLY ONCE. Idempotent-ish (cancelling an already-finished
-     * bolus is harmless), so — unlike delivery — a dropped ack here is not dangerous. [onResult]=(sent, msg).
-     */
-    fun cancelBolus(seedW: Long, extended: Boolean, onResult: (Boolean, String) -> Unit) {
-        onResult(false, "bolus cancellation unavailable in status-only mode")
-    }
-
-    /**
-     * SAFE TBR (production + test) via the same canary as the bolus: lock the write counter on the BENIGN
-     * event-index char, then write the TBR command EXACTLY ONCE at the confirmed next counter. Aborts
-     * with no TBR write if the canary can't be confirmed. [percent] 0=suspend, 100=normal; [durationMinutes]
-     * MUST be a 15-min step (15/30/…). Counter persisted after each accepted write. [onResult]=(accepted,msg).
-     */
-    fun testTbrCanary(percent: Int, durationMinutes: Int, seedW: Long, onResult: (Boolean, String) -> Unit) {
-        onResult(false, "TBR unavailable in status-only mode")
+    internal fun recordBolusUnresolved(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean {
+        val recorded = bolusWriteCoordinator.recordUnresolved(writeId, owner.owner, evidenceHash, detail)
+        releaseBolusWrite()
+        return recorded
     }
 
     @SuppressLint("MissingPermission")
@@ -1418,8 +1595,10 @@ class YpsoBleManager @Inject constructor(
                         pumpState.invalidateStatus()
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         historySelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
+                        bolusWriteCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         profileReadActive.set(false)
                         historyReadActive.set(false)
+                        bolusWriteActive.set(false)
                         controlNotificationsEnabled = false
                         drainPendingOperationsLocked() to owned
                     }
@@ -1481,9 +1660,11 @@ class YpsoBleManager @Inject constructor(
                     if (pumpState.connectionState != ConnectionState.READY) return
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
-                    // Authentication itself does not enable therapy. Read-only profile acquisition
-                    // performs separately accounted selector/setup writes only when requested.
-                    aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; therapy writes remain disabled")
+                    aapsLogger.info(
+                        LTag.PUMP,
+                        if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
+                        else "YpsoPump authenticated; immediate bolus therapy is available after readiness checks",
+                    )
                     markConnected(controlNotificationsEnabled = false)
                     null
                 }
@@ -1504,6 +1685,8 @@ class YpsoBleManager @Inject constructor(
                 scheduleProfileContinuation(Runnable { profileWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
             } else if (ch.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && historyReadActive.get()) {
                 scheduleProfileContinuation(Runnable { historyWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
+            } else if (ch.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID && bolusWriteActive.get()) {
+                scheduleProfileContinuation(Runnable { bolusWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
             } else completeCurrent(g, ch.uuid, null, status)
         }
 
@@ -1580,6 +1763,8 @@ class YpsoBleManager @Inject constructor(
             pumpState.invalidateStatus()
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
+            bolusWriteCoordinatorInstance?.ownerDisconnected(g, message)
+            bolusWriteActive.set(false)
             profileReadActive.set(false)
             historyReadActive.set(false)
             controlNotificationsEnabled = false
@@ -1649,6 +1834,9 @@ class YpsoBleManager @Inject constructor(
                 characteristic.uuid == YpsoWritePolicy.SETTING_ID_UUID && authorizedProfileFrame === value
             } else if (remoteWrite == YpsoRemoteWrite.HISTORY_SELECTOR) {
                 characteristic.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && authorizedHistoryFrame === value
+            } else if (remoteWrite == YpsoRemoteWrite.THERAPY_COMMAND) {
+                !YpsoPumpConst.READ_ONLY_MODE && characteristic.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID &&
+                    authorizedBolusFrame === value
             } else YpsoWritePolicy.allowsCharacteristic(
                 remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),

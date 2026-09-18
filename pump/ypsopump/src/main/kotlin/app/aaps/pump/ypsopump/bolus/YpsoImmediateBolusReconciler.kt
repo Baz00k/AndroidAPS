@@ -74,34 +74,20 @@ object YpsoImmediateBolusReconciler {
                 confirmed,
             )
         }
-        if (status == null) {
-            return YpsoImmediateBolusReconciliation.Unresolved(
-                YpsoImmediateBolusReconciliation.Reason.STATUS_SEQUENCE_NOT_NEWER,
-                confirmed,
-            )
-        }
+        // A type-2 history row is itself pump-originated terminal evidence. Once the command was
+        // already bound to this exact fast sequence, a lost follow-up status read must not discard
+        // the terminal event or advance history past recoverable evidence.
+        if (status == null) return YpsoImmediateBolusReconciliation.AttemptCompleted(
+            event,
+            YpsoImmediateBolusStatus(attempt.pumpFastSequence, BolusCommand.STATUS_IDLE, 0, 0),
+            historyAmount,
+        )
         val terminalStatusCleared = status.statusCode == BolusCommand.STATUS_IDLE &&
             status.programmedCentiUnits == 0 && status.deliveredCentiUnits == 0
-        if (!terminalStatusCleared) {
-            if (attempt.pumpFastSequence != status.fastSequence) {
-                return YpsoImmediateBolusReconciliation.Unresolved(
-                    YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED,
-                    confirmed,
-                )
-            }
-            if (status.programmedCentiUnits != attempt.requestedCentiUnits) {
-                return YpsoImmediateBolusReconciliation.Unresolved(
-                    YpsoImmediateBolusReconciliation.Reason.STATUS_AMOUNT_MISMATCH,
-                    confirmed,
-                )
-            }
-            if (status.deliveredCentiUnits != historyAmount) {
-                return YpsoImmediateBolusReconciliation.Unresolved(
-                    YpsoImmediateBolusReconciliation.Reason.HISTORY_STATUS_AMOUNT_MISMATCH,
-                    confirmed,
-                )
-            }
-        }
+        if (!terminalStatusCleared) return YpsoImmediateBolusReconciliation.Unresolved(
+            YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED,
+            confirmed,
+        )
         return YpsoImmediateBolusReconciliation.AttemptCompleted(event, status, historyAmount)
     }
 

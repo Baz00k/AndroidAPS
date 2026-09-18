@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump.history
 
+import app.aaps.core.data.model.BS
 import java.io.File
 import java.io.FileOutputStream
 import org.json.JSONObject
@@ -10,6 +11,7 @@ data class YpsoPendingBolusSync(
     val timestamp: Long,
     val amountCentiUnits: Int,
     val eventSequence: Long,
+    val type: BS.Type = BS.Type.NORMAL,
 ) {
     init {
         require(pumpSerial.isNotBlank())
@@ -49,7 +51,7 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
     }
 
     private fun encode(value: YpsoHistoryState): JSONObject = JSONObject()
-        .put("version", 1)
+        .put("version", 2)
         .put("cursor", value.cursor?.let(::encodeCursor) ?: JSONObject.NULL)
         .put("pendingBolus", value.pendingBolus?.let(::encodePending) ?: JSONObject.NULL)
 
@@ -79,9 +81,10 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
         .put("timestamp", value.timestamp)
         .put("amountCentiUnits", value.amountCentiUnits)
         .put("eventSequence", value.eventSequence)
+        .put("type", value.type.name)
 
     private fun decode(json: JSONObject): YpsoHistoryState {
-        require(json.getInt("version") == 1)
+        require(json.getInt("version") in 1..2)
         require(json.keys().asSequence().toSet() == setOf("version", "cursor", "pendingBolus"))
         return YpsoHistoryState(
             cursor = if (json.isNull("cursor")) null else decodeCursor(json.getJSONObject("cursor")),
@@ -115,10 +118,11 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
     )
 
     private fun decodePending(value: JSONObject): YpsoPendingBolusSync {
-        require(value.keys().asSequence().toSet() == PENDING_FIELDS)
+        require(value.keys().asSequence().toSet() in setOf(PENDING_FIELDS_V1, PENDING_FIELDS_V2))
         return YpsoPendingBolusSync(
             value.getString("pumpSerial"), value.getLong("pumpId"), value.getLong("timestamp"),
             value.getInt("amountCentiUnits"), value.getLong("eventSequence"),
+            BS.Type.fromString(if (value.has("type")) value.getString("type") else null),
         )
     }
 
@@ -129,6 +133,7 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
         private val TBR_FIELDS = setOf(
             "serial", "generation", "sequence", "fingerprintHigh", "fingerprintLow", "stateHigh", "stateLow", "percent", "requestedMinutes",
         )
-        private val PENDING_FIELDS = setOf("pumpSerial", "pumpId", "timestamp", "amountCentiUnits", "eventSequence")
+        private val PENDING_FIELDS_V1 = setOf("pumpSerial", "pumpId", "timestamp", "amountCentiUnits", "eventSequence")
+        private val PENDING_FIELDS_V2 = PENDING_FIELDS_V1 + "type"
     }
 }

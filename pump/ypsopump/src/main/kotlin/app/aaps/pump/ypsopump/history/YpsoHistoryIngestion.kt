@@ -16,6 +16,11 @@ class YpsoHistoryIngestion(
     private val pumpSync: PumpSync,
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
+    fun isAccounted(pumpId: Long): Boolean {
+        val state = store.load()
+        if (state.pendingBolus != null) return false
+        return (state.cursor?.identity?.aapsPumpId ?: Long.MIN_VALUE) >= pumpId
+    }
 
     fun retryPending(pumpSerial: String): Boolean {
         val state = store.load()
@@ -24,7 +29,7 @@ class YpsoHistoryIngestion(
         val result = pumpSync.syncBolusWithPumpIdDetailed(
             pending.timestamp,
             pending.amountCentiUnits / 100.0,
-            BS.Type.NORMAL,
+            pending.type,
             pending.pumpId,
             PumpType.YPSOPUMP,
             pending.pumpSerial,
@@ -34,7 +39,13 @@ class YpsoHistoryIngestion(
         return true
     }
 
-    fun ingest(pumpSerial: String, zone: ZoneId, reboot: Long, snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
+    fun ingest(
+        pumpSerial: String,
+        zone: ZoneId,
+        reboot: Long,
+        snapshot: YpsoHistorySnapshot,
+        bolusType: (YpsoHistoryEvent) -> BS.Type = { BS.Type.NORMAL },
+    ): YpsoHistoryIngestionResult {
         if (!retryPending(pumpSerial)) return YpsoHistoryIngestionResult.Blocked("pending PumpSync record was rejected")
         if (snapshot.pumpRebootBefore != reboot || snapshot.pumpRebootAfter != reboot) {
             return YpsoHistoryIngestionResult.Blocked("history snapshot belongs to another pump reboot epoch")
@@ -63,12 +74,15 @@ class YpsoHistoryIngestion(
                             val resolved = YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved
                                 ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
                             val amount = requireNotNull(event.semantics.amountUnits)
+                            val amountCentiUnits = Math.round(amount * 100).toInt()
+                            if (amountCentiUnits == 0) continue
                             val pending = YpsoPendingBolusSync(
                                 pumpSerial,
                                 event.identity.aapsPumpId,
                                 resolved.instant.toEpochMilli(),
-                                Math.round(amount * 100).toInt(),
+                                amountCentiUnits,
                                 event.identity.sequence,
+                                bolusType(event),
                             )
                             store.commit(store.load().copy(pendingBolus = pending))
                             if (!retryPending(pumpSerial)) return YpsoHistoryIngestionResult.Blocked("PumpSync rejected bolus")

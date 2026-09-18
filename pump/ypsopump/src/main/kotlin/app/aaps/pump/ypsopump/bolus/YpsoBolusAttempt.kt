@@ -168,8 +168,10 @@ interface YpsoBolusAttemptStore {
  */
 class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
 
+    @Synchronized
     fun current(): YpsoBolusAttempt? = store.load()
 
+    @Synchronized
     fun prepare(attempt: YpsoBolusAttempt): YpsoBolusAttempt {
         require(attempt.outcome == YpsoBolusOutcome.NOT_SENT && attempt.dispatchCounter == null)
         val existing = store.load()
@@ -305,6 +307,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     fun unresolved(requestId: String, detail: String): YpsoBolusAttempt =
         update(requestId) { it.copy(outcome = YpsoBolusOutcome.UNRESOLVED, detail = detail) }
 
+    @Synchronized
     private fun update(requestId: String, transform: (YpsoBolusAttempt) -> YpsoBolusAttempt): YpsoBolusAttempt {
         val current = requireNotNull(store.load()) { "bolus attempt is missing" }
         require(current.requestId == requestId) { "bolus request identity mismatch" }
