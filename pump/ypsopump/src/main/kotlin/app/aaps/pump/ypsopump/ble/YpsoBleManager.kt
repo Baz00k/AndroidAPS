@@ -593,24 +593,20 @@ class YpsoBleManager @Inject constructor(
     }
     private fun complete(op: Op, gatt: BluetoothGatt, uuid: UUID, value: ByteArray?, status: Int) {
         var timeout: Runnable? = null
-        var callbackFailure: Throwable? = null
         synchronized(opLock) {
             if (current !== op || currentGatt !== gatt || bluetoothGatt !== gatt || op.uuid != uuid) return
             current = null
             currentGatt = null
             timeout = currentTimeout
             currentTimeout = null
-            // Detach and deliver in one critical section. If the callback ran after releasing the lock,
-            // a teardown could drain (and record) in between, and this already-detached callback would
-            // then record the same failure again — or turn a deliberate local teardown into a failure.
-            try {
-                op.onResult(gatt, value, status)
-            } catch (t: Throwable) {
-                callbackFailure = t
-            }
         }
         timeout?.let { runCatching { cancelOpTimeout(it) } }
-        callbackFailure?.let { aapsLogger.error(LTag.PUMP, "YpsoPump operation callback threw: ${it.message}") }
+        // Domain callbacks can publish availability and synchronously enter the pump plugin. Never do
+        // that while holding opLock: deliverTreatment may be waiting for this exact callback, and the
+        // reverse lock order otherwise deadlocks both the command worker and Android's main thread.
+        // The operation was detached above, so teardown cannot drain or deliver it a second time.
+        runCatching { op.onResult(gatt, value, status) }
+            .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump operation callback threw: ${it.message}") }
         pumpOps()
     }
 
@@ -791,9 +787,8 @@ class YpsoBleManager @Inject constructor(
             if (totalFrames == 0) totalFrames = reportedTotal ?: 1
             if (frames.size < totalFrames) step(CHAR_EXTREAD, expectedFrame + 1) else {
                 if (!finishTransaction()) return@readOp
-                synchronized(opLock) {
-                    if (bluetoothGatt === originGatt) done(originGatt, reassemble(frames)) else onFailure()
-                }
+                val stillOwned = synchronized(opLock) { bluetoothGatt === originGatt }
+                if (stillOwned) done(originGatt, reassemble(frames)) else onFailure()
             }
         }
         step(uuid, 1)

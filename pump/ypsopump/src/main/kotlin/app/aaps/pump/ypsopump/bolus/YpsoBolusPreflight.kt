@@ -5,9 +5,6 @@ data class YpsoBolusReadiness(
     val authenticatedCurrentSession: Boolean,
     val statusCurrent: Boolean,
     val writeCounterCertain: Boolean,
-    val profileScheduleMatches: Boolean,
-    val activeProgramContinuous: Boolean,
-    val scheduleEditAbsent: Boolean,
     val pumpRunning: Boolean,
     val reservoirHasInsulin: Boolean,
     val immediateBolusIdle: Boolean,
@@ -25,9 +22,6 @@ sealed interface YpsoBolusPreflight {
         SESSION_NOT_CURRENT,
         STATUS_NOT_CURRENT,
         COUNTER_UNCERTAIN,
-        PROFILE_MISMATCH,
-        ACTIVE_PROGRAM_NOT_CONTINUOUS,
-        SCHEDULE_EDIT_NOT_EXCLUDED,
         PUMP_NOT_RUNNING,
         RESERVOIR_EMPTY,
         IMMEDIATE_BOLUS_ACTIVE,
@@ -44,9 +38,6 @@ object YpsoBolusPreflightPolicy {
             !value.authenticatedCurrentSession -> YpsoBolusPreflight.Reason.SESSION_NOT_CURRENT
             !value.statusCurrent -> YpsoBolusPreflight.Reason.STATUS_NOT_CURRENT
             !value.writeCounterCertain -> YpsoBolusPreflight.Reason.COUNTER_UNCERTAIN
-            !value.profileScheduleMatches -> YpsoBolusPreflight.Reason.PROFILE_MISMATCH
-            !value.activeProgramContinuous -> YpsoBolusPreflight.Reason.ACTIVE_PROGRAM_NOT_CONTINUOUS
-            !value.scheduleEditAbsent -> YpsoBolusPreflight.Reason.SCHEDULE_EDIT_NOT_EXCLUDED
             !value.pumpRunning -> YpsoBolusPreflight.Reason.PUMP_NOT_RUNNING
             !value.reservoirHasInsulin -> YpsoBolusPreflight.Reason.RESERVOIR_EMPTY
             !value.immediateBolusIdle -> YpsoBolusPreflight.Reason.IMMEDIATE_BOLUS_ACTIVE

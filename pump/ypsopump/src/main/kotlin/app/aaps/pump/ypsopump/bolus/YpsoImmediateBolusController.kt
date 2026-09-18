@@ -77,7 +77,10 @@ internal class YpsoImmediateBolusController(
         run {
             val session = bleManager.session?.snapshot()
                 ?: return DeliveryResult.NotSent("durable pump session is unavailable")
-            val cursor = historyCursor() ?: return DeliveryResult.NotSent("stable pump history baseline is unavailable")
+            // Use the durable cursor maintained by ordinary history synchronization. A bolus must not
+            // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
+            // sequence proves command identity; history is scanned afterward for delivery accounting.
+            val cursor = historyCursor() ?: return DeliveryResult.NotSent("pump history has not been initialized")
             journal.current()?.takeIf { it.inhibitsAutomatedDelivery }?.let {
                 return DeliveryResult.NotSent("earlier bolus ${it.requestId} remains ${it.outcome}")
             }
@@ -95,8 +98,8 @@ internal class YpsoImmediateBolusController(
             val generation = bleManager.session?.activeRecord()?.generation
                 ?: return DeliveryResult.NotSent("authenticated session generation is unavailable")
             val reboot = session.reboot ?: return DeliveryResult.NotSent("pump reboot epoch is unavailable")
-            require(cursor.identity.pumpSerial == serial && cursor.pumpReboot == reboot.toLong()) {
-                "history baseline belongs to another pump epoch"
+            if (cursor.identity.pumpSerial != serial || cursor.pumpReboot != reboot.toLong()) {
+                return DeliveryResult.NotSent("pump history cursor belongs to another pump epoch")
             }
             val requestId = "bolus-${UUID.randomUUID()}"
             val payloadHash = YpsoWriteAccounting.sha256(YpsoCrc.appendCrc(request.payload()))

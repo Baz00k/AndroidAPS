@@ -1112,6 +1112,27 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `status completion callback runs after BLE operation lock is released`() {
+        val fixture = connectedGatt()
+        stubStatus()
+        var callbackEntered = false
+        val operationLock = checkNotNull(manager.javaClass.getDeclaredField("opLock").apply { isAccessible = true }.get(manager))
+        manager.readStatus {
+            assertFalse(Thread.holdsLock(operationLock), "domain callback ran while holding the BLE operation lock")
+            callbackEntered = true
+        }
+
+        manager.gattCallback.onCharacteristicRead(
+            fixture.gatt,
+            fixture.status,
+            byteArrayOf(0x11, 0x55),
+            BluetoothGatt.GATT_SUCCESS,
+        )
+
+        assertTrue(callbackEntered)
+    }
+
+    @Test
     fun `missing discovery and authentication callbacks close their owned handshake`() {
         for (phase in listOf(ConnectionState.CONNECTING, ConnectionState.DISCOVERING)) {
             val gatt: BluetoothGatt = mock()

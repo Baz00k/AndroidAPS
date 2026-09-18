@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
+import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpSync
@@ -21,6 +22,7 @@ import java.time.ZoneId
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
+import java.lang.reflect.Modifier
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -44,11 +46,23 @@ class YpsoPumpPluginTest {
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
     )
     private val profileFunction: ProfileFunction = mock()
-    private val constraintsChecker: ConstraintsChecker = mock()
+    private val maxBolusConstraint: Constraint<Double> = mock {
+        onGeneric { value() } doReturn 30.0
+    }
+    private val constraintsChecker: ConstraintsChecker = mock {
+        on { getMaxBolusAllowed() } doReturn maxBolusConstraint
+    }
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker
     )
+
+    @Test
+    fun `bolus delivery does not hold the plugin monitor while waiting for BLE`() {
+        val method = YpsoPumpPlugin::class.java.getDeclaredMethod("deliverTreatment", DetailedBolusInfo::class.java)
+
+        assertFalse(Modifier.isSynchronized(method.modifiers))
+    }
 
     @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {
@@ -63,9 +77,11 @@ class YpsoPumpPluginTest {
         )
         results.forEach { assertFalse(it.success); assertFalse(it.enacted); assertEquals(0.0, it.bolusDelivered) }
         assertEquals(0.0, plugin.baseBasalRate)
-        assertFalse(plugin.pumpDescription.isBolusCapable)
+        assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isBolusCapable)
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
-        verifyNoInteractions(sync, manager)
+        verifyNoInteractions(sync)
+        verify(manager, times(2)).noBackupDirectory()
+        verifyNoMoreInteractions(manager)
     }
 
     @Test

@@ -305,11 +305,11 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_PROFILE_MISMATCH, message, Notification.URGENT)
     }
 
-    @Synchronized
     override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus is active")
         try {
+        return runCatching {
         if (detailedBolusInfo.carbs != 0.0) return fail(R.string.ypsopump_bolus_invalid, "carbohydrates are not stored on this pump")
         val constrainedMaximum = constraintsChecker.getMaxBolusAllowed().value()
         val request = runCatching {
@@ -323,24 +323,12 @@ class YpsoPumpPlugin @Inject constructor(
             return fail(R.string.ypsopump_bolus_failed, if (bolusController.cancellationRequested) "bolus cancelled before dispatch" else "fresh pump status is unavailable")
         }
         if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
-        if (!bleManager.canReadProfile || !readProfileBlocking(
-                activeOnly = false,
-                yieldForQueue = false,
-                stopWhen = { bolusController.cancellationRequested },
-            )) {
-            return fail(R.string.ypsopump_bolus_failed, "current pump profile could not be verified")
+        val reboot = bleManager.session?.snapshot()?.reboot
+            ?: return fail(R.string.ypsopump_bolus_failed, "pump reboot epoch is unavailable")
+        historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let {
+            return fail(R.string.ypsopump_bolus_failed, it)
         }
-        reconcileProfileWithLoop()
-        if (pumpState.profileComparison != YpsoPumpState.ProfileComparison.MATCHES) {
-            return fail(R.string.ypsopump_bolus_failed, "pump profile does not match the active AAPS profile")
-        }
-        val history = readHistoryBlocking(stopWhen = { bolusController.cancellationRequested })
-            ?: return fail(R.string.ypsopump_bolus_failed, if (bolusController.cancellationRequested) "bolus cancelled before dispatch" else "stable pump history baseline is unavailable")
-        when (val ingestion = ingestHistory(history)) {
-            is YpsoHistoryIngestionResult.Applied -> Unit
-            is YpsoHistoryIngestionResult.Blocked -> return fail(R.string.ypsopump_bolus_failed, ingestion.reason)
-        }
-        return when (val result = bolusController.deliver(request)) {
+        when (val result = bolusController.deliver(request)) {
             is YpsoImmediateBolusController.DeliveryResult.Started ->
                 awaitBolusTerminal(result.attempt.requestId)
             is YpsoImmediateBolusController.DeliveryResult.NotSent ->
@@ -352,24 +340,35 @@ class YpsoPumpPlugin @Inject constructor(
                     .bolusDelivered(0.0)
                     .comment(rh.gs(R.string.ypsopump_bolus_uncertain, result.detail))
         }
+        }.getOrElse {
+            aapsLogger.error(LTag.PUMP, "YpsoPump bolus lifecycle failed: ${it.message}")
+            fail(R.string.ypsopump_bolus_failed, it.message ?: "internal bolus failure")
+        }
         } finally {
             bolusController.finishDelivery()
         }
     }
 
     override fun stopBolusDelivering() {
-        if (!YpsoPumpConst.READ_ONLY_MODE) bolusController.requestStop()
+        if (!YpsoPumpConst.READ_ONLY_MODE) runCatching { bolusController.requestStop() }
+            .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
     }
 
     private fun awaitBolusTerminal(requestId: String, timeoutMs: Long = 90_000): PumpEnactResult {
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (bolusController.cancellationRequested) {
+                bolusController.requestStop()
+                Thread.sleep(250L)
+                continue
+            }
             val attempt = bolusController.currentAttempt()
             if (attempt?.requestId != requestId) return fail(R.string.ypsopump_bolus_failed, "durable bolus identity changed")
             if (attempt.confirmedCentiUnits != null) {
                 val pumpHistoryId = attempt.pumpHistoryId
                 if (pumpHistoryId == null || !historyIngestion.isAccounted(pumpHistoryId)) {
-                    readHistoryBlocking()?.let(::ingestHistory)
+                    val remaining = deadline - android.os.SystemClock.elapsedRealtime()
+                    if (remaining > 0) readHistoryBlocking(timeoutMs = minOf(20_000L, remaining))?.let(::ingestHistory)
                     Thread.sleep(250L)
                     continue
                 }
@@ -382,7 +381,8 @@ class YpsoPumpPlugin @Inject constructor(
             }
             val status = readBolusStatusBlocking()
             if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
-                readHistoryBlocking()?.let(::ingestHistory)
+                val remaining = deadline - android.os.SystemClock.elapsedRealtime()
+                if (remaining > 0) readHistoryBlocking(timeoutMs = minOf(20_000L, remaining))?.let(::ingestHistory)
             }
             Thread.sleep(250L)
         }

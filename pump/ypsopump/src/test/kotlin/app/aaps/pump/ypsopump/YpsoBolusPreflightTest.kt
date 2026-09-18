@@ -9,12 +9,11 @@ import org.junit.jupiter.api.Test
 
 class YpsoBolusPreflightTest {
     @Test
-    fun `new dose requires every current therapy fact`() {
+    fun `new dose requires bolus facts but not basal profile evidence`() {
         assertSame(YpsoBolusPreflight.Ready, YpsoBolusPreflightPolicy.evaluate(ready()))
         val fields = listOf<(YpsoBolusReadiness) -> YpsoBolusReadiness>(
             { it.copy(connected = false) }, { it.copy(authenticatedCurrentSession = false) }, { it.copy(statusCurrent = false) },
-            { it.copy(writeCounterCertain = false) }, { it.copy(profileScheduleMatches = false) },
-            { it.copy(activeProgramContinuous = false) }, { it.copy(scheduleEditAbsent = false) }, { it.copy(pumpRunning = false) },
+            { it.copy(writeCounterCertain = false) }, { it.copy(pumpRunning = false) },
             { it.copy(reservoirHasInsulin = false) }, { it.copy(immediateBolusIdle = false) },
             { it.copy(extendedOrMixedBolusIdle = false) }, { it.copy(stableHistoryCursorCaptured = false) },
             { it.copy(unresolvedInsulinAbsent = false) },
@@ -37,5 +36,5 @@ class YpsoBolusPreflightTest {
         )
     }
 
-    private fun ready() = YpsoBolusReadiness(true, true, true, true, true, true, true, true, true, true, true, true, true)
+    private fun ready() = YpsoBolusReadiness(true, true, true, true, true, true, true, true, true, true)
 }

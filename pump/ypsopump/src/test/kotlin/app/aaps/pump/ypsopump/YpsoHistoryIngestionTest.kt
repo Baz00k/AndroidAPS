@@ -56,6 +56,21 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
+    fun `bolus readiness is local and requires an initialized matching cursor`() {
+        val sync: PumpSync = mock()
+        val store = Store()
+        val ingestion = YpsoHistoryIngestion(store, sync)
+
+        assertEquals("pump history has not been initialized", ingestion.bolusReadiness("10000001", 21))
+        store.value = YpsoHistoryState(
+            cursor = YpsoHistoryCursor(YpsoEventIdentity("10000001", 0, 100), row(100, 2, 80).fingerprint(), 21),
+        )
+        assertNull(ingestion.bolusReadiness("10000001", 21))
+        assertEquals("pump history cursor belongs to another pump epoch", ingestion.bolusReadiness("10000001", 22))
+        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
     fun `pump switch bootstraps the new serial without importing its existing history`() {
         val oldHead = row(100, 2, 80)
         val store = Store(

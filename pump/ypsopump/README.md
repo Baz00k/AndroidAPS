@@ -22,8 +22,8 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 - a BLE MAC is never displayed or synthesized as a serial.
 
 When `READ_ONLY_MODE` is changed to `false`, normal AAPS `deliverTreatment()` and
-`stopBolusDelivering()` use the production immediate-bolus controller: current status/profile/history
-preflight, exact dose validation, durable persist-before-dispatch ownership, same-link fast-block
+`stopBolusDelivering()` use the production immediate-bolus controller: current status, exact dose
+validation, durable persist-before-dispatch ownership, same-link fast-block
 identity proof, cancellation of only that proven identity, terminal history reconciliation, and
 idempotent PumpSync ingestion. Temporary basal, extended bolus and profile writes remain unsupported.
 
@@ -46,8 +46,8 @@ yields to newly queued commands after the current selector has been reconciled. 
 refresh leaves the previous complete configuration intact. The UI shows the last observed program
 and schedule read age; an unreported pump edit can leave this information outdated. A different
 phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
-Reading configuration alone does not authorize delivery; the production bolus preflight refreshes
-the complete profile and stable history before every new dose.
+Profile configuration is monitoring evidence, not immediate-bolus authorization. Bolus delivery does
+not read or compare basal schedules; profile acquisition remains an explicit operator action.
 
 ### Divergence is reported, not tolerated
 
@@ -64,9 +64,10 @@ effective profile switch it needs to run a loop. Reporting failure in that case 
 alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
 divergent configuration still fails, because neither proves what the pump is delivering.
 
-Immediate-bolus preflight does not rely on retained configuration alone: it performs a complete
-coherent profile acquisition and stable history scan immediately before dispatch, then compares the
-fresh pump schedule with the active AAPS profile. TBR remains unsupported.
+Immediate-bolus preflight reads current pump and immediate-bolus status. It uses the durable history
+cursor maintained by ordinary synchronization instead of scanning history before dispatch. History is
+read afterward to confirm delivered insulin and complete PumpSync accounting. It does not acquire or
+compare the basal profile. TBR remains unsupported.
 
 ## Protected setup
 
