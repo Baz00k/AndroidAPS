@@ -12,6 +12,7 @@ import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
+import app.aaps.core.interfaces.pump.BolusProgressData
 import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpPluginBase
@@ -22,6 +23,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
+import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.keys.IntKey
@@ -214,9 +216,10 @@ class YpsoPumpPlugin @Inject constructor(
                 else                                                                    -> rh.gs(R.string.ypsopump_profile_read_complete)
             }
         }
-        if (statusRead && bleManager.canReadHistory && pumpState.profileEvidence != null) {
-            readHistoryBlocking()?.let(::ingestHistory)
-        }
+        // Status polling runs on AAPS' serialized pump-command queue. History selection can take many
+        // BLE round trips (and a stalled transfer used to hold this queue for two minutes), so it must
+        // never run inline here: queued boluses and Stop would be unable to overtake it. Immediate
+        // boluses reconcile their authoritative terminal history in awaitBolusTerminal().
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime
@@ -330,7 +333,7 @@ class YpsoPumpPlugin @Inject constructor(
         }
         when (val result = bolusController.deliver(request)) {
             is YpsoImmediateBolusController.DeliveryResult.Started ->
-                awaitBolusTerminal(result.attempt.requestId)
+                awaitBolusTerminal(result.attempt.requestId, detailedBolusInfo.id, result.observedDeliveredUnits)
             is YpsoImmediateBolusController.DeliveryResult.NotSent ->
                 fail(R.string.ypsopump_bolus_failed, result.detail)
             is YpsoImmediateBolusController.DeliveryResult.Uncertain ->
@@ -354,8 +357,21 @@ class YpsoPumpPlugin @Inject constructor(
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
     }
 
-    private fun awaitBolusTerminal(requestId: String, timeoutMs: Long = 90_000): PumpEnactResult {
+    private fun awaitBolusTerminal(
+        requestId: String,
+        progressId: Long,
+        initiallyDelivered: Double,
+        timeoutMs: Long = 90_000,
+    ): PumpEnactResult {
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        var reportedDelivered = -1.0
+        fun publishProgress(delivered: Double) {
+            if (delivered <= reportedDelivered || delivered > BolusProgressData.insulin) return
+            reportedDelivered = delivered
+            BolusProgressData.delivered = delivered
+            rxBus.send(EventOverviewBolusProgress(rh, delivered, progressId))
+        }
+        publishProgress(initiallyDelivered)
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
             if (bolusController.cancellationRequested) {
                 bolusController.requestStop()
@@ -380,6 +396,15 @@ class YpsoPumpPlugin @Inject constructor(
                     .comment(rh.gs(R.string.ypsopump_bolus_completed, delivered))
             }
             val status = readBolusStatusBlocking()
+            val provenSequence = attempt?.pumpFastSequence
+            if (status != null && provenSequence != null &&
+                status.fastSequence == provenSequence &&
+                Math.round(status.totalProgrammedUnits * 100.0).toInt() == attempt.requestedCentiUnits
+            ) {
+                // This is same-command status evidence suitable for UI progress. Pump history remains
+                // authoritative for the final delivered amount and PumpSync accounting.
+                publishProgress(status.deliveredUnits)
+            }
             if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                 if (remaining > 0) readHistoryBlocking(timeoutMs = minOf(20_000L, remaining))?.let(::ingestHistory)

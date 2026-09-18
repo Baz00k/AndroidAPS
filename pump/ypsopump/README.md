@@ -64,10 +64,12 @@ effective profile switch it needs to run a loop. Reporting failure in that case 
 alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
 divergent configuration still fails, because neither proves what the pump is delivering.
 
-Immediate-bolus preflight reads current pump and immediate-bolus status. It uses the durable history
-cursor maintained by ordinary synchronization instead of scanning history before dispatch. History is
-read afterward to confirm delivered insulin and complete PumpSync accounting. It does not acquire or
-compare the basal profile. TBR remains unsupported.
+Immediate-bolus preflight reads current pump and immediate-bolus status. It uses the existing durable
+history cursor instead of scanning history before dispatch. Routine status and KeepAlive polling also
+never scans history inline, because those commands share the serialized therapy queue. History is read
+afterward to confirm delivered insulin and complete PumpSync accounting. Same-command bolus status may
+update UI progress, but only terminal history is accounting authority. Bolus delivery does not acquire
+or compare the basal profile. TBR remains unsupported.
 
 ## Protected setup
 

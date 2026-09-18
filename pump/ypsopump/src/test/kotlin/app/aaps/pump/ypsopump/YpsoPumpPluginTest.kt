@@ -252,6 +252,7 @@ class YpsoPumpPluginTest {
         whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
         whenever(manager.isConnected).thenReturn(true)
         whenever(manager.canReadProfile).thenReturn(true)
+        whenever(manager.canReadHistory).thenReturn(true)
         whenever(manager.readStatus(any())).thenAnswer {
             it.getArgument<(Boolean) -> Unit>(0)(true)
             YpsoBleManager.StatusReadAttempt()
@@ -261,11 +262,11 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(false)
             YpsoBleManager.ProfileReadAttempt()
         }
-
         plugin.getPumpStatus("manual change")
 
         verify(manager, never()).readProfile(any())
         verify(manager, never()).readProfileConfiguration(any(), any(), any())
+        verify(manager, never()).readStableHistory(any(), any(), any())
         assertTrue(state.hasFreshProfileEvidence)
     }
 
