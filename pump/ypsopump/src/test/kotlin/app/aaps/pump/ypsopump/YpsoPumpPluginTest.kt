@@ -243,7 +243,7 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `status polling does not issue a history sentinel or configuration selectors`() {
+    fun `status polling only schedules history recovery and never blocks on it inline`() {
         state.elapsedRealtime = { 2_001L }
         state.currentZone = { ZoneId.of("Europe/Warsaw") }
         state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
@@ -257,6 +257,8 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(true)
             YpsoBleManager.StatusReadAttempt()
         }
+        var recovery: (() -> Unit)? = null
+        plugin.dispatchHistoryRecovery = { recovery = it }
         whenever(manager.readProfile(any())).thenAnswer {
             assertFalse(state.hasFreshProfileEvidence)
             it.getArgument<(Boolean) -> Unit>(0)(false)
@@ -267,6 +269,7 @@ class YpsoPumpPluginTest {
         verify(manager, never()).readProfile(any())
         verify(manager, never()).readProfileConfiguration(any(), any(), any())
         verify(manager, never()).readStableHistory(any(), any(), any())
+        assertNotNull(recovery, "status completion should schedule independent recovery")
         assertTrue(state.hasFreshProfileEvidence)
     }
 

@@ -376,13 +376,11 @@ object YpsoHistoryReconciler {
         for (entry in chronological) {
             val delta = (entry.sequence - priorSequence + MODULUS) % MODULUS
             if (delta == 0L) continue
-            if (delta >= HALF_RANGE) {
+            val rebootReset = snapshot.pumpRebootAfter != cursor.pumpReboot && entry.sequence < priorSequence
+            if (delta >= HALF_RANGE && !rebootReset) {
                 return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.INVALID_ORDER_OR_RESET)
             }
             if (entry.sequence < priorSequence) {
-                if (snapshot.pumpRebootAfter != cursor.pumpReboot) {
-                    return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT)
-                }
                 if (generation == Int.MAX_VALUE) {
                     return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.SEQUENCE_GENERATION_OVERFLOW)
                 }
@@ -412,11 +410,12 @@ object YpsoHistoryReconciler {
             priorSequence = entry.sequence
         }
         val latest = newEvents.lastOrNull()
-        // Do not absorb a reboot into an unchanged cursor. A later lower sequence may be a reset
-        // caused by that reboot; retaining the cursor's original reboot keeps that ambiguity blocked.
+        // Finding the exact durable cursor in a stable snapshot proves continuity across a reboot.
+        // A lower subsequent sequence is assigned the next generation above, while a scan that cannot
+        // find the cursor remains a gap and cannot silently re-anchor or lose insulin.
         val nextCursor = latest?.let {
             YpsoHistoryCursor(it.identity, it.entry.fingerprint(), snapshot.pumpRebootAfter, activeTbr)
-        } ?: cursor.copy(activeTbr = activeTbr)
+        } ?: cursor.copy(pumpReboot = snapshot.pumpRebootAfter, activeTbr = activeTbr)
         return YpsoHistoryReconciliation.Stable(cursor, nextCursor, newEvents, stateUpdates)
     }
 

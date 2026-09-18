@@ -241,7 +241,7 @@ class YpsoHistoryContractTest {
     }
 
     @Test
-    fun `reboot with continuing sequence preserves identity while lower sequence is a deterministic reset gap`() {
+    fun `reboot recovery preserves continuity and assigns a new generation after sequence reset`() {
         val old = entry(sequence = 100)
         val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
         val continued = assertInstanceOf(
@@ -254,34 +254,41 @@ class YpsoHistoryContractTest {
         assertEquals(22, continued.cursor.pumpReboot)
         assertEquals(0, continued.cursor.identity.sequenceGeneration)
 
+        val ordinaryReset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                cursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), old.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
+        )
+        assertEquals(1, ordinaryReset.cursor.identity.sequenceGeneration)
+        assertEquals(0, ordinaryReset.cursor.identity.sequence)
+
         val high = entry(sequence = 0xffff_ffffL)
         val highCursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, high.sequence), high.fingerprint(), 21)
-        assertEquals(
-            YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT,
-            assertInstanceOf(
-                YpsoHistoryReconciliation.Gap::class.java,
-                YpsoHistoryReconciler.reconcile(
-                    highCursor,
-                    snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
-                ),
-            ).reason,
+        val reset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                highCursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
         )
+        assertEquals(1, reset.cursor.identity.sequenceGeneration)
+        assertEquals(22, reset.cursor.pumpReboot)
 
         val highUnchangedAfterReboot = assertInstanceOf(
             YpsoHistoryReconciliation.Stable::class.java,
             YpsoHistoryReconciler.reconcile(highCursor, snapshot(1, 1, listOf(high), fullCoverage = true, reboot = 22)),
         )
-        assertEquals(21, highUnchangedAfterReboot.cursor.pumpReboot)
-        assertEquals(
-            YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT,
-            assertInstanceOf(
-                YpsoHistoryReconciliation.Gap::class.java,
-                YpsoHistoryReconciler.reconcile(
-                    highUnchangedAfterReboot.cursor,
-                    snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
-                ),
-            ).reason,
+        assertEquals(22, highUnchangedAfterReboot.cursor.pumpReboot)
+        val delayedReset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                highUnchangedAfterReboot.cursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
         )
+        assertEquals(1, delayedReset.cursor.identity.sequenceGeneration)
     }
 
     @Test
@@ -305,6 +312,21 @@ class YpsoHistoryContractTest {
                 ),
             ).reason,
         )
+    }
+
+    @Test
+    fun `cursor older than the former 128 row window reconciles when recovery covers it`() {
+        val baseline = entry(sequence = 100)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), baseline.fingerprint(), 21)
+        val rows = (229L downTo 101L).map(::entry) + baseline
+
+        val result = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(130, 130, rows, fullCoverage = true)),
+        )
+
+        assertEquals(129, result.newEventsOldestFirst.size)
+        assertEquals(229, result.cursor.identity.sequence)
     }
 
     @Test

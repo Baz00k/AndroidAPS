@@ -66,10 +66,15 @@ divergent configuration still fails, because neither proves what the pump is del
 
 Immediate-bolus preflight reads current pump and immediate-bolus status. It uses the existing durable
 history cursor instead of scanning history before dispatch. Routine status and KeepAlive polling also
-never scans history inline, because those commands share the serialized therapy queue. History is read
-afterward to confirm delivered insulin and complete PumpSync accounting. Same-command bolus status may
-update UI progress, but only terminal history is accounting authority. Bolus delivery does not acquire
-or compare the basal profile. TBR remains unsupported.
+never scans history inline, because those commands share the serialized therapy queue. A successful
+status command instead schedules a bounded background recovery scan. That scan anchors an empty store,
+imports later pump-originated immediate boluses, and reconciles restart/reboot or delayed history; it
+cancels and yields the BLE link whenever therapy is queued. A new bolus remains inhibited until one
+such scan has proved the durable cursor usable in the current plugin lifecycle. Active boluses read history afterward
+to confirm delivered insulin and complete PumpSync accounting. Stop signals cancellation promptly but
+continues observing status and history so partial delivery remains accounted. Same-command bolus status
+may update UI progress, but only terminal history is accounting authority. Bolus delivery does not
+acquire or compare the basal profile. TBR remains unsupported.
 
 ## Protected setup
 

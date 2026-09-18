@@ -60,6 +60,9 @@ import androidx.preference.PreferenceScreen
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * AndroidAPS pump plugin for the Ypsomed YpsoPump.
@@ -116,6 +119,14 @@ class YpsoPumpPlugin @Inject constructor(
             historyIngestion::currentCursor,
         )
     }
+    private val historyRecoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ypso-history-recovery").apply { isDaemon = true }
+    }
+    internal var dispatchHistoryRecovery: ((() -> Unit) -> Unit) = { task -> historyRecoveryExecutor.execute(task) }
+    private val historyRecoveryActive = AtomicBoolean(false)
+    private val historyRecoveryReady = AtomicBoolean(false)
+    private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
+    @Volatile private var historyRecoveryEnabled = true
 
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
@@ -142,7 +153,9 @@ class YpsoPumpPlugin @Inject constructor(
     // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
-    override fun isBusy(): Boolean = bolusController.isBusy
+    // A recovery scan keeps AAPS' connection alive. Any queued command cancels it, after which the
+    // queue reconnects if cancellation had to tear down the selector-owning BLE link.
+    override fun isBusy(): Boolean = bolusController.isBusy || historyRecoveryActive.get()
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -220,6 +233,7 @@ class YpsoPumpPlugin @Inject constructor(
         // BLE round trips (and a stalled transfer used to hold this queue for two minutes), so it must
         // never run inline here: queued boluses and Stop would be unable to overtake it. Immediate
         // boluses reconcile their authoritative terminal history in awaitBolusTerminal().
+        if (statusRead) scheduleHistoryRecovery(reason)
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime
@@ -328,6 +342,9 @@ class YpsoPumpPlugin @Inject constructor(
         if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
         val reboot = bleManager.session?.snapshot()?.reboot
             ?: return fail(R.string.ypsopump_bolus_failed, "pump reboot epoch is unavailable")
+        if (!historyRecoveryReady.get()) {
+            return fail(R.string.ypsopump_bolus_failed, "pump history recovery has not completed")
+        }
         historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let {
             return fail(R.string.ypsopump_bolus_failed, it)
         }
@@ -353,6 +370,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun stopBolusDelivering() {
+        cancelHistoryRecovery()
         if (!YpsoPumpConst.READ_ONLY_MODE) runCatching { bolusController.requestStop() }
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
     }
@@ -372,11 +390,13 @@ class YpsoPumpPlugin @Inject constructor(
             rxBus.send(EventOverviewBolusProgress(rh, delivered, progressId))
         }
         publishProgress(initiallyDelivered)
+        var cancellationSignalled = false
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            if (bolusController.cancellationRequested) {
+            if (bolusController.cancellationRequested && !cancellationSignalled) {
+                // Stop is a request, not terminal evidence. Signal it promptly once, then continue
+                // observing same-command status and authoritative type-2 history for partial delivery.
                 bolusController.requestStop()
-                Thread.sleep(250L)
-                continue
+                cancellationSignalled = true
             }
             val attempt = bolusController.currentAttempt()
             if (attempt?.requestId != requestId) return fail(R.string.ypsopump_bolus_failed, "durable bolus identity changed")
@@ -536,13 +556,19 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    private fun readHistoryBlocking(timeoutMs: Long = 120_000, stopWhen: () -> Boolean = { false }): YpsoHistorySnapshot? {
+    private fun readHistoryBlocking(
+        timeoutMs: Long = 120_000,
+        maxRows: Int = 128,
+        stopWhen: () -> Boolean = { false },
+        onAttempt: (YpsoBleManager.HistoryReadAttempt) -> Unit = {},
+    ): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
-        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor()) {
+        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows) {
             snapshot = it
             latch.countDown()
         }
+        onAttempt(attempt)
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
             if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
@@ -557,15 +583,51 @@ class YpsoPumpPlugin @Inject constructor(
         return null
     }
 
+    /**
+     * Runs history/accounting independently of AAPS' serialized command execution. The operation is
+     * finite (at most the pump's complete 3000-row ring), and immediately yields to any queued pump
+     * command. Empty stores use a one-row anchor and therefore never import pre-install insulin.
+     */
+    private fun scheduleHistoryRecovery(reason: String) {
+        if (!historyRecoveryEnabled || !bleManager.isConnected || !bleManager.canReadHistory) return
+        if (!historyRecoveryActive.compareAndSet(false, true)) return
+        dispatchHistoryRecovery {
+            try {
+                val cursor = historyIngestion.currentCursor()
+                val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
+                val snapshot = readHistoryBlocking(
+                    timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
+                    maxRows = maxRows,
+                    stopWhen = ::historyRecoveryMustYield,
+                    onAttempt = historyRecoveryAttempt::set,
+                )
+                if (snapshot != null && !historyRecoveryMustYield()) ingestHistory(snapshot)
+            } catch (exception: RuntimeException) {
+                aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
+            } finally {
+                historyRecoveryAttempt.set(null)
+                historyRecoveryActive.set(false)
+            }
+        }
+    }
+
+    private fun historyRecoveryMustYield(): Boolean =
+        !historyRecoveryEnabled || bolusController.isBusy ||
+            commandQueue.size() > 0 || commandQueue.bolusInQueue()
+
+    private fun cancelHistoryRecovery() {
+        historyRecoveryAttempt.get()?.cancel()
+    }
+
     private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
         val serial = serialNumber()
-        val evidence = pumpState.profileEvidence
+        val zone = pumpState.historyZone
         val reboot = bleManager.session?.snapshot()?.reboot
-        if (serial.isBlank() || evidence == null || reboot == null || evidence.generation != bleManager.session?.activeRecord()?.generation) {
-            aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity, zone or session evidence unavailable")
-            return YpsoHistoryIngestionResult.Blocked("pump identity, zone or session evidence unavailable")
+        if (serial.isBlank() || reboot == null || bleManager.session?.activeRecord()?.generation == null) {
+            aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity or session evidence unavailable")
+            return YpsoHistoryIngestionResult.Blocked("pump identity or session evidence unavailable")
         }
-        reconcileBolusAttempt(serial, evidence.zone, reboot, snapshot)
+        reconcileBolusAttempt(serial, zone, reboot, snapshot)
         val attempt = bolusController.currentAttempt()
         if (attempt?.inhibitsAutomatedDelivery == true && attempt.pumpFastSequence != null && snapshot.rowsNewestFirst.any {
                 it.sequence == attempt.pumpFastSequence &&
@@ -574,7 +636,7 @@ class YpsoPumpPlugin @Inject constructor(
             }) {
             return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")
         }
-        val result = historyIngestion.ingest(serial, evidence.zone, reboot.toLong(), snapshot) { event ->
+        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event ->
             if (attempt?.pumpHistoryId == event.identity.aapsPumpId) {
                 when (attempt.treatment) {
                     app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> app.aaps.core.data.model.BS.Type.NORMAL
@@ -584,9 +646,11 @@ class YpsoPumpPlugin @Inject constructor(
             } else app.aaps.core.data.model.BS.Type.NORMAL
         }
         when (result) {
-            is YpsoHistoryIngestionResult.Applied -> Unit
-            is YpsoHistoryIngestionResult.Blocked ->
+            is YpsoHistoryIngestionResult.Applied -> historyRecoveryReady.set(true)
+            is YpsoHistoryIngestionResult.Blocked -> {
+                historyRecoveryReady.set(false)
                 aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
+            }
         }
         return result
     }
@@ -659,11 +723,15 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun onStart() {
         super.onStart()
+        historyRecoveryEnabled = true
+        historyRecoveryReady.set(false)
         provisioning.refreshState()
         publishAvailabilityNotification()
     }
 
     override fun onStop() {
+        historyRecoveryEnabled = false
+        cancelHistoryRecovery()
         super.onStop()
         dismissAvailabilityNotification()
     }
@@ -799,6 +867,8 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     companion object {
+        private const val HISTORY_RECOVERY_MAX_ROWS = 3000
+        private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 
