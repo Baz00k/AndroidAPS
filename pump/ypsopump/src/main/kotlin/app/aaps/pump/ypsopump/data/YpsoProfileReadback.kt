@@ -87,6 +87,11 @@ internal class YpsoProfileReadback(
         val zone: ZoneId,
         val eventCount: Int,
         val observedAt: Instant = Instant.now(),
+        /**
+         * When the active program was last directly observed. An active-program-only check keeps
+         * [acquiredElapsedMs] so unread schedule rows cannot be made to look newly acquired.
+         */
+        val activeProgramObservedElapsedMs: Long = acquiredElapsedMs,
     ) {
         val activeSchedule: YpsoBasalSchedule
             get() = if (activeProgram == YpsoBasalSchedule.Program.A) profileA else profileB

@@ -39,6 +39,13 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
             output.fd.sync()
         }
         check(next.renameTo(file)) { "cannot atomically replace history state" }
+        fsyncParentDirectory()
+    }
+
+    /** Make the replaced directory entry itself durable, not just the temporary file contents. */
+    private fun fsyncParentDirectory() {
+        val directory = file.parentFile ?: return
+        java.nio.channels.FileChannel.open(directory.toPath(), java.nio.file.StandardOpenOption.READ).use { it.force(true) }
     }
 
     private fun encode(value: YpsoHistoryState): JSONObject = JSONObject()

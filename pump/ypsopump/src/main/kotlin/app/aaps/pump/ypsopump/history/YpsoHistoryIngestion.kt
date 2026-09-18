@@ -53,14 +53,13 @@ class YpsoHistoryIngestion(
             is YpsoHistoryReconciliation.Stable -> {
                 for (event in reconciliation.newEventsOldestFirst) {
                     when (event.semantics.kind) {
-                        // Terminal bolus rows were paired against pump-reported delivery: type 2 and
-                        // type 3 carry the delivered amount (including a cancelled partial), and type
-                        // 18 value1 carries the delivered amount observed at cancellation. All are
-                        // pump-confirmed insulin regardless of who started the bolus; origin is never
+                        // Only immediate-bolus terminal rows are ingested as an instantaneous normal
+                        // bolus. Square/combination terminal rows carry the pump-confirmed delivered
+                        // total, but mapping them as one instantaneous normal bolus would distort
+                        // their delivery-time distribution and IOB; they stay unaccounted until an
+                        // evidence-backed extended-bolus reporting contract exists. Origin is never
                         // inferred from amount, recency or receipt time.
-                        YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
-                        YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
-                        YpsoHistoryKind.COMBINED_BOLUS_COMPLETED -> {
+                        YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED -> {
                             val resolved = YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved
                                 ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
                             val amount = requireNotNull(event.semantics.amountUnits)

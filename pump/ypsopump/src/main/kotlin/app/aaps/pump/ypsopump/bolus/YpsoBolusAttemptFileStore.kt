@@ -20,6 +20,13 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             output.fd.sync()
         }
         check(temporary.renameTo(file)) { "cannot atomically replace bolus journal" }
+        fsyncParentDirectory()
+    }
+
+    /** Make the replaced directory entry itself durable, not just the temporary file contents. */
+    private fun fsyncParentDirectory() {
+        val directory = file.parentFile ?: return
+        java.nio.channels.FileChannel.open(directory.toPath(), java.nio.file.StandardOpenOption.READ).use { it.force(true) }
     }
 
     private fun encode(value: YpsoBolusAttempt): JSONObject = JSONObject()
@@ -65,6 +72,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         require(json.keys().asSequence().toSet() == rootFields(version)) { "unexpected bolus journal fields" }
         val baseline = json.getJSONObject("baseline")
         require(baseline.keys().asSequence().toSet() == BASELINE_FIELDS)
+        val cancelRequestId = json.stringOrNull("cancelRequestId")
         return YpsoBolusAttempt(
             requestId = json.getString("requestId"),
             pumpSerial = json.getString("pumpSerial"),
@@ -93,9 +101,12 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             pumpHistoryId = json.longOrNull("pumpHistoryId"),
             confirmedCentiUnits = json.intOrNull("confirmedCentiUnits"),
             deliveryTimestamp = json.longOrNull("deliveryTimestamp"),
-            cancelRequestId = json.stringOrNull("cancelRequestId"),
+            cancelRequestId = cancelRequestId,
             cancelCounter = json.longOrNull("cancelCounter"),
-            cancelBlock = if (version >= 3) json.stringOrNull("cancelBlock")?.let(YpsoBolusBlock::valueOf) else null,
+            // Version 2 only ever carried immediate attempts, so its cancellation ownership migrates
+            // to the fast block; version 3 records the block explicitly.
+            cancelBlock = if (version >= 3) json.stringOrNull("cancelBlock")?.let(YpsoBolusBlock::valueOf)
+            else if (cancelRequestId != null) YpsoBolusBlock.FAST else null,
             cancelObservedCentiUnits = if (version >= 3) json.intOrNull("cancelObservedCentiUnits") else null,
             detail = json.stringOrNull("detail"),
         )

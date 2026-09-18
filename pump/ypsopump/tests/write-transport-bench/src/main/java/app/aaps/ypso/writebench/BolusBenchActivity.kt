@@ -362,6 +362,16 @@ class BolusBenchActivity : Activity() {
     private fun dispatchCancel(owner: BluetoothGatt) {
         val attempt = attempts.current() ?: error("no durable bolus attempt")
         require(attempt.inhibitsAutomatedDelivery && attempt.cancelRequestId == null) { "attempt is not cancellable" }
+        val document = YpsoSessionDocumentParser.parse(File(filesDir, "ypso-keys.json").readBytes())
+        try {
+            require(attempt.pumpSerial == document.serial) { "attempt belongs to another pump" }
+        } finally {
+            document.sharedKey.fill(0)
+        }
+        val record = checkNotNull(session.snapshot())
+        require(attempt.sessionGeneration == checkNotNull(token).generation && attempt.baseline.pumpReboot == record.reboot) {
+            "attempt belongs to another session epoch"
+        }
         val block = requireNotNull(attempt.provenCancelBlock) { "bolus status identity was never proven" }
         val identity = requireNotNull(attempt.provenSequence(block)) { "bolus status identity was never proven" }
         val programmed = requireNotNull(attempt.programmedCentiUnits(block))
@@ -388,8 +398,11 @@ class BolusBenchActivity : Activity() {
     private fun reconcileTerminal(owner: BluetoothGatt, status: BolusCommand) {
         val attempt = attempts.current() ?: error("no durable bolus attempt")
         require(attempt.inhibitsAutomatedDelivery) { "attempt is already terminal or certainly not sent" }
-        require(attempt.pumpSerial == YpsoSessionDocumentParser.parse(File(filesDir, "ypso-keys.json").readBytes()).serial) {
-            "attempt belongs to another pump"
+        val document = YpsoSessionDocumentParser.parse(File(filesDir, "ypso-keys.json").readBytes())
+        try {
+            require(attempt.pumpSerial == document.serial) { "attempt belongs to another pump" }
+        } finally {
+            document.sharedKey.fill(0)
         }
         val record = checkNotNull(session.snapshot())
         require(attempt.sessionGeneration == checkNotNull(token).generation && attempt.baseline.pumpReboot == record.reboot) {
@@ -486,14 +499,14 @@ class BolusBenchActivity : Activity() {
                         val programmed = requireNotNull(attempt.programmedCentiUnits(block))
                         val rowAmount = Math.round(checkNotNull(event.semantics.amountUnits) * 100.0).toInt()
                         val aborted = event.semantics.kind in abortedKinds
-                        // Target-paired semantics: a type-2 immediate row and a type-3 delayed row carry
-                        // the delivered amount, including a cancelled square bolus (observed 0.08 U while
-                        // programmed was 0.5 U). Aborted rows stay unqualified; combination rows stay
-                        // unqualified while a cancellation could have stopped them.
+                        // Target-paired semantics: completed rows of every bolus shape carry the
+                        // delivered amount, including a cancelled square or combination (observed 8
+                        // centi-units of 50 and 40 of 100). Cancellation observations during the run
+                        // are progress/lower-bound evidence only; abort rows remain unqualified.
                         val rowAmountIsDelivered = when (event.semantics.kind) {
                             YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
-                            YpsoHistoryKind.DELAYED_BOLUS_COMPLETED -> true
-                            YpsoHistoryKind.COMBINED_BOLUS_COMPLETED -> attempt.cancelRequestId == null
+                            YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
+                            YpsoHistoryKind.COMBINED_BOLUS_COMPLETED -> true
                             else -> false
                         }
                         val delivered = if (rowAmountIsDelivered) {
@@ -565,13 +578,24 @@ class BolusBenchActivity : Activity() {
                     observeBolusStatus(owner, writeId, cancel, operationOwner)
                 }
                 is YpsoWriteOutcome.NotSent -> {
-                    if (cancel && attempt?.outcome == YpsoBolusOutcome.CANCEL_PENDING) attempts.cancelNotSent(attempt.requestId, outcome.failure.detail)
+                    if (cancel && attempt?.outcome == YpsoBolusOutcome.CANCEL_PENDING) {
+                        attempts.cancelNotSent(attempt.requestId, outcome.failure.detail)
+                    } else if (!cancel && attempt?.requestId == writeId) {
+                        attempts.provenNotApplied(writeId, rejected = false, detail = outcome.failure.detail)
+                    }
                     finishWith("OUTCOME:NotSent;${outcome.failure.detail}")
                 }
-                is YpsoWriteOutcome.ProvenRejected -> finishWith(
-                    "OUTCOME:ProvenRejected;layer=${outcome.failure.layer};code=${outcome.failure.code};" +
-                        "frame=${outcome.failure.frame};detail=${outcome.failure.detail}",
-                )
+                is YpsoWriteOutcome.ProvenRejected -> {
+                    if (cancel && attempt?.outcome == YpsoBolusOutcome.CANCEL_PENDING) {
+                        attempts.cancelNotSent(attempt.requestId, "cancel was proven rejected: ${outcome.failure.detail}")
+                    } else if (!cancel && attempt?.requestId == writeId) {
+                        attempts.provenNotApplied(writeId, rejected = true, detail = outcome.failure.detail)
+                    }
+                    finishWith(
+                        "OUTCOME:ProvenRejected;layer=${outcome.failure.layer};code=${outcome.failure.code};" +
+                            "frame=${outcome.failure.frame};detail=${outcome.failure.detail}",
+                    )
+                }
                 is YpsoWriteOutcome.PossiblyApplied -> finishWith(
                     "OUTCOME:PossiblyApplied;layer=${outcome.failure.layer};code=${outcome.failure.code};" +
                         "frame=${outcome.failure.frame};detail=${outcome.failure.detail};reconciliation required",
