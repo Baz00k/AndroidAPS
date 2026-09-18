@@ -62,7 +62,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..15)
+        check(version in 1..6 || version in 8..16)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -214,6 +214,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                     } else {
                         null
                     },
+                counterRecoveryExponent = if (version >= 16) r.getInt("counterRecoveryExponent") else 0,
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -434,6 +435,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("benchDuplicateCounterAttempted", r.benchDuplicateCounterAttempted)
                 .put("benchAmbiguityConvergenceAttempted", r.benchAmbiguityConvergenceAttempted)
                 .put("benchDuplicateCounterPredecessor", r.benchDuplicateCounterPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
+                .put("counterRecoveryExponent", r.counterRecoveryExponent)
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
                     JSONObject()
                         .put("operationId", evidence.operationId)
@@ -462,7 +464,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 15).put("records", records)
+        val body = JSONObject().put("version", 16).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)

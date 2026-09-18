@@ -186,7 +186,18 @@ class PumpSyncImplementation @Inject constructor(
     }
 
     override fun syncBolusWithPumpId(timestamp: Long, amount: Double, type: BS.Type?, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean {
-        if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return false
+        return syncBolusWithPumpIdDetailed(timestamp, amount, type, pumpId, pumpType, pumpSerial) == PumpSync.BolusSyncResult.INSERTED
+    }
+
+    override fun syncBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
+        if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return PumpSync.BolusSyncResult.REJECTED
         val bolus = BS(
             timestamp = timestamp,
             amount = amount,
@@ -198,7 +209,13 @@ class PumpSyncImplementation @Inject constructor(
             )
         )
         return persistenceLayer.syncPumpBolus(bolus, type)
-            .map { result -> result.inserted.isNotEmpty() }
+            .map { result ->
+                when {
+                    result.inserted.isNotEmpty() -> PumpSync.BolusSyncResult.INSERTED
+                    result.updated.isNotEmpty() -> PumpSync.BolusSyncResult.UPDATED
+                    else -> PumpSync.BolusSyncResult.UNCHANGED
+                }
+            }
             .blockingGet()
     }
 

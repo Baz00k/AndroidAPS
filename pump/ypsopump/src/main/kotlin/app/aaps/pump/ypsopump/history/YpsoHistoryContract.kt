@@ -7,7 +7,10 @@ package app.aaps.pump.ypsopump.history
  * The publications may share lineage (one cites a common Python reference), so they corroborate
  * rather than independently confirm; target rows remain the empirical anchor. Value layouts are
  * claimed only where the target paired them, plus the centi-unit bolus convention shared by the
- * paired rows. Unknown numbers and unclaimed fields stay fail-closed.
+ * paired rows. Bolus completion rows (2, 3, 18) were paired against pump-reported delivery and carry
+ * the delivered amount, including partial amounts after a bench cancellation. Abort rows (29-31)
+ * remain unpaired and their amount fields are not accounting evidence. Unknown numbers and unclaimed
+ * fields stay fail-closed.
  */
 enum class YpsoHistoryKind {
     // Bolus family
@@ -93,10 +96,14 @@ object YpsoHistoryClassifier {
     fun classify(entry: YpsoHistoryEntry): YpsoHistorySemantics =
         when (entry.eventType) {
             1 -> bolus(YpsoHistoryKind.DELAYED_BOLUS_RUNNING, entry)
+            // Paired: a completed 10.0-U standard bolus and a same-link cancelled 10.0-U standard
+            // bolus both reported the delivered amount (1000 and 91 centi-units).
             2 -> YpsoHistorySemantics(
                 YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
                 amountUnits = entry.value1 / 100.0,
             )
+            // Paired: a cancelled 0.5-U/15-min square bolus reported the delivered amount 8
+            // centi-units while the programmed total remained 50.
             3 -> YpsoHistorySemantics(
                 YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
                 amountUnits = entry.value1 / 100.0,
@@ -126,6 +133,10 @@ object YpsoHistoryClassifier {
             }
             16 -> YpsoHistorySemantics(YpsoHistoryKind.REWIND_FINISHED)
             17 -> bolus(YpsoHistoryKind.COMBINED_BOLUS_RUNNING, entry)
+            // Paired: a completed 1.0-U combination (0.4 immediate + 0.6/15 min) reported
+            // value1 = 100 (delivered total), value2 = 40 (immediate part), value3 = 15 (minutes);
+            // a cancelled run reported value1 = 40 (delivered at abort). Value1 is the delivered
+            // total, matching the reference immediate = value2 layout.
             18 -> bolus(YpsoHistoryKind.COMBINED_BOLUS_COMPLETED, entry)
             19 -> bolus(YpsoHistoryKind.IMMEDIATE_BOLUS_RUNNING, entry)
             20 -> YpsoHistorySemantics(YpsoHistoryKind.DELAYED_BOLUS_BACKUP)

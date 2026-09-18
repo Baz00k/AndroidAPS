@@ -215,6 +215,18 @@ interface PumpSync {
      **/
     fun syncBolusWithPumpId(timestamp: Long, amount: Double, type: BS.Type?, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean
 
+    /** Detailed persistence result for drivers that must distinguish an idempotent duplicate from rejection. */
+    enum class BolusSyncResult { INSERTED, UPDATED, UNCHANGED, REJECTED }
+
+    fun syncBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): BolusSyncResult
+
     /**
      * Synchronization of carbs
      *

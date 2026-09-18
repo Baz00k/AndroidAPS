@@ -209,3 +209,11 @@ record-invariant rejection. It does not emulate secure hardware persistence.
 `SessionCryptoTest` executes real native AEAD including independent synthetic vectors;
 `CapturedStatusProtocolTest` retains independently transformed target fixtures. BLE lifecycle
 tests use mocked Android transport and codec metadata with the real session owner.
+# Current recovery rule
+
+The pump accepts **any higher write counter**, not only a contiguous successor. Read
+[write-counter recovery](counter-recovery.md) for the runtime contract. Historical one-shot
+convergence and counter-consumption gates below describe qualification experiments and are
+superseded for normal runtime recovery. Preserve unknown command effects independently of the
+allocated counter high-water mark; do not strand profile/history reads or cancellation waiting
+to discover the exact last consumed counter.

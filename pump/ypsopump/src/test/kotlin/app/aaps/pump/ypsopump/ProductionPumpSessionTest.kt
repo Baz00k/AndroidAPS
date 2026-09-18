@@ -242,6 +242,66 @@ class ProductionPumpSessionTest {
     }
 
     @Test
+    fun `interrupted write recovery retains high water and unknown effect across commit crashes`() {
+        for (phase in listOf(PumpSession.Phase.RESERVED, PumpSession.Phase.POSSIBLY_SENT, PumpSession.Phase.ACKED)) {
+            for (fault in 0..2) {
+                val store = MemoryStore()
+                initialized(store)
+                store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+                val owner = PumpSession(store)
+                val token = owner.open(pump, key)
+                val transaction = owner.begin(token)
+                owner.reserve(token, transaction, PumpSession.WriteIntent("interrupted", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)))
+                if (phase != PumpSession.Phase.RESERVED) owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+                if (phase == PumpSession.Phase.ACKED) owner.advance(token, transaction, PumpSession.Phase.ACKED)
+                assertThrows(IllegalStateException::class.java) { owner.recoverInterruptedWrite(token) }
+                owner.finish(token, transaction)
+                store.fault = fault
+                if (fault == 0) owner.recoverInterruptedWrite(token)
+                else assertThrows(SecurityException::class.java) { owner.recoverInterruptedWrite(token) }
+                store.fault = 0
+                val restarted = PumpSession(store)
+                val next = restarted.open(pump, key)
+                restarted.recoverInterruptedWrite(next)
+                val retained = restarted.snapshot()!!
+                assertEquals(4281, retained.write)
+                assertNull(retained.reservation)
+                assertEquals("interrupted", retained.writeEvidence.single().operationId)
+                assertNull(retained.writeEvidence.single().resolution)
+                assertEquals(4282, restarted.reserve(next, restarted.begin(next)).counter)
+            }
+        }
+    }
+
+    @Test
+    fun `confirmed counter errors exponentially increase candidates and acceptance resets recovery`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(4) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(token, transaction, PumpSession.WriteIntent("counter-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        assertEquals(listOf(4281L, 4282L, 4284L, 4288L), candidates)
+        assertEquals(4, owner.snapshot()!!.counterRecoveryExponent)
+        val acceptedTransaction = owner.begin(token)
+        val accepted = owner.reserve(token, acceptedTransaction, PumpSession.WriteIntent("accepted", "characteristic", "SETTINGS_SELECTOR", "ef".repeat(32)))
+        assertEquals(4296L, accepted.counter)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.ACKED)
+        owner.finish(token, acceptedTransaction)
+        owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "01".repeat(32), "semantic read-back accepted")
+        assertEquals(0, owner.snapshot()!!.counterRecoveryExponent)
+    }
+
+    @Test
     fun `proven local not sent restores counter and permits a new reservation`() {
         val store = MemoryStore()
         initialized(store)

@@ -21,6 +21,8 @@ import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoProfileReadback
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
+import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -141,6 +143,8 @@ class YpsoBleManagerTest {
         pumpState.masterVersion = "V05.00.52"
         pumpState.supervisorVersion = "V05.00.52"
         pumpState.controlServiceVersion = "1.3"
+        manager.sdkInt = 33
+        manager.scheduleProfileContinuation = { it.run() }
         val results = mutableListOf<Boolean>()
 
         manager.readProfile(results::add)
@@ -168,8 +172,8 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `explicit acquisition does not use history count as a configuration revision`() {
-        acquireProfile(finalCount = 3002)
+    fun `explicit acquisition rejects a history change during profile acquisition`() {
+        acquireProfile(finalCount = 3002, expectedSuccess = false)
     }
 
     @Test
@@ -183,6 +187,73 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `stable history includes the head once and continues with the next logical index`() {
+        val fixture = connectedGatt(eventCountPresent = true)
+        val record = manager.session!!.snapshot()!!
+        val store = object : PumpSession.Store {
+            var state = PumpSession.State(
+                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
+                activeGeneration = record.generation,
+            )
+            override fun load() = state
+            override fun commit(state: PumpSession.State) { this.state = state }
+        }
+        manager.session = PumpSession(store)
+        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
+        pumpState.masterVersion = "V05.00.52"
+        pumpState.supervisorVersion = "V05.00.52"
+        pumpState.controlServiceVersion = "1.3"
+        manager.sdkInt = 33
+        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
+        val service = fixture.gatt.services.first()
+        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
+            val value: BluetoothGattCharacteristic = mock()
+            whenever(value.uuid).thenReturn(uuid)
+            whenever(value.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
+            whenever(service.getCharacteristic(uuid)).thenReturn(value)
+            whenever(fixture.gatt.readCharacteristic(value)).thenReturn(true)
+            return value
+        }
+        val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
+        val eventValue = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
+        var readCounter = 0L
+        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
+        }
+        fun row(index: Int, sequence: Long): ByteArray {
+            val payload = java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .putInt(100 + index).put(2).putShort(100).putShort(0).putShort(0).putInt(sequence.toInt()).putShort(index.toShort())
+                .array()
+            return YpsoCrc.appendCrc(payload)
+        }
+        fun selected(index: Int, sequence: Long) {
+            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
+            respond(selector, YpsoGlb.encode(index))
+            respond(eventValue, row(index, sequence))
+        }
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+
+        manager.readStableHistory(null, maxRows = 2, onResult = results::add)
+        respond(fixture.eventCount!!, YpsoGlb.encode(2))
+        respond(selector, YpsoGlb.encode(9))
+        selected(0, 101)
+        respond(selector, YpsoGlb.encode(0))
+        selected(1, 100)
+        respond(fixture.eventCount, YpsoGlb.encode(2))
+        respond(selector, YpsoGlb.encode(1))
+        selected(0, 101)
+
+        val errors = argumentCaptor<String>()
+        verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
+        val calls = org.mockito.Mockito.mockingDetails(fixture.gatt).invocations.joinToString { it.method.name + ":" + it.arguments.firstOrNull() }
+        val snapshot = requireNotNull(results.singleOrNull()) { errors.allValues.joinToString() + " calls=" + calls }
+        assertEquals(listOf(0, 1), snapshot.rowsNewestFirst.map { it.index })
+        assertEquals(listOf(101L, 100L), snapshot.rowsNewestFirst.map { it.sequence })
+    }
+
+    @Test
     fun `configuration refresh yields after reconciled selector and retains previous complete schedules`() {
         acquireProfile(yieldAfterFirstRow = true)
     }
@@ -193,7 +264,7 @@ class YpsoBleManagerTest {
     }
 
     private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
-                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false) {
+                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false, expectedSuccess: Boolean = true) {
         val fixture = connectedGatt(eventCountPresent = true)
         val record = manager.session!!.snapshot()!!
         val profileStore = object : PumpSession.Store {
@@ -244,6 +315,7 @@ class YpsoBleManagerTest {
         var yielding = false
         val attempt = manager.readProfileConfiguration(activeOnly, { yielding }, results::add)
         manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
+        respond(fixture.eventCount!!, YpsoGlb.encode(3000))
         respond(selector, YpsoGlb.encode(61))
         if (malformedIdentity) {
             repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
@@ -256,15 +328,15 @@ class YpsoBleManagerTest {
         }
         selected(1, if (activeOnly) 10 else 3)
         if (activeOnly) {
+            respond(fixture.eventCount, YpsoGlb.encode(3000))
             assertEquals(listOf(true), results)
             assertEquals("B", pumpState.lastReadProgram)
             assertTrue(pumpState.profileEvidence!!.profileA === previous!!.profileA)
             assertTrue(pumpState.profileEvidence!!.profileB === previous.profileB)
-            assertEquals(previous.observedAt, pumpState.profileEvidence!!.observedAt)
+            assertTrue(pumpState.profileEvidence!!.observedAt >= previous.observedAt)
             assertEquals(4281, manager.writeCounter)
             return
         }
-        respond(fixture.eventCount!!, YpsoGlb.encode(3000))
         for (id in 14..61) {
             if (yieldAfterFirstRow && id == 14) yielding = true
             val continuations = mutableListOf<Runnable>()
@@ -300,8 +372,8 @@ class YpsoBleManagerTest {
         respond(fixture.eventCount, YpsoGlb.encode(finalCount))
         val errors = argumentCaptor<String>()
         verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
-        assertEquals(listOf(true), results, errors.allValues.joinToString())
-        assertTrue(pumpState.hasFreshProfileEvidence)
+        assertEquals(listOf(expectedSuccess), results, errors.allValues.joinToString())
+        assertEquals(expectedSuccess, pumpState.hasFreshProfileEvidence)
         assertEquals(4330, manager.writeCounter)
         assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
     }

@@ -351,6 +351,62 @@ lookup was added. Normal status resumed on the same pump: 166.52 U, 3 battery ba
 0.50 U/h, mode 10. This observation establishes the mapping; it is not final-artifact
 acceptance of the subsequent lookup gate.
 
+### Immediate, square and combination bolus write qualification
+
+On 2026-09-18, the disconnected-pump bench qualified standard, square (extended) and combination
+boluses on target firmware V05.00.52. The control-notification CCCD was enabled before every write.
+Two earlier commands that encoded the third u32 field as another copy of the standard amount were
+rejected on the final frame with `130` (`APPERR_VALUE_INVALID`) and were subsequently proven to have
+zero pump effect by unchanged idle status and stable history.
+
+Accepted 13-byte little-endian plaintexts:
+
+```text
+standard 0.1 U                                 0a000000 00000000 00000000 01
+square 0.5 U over 15 min                       32000000 0f000000 00000000 02
+combination 1.0 U = 0.4 U + 0.6 U/15 min       64000000 0f000000 28000000 02
+cancel, fast block                             all-zero with byte 12 = 01
+cancel, slow block                             all-zero with byte 12 = 02
+```
+
+The fields are total centi-units, duration minutes, combination-immediate centi-units and type
+(1 standard, 2 extended/combination). A standard bolus has duration zero and combination-immediate
+zero. Invalid shapes are rejected by the bench before encryption.
+
+Observed status and history semantics:
+
+| command | status while delivering | terminal history |
+|---|---|---|
+| standard | fast status 1, fast total = requested, fast sequence assigned, fast injected reported | type 2 amount = delivered amount |
+| square | slow status 1, slow total = requested whole amount, slow sequence assigned, fast block idle | type 3 amount = delivered amount, value2 = programmed duration |
+| combination | slow status 1 or 3, slow total = whole combination total, slow injected includes the immediate part; combo sub-block at offsets 26/30 = immediate injected/total (0.07/0.4 observed); fast block idle | type 18 value1 = delivered total (100 for a completed 1.0 U run), value2 = immediate part (40), value3 = duration (15) |
+
+Terminal status clears sequence and amount fields to zero; a history row is the delivered-amount
+authority only after the block identity was proven while delivering. History never establishes
+ownership retroactively.
+
+Cancellation targets the persisted proven identity that is still delivering: the slow sequence for a
+square or combination bolus, the fast sequence for a standard bolus. This pump delivers standard
+boluses at roughly 1 U/s (operator-confirmed), so a second BLE connection cannot catch a standard
+bolus before it completes. The bench therefore offers an explicit same-link mode that proves the
+identity, persists cancellation ownership and dispatches the cancel on the same connection. Square
+and combination blocks run for minutes and can be cancelled across a new connection.
+
+Qualification runs (disconnected pump, no cartridge):
+
+- square 0.5 U over 15 min: dispatch counter 7094, slow sequence 47998; cancel counter 7095 delivered
+  0.08 U; terminal type 3, sequence 47998, durable outcome `CANCELLED_PARTIAL`.
+- combination 0.4 U + 0.6 U over 15 min: dispatch counter 7201, slow sequence 47999; cancel counter
+  7202 delivered 0.40 U; terminal type 18, sequence 47999, durable outcome `CANCELLED_PARTIAL`.
+- combination 0.4 U + 0.6 U over 15 min completed: dispatch counter 7824, slow sequence 48004;
+  terminal type 18, sequence 48004, row values 100/40/15, durable outcome `COMPLETED` (1.0 U).
+- standard 3.0 U and 6.0 U: completed with type-2 amounts 3.0 and 6.0 U (sequences 48000, 48001).
+- standard 10.0 U same-link cancel: dispatch counter 7719, fast sequence 48003, cancel counter 7720;
+  terminal type 2, sequence 48003 delivered 0.91 U; durable outcome `CANCELLED_PARTIAL`.
+
+Pump-local timestamps in terminal rows ran about 15 s behind the phone clock across runs, so
+instant conversion still depends on the explicit pump-local time resolution.
+
 Remaining evidence gaps are exact physical range limits, unobserved alarm/terminal-bolus
 enums, natural TBR expiry, and zero-total framing semantics (zero-total is rejected).
 This pump has Stop, not Pause. Stop, active boluses and no/empty-cartridge cases have the
@@ -455,3 +511,10 @@ and the reviewed handoff plus retired legacy record remained present. This recor
 reconciliation only: the first candidate lacked explicit successful profile-publication logging,
 so final coherent publication is not claimed from the counter progression alone. The command queue
 disconnected normally after the run. All four protected bench hashes matched their pre-run values.
+# Counter interpretation correction
+
+YpsoPump accepts any strictly higher write counter; gaps are permitted. Historical observations
+below retain their original command outcomes, but uncertainty about consumption is **not** a
+requirement to stop future writes. The runtime contract is [write-counter recovery](counter-recovery.md).
+In particular, an unresolved 4281 may be retired as unknown while retaining 4281 as the local
+high-water mark and using 4282 next. No reset or fabricated acceptance evidence is needed.

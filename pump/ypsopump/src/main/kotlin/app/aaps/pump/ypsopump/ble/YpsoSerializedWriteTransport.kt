@@ -14,7 +14,7 @@ internal data class YpsoWriteFailure(
     val frame: Int? = null,
     val detail: String,
 ) {
-    enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, DEADLINE, RECONCILIATION }
+    enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, PUMP_COUNTER, DEADLINE, RECONCILIATION }
 }
 
 /** Transport and reconciliation states. Only [Verified] closes pump-side uncertainty. */
@@ -158,7 +158,11 @@ internal class YpsoSerializedWriteTransport(
 
     fun start(request: Request): Boolean {
         require(request.writeId.isNotBlank() && request.owner.connectionId.isNotBlank() && request.owner.generation.isNotBlank())
-        require(request.category == YpsoRemoteWrite.HISTORY_SELECTOR || request.category == YpsoRemoteWrite.SETTINGS_SELECTOR)
+        require(
+            request.category == YpsoRemoteWrite.HISTORY_SELECTOR ||
+                request.category == YpsoRemoteWrite.SETTINGS_SELECTOR ||
+                request.category == YpsoRemoteWrite.THERAPY_COMMAND,
+        )
         require(request.counter > 0 && request.frames.isNotEmpty() && request.frames.all { it.isNotEmpty() })
         require(request.deadlineMs > 0)
         val deadline = Runnable { onDeadline(request.writeId) }
@@ -282,9 +286,9 @@ internal class YpsoSerializedWriteTransport(
                         outcome =
                             possiblyApplied(
                                 current,
-                                YpsoWriteFailure.Layer.GATT_CALLBACK,
+                                if (status == 139 && current.frame + 1 == request.frames.size) YpsoWriteFailure.Layer.PUMP_COUNTER else YpsoWriteFailure.Layer.GATT_CALLBACK,
                                 status,
-                                "numeric callback status has no measured semantic classification",
+                                if (status == 139 && current.frame + 1 == request.frames.size) "pump returned APPERR_COUNTER_ERROR" else "numeric callback status has no measured semantic classification",
                             )
                         holdForReconciliationLocked(current, uncertaintyReported = true)
                     } else {

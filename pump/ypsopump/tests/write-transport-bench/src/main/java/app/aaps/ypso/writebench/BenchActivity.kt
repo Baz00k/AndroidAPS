@@ -310,6 +310,7 @@ class BenchActivity : Activity() {
                 RunKind.READ_HISTORY_COUNTS,
                 // Read-only; the unresolved reservation stays visible in the capture's session snapshot.
                 RunKind.CAPTURE_CURRENT_HISTORY,
+                RunKind.PROFILE_ACQUISITION,
                 RunKind.AMBIGUITY_CONVERGENCE,
                 RunKind.SETTINGS_COUNTER_RECOVERY,
                 RunKind.SETTINGS_COUNTER_JUMP,
@@ -1459,6 +1460,9 @@ class BenchActivity : Activity() {
     }
 
     private fun startProfileAcquisition(owner: BluetoothGatt) {
+        // This is a normal read acquisition, not a historical counter experiment. The previous
+        // run has closed its transport; retain its counter and outcome, then acquire afresh.
+        session.recoverInterruptedWrite(checkNotNull(token))
         val settingId = findUnique(owner, YpsoWritePolicy.SETTING_ID_UUID)
         val settingValue = findUnique(owner, SETTING_VALUE_UUID)
         if (settingId == null || settingValue == null || settingId.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0) {
