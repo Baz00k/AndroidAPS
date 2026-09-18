@@ -121,7 +121,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(15, org.json.JSONObject(body).getInt("version"))
+        assertEquals(16, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test

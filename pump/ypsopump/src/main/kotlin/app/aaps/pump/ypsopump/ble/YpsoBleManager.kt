@@ -24,6 +24,9 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoFirmwareVersion
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoProfileReadback
+import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
+import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
+import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
 import java.time.Duration
@@ -48,6 +51,7 @@ class YpsoBleManager @Inject constructor(
     private val pumpState: YpsoPumpState,
     private val provisioning: YpsoProvisioningService
 ) {
+    internal fun noBackupDirectory(): java.io.File = context.noBackupFilesDir
 
     init {
         provisioning.quiesceConnection = { disconnect() }
@@ -60,9 +64,10 @@ class YpsoBleManager @Inject constructor(
     val canReadProfile: Boolean
         get() = session?.snapshot()?.let {
             it.reboot != null && it.read != null && it.write != null &&
-                it.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED &&
-                (it.reservation == null || it.reservation.phase == PumpSession.Phase.VERIFIED)
+                it.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED
         } == true
+    val canReadHistory: Boolean
+        get() = canReadProfile && !profileReadActive.get() && !historyReadActive.get()
     @Volatile internal var session: PumpSession? = null
     @Volatile private var sessionToken: PumpSession.Token? = null
     @Volatile private var configuredKey: ByteArray? = null
@@ -72,6 +77,7 @@ class YpsoBleManager @Inject constructor(
     private var bondedIdentitySerial: String? = null
     private val readCounter: Long get() = session?.snapshot()?.read ?: 0L
     private val profileReadActive = AtomicBoolean(false)
+    private val historyReadActive = AtomicBoolean(false)
     @Volatile private var controlNotificationsEnabled = false
 
     companion object {
@@ -89,6 +95,7 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_SYSTEM_TIME: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbedd3b7bc5")
         // History (events) — used for the zero-therapy write-transport validation.
         private val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
+        private val CHAR_EVENT_VALUE: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
         private val CHAR_CONTROL_VERSION: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
         // Provisional control-notification UUID. Non-auth write transport is unsupported in this artifact.
@@ -403,6 +410,18 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    class HistoryReadAttempt internal constructor() {
+        private val active = AtomicBoolean(true)
+        internal val isActive: Boolean get() = active.get()
+        internal var onCancel: () -> Unit = {}
+        internal fun tryComplete(): Boolean = active.compareAndSet(true, false)
+        fun cancel(): Boolean {
+            if (!active.compareAndSet(true, false)) return false
+            onCancel()
+            return true
+        }
+    }
+
     private data class ReadOwnership(val gatt: BluetoothGatt?, val generation: String?, val attemptId: String?)
 
     @SuppressLint("MissingPermission")
@@ -410,11 +429,13 @@ class YpsoBleManager @Inject constructor(
         val (gatt, failed) = synchronized(opLock) {
             val ownedGatt = bluetoothGatt
             ownedGatt?.let { profileSelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
+            ownedGatt?.let { historySelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             bluetoothGatt = null
             session?.quiesce()
             sessionToken = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
             profileReadActive.set(false)
+            historyReadActive.set(false)
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
@@ -464,6 +485,9 @@ class YpsoBleManager @Inject constructor(
     private var profileWriteTransportInstance: YpsoSerializedWriteTransport? = null
     private var profileSelectorCoordinatorInstance: YpsoProfileSelectorCoordinator? = null
     private var profileSelectorSession: PumpSession? = null
+    private var historyWriteTransportInstance: YpsoSerializedWriteTransport? = null
+    private var historySelectorCoordinatorInstance: YpsoHistorySelectorCoordinator? = null
+    private var historySelectorSession: PumpSession? = null
     private val profileWriteTransport: YpsoSerializedWriteTransport
         get() = profileWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
             profileWriteTransportInstance = it
@@ -476,6 +500,20 @@ class YpsoBleManager @Inject constructor(
                 profileSelectorCoordinatorInstance = YpsoProfileSelectorCoordinator(owner, sessionCrypto, profileWriteTransport)
             }
             return checkNotNull(profileSelectorCoordinatorInstance)
+        }
+
+    private val historyWriteTransport: YpsoSerializedWriteTransport
+        get() = historyWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
+            historyWriteTransportInstance = it
+        }
+    private val historySelectorCoordinator: YpsoHistorySelectorCoordinator
+        get() {
+            val owner = checkNotNull(session)
+            if (historySelectorCoordinatorInstance == null || historySelectorSession !== owner) {
+                historySelectorSession = owner
+                historySelectorCoordinatorInstance = YpsoHistorySelectorCoordinator(owner, sessionCrypto, historyWriteTransport)
+            }
+            return checkNotNull(historySelectorCoordinatorInstance)
         }
 
     private fun armHandshakeTimeout(gatt: BluetoothGatt, phase: ConnectionState) {
@@ -570,6 +608,7 @@ class YpsoBleManager @Inject constructor(
     // Plaintext IDs are allowlisted by the coordinator before encryption/reservation. The final
     // GATT boundary admits only the exact frame during that coordinator's synchronous dispatch.
     private var authorizedProfileFrame: ByteArray? = null
+    private var authorizedHistoryFrame: ByteArray? = null
 
     private fun writeProfileFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
         if (bluetoothGatt !== gatt || current != null || !profileReadActive.get()) return@synchronized false
@@ -579,6 +618,17 @@ class YpsoBleManager @Inject constructor(
             writeCharacteristic(gatt, characteristic, value, YpsoRemoteWrite.SETTINGS_SELECTOR)
         } finally {
             authorizedProfileFrame = null
+        }
+    }
+
+    private fun writeHistoryFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
+        if (bluetoothGatt !== gatt || current != null || !historyReadActive.get()) return@synchronized false
+        val characteristic = findChar(gatt, YpsoWritePolicy.EVENT_INDEX_UUID) ?: return@synchronized false
+        authorizedHistoryFrame = value
+        try {
+            writeCharacteristic(gatt, characteristic, value, YpsoRemoteWrite.HISTORY_SELECTOR)
+        } finally {
+            authorizedHistoryFrame = null
         }
     }
 
@@ -923,7 +973,8 @@ class YpsoBleManager @Inject constructor(
                 ?: return@readEncrypted failProfile("$label is not exact GLB")
             done(value, body)
         }
-        fun finish(date: ByteArray, time: ByteArray, activeAfter: ByteArray) {
+        fun finish(date: ByteArray, time: ByteArray, activeAfter: ByteArray, eventCountAfter: Int) {
+            if (eventCountAfter != eventCountBefore) return failProfile("event count changed during profile acquisition")
             val local = YpsoProfileReadback.decodeClock(date, time) ?: return failProfile("pump clock is malformed")
             val evidence = readback?.finish(
                 token.generation,
@@ -954,7 +1005,10 @@ class YpsoBleManager @Inject constructor(
         }
         fun readClock(activeAfter: ByteArray) = readEncrypted(CHAR_SYSTEM_DATE) { date ->
             readEncrypted(CHAR_SYSTEM_TIME) { time ->
-                finish(date, time, activeAfter)
+                readExactGlb(CHAR_EVENT_COUNT, "event count after profile acquisition") { eventCountAfter, _ ->
+                    if (eventCountAfter < 0) return@readExactGlb failProfile("event count after profile acquisition is negative")
+                    finish(date, time, activeAfter, eventCountAfter)
+                }
             }
         }
         fun select(settingId: Int, done: (ByteArray) -> Unit) {
@@ -1007,38 +1061,45 @@ class YpsoBleManager @Inject constructor(
         enableProfileSetup(gatt) { setup ->
             if (!setup) return@enableProfileSetup failProfile("required control notification setup failed")
             scheduleProfileContinuation(Runnable {
-                readExactGlb(YpsoWritePolicy.SETTING_ID_UUID, "initial selector identity") { initialSettingId, _ ->
-                    selectedSettingId = initialSettingId
-                    fun readActiveBefore() = select(1) { activeBefore ->
-                        val program = YpsoBasalSchedule.Program.decode(activeBefore) ?: return@select failProfile("active program is unsupported")
-                        if (activeOnly) {
-                            val previous = pumpState.profileEvidence ?: return@select failProfile("read complete profiles first")
-                            if (previous.generation != token.generation) return@select failProfile("configuration belongs to another pump session")
-                            val updated = YpsoProfileReadback.VerifiedReadback(
-                                previous.generation, reboot, connectionId, program, previous.profileA, previous.profileB,
-                                previous.acquiredElapsedMs, previous.zone, 0, previous.observedAt,
-                            )
-                            synchronized(opLock) {
-                                if (!owned()) return@select failProfile("profile ownership changed before active-program publication")
-                                if (!attempt.tryComplete()) return@select
-                                val saved = runCatching { persistProfile(updated) }.isSuccess
-                                if (saved) pumpState.publishProfileEvidence(updated)
-                                profileReadActive.set(false)
-                                if (!saved) { onDone(false); return@select }
+                readExactGlb(CHAR_EVENT_COUNT, "event count before profile acquisition") { initialEventCount, _ ->
+                    if (initialEventCount < 0) return@readExactGlb failProfile("event count before profile acquisition is negative")
+                    eventCountBefore = initialEventCount
+                    readExactGlb(YpsoWritePolicy.SETTING_ID_UUID, "initial selector identity") { initialSettingId, _ ->
+                        selectedSettingId = initialSettingId
+                        fun readActiveBefore() = select(1) { activeBefore ->
+                            val program = YpsoBasalSchedule.Program.decode(activeBefore) ?: return@select failProfile("active program is unsupported")
+                            if (activeOnly) {
+                                readExactGlb(CHAR_EVENT_COUNT, "event count after active-program check") { eventCountAfter, _ ->
+                                    if (eventCountAfter != eventCountBefore) return@readExactGlb failProfile("event count changed during active-program check")
+                                    val previous = pumpState.profileEvidence ?: return@readExactGlb failProfile("read complete profiles first")
+                                    if (previous.generation != token.generation) return@readExactGlb failProfile("configuration belongs to another pump session")
+                                    if (previous.zone != ZoneId.systemDefault()) return@readExactGlb failProfile("configuration belongs to another time zone")
+                                    val updated = YpsoProfileReadback.VerifiedReadback(
+                                        previous.generation, reboot, connectionId, program, previous.profileA, previous.profileB,
+                                        android.os.SystemClock.elapsedRealtime(), previous.zone, eventCountAfter, Instant.now(),
+                                    )
+                                    synchronized(opLock) {
+                                        if (!owned()) return@readExactGlb failProfile("profile ownership changed before active-program publication")
+                                        if (!attempt.tryComplete()) return@readExactGlb
+                                        val saved = runCatching { persistProfile(updated) }.isSuccess
+                                        if (saved) pumpState.publishProfileEvidence(updated)
+                                        profileReadActive.set(false)
+                                        if (!saved) { onDone(false); return@readExactGlb }
+                                    }
+                                    onDone(true)
+                                }
+                                return@select
                             }
-                            onDone(true)
-                            return@select
+                            readback = YpsoProfileReadback(token.generation, reboot, connectionId, startedElapsed, program)
+                            scheduleProfileContinuation(Runnable { readRows(14) })
                         }
-                        readback = YpsoProfileReadback(token.generation, reboot, connectionId, startedElapsed, program)
-                        eventCountBefore = 0
-                        scheduleProfileContinuation(Runnable { readRows(14) })
-                    }
-                    if (initialSettingId == 1) {
-                        // Establish a changed selector identity before setting 1. The witness is not
-                        // part of the coherent profile bracket and its value is deliberately discarded.
-                        select(14) { scheduleProfileContinuation(Runnable { readActiveBefore() }) }
-                    } else {
-                        readActiveBefore()
+                        if (initialSettingId == 1) {
+                            // Establish a changed selector identity before setting 1. The witness is not
+                            // part of the coherent profile bracket and its value is deliberately discarded.
+                            select(14) { scheduleProfileContinuation(Runnable { readActiveBefore() }) }
+                        } else {
+                            readActiveBefore()
+                        }
                     }
                 }
             })
@@ -1059,6 +1120,194 @@ class YpsoBleManager @Inject constructor(
             aapsLogger.debug(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
             onResult(count)
         }
+    }
+
+    /**
+     * Produce a stable event-history snapshot by explicitly selecting every logical row. Selector
+     * writes are strict-next journaled and accepted only after same-link selector identity read-back.
+     */
+    fun readStableHistory(
+        cursor: YpsoHistoryCursor?,
+        maxRows: Int = 128,
+        onResult: (YpsoHistorySnapshot?) -> Unit,
+    ): HistoryReadAttempt {
+        require(maxRows > 0)
+        val attempt = HistoryReadAttempt()
+        if (!historyReadActive.compareAndSet(false, true) || profileReadActive.get()) {
+            attempt.tryComplete()
+            onResult(null)
+            return attempt
+        }
+        val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
+        val gatt = captured.first
+        val token = captured.second
+        val connectionId = captured.third
+        attempt.onCancel = {
+            synchronized(opLock) { if (bluetoothGatt === gatt) disconnect() }
+            runCatching { onResult(null) }
+        }
+        if (!isConnected || gatt == null || token == null || !hasCompatibleStatusProtocol()) {
+            historyReadActive.set(false)
+            if (attempt.tryComplete()) onResult(null)
+            return attempt
+        }
+        val initial = session?.snapshot()
+        val reboot = initial?.reboot
+        val selector = findChar(gatt, YpsoWritePolicy.EVENT_INDEX_UUID)
+        if (reboot == null || initial.write == null ||
+            initial.writeBootstrapState != PumpSession.WriteBootstrapState.ESTABLISHED ||
+            selector == null || selector.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0 ||
+            findChar(gatt, CHAR_EVENT_COUNT) == null || findChar(gatt, CHAR_EVENT_VALUE) == null
+        ) {
+            historyReadActive.set(false)
+            if (attempt.tryComplete()) onResult(null)
+            return attempt
+        }
+        val owner = YpsoHistorySelectorCoordinator.Owner(gatt, connectionId, token)
+        var countBefore = -1
+        var headBefore: YpsoHistoryEntry? = null
+        val rows = mutableListOf<YpsoHistoryEntry>()
+
+        fun owned(): Boolean = synchronized(opLock) {
+            bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
+        }
+        fun finish(value: YpsoHistorySnapshot?) {
+            if (!attempt.tryComplete()) return
+            historyReadActive.set(false)
+            onResult(value)
+        }
+        fun failHistory(detail: String) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump stable history failed: $detail")
+            finish(null)
+        }
+        fun readEncrypted(uuid: UUID, done: (ByteArray) -> Unit) {
+            if (!attempt.isActive || !owned()) return failHistory("history ownership changed before read")
+            readMultiframe(uuid, expectedGatt = gatt, onFailure = { failHistory("read $uuid failed") }) { ownerGatt, frames ->
+                if (!attempt.isActive || ownerGatt !== gatt || !owned()) return@readMultiframe failHistory("history ownership changed")
+                val body = runCatching { decryptOwned(frames) }.getOrElse {
+                    return@readMultiframe failHistory(it.message ?: "history decrypt failed")
+                }
+                done(body)
+            }
+        }
+        fun readCount(done: (Int) -> Unit) = readEncrypted(CHAR_EVENT_COUNT) { body ->
+            val value = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(body)
+                ?: return@readEncrypted failHistory("event count is not exact GLB")
+            if (value < 0) return@readEncrypted failHistory("event count is negative")
+            done(value)
+        }
+        fun dispatchChangedSelection(index: Int, previousIndex: Int, done: (YpsoHistoryEntry) -> Unit) {
+            if (!attempt.isActive || !owned()) return failHistory("history ownership changed before selector $index")
+            if (previousIndex == index) return failHistory("selector $index lacks changed-value acceptance evidence")
+            val writeId = "history-$connectionId-$index-${UUID.randomUUID()}"
+            var transportOutcomeHandled = false
+            val started = historySelectorCoordinator.select(
+                writeId,
+                owner,
+                index,
+                pumpState.masterVersion.takeIf(String::isNotBlank),
+                OP_TIMEOUT_MS,
+                dispatch = { frame -> writeHistoryFrame(gatt, frame) },
+            ) { outcome ->
+                if (outcome is YpsoWriteOutcome.Verified) return@select
+                if (transportOutcomeHandled) return@select
+                val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
+                    outcome is YpsoWriteOutcome.PossiblyApplied &&
+                    outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK
+                if (!canReconcile) return@select failHistory("selector $index was not semantically observable: $outcome")
+                transportOutcomeHandled = true
+                readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { selectedBody ->
+                    val selected = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(selectedBody)
+                        ?: return@readEncrypted failHistory("selector identity is not exact GLB")
+                    if (selected != index) return@readEncrypted failHistory("selector identity mismatch: requested $index, read $selected")
+                    val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
+                        "${owner.token.generation}|$reboot|$connectionId|$index|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
+                    )
+                    val reconciled = runCatching {
+                        historySelectorCoordinator.reconcileAccepted(
+                            writeId,
+                            owner,
+                            evidenceHash,
+                            "same-link exact-GLB selector identity read-back matched event index $index",
+                        )
+                    }.getOrDefault(false)
+                    if (!reconciled) return@readEncrypted failHistory("selector $index reconciliation failed")
+                    readEncrypted(CHAR_EVENT_VALUE) { body ->
+                        val entry = YpsoHistoryEntry.decodeWire(body)
+                            ?: return@readEncrypted failHistory("event $index failed strict decoding")
+                        if (entry.index != index) return@readEncrypted failHistory("event row embedded index mismatch")
+                        done(entry)
+                    }
+                }
+            }
+            if (!started) failHistory("selector $index could not start")
+        }
+        fun readSelected(index: Int, done: (YpsoHistoryEntry) -> Unit) {
+            readEncrypted(CHAR_EVENT_VALUE) { body ->
+                val entry = YpsoHistoryEntry.decodeWire(body)
+                    ?: return@readEncrypted failHistory("event $index failed strict decoding")
+                if (entry.index != index) return@readEncrypted failHistory("event row embedded index mismatch")
+                done(entry)
+            }
+        }
+        fun select(index: Int, done: (YpsoHistoryEntry) -> Unit) {
+            readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { beforeBody ->
+                val before = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(beforeBody)
+                    ?: return@readEncrypted failHistory("pre-selector identity is not exact GLB")
+                if (before != index) {
+                    dispatchChangedSelection(index, before, done)
+                    return@readEncrypted
+                }
+                // Already selected is read-only evidence. Never dispatch a no-op selector and mistake
+                // unchanged read-back for proof that its write counter was consumed.
+                readSelected(index, done)
+            }
+        }
+        fun finishScan() {
+            readCount { countAfter ->
+                if (countAfter == 0) {
+                    if (countBefore != 0) return@readCount failHistory("event count moved to empty")
+                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
+                    return@readCount
+                }
+                select(0) { headAfter ->
+                    finish(
+                        YpsoHistorySnapshot(
+                            countBefore,
+                            countAfter,
+                            reboot.toLong(),
+                            reboot.toLong(),
+                            headBefore,
+                            headAfter,
+                            rows.toList(),
+                            fullCoverage = rows.size == countBefore,
+                        ),
+                    )
+                }
+            }
+        }
+        fun readRows(index: Int, limit: Int) {
+            if (index >= limit) return finishScan()
+            select(index) { row ->
+                rows += row
+                val foundCursor = cursor != null && row.sequence == cursor.identity.sequence && row.fingerprint() == cursor.fingerprint
+                if (foundCursor && cursor.activeTbr == null) finishScan() else readRows(index + 1, limit)
+            }
+        }
+        readCount { count ->
+            countBefore = count
+            if (count == 0) {
+                finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
+                return@readCount
+            }
+            select(0) { head ->
+                headBefore = head
+                val limit = minOf(count, maxRows)
+                rows += head
+                readRows(1, limit)
+            }
+        }
+        return attempt
     }
 
     /** Read CHAR_BOLUS_STATUS and parse the immediate-delivery block via [BolusCommand.decode]. */
@@ -1152,7 +1401,9 @@ class YpsoBleManager @Inject constructor(
                         pumpState.connectionState = ConnectionState.DISCONNECTED
                         pumpState.invalidateStatus()
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
+                        historySelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         profileReadActive.set(false)
+                        historyReadActive.set(false)
                         controlNotificationsEnabled = false
                         drainPendingOperationsLocked() to owned
                     }
@@ -1235,6 +1486,8 @@ class YpsoBleManager @Inject constructor(
                 }
             } else if (ch.uuid == YpsoWritePolicy.SETTING_ID_UUID && profileReadActive.get()) {
                 scheduleProfileContinuation(Runnable { profileWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
+            } else if (ch.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && historyReadActive.get()) {
+                scheduleProfileContinuation(Runnable { historyWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
             } else completeCurrent(g, ch.uuid, null, status)
         }
 
@@ -1310,7 +1563,9 @@ class YpsoBleManager @Inject constructor(
             pumpState.connectionState = ConnectionState.DISCONNECTED
             pumpState.invalidateStatus()
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
+            historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
             profileReadActive.set(false)
+            historyReadActive.set(false)
             controlNotificationsEnabled = false
             drainPendingOperationsLocked() to captured
         }
@@ -1376,6 +1631,8 @@ class YpsoBleManager @Inject constructor(
         val authorized = synchronized(opLock) {
             bluetoothGatt === g && if (remoteWrite == YpsoRemoteWrite.SETTINGS_SELECTOR) {
                 characteristic.uuid == YpsoWritePolicy.SETTING_ID_UUID && authorizedProfileFrame === value
+            } else if (remoteWrite == YpsoRemoteWrite.HISTORY_SELECTOR) {
+                characteristic.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && authorizedHistoryFrame === value
             } else YpsoWritePolicy.allowsCharacteristic(
                 remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),

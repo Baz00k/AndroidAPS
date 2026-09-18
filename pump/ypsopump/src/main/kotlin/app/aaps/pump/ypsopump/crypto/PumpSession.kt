@@ -264,6 +264,8 @@ class PumpSession(private val store: Store) {
         val benchAmbiguityConvergenceAttempted: Boolean = false,
         /** Immutable accepted write that authorized the epoch's duplicate-counter probe. */
         val benchDuplicateCounterPredecessor: AcceptedWriteBinding? = null,
+        /** Number of consecutive pump-confirmed APPERR_COUNTER_ERROR responses. */
+        val counterRecoveryExponent: Int = 0,
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -854,7 +856,7 @@ class PumpSession(private val store: Store) {
     /** Persisted transition; discard this response and reconnect with a new connection token. */
     class RebootAdoptedException : SecurityException("Authenticated reboot adopted; reconnect required")
 
-    /** No production caller can establish write certainty in the status-only contract. */
+    /** Reserve above the durable local high-water mark; the pump does not require contiguous counters. */
     @Synchronized
     fun reserve(origin: Token, id: String, intent: WriteIntent? = null): Reservation {
         return reserveCandidate(origin, id, intent, forwardGap = 0, candidate = WriteCandidate.STANDARD)
@@ -875,7 +877,8 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
         val last = bootstrapPriorWrite ?: old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
-        val increment = 1L + forwardGap
+        val standardIncrement = if (candidate == WriteCandidate.STANDARD) counterRecoveryIncrement(old.counterRecoveryExponent) else 1L
+        val increment = standardIncrement + forwardGap
         check(last <= Long.MAX_VALUE - increment) { "Write counter exhausted" }
         intent?.let {
             require(it.operationId.isNotBlank() && it.characteristic.isNotBlank() && it.purpose.isNotBlank())
@@ -956,6 +959,46 @@ class PumpSession(private val store: Store) {
         update(restoreAfterNotConsumed(old, reserved, evidence))
     }
 
+    /**
+     * Retire an interrupted transport reservation without claiming that its command succeeded or
+     * failed. YpsoPump accepts any counter above its last accepted counter: keeping our allocated
+     * high-water mark makes the next reservation safe whether this write was consumed or not.
+     * Burn a small forward block on reconnect to recover promptly when the last controller's
+     * persisted position lags the pump. This is allocation headroom, not a pump gap restriction.
+     * Call only after the old transport owner has been released. Therapy effect/retry decisions
+     * remain the responsibility of the durable domain journal, not this counter allocator.
+     */
+    @Synchronized
+    fun recoverInterruptedWrite(origin: Token) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = old.reservation?.takeIf { it.phase != Phase.VERIFIED } ?: return
+        check(old.writeBootstrapState == WriteBootstrapState.ESTABLISHED && old.write != null) {
+            "Write high-water mark is unavailable"
+        }
+        check(old.write >= reserved.counter) { "Reservation exceeds write high-water mark" }
+        val detail = "Interrupted transport retired at phase=${reserved.phase}; counter retained as high-water mark; command outcome unknown"
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest("${reserved.id}:$detail".toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val evidence = writeEvidence(reserved, null, hash, detail)
+        update(old.copy(reservation = null, writeEvidence = old.writeEvidence + evidence))
+    }
+
+    /** Pump-originated APPERR_COUNTER_ERROR (139): the command was rejected and the next gap doubles. */
+    @Synchronized
+    fun rejectCounterTooLow(origin: Token, reservationId: String, evidenceHash: String, detail: String) {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = checkNotNull(old.reservation)
+        check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) {
+            "Write is not awaiting counter-error recovery"
+        }
+        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        check(old.counterRecoveryExponent < MAX_COUNTER_RECOVERY_EXPONENT) { "Counter recovery exhausted" }
+        val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
+        update(old.copy(reservation = null, writeEvidence = old.writeEvidence + evidence, counterRecoveryExponent = old.counterRecoveryExponent + 1))
+    }
+
     /** Persist reviewed evidence that does not yet classify counter consumption; the reservation remains blocking. */
     @Synchronized
     fun recordUnresolvedWriteEvidence(
@@ -1023,7 +1066,8 @@ class PumpSession(private val store: Store) {
                             old.writeBootstrapState
                         },
                     benchStrictNextAccepted =
-                        old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR
+                        old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
+                    counterRecoveryExponent = 0,
                 )
             WriteResolution.REJECTED_COUNTER_CONSUMED ->
                 old.copy(
@@ -1132,6 +1176,14 @@ class PumpSession(private val store: Store) {
     }
 
     companion object {
+        const val MAX_COUNTER_RECOVERY_EXPONENT = 20
+
+        fun counterRecoveryIncrement(exponent: Int): Long {
+            require(exponent in 0..MAX_COUNTER_RECOVERY_EXPONENT)
+            return 1L shl maxOf(0, exponent - 1)
+        }
+        private fun isCounterRecoveryIncrement(value: Long): Boolean =
+            value > 0 && value <= counterRecoveryIncrement(MAX_COUNTER_RECOVERY_EXPONENT) && value and (value - 1) == 0L
         private fun expectedHistoryIndexCharacteristic(family: HistoryFamily): String =
             when (family) {
                 HistoryFamily.ALARM -> "669a0c20-0008-969e-e211-fcbec93b7bc5"
@@ -1219,6 +1271,7 @@ class PumpSession(private val store: Store) {
                 require(!r.benchNewEpochBootstrapAttempted || r.writeBootstrapState != WriteBootstrapState.UNKNOWN_MID_EPOCH)
                 require(!r.benchNewEpochBootstrapAttempted || r.benchNewEpochBootstrapReference != null)
                 require(!r.benchForwardGapAttempted || r.benchStrictNextAccepted)
+                require(r.counterRecoveryExponent in 0..MAX_COUNTER_RECOVERY_EXPONENT)
                 require(
                     !r.benchDuplicateCounterAttempted ||
                         r.benchStrictNextAccepted ||
@@ -1257,7 +1310,11 @@ class PumpSession(private val store: Store) {
                     val priorWrite = checkNotNull(it.priorWrite)
                     require(priorWrite >= 0)
                     when (it.candidate) {
-                        WriteCandidate.STANDARD -> require(it.counter - priorWrite == 1L)
+                        WriteCandidate.STANDARD ->
+                            require(
+                                if (it.phase == Phase.VERIFIED) isCounterRecoveryIncrement(it.counter - priorWrite)
+                                else it.counter - priorWrite == counterRecoveryIncrement(r.counterRecoveryExponent)
+                            )
                         WriteCandidate.BENCH_STRICT_NEXT_SELECTOR -> {
                             require(it.counter - priorWrite == 1L)
                             require(it.operationId != null)
@@ -1358,8 +1415,8 @@ class PumpSession(private val store: Store) {
                             it.priorWrite >= 0,
                     )
                     when (it.candidate) {
-                        WriteCandidate.STANDARD, WriteCandidate.BENCH_STRICT_NEXT_SELECTOR ->
-                            require(it.counter - it.priorWrite == 1L)
+                        WriteCandidate.STANDARD -> require(isCounterRecoveryIncrement(it.counter - it.priorWrite))
+                        WriteCandidate.BENCH_STRICT_NEXT_SELECTOR -> require(it.counter - it.priorWrite == 1L)
                         WriteCandidate.BENCH_FORWARD_GAP_SELECTOR ->
                             require(it.counter - it.priorWrite == 2L)
                         WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR ->

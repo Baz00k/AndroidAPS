@@ -1,15 +1,32 @@
-# Serialized non-therapy Bluetooth write bench
+# Serialized Bluetooth qualification bench
+
+## Current counter recovery contract
+
+**Counters are strictly increasing, not contiguous.** The pump accepts any higher counter.
+See [write-counter recovery](../../docs/counter-recovery.md) before interpreting the historical
+one-shot experiments below. Their gap limits and review gates are experimental controls, not
+pump requirements. Normal profile/history acquisition and bolus transport recover interrupted
+reservations automatically after teardown, preserving unknown command outcomes and advancing
+above the durable allocated high-water mark. A lost callback at 4281 permits 4282 without
+establishing whether 4281 was consumed. Only a pump-originated final-frame counter error 139 starts
+a persisted exponential search (`+1,+2,+4,+8,...`); other failures never enlarge the gap. Bolus retry and cancellation
+ownership remain governed by the durable bolus attempt journal.
 
 This is a separate Android application and UID. It compiles the driver's real session owner,
 crypto, framing, selector policy, readiness model, serialized transport and coordinator. It has
-no AAPS plugin or therapy/configuration API. Its only app-initiated remote writes are:
+no AAPS plugin or configuration API. Its ordinary `BenchActivity` actions remain non-therapy. The
+separate `BolusBenchActivity` is an explicit disconnected-pump qualification capability and is the
+only path in this artifact that may issue a bolus start/cancel command. App-initiated
+remote writes are:
 
 - MD5 access authentication;
 - control-notification CCCD enable (`0x0001`);
 - exact 8-byte GLB selectors for event, alarm, system history and setting ID.
+- standard/square/combination bolus start and cancellation only through `BolusBenchActivity`, after
+  strict validation and durable attempt/counter journaling.
 
 Complaint history is excluded because the references conflict and no target-verified UUID exists.
-Setting **values**, date/time, history clearing, bolus and TBR are not writable from this artifact.
+Setting **values**, date/time, history clearing and TBR are not writable from this artifact.
 The exported operator activity requires the platform `android.permission.DUMP` permission held by
 the ADB shell, preventing ordinary installed applications from invoking its actions.
 
@@ -22,6 +39,76 @@ write remains `AcceptedUnverified`; the app captures read-back but requires expl
 reconciliation before another selector can run. For settings it first reads and decrypts the readable
 `SETTING_ID` characteristic and requires exact GLB identity equality before reading `SETTING_VALUE`;
 a valid or unchanged value alone is never treated as selector proof.
+
+`BolusBenchActivity` is only for a pump physically disconnected from a person. It rejects non-finite,
+out-of-limit, non-step and malformed duration/combination requests, stopped/empty pumps, conflicting
+immediate/extended delivery, unknown counter ownership, and cancellation without a previously proven
+block identity. The attempt is persisted before possible dispatch. An ACK remains
+`AcceptedUnverified`; same-link status must prove a strictly newer block sequence and the exact
+programmed amount. Cancellation requires that same durable identity to still be actively delivering.
+Stable terminal history reconciliation remains mandatory before the evidence can claim delivered
+insulin or a final cancellation outcome.
+
+The distributed AndroidAPS artifact remains status-only: `READ_ONLY_MODE`, pump capabilities, plugin
+entry points and production therapy policy are unchanged.
+
+## Bolus qualification actions
+
+These actions are exported only to the ADB shell through `android.permission.DUMP`. Use a pump that is
+physically disconnected from a person. Complete and review the existing session/counter/profile
+qualification first. `start-bolus` validates the exact standard, square (extended) or combination
+request, reads running/reservoir and both bolus status blocks, captures a fingerprinted history
+baseline, then persists the attempt before possible command dispatch:
+
+```sh
+WRITE_ID="bolus-start-$(uuidgen)"
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BolusBenchActivity \
+  --es action start-bolus --es write_id "$WRITE_ID" --es units 1.00 --es aaps_max_bolus 1.00
+# square bolus: add --es duration_minutes 15
+# combination:  add --es duration_minutes 15 --es immediate_units 0.40
+```
+
+`validate-bolus` performs the same validation without connecting and reports the shape, total,
+duration and combination-immediate amount. Use decimal strings (`--es units 0.10`) to keep requested
+amounts exact; `--ef` stores a binary float that still passes representability checks.
+
+The same-link result establishes only `DELIVERING`: a strictly newer block sequence and the exact
+pump-programmed amount are required. A standard bolus binds the fast block; square and combination
+boluses bind the slow block, whose programmed total is the whole requested amount. The result does
+not establish delivered insulin.
+
+Cancellation is allowed only when the persisted proven block identity is still actively delivering
+the exact intended programmed amount:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BolusBenchActivity \
+  --es action cancel-bolus --es write_id "bolus-cancel-$(uuidgen)"
+```
+
+This pump delivers standard boluses at roughly 1 U/s, so a new connection cannot catch a standard
+bolus before completion. Square and combination blocks run for minutes and can be cancelled across a
+new connection. For a standard bolus, `--ez start_then_cancel true` proves the fast identity,
+persists cancellation ownership and dispatches the cancel on the same connection with no retry:
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BolusBenchActivity \
+  --es action start-bolus --es write_id "$WRITE_ID" --es units 10.00 --es aaps_max_bolus 10.00 \
+  --ez start_then_cancel true
+```
+
+After completion or cancellation, run terminal reconciliation. This brackets a bounded stable-history
+scan, requires the exact baseline sequence and fingerprint, and compares requested, programmed,
+pump-status-delivered and pump-history-delivered units. A unique compatible history row is ingestible
+as confirmed insulin, but the AAPS attempt becomes terminal only when the proven block-sequence
+identity also matches. Type-2 and type-3 completed rows carry the delivered amount, including partial
+amounts after cancellation; a type-18 combination row reports the delivered amount at abort. Type-29,
+type-30 and type-31 abort-row amounts remain unqualified and cannot create insulin.
+
+```sh
+adb -s "$SERIAL" shell am start -W -n app.aaps.ypso.writebench/.BolusBenchActivity \
+  --es action reconcile-bolus --ei max_history_rows 128
+adb -s "$SERIAL" exec-out run-as app.aaps.ypso.writebench cat files/result.txt
+```
 
 ## Build and install
 

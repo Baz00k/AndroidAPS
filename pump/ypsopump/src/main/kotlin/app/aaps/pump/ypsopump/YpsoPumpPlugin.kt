@@ -30,6 +30,10 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
+import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import android.content.Context
 import android.content.Intent
@@ -80,6 +84,12 @@ class YpsoPumpPlugin @Inject constructor(
     private var availabilityNotificationSynchronized = false
     /** Last published mismatch text, or null when no mismatch is currently published. */
     private var publishedProfileMismatch: String? = null
+    private val historyIngestion by lazy {
+        YpsoHistoryIngestion(
+            YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
+            pumpSync,
+        )
+    }
 
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
@@ -179,6 +189,9 @@ class YpsoPumpPlugin @Inject constructor(
 
                 else                                                                    -> rh.gs(R.string.ypsopump_profile_read_complete)
             }
+        }
+        if (statusRead && bleManager.canReadHistory && pumpState.profileEvidence != null) {
+            readHistoryBlocking()?.let(::ingestHistory)
         }
     }
 
@@ -374,6 +387,38 @@ class YpsoPumpPlugin @Inject constructor(
         aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
         bleManager.disconnect()
         return false
+    }
+
+    private fun readHistoryBlocking(timeoutMs: Long = 120_000): YpsoHistorySnapshot? {
+        var snapshot: YpsoHistorySnapshot? = null
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor()) {
+            snapshot = it
+            latch.countDown()
+        }
+        if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
+        if (!attempt.cancel()) {
+            latch.await()
+            return snapshot
+        }
+        aapsLogger.error(LTag.PUMP, "YpsoPump history read timed out after ${timeoutMs}ms")
+        bleManager.disconnect()
+        return null
+    }
+
+    private fun ingestHistory(snapshot: YpsoHistorySnapshot) {
+        val serial = serialNumber()
+        val evidence = pumpState.profileEvidence
+        val reboot = bleManager.session?.snapshot()?.reboot
+        if (serial.isBlank() || evidence == null || reboot == null || evidence.generation != bleManager.session?.activeRecord()?.generation) {
+            aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity, zone or session evidence unavailable")
+            return
+        }
+        when (val result = historyIngestion.ingest(serial, evidence.zone, reboot.toLong(), snapshot)) {
+            is YpsoHistoryIngestionResult.Applied -> Unit
+            is YpsoHistoryIngestionResult.Blocked ->
+                aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
+        }
     }
 
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =

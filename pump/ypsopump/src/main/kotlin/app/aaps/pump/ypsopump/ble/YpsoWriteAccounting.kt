@@ -28,6 +28,8 @@ internal open class YpsoWriteAccounting(
         val plaintext: ByteArray,
         val firmware: String?,
         val deadlineMs: Long,
+        /** Domain journal hook; must durably persist command identity before POSSIBLY_SENT. */
+        val beforeDispatch: (PumpSession.Reservation) -> Unit = {},
         val dispatch: (ByteArray) -> Boolean,
         val onOutcome: (YpsoWriteOutcome) -> Unit,
     )
@@ -48,7 +50,15 @@ internal open class YpsoWriteAccounting(
             request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "write ID is already owned"))
             return false
         }
-        val transaction = runCatching { session.begin(request.owner.token) }.getOrElse {
+        if (transport.hasUnresolvedWrite()) {
+            releaseClaim(request.writeId)
+            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "previous transport owner must be released before recovery"))
+            return false
+        }
+        val transaction = runCatching {
+            prepareSession(request.owner)
+            session.begin(request.owner.token)
+        }.getOrElse {
             releaseClaim(request.writeId)
             request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "session unavailable"))
             return false
@@ -90,6 +100,13 @@ internal open class YpsoWriteAccounting(
             return false
         }
         encrypted.fill(0)
+        runCatching { request.beforeDispatch(reservation) }.getOrElse {
+            runCatching { session.markNotSent(request.owner.token, transaction) }
+            finish()
+            releaseClaim(request.writeId)
+            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "domain dispatch journal failed", reservation.counter))
+            return false
+        }
         runCatching { session.advance(request.owner.token, transaction, PumpSession.Phase.POSSIBLY_SENT) }.getOrElse {
             finish()
             releaseClaim(request.writeId)
@@ -139,7 +156,28 @@ internal open class YpsoWriteAccounting(
                                 failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "ACK persistence failed"),
                             )
                         }
-                        else -> outcome
+                        is YpsoWriteOutcome.ProvenRejected -> outcome
+                        is YpsoWriteOutcome.PossiblyApplied ->
+                            if (automaticCounterRecovery && outcome.failure.isPumpCounterError()) {
+                                runCatching {
+                                    finish()
+                                    session.rejectCounterTooLow(
+                                        request.owner.token,
+                                        reservation.id,
+                                        sha256("${request.writeId}:${reservation.counter}:139".toByteArray()),
+                                        "pump returned APPERR_COUNTER_ERROR (139) for final command frame",
+                                    )
+                                    release(request.writeId)
+                                    YpsoWriteOutcome.ProvenRejected(request.writeId, reservation.counter, outcome.failure)
+                                }.getOrElse { failure ->
+                                    YpsoWriteOutcome.PossiblyApplied(
+                                        request.writeId,
+                                        reservation.counter,
+                                        failure(request, YpsoWriteFailure.Layer.SESSION, failure.message ?: "counter recovery persistence failed"),
+                                    )
+                                }
+                            } else outcome
+                        is YpsoWriteOutcome.Verified -> outcome
                     }
                     finish()
                     request.onOutcome(delivered)
@@ -203,6 +241,12 @@ internal open class YpsoWriteAccounting(
         intent: PumpSession.WriteIntent,
     ): PumpSession.Reservation = session.reserve(owner.token, transaction, intent)
 
+    protected open fun prepareSession(owner: Owner) {
+        session.recoverInterruptedWrite(owner.token)
+    }
+
+    protected open val automaticCounterRecovery: Boolean = true
+
     private fun validateEvidence(
         semantic: YpsoSemanticEvidence,
         resolution: PumpSession.WriteResolution?,
@@ -244,3 +288,6 @@ internal open class YpsoWriteAccounting(
         fun sha256(value: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
     }
 }
+
+internal fun YpsoWriteFailure.isPumpCounterError(): Boolean =
+    layer == YpsoWriteFailure.Layer.PUMP_COUNTER && code == 139
