@@ -49,6 +49,9 @@ object YpsoBolusRequestValidator {
         require(durationMinutes in 0..BolusCommand.MAX_DURATION_MINUTES) {
             "durationMinutes is outside 0..${BolusCommand.MAX_DURATION_MINUTES}"
         }
+        require(durationMinutes == 0 || durationMinutes in 15..720 && durationMinutes % 15 == 0) {
+            "extended duration must be an exact 15-minute step from 15 to 720 minutes"
+        }
         val shape = when {
             durationMinutes == 0 -> {
                 require(immediateUnits == 0.0) { "an immediate bolus cannot carry a combination part" }

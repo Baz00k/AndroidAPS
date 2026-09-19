@@ -21,11 +21,12 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 - measurements expire five minutes after acquisition, including while disconnected;
 - a BLE MAC is never displayed or synthesized as a serial.
 
-When `READ_ONLY_MODE` is changed to `false`, normal AAPS `deliverTreatment()` and
-`stopBolusDelivering()` use the production immediate-bolus controller: current status, exact dose
-validation, durable persist-before-dispatch ownership, same-link fast-block
-identity proof, cancellation of only that proven identity, terminal history reconciliation, and
-idempotent PumpSync ingestion. Temporary basal, extended bolus and profile writes remain unsupported.
+When `READ_ONLY_MODE` is changed to `false`, normal AAPS immediate and square extended boluses use
+the production bolus controller: current status, exact dose/duration validation, durable
+persist-before-dispatch ownership, same-link fast- or slow-block identity proof, cancellation of only
+that proven identity, terminal history reconciliation, and PumpSync ingestion. Extended boluses accept
+0.1-U dose steps and 15-minute duration steps from 15 minutes through 12 hours. Temporary basal,
+combination-bolus UI and profile writes remain unsupported.
 
 Profile programming and activation are manual. In **YpsoPump Preferences → Basal configuration**,
 use **Read pump basal profiles** during setup and
@@ -46,7 +47,7 @@ yields to newly queued commands after the current selector has been reconciled. 
 refresh leaves the previous complete configuration intact. The UI shows the last observed program
 and schedule read age; an unreported pump edit can leave this information outdated. A different
 phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
-Profile configuration is monitoring evidence, not immediate-bolus authorization. Bolus delivery does
+Profile configuration is monitoring evidence, not bolus authorization. Bolus delivery does
 not read or compare basal schedules; profile acquisition remains an explicit operator action.
 
 ### Divergence is reported, not tolerated
@@ -64,11 +65,11 @@ effective profile switch it needs to run a loop. Reporting failure in that case 
 alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
 divergent configuration still fails, because neither proves what the pump is delivering.
 
-Immediate-bolus preflight reads current pump and immediate-bolus status. It uses the existing durable
+Bolus preflight reads current pump and bolus status. It uses the existing durable
 history cursor instead of scanning history before dispatch. Routine status and KeepAlive polling also
 never scans history inline, because those commands share the serialized therapy queue. A successful
 status command instead schedules a bounded background recovery scan. That scan anchors an empty store,
-imports later pump-originated immediate boluses, and reconciles restart/reboot or delayed history; it
+imports later pump-originated boluses, and reconciles restart/reboot or delayed history; it
 cancels and yields the BLE link whenever therapy is queued. A new bolus remains inhibited until one
 such scan has proved the durable cursor usable in the current plugin lifecycle. Active boluses read history afterward
 to confirm delivered insulin and complete PumpSync accounting. Stop signals cancellation promptly but

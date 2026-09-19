@@ -1658,7 +1658,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.info(
                         LTag.PUMP,
                         if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
-                        else "YpsoPump authenticated; immediate bolus therapy is available after readiness checks",
+                        else "YpsoPump authenticated; bolus therapy is available after readiness checks",
                     )
                     markConnected(controlNotificationsEnabled = false)
                     null

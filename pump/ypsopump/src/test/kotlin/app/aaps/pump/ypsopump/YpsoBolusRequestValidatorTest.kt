@@ -76,6 +76,15 @@ class YpsoBolusRequestValidatorTest {
             YpsoBolusRequestValidator.validateDelivery(0.5, 1441, 0.0, YpsoBolusTreatment.NORMAL, 30.0)
         }
         assertThrows(IllegalArgumentException::class.java) {
+            YpsoBolusRequestValidator.validateDelivery(0.5, 14, 0.0, YpsoBolusTreatment.NORMAL, 30.0)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            YpsoBolusRequestValidator.validateDelivery(0.5, 16, 0.0, YpsoBolusTreatment.NORMAL, 30.0)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            YpsoBolusRequestValidator.validateDelivery(0.5, 735, 0.0, YpsoBolusTreatment.NORMAL, 30.0)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
             YpsoBolusRequestValidator.validateDelivery(0.5, 15, 0.5, YpsoBolusTreatment.NORMAL, 30.0)
         }
         assertThrows(IllegalArgumentException::class.java) {

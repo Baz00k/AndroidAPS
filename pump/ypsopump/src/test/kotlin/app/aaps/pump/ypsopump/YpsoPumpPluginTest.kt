@@ -51,6 +51,7 @@ class YpsoPumpPluginTest {
     }
     private val constraintsChecker: ConstraintsChecker = mock {
         on { getMaxBolusAllowed() } doReturn maxBolusConstraint
+        on { getMaxExtendedBolusAllowed() } doReturn maxBolusConstraint
     }
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
@@ -73,12 +74,13 @@ class YpsoPumpPluginTest {
             plugin.setNewBasalProfile(profile),
             plugin.setTempBasalAbsolute(1.2, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
             plugin.setTempBasalPercent(150, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
-            plugin.cancelTempBasal(true), plugin.setExtendedBolus(1.0, 30), plugin.cancelExtendedBolus(), plugin.loadTDDs()
+            plugin.cancelTempBasal(true), plugin.loadTDDs()
         )
         results.forEach { assertFalse(it.success); assertFalse(it.enacted); assertEquals(0.0, it.bolusDelivered) }
         assertEquals(0.0, plugin.baseBasalRate)
         assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isBolusCapable)
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
+        assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isExtendedBolusCapable)
         verifyNoInteractions(sync)
         verify(manager, times(2)).noBackupDirectory()
         verifyNoMoreInteractions(manager)

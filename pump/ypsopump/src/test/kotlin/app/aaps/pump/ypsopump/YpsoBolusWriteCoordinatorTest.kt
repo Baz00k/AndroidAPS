@@ -4,6 +4,7 @@ import app.aaps.pump.ypsopump.ble.YpsoBolusWriteCoordinator
 import app.aaps.pump.ypsopump.ble.YpsoSerializedWriteTransport
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
@@ -85,6 +86,39 @@ class YpsoBolusWriteCoordinatorTest {
         }
         assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
         assertEquals(PumpSession.Phase.ACKED, fixture.session.snapshot()?.reservation?.phase)
+    }
+
+    @Test
+    fun `slow block cancellation reserves and encrypts the extended cancel payload`() {
+        val fixture = readyFixture()
+        val callbacks = mutableListOf<Runnable>()
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val frames = mutableListOf<ByteArray>()
+        val transport = YpsoSerializedWriteTransport({ runnable, _ -> callbacks += runnable }, { callbacks -= it })
+        val coordinator = YpsoBolusWriteCoordinator(fixture.session, SessionCrypto(), transport)
+        val owner = YpsoBolusWriteCoordinator.Owner(fixture.gatt, "connection", fixture.token)
+
+        var journaledCounter: Long? = null
+        assertTrue(
+            coordinator.cancel(
+                "cancel-1",
+                owner,
+                YpsoBolusBlock.SLOW,
+                "V05.00.52",
+                5_000,
+                { journaledCounter = it.counter },
+                { frames += it; true },
+                outcomes::add,
+            ),
+        )
+        assertEquals(4810, journaledCounter)
+        val expectedPlaintext = YpsoCrc.appendCrc(BolusCommand.cancelPayload(extended = true))
+        assertEquals(sha256(expectedPlaintext), fixture.session.snapshot()?.reservation?.payloadHash)
+
+        repeat(YpsoFraming.chunkPayload(SessionCrypto().encrypt(expectedPlaintext, fixture.key, 21, 4810)).size) {
+            transport.onCharacteristicWrite(fixture.gatt, app.aaps.pump.ypsopump.ble.YpsoWritePolicy.BOLUS_START_STOP_UUID, 0)
+        }
+        assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
     }
 
     private data class Fixture(val session: PumpSession, val token: PumpSession.Token, val key: ByteArray, val gatt: Any)
