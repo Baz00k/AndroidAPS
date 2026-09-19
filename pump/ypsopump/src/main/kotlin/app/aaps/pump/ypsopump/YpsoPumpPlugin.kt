@@ -140,9 +140,6 @@ class YpsoPumpPlugin @Inject constructor(
         isSetBasalProfileCapable = false
         supportsTDDs = false
         needsManualTDDLoad = false
-        if (YpsoPumpConst.READ_ONLY_MODE) {
-            isBolusCapable = false
-        }
     }
 
     private fun notImplemented(): PumpEnactResult =
