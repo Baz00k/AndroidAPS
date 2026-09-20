@@ -131,6 +131,7 @@ class YpsoPumpPlugin @Inject constructor(
     internal var dispatchHistoryRecovery: ((() -> Unit) -> Unit) = { task -> historyRecoveryExecutor.execute(task) }
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
+    private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
     @Volatile private var historyRecoveryEnabled = true
 
     init {
@@ -186,6 +187,10 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun connect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "connect: $reason")
+        if (reason == "Connection needed") {
+            idleDisconnectDeferredToHistory.set(false)
+            cancelHistoryRecovery()
+        }
         if (!configured()) {
             bleManager.disconnect()
             pumpState.invalidateStatus()
@@ -206,6 +211,11 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun disconnect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "disconnect: $reason")
+        if (reason == "Queue empty" && historyRecoveryActive.get()) {
+            idleDisconnectDeferredToHistory.set(true)
+            aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect deferred until history recovery releases the connection")
+            return
+        }
         bleManager.disconnect(preserveStatus = reason == "Queue empty")
     }
     override fun stopConnecting() { bleManager.disconnect() }
@@ -689,6 +699,11 @@ class YpsoPumpPlugin @Inject constructor(
             } finally {
                 historyRecoveryAttempt.set(null)
                 historyRecoveryActive.set(false)
+                if (idleDisconnectDeferredToHistory.getAndSet(false) &&
+                    commandQueue.size() == 0 && !bolusController.isBusy
+                ) {
+                    bleManager.disconnect(preserveStatus = true)
+                }
             }
         }
     }

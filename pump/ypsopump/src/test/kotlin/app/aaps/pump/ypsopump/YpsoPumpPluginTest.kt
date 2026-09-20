@@ -9,6 +9,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.notifications.Notification
+import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.interfaces.Preferences
@@ -41,6 +42,7 @@ class YpsoPumpPluginTest {
     private val rxBus: RxBus = mock()
     private val preferences: Preferences = mock()
     private val provisioning: YpsoProvisioningService = mock()
+    private val commandQueue: CommandQueue = mock()
     private val installed = YpsoProvisioningService.InstalledSession(
         "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
@@ -54,7 +56,7 @@ class YpsoPumpPluginTest {
         on { getMaxExtendedBolusAllowed() } doReturn maxBolusConstraint
     }
     private val plugin = YpsoPumpPlugin(
-        AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, rxBus, ui,
+        AAPSLoggerTest(), rh, preferences, commandQueue, state, manager, sync, rxBus, ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker
     )
 
@@ -272,6 +274,17 @@ class YpsoPumpPluginTest {
         verify(manager, never()).readStableHistory(any(), any(), any())
         assertNotNull(recovery, "status completion should schedule independent recovery")
         assertTrue(state.hasFreshProfileEvidence)
+    }
+
+    @Test
+    fun `queue empty does not disconnect an active background history scan`() {
+        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        active.set(true)
+
+        plugin.disconnect("Queue empty")
+
+        verify(manager, never()).disconnect(any())
     }
 
     @Test

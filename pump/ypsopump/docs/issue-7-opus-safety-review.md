@@ -53,6 +53,18 @@ September 19; no pending bolus outbox record exists. The immediate attempt is no
 longer in the single-record journal, which now holds the extended attempt.
 Recovery must preserve multiple unresolved attempts rather than overwrite them.
 
+### Root cause reproduced read-only: queue-empty teardown
+
+With the authorized read-only debug APK, a live history scan successfully read and
+decrypted event count, selector identity, and multiple event rows. At 03:41:01 the
+queue called `disconnect("Queue empty")` while recovery was mid-row; teardown
+completed the pending EXTREAD with status -1 and `readStableHistory` failed. This
+matches the treatment incident. Removing history recovery from `isBusy()` prevented
+queue starvation but left the BLE connection without an owner. Candidate fix defers
+queue-empty disconnect while recovery is active, lets a new command cancel/preempt
+recovery, and releases the idle connection when recovery finishes. Focused handoff
+and one-shot Stop-yield tests pass. Hardware re-verification remains required.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 
