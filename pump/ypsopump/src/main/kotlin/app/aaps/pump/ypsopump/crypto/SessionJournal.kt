@@ -5,6 +5,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.KeyStore
 import java.util.Base64
 import java.util.UUID
@@ -17,9 +19,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Journal revisions are authenticated by unique, non-exportable Keystore keys. The previous anchor
- * is destroyed BEFORE replacing the file. A crash anywhere in that interval requires recovery;
- * it cannot restore an older replay floor. The file is excluded from Android backup.
+ * Journal revisions are authenticated by unique, non-exportable Keystore keys. A new sealed
+ * revision is first published in a transition containing both the prior and next sealed envelopes.
+ * The prior revision remains authoritative while its key exists; deleting that exact key atomically
+ * makes the next revision authoritative. Process termination therefore leaves one decryptable,
+ * unambiguous replay floor. The file is excluded from Android backup.
  */
 class SessionJournal internal constructor(private val storage: Storage) : PumpSession.Store {
 
@@ -41,12 +45,11 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         val anchors = storage.anchors()
         val contents = storage.read()
         if (contents == null && anchors.isEmpty()) return PumpSession.State()
-        val envelope = JSONObject(checkNotNull(contents))
+        val envelope = authoritativeEnvelope(JSONObject(checkNotNull(contents)), anchors)
         val alias = envelope.getString("anchor")
-        // A killed process can leave the next key beside the committed key before invalidation.
-        // Commit deletes all prior keys before writing/publishing the next revision, so a retained
-        // file whose own key still exists has not been superseded. Authenticate it below without
-        // modifying the file or keys. Missing own key still rejects rollback/restored revisions.
+        // Extra orphan keys are harmless. A missing authoritative key rejects rollback, restored
+        // revisions, and interrupted legacy commits from versions that invalidated the prior anchor
+        // before publishing.
         if (alias !in anchors) throw AnchorMismatch(anchors.size, false)
         val body = if (envelope.has("sealed")) storage.open(alias, envelope.getString("sealed")) else {
             val legacyBody = envelope.getString("body")
@@ -475,17 +478,51 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         val alias = PREFIX + UUID.randomUUID()
         try {
             storage.create(alias)
-            val envelope = JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body)).toString()
-            // Invalidate every previous revision before the commit can become observable.
-            old.forEach(storage::delete)
-            storage.writeAndSync(envelope)
+            val nextEnvelope = JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body))
+            val currentContents = storage.read()
+            if (currentContents == null && old.isEmpty()) {
+                storage.writeAndSync(nextEnvelope.toString())
+                return
+            }
+            val priorEnvelope = authoritativeEnvelope(JSONObject(checkNotNull(currentContents)), old)
+            val priorAlias = priorEnvelope.getString("anchor")
+            val transition = JSONObject()
+                .put("transitionVersion", TRANSITION_VERSION)
+                .put("prior", priorEnvelope)
+                .put("next", nextEnvelope)
+            // Until priorAlias is deleted, load() deterministically selects prior. Once it is
+            // deleted, the same durable file deterministically selects next.
+            storage.writeAndSync(transition.toString())
+            // Remove every older orphan before switching authority. Otherwise restoring a stale
+            // envelope whose orphan key survived could roll the replay floor backwards.
+            old.filterNot { it == priorAlias }.forEach(storage::delete)
+            storage.delete(priorAlias)
+            // The transition now resolves to next. Finalization and orphan cleanup are optional.
+            runCatching { storage.writeAndSync(nextEnvelope.toString()) }
         } catch (e: Exception) {
-            // If failure happened before the old anchors were invalidated, keep the old revision usable
-            // instead of leaving an extra orphan alias that makes a truthful load look restored/corrupt.
+            // Remove the candidate only if the currently durable envelope still resolves to prior.
+            // If priorAlias was deleted, the transition already makes this candidate authoritative.
             runCatching {
-                if (storage.anchors().any { it in old }) storage.delete(alias)
+                val anchors = storage.anchors()
+                val authoritativeAlias = storage.read()?.let {
+                    authoritativeEnvelope(JSONObject(it), anchors).getString("anchor")
+                }
+                if (authoritativeAlias != alias && alias in anchors) storage.delete(alias)
             }
             throw e
+        }
+    }
+
+    private fun authoritativeEnvelope(root: JSONObject, anchors: List<String>): JSONObject {
+        if (root.optInt("transitionVersion", 0) != TRANSITION_VERSION) return root
+        val prior = root.getJSONObject("prior")
+        val next = root.getJSONObject("next")
+        val priorAlias = prior.getString("anchor")
+        val nextAlias = next.getString("anchor")
+        return when {
+            priorAlias in anchors -> prior
+            nextAlias in anchors -> next
+            else -> throw AnchorMismatch(anchors.size, false)
         }
     }
 
@@ -523,7 +560,8 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         override fun writeAndSync(value: String) {
             checkpoint("before-truncate")
-            FileOutputStream(file).use { out ->
+            val temporary = File(file.parentFile, "${file.name}.new")
+            FileOutputStream(temporary).use { out ->
                 checkpoint("after-truncate")
                 val bytes = value.toByteArray(Charsets.UTF_8)
                 val middle = bytes.size / 2
@@ -534,6 +572,8 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 out.fd.sync()
                 checkpoint("after-sync")
             }
+            check(temporary.renameTo(file)) { "Unable to atomically publish session journal" }
+            FileChannel.open(file.parentFile.toPath(), StandardOpenOption.READ).use { it.force(true) }
         }
     }
 
@@ -544,6 +584,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
 
     companion object {
         private const val PREFIX = "ypso.session.revision."
+        private const val TRANSITION_VERSION = 1
         private const val IV_SIZE = 12
         private val EVIDENCE_BINDING_FIELDS =
             setOf("characteristic", "purpose", "payloadHash", "priorWrite", "candidate")

@@ -194,7 +194,10 @@ class YpsoPumpPlugin @Inject constructor(
         if (!configured()) {
             bleManager.disconnect()
             pumpState.invalidateStatus()
-            aapsLogger.info(LTag.PUMP, "YpsoPump: no protected pump session configured — skipping connect")
+            aapsLogger.info(
+                LTag.PUMP,
+                "YpsoPump: no protected pump session configured — skipping connect (${provisioning.ownershipStatus()})",
+            )
             // A failed replacement whose only fallback is the retained legacy bundle is being restored
             // asynchronously; do not overwrite its recorded failure with an unconfigured condition.
             if (!provisioning.isSessionRestorePending())

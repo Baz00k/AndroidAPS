@@ -72,6 +72,34 @@ row holdback to the physical-delivery window while retaining reconciliation elig
 and changed backwards-clock handling to re-anchor a finite safety block instead of
 immediately permitting another dose. Focused state regressions pass.
 
+### Protected-session loss during diagnostic force-stop
+
+Force-stopping the debug app during an active authenticated history read exposed a
+separate critical durability defect. The journal reported
+`JOURNAL_UNAVAILABLE:anchor_count=1,contains_current=false`: the published envelope's
+Keystore key had been deleted, while an unpublished revision's key survived. The old
+commit protocol deliberately deleted the prior anchor before replacing the journal;
+its tests accepted permanent unavailability at several crash boundaries. Neither the
+current envelope nor the pre-update private snapshot can be safely restored because
+their non-exportable anchors no longer exist. Do not synthesize counters or blindly
+restore either file. Candidate protocol now atomically publishes a transition holding
+prior and next sealed envelopes; prior remains authoritative while its exact anchor
+exists, and next becomes authoritative only after that anchor is retired. Tests inject
+exceptions and process termination at every publication/anchor boundary and require an
+exact old or exact next state, never an unavailable or ambiguous replay floor. The app
+remains stopped and read-only; reconnect requires the reviewed ownership recovery path.
+
+Recovery artifact review found two existing canonical `ypso-keys` session documents and
+an HMAC-valid write-bench ownership handoff. The handoff is historical: reboot 21,
+read 2998, write 4280, exported September 17. The surviving bench journal reports write
+7826, while the durable incident bolus journal proves later local allocations 9034 and
+9035; the interrupted diagnostic history scan may have allocated still higher selector
+counters. Importing the historical handoff as current ownership would therefore roll the
+write floor backwards. Added an ownership-adoption guard that compares the handoff against
+the highest durable bolus start/cancel allocation for the same pump and rejects a stale
+handoff. The existing pump-confirmed 139 search remains inapplicable without a durable
+ownership record; missing/corrupt journal recovery needs its own reviewed contract.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 

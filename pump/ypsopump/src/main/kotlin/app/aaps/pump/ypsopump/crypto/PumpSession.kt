@@ -577,7 +577,12 @@ class PumpSession(private val store: Store) {
      * itself, and an unresolved local or imported write blocks the operation.
      */
     @Synchronized
-    internal fun adoptOwnershipHandoff(imported: Record, importedAt: Long, source: Map<String, String>) {
+    internal fun adoptOwnershipHandoff(
+        imported: Record,
+        importedAt: Long,
+        source: Map<String, String>,
+        minimumKnownWriteFloor: Long? = null,
+    ) {
         val current = state ?: throw SecurityException("Session storage unavailable")
         check(current.candidateGeneration == null) { "Cannot import ownership while credential verification is pending" }
         val active = current.records.singleOrNull { it.generation == current.activeGeneration }
@@ -590,6 +595,9 @@ class PumpSession(private val store: Store) {
         check(imported.serial == active.serial && imported.serial.isNotBlank()) { "Ownership handoff pump identity does not match" }
         check(imported.reboot != null && imported.read != null && imported.write != null) { "Ownership handoff has no complete replay floor" }
         check(imported.writeBootstrapState == WriteBootstrapState.ESTABLISHED) { "Ownership handoff write floor is not established" }
+        minimumKnownWriteFloor?.let { floor ->
+            check(imported.write >= floor) { "Ownership handoff predates durable local write allocation" }
+        }
         val sameEpoch = active.reboot == null || active.reboot == imported.reboot
         check(active.reboot == null || imported.reboot >= active.reboot) { "Ownership handoff would roll back the pump epoch" }
         if (sameEpoch) {

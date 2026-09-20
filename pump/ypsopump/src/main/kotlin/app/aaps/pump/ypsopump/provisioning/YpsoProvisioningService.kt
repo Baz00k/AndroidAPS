@@ -6,10 +6,12 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.SharedPreferences
 import app.aaps.pump.ypsopump.YpsoPumpConst
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import java.io.InputStream
+import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
@@ -22,14 +24,23 @@ class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
     private val legacyStore: LegacyStore,
-    private val bondedSerialForMac: (String) -> String? = { null }
+    private val durableBolusWriteFloor: () -> Pair<String, Long>? = { null },
+    private val bondedSerialForMac: (String) -> String? = { null },
 ) {
 
     @Inject constructor(context: Context, pumpState: YpsoPumpState) : this(
         PumpSession(SessionJournal(context)),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
-        { mac -> bondedPumpSerial(context, mac) }
+        {
+            YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json"))
+                .load()
+                ?.let { attempt ->
+                    listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
+                        ?.let { floor -> attempt.pumpSerial to floor }
+                }
+        },
+        { mac -> bondedPumpSerial(context, mac) },
     )
 
     internal var quiesceConnection: () -> Unit = {}
@@ -289,6 +300,10 @@ class YpsoProvisioningService internal constructor(
                         "ownership_source_apk_sha256" to reviewed.source.apkSha256,
                         "ownership_source_journal_sha256" to reviewed.source.journalSha256,
                     ),
+                    minimumKnownWriteFloor = durableBolusWriteFloor()?.let { (serial, floor) ->
+                        check(serial == reviewed.record.serial) { "Durable bolus allocation belongs to another pump" }
+                        floor
+                    },
                 )
                 pumpState.invalidateStatus()
                 pumpState.invalidateProfileEvidence()
