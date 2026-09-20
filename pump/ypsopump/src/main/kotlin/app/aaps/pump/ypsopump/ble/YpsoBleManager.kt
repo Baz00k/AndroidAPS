@@ -88,6 +88,7 @@ class YpsoBleManager @Inject constructor(
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val EXPECTED_PROFILE_SELECTOR_FRAME_COUNT = 4
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
+        private const val LOCAL_CANCEL_STATUS = -3 // local preemption; release ownership without reporting transport failure
         private val SUPPORTED_CONTROL_SERVICE_VERSION = "1.3\u0000".toByteArray(Charsets.US_ASCII)
         private val SERVICE_CONTROL: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
         private val SERVICE_EXTREAD: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
@@ -478,15 +479,22 @@ class YpsoBleManager @Inject constructor(
     private var currentTimeout: Runnable? = null
     // A dropped callback used to leave the active operation and multi-frame transaction latched forever.
     // Time each operation out so its result path tears down the transaction and connection cleanly.
-    private val opHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val opScheduler = java.util.concurrent.ScheduledThreadPoolExecutor(1) { runnable ->
+        Thread(runnable, "ypso-ble-watchdog").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+    private val scheduledOps = java.util.concurrent.ConcurrentHashMap<Runnable, java.util.concurrent.ScheduledFuture<*>>()
 
     // Injectable scheduling seams keep timeout/callback races deterministic in local unit tests without
-    // exposing the BLE queue itself. Production retains Android's main-looper scheduling.
+    // exposing the BLE queue itself. Production uses a dedicated watchdog, independent of UI load.
     internal var scheduleOpTimeout: (Runnable, Long) -> Unit = { timeout, delay ->
-        opHandler.postDelayed(timeout, delay)
+        scheduledOps.remove(timeout)?.cancel(false)
+        scheduledOps[timeout] = opScheduler.schedule({
+            scheduledOps.remove(timeout)
+            timeout.run()
+        }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
-    internal var cancelOpTimeout: (Runnable) -> Unit = { timeout -> opHandler.removeCallbacks(timeout) }
-    internal var scheduleProfileContinuation: (Runnable) -> Unit = { runnable -> opHandler.post(runnable) }
+    internal var cancelOpTimeout: (Runnable) -> Unit = { timeout -> scheduledOps.remove(timeout)?.cancel(false) }
+    internal var scheduleProfileContinuation: (Runnable) -> Unit = { runnable -> opScheduler.execute(runnable) }
     internal var sdkInt: Int = Build.VERSION.SDK_INT
     private var handshakeTimeout: Runnable? = null
     private var profileWriteTransportInstance: YpsoSerializedWriteTransport? = null
@@ -620,6 +628,11 @@ class YpsoBleManager @Inject constructor(
         complete(op, gatt, uuid, value, status)
     }
 
+    private fun cancelCurrentOperation(gatt: BluetoothGatt) {
+        val op = synchronized(opLock) { current?.takeIf { currentGatt === gatt } } ?: return
+        complete(op, gatt, op.uuid, null, LOCAL_CANCEL_STATUS)
+    }
+
     @SuppressLint("MissingPermission")
     private fun readOp(
         gatt: BluetoothGatt,
@@ -747,6 +760,10 @@ class YpsoBleManager @Inject constructor(
             val invalidFrame = v != null && reportedTotal == null
             if (gatt !== originGatt || s != BluetoothGatt.GATT_SUCCESS || v == null || invalidFrame) {
                 if (!finishTransaction()) return@readOp
+                if (s == LOCAL_CANCEL_STATUS) {
+                    onFailure()
+                    return@readOp
+                }
                 // Name 0x8C explicitly. Reported as a bare "status=140" it reads like a transient BLE
                 // fault and invites hours of restarting things that cannot possibly help; it actually
                 // means the shared key is gone and only a re-key will fix it.
@@ -1202,7 +1219,8 @@ class YpsoBleManager @Inject constructor(
         val token = captured.second
         val connectionId = captured.third
         attempt.onCancel = {
-            synchronized(opLock) { if (bluetoothGatt === gatt) disconnect() }
+            historyReadActive.set(false)
+            if (gatt != null) cancelCurrentOperation(gatt)
             runCatching { onResult(null) }
         }
         if (!isConnected || gatt == null || token == null || !hasCompatibleStatusProtocol()) {

@@ -400,8 +400,8 @@ class YpsoPumpPlugin @Inject constructor(
             if (bolusController.cancellationRequested && !cancellationSignalled) {
                 // Stop is a request, not terminal evidence. Signal it promptly once, then continue
                 // observing same-command status and authoritative type-2 history for partial delivery.
-                bolusController.requestStop()
-                cancellationSignalled = true
+                cancellationSignalled = bolusController.requestStop() ==
+                    YpsoImmediateBolusController.StopResult.DISPATCHED_OR_PENDING
             }
             val attempt = bolusController.currentAttempt()
             if (attempt?.requestId != requestId) {
@@ -417,7 +417,10 @@ class YpsoPumpPlugin @Inject constructor(
                 val pumpHistoryId = attempt.pumpHistoryId
                 if (pumpHistoryId == null || !historyIngestion.isAccounted(pumpHistoryId)) {
                     val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-                    if (remaining > 0) readHistoryBlocking(timeoutMs = minOf(20_000L, remaining))?.let(::ingestHistory)
+                    if (remaining > 0) readHistoryBlocking(
+                        timeoutMs = minOf(20_000L, remaining),
+                        stopWhen = { bolusController.cancellationRequested },
+                    )?.let(::ingestHistory)
                     Thread.sleep(250L)
                     continue
                 }
@@ -441,7 +444,10 @@ class YpsoPumpPlugin @Inject constructor(
             }
             if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-                if (remaining > 0) readHistoryBlocking(timeoutMs = minOf(20_000L, remaining))?.let(::ingestHistory)
+                if (remaining > 0) readHistoryBlocking(
+                    timeoutMs = minOf(20_000L, remaining),
+                    stopWhen = { bolusController.cancellationRequested },
+                )?.let(::ingestHistory)
             }
             Thread.sleep(250L)
         }
@@ -643,14 +649,17 @@ class YpsoPumpPlugin @Inject constructor(
         }
         onAttempt(attempt)
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        var yielded = false
         while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
+            if (stopWhen()) { yielded = true; break }
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
         }
         if (latch.count == 0L) return snapshot
         if (!attempt.cancel()) {
             latch.await()
             return snapshot
         }
+        if (yielded) return null
         aapsLogger.error(LTag.PUMP, "YpsoPump history read timed out after ${timeoutMs}ms")
         bleManager.disconnect()
         return null

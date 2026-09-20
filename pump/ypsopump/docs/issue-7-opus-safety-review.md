@@ -23,7 +23,7 @@ implementation ledger; a finding is not closed until its regression evidence is 
 | S2 | Confirmed | Fixed in working tree | Pending | Extended deadline = duration + 90 s; epoch change becomes durable warning |
 | S3 | Confirmed | Fixed in working tree | Pending | Split dose inhibition/reconciliation/row holdback; backwards-clock regression passes |
 | S4 | Confirmed | Fixed | Pending | Restored independent selector identity proof; stable-history regression passes |
-| S5 | Pending | Open | — | — |
+| S5 | Confirmed | Fixed | Pending | Stop retries until dispatch/pending; history yields locally; BLE watchdog moved off main looper; BLE suite passes |
 | S6 | Confirmed | Fixed in working tree | Pending | Authoritative terminal amount publishes final progress |
 | S7 | Confirmed | Fixed in working tree | Pending | Live PumpSync row without durable identity now fails explicitly |
 | S8 | Confirmed | Fixed in working tree | Pending | Synchronized message lifecycle dismisses, raises, clears, and can re-raise |

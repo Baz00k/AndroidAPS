@@ -22,6 +22,8 @@ internal class YpsoImmediateBolusController(
     private val historyCursor: () -> YpsoHistoryCursor?,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
+    enum class StopResult { RETRY, DISPATCHED_OR_PENDING, NOT_APPLICABLE }
+
     sealed interface DeliveryResult {
         data class Started(val attempt: YpsoBolusAttempt, val observedDeliveredUnits: Double) : DeliveryResult
         data class NotSent(val detail: String) : DeliveryResult
@@ -199,15 +201,17 @@ internal class YpsoImmediateBolusController(
         }
     }
 
-    fun requestStop() {
+    fun requestStop(): StopResult {
         stopRequested.set(true)
-        val attempt = journal.current() ?: return
-        if (attempt.provenCancelBlock == null) return
+        val attempt = journal.current() ?: return StopResult.NOT_APPLICABLE
+        if (attempt.cancelRequestId != null) return StopResult.DISPATCHED_OR_PENDING
+        if (attempt.provenCancelBlock == null) return StopResult.RETRY
         val owner = commandOwner.get()
         val status = if (owner != null) readBolusStatus(owner) else readBolusStatus()
-        if (status == null) return
-        val connectionKey = owner?.let(bleManager::connectionKey) ?: bleManager.currentBolusConnectionKey() ?: return
+        if (status == null) return StopResult.RETRY
+        val connectionKey = owner?.let(bleManager::connectionKey) ?: bleManager.currentBolusConnectionKey() ?: return StopResult.RETRY
         cancelProven(attempt, status, connectionKey)
+        return if (journal.current()?.cancelRequestId != null) StopResult.DISPATCHED_OR_PENDING else StopResult.RETRY
     }
 
     @Synchronized
