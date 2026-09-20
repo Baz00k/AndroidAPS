@@ -10,7 +10,14 @@ enum class ActionId {
 }
 
 @Immutable
-data class TherapyAction(val id: ActionId, val label: String, val sub: String = "", val cancelable: Boolean = false)
+data class TherapyAction(
+    val id: ActionId,
+    val label: String,
+    val sub: String = "",
+    val cancelable: Boolean = false,
+    val enabled: Boolean = true,
+    val disabledSub: String = "",
+)
 
 @Immutable
 data class EventAction(val id: ActionId, val label: String)

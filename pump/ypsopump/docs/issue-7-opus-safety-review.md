@@ -31,12 +31,12 @@ implementation ledger; a finding is not closed until its regression evidence is 
 | S10 | Confirmed | Fixed in working tree | Pending | Queued therapy can repeatedly bypass transport-only backoff; rekey remains blocking |
 | S11 | Confirmed | Fixed in working tree | Pending | Post-dispatch identity loss is enacted uncertainty; confirmed partial is successful enacted result |
 | S12 | Confirmed | Fixed in working tree | Pending | Removed redundant post-terminal stop transaction |
-| S13.1 | Pending | Open | — | — |
-| S13.2 | Pending | Open | — | — |
-| S13.3 | Pending | Open | — | — |
-| S13.4 | Pending | Open | — | — |
-| S14 | Pending | Open | — | — |
-| S15 | Pending | Open | — | — |
+| S13.1 | Confirmed | Fixed | Pending | Alarm runs before any UI work; refresh is main-thread and binding-guarded |
+| S13.2 | Confirmed | Fixed | Pending | Confirmation latch resets on pause and view destruction |
+| S13.3 | Confirmed | Fixed | Pending | Pending state localized; queue and confirmation guards are visible/disabled |
+| S13.4 | Confirmed | Fixed | Pending | Pending cancel deduplicated and tested; queued set is explicitly superseded |
+| S14 | Confirmed naming/test gap | Fixed | Pending | Presentation renamed; paired GATT 129 and pump 140 tests cover retry vs rekey |
+| S15 | Confirmed | Fixed | Pending | Four unsafe-contract tests rewritten; broader full-suite evidence pending |
 
 ## Finding inventory
 

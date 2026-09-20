@@ -16,6 +16,7 @@ interface CommandQueue {
     fun performing(): Command?
     fun resetPerforming()
     fun bolusInQueue(): Boolean
+    fun extendedBolusInQueue(): Boolean
     fun bolus(detailedBolusInfo: DetailedBolusInfo, callback: Callback?): Boolean
     fun cancelAllBoluses(id: Long?)
     fun stopPump(callback: Callback?)

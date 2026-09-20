@@ -92,6 +92,7 @@ class ActionsFragment : DaggerFragment() {
 
     // ---- Redesigned Actions (Compose overlay) ----
     private val actionsState = mutableStateOf(ActionsUiState())
+    private var extendedBolusCancellationConfirmationOpen = false
 
     private var _binding: ActionsFragmentBinding? = null
 
@@ -133,16 +134,7 @@ class ActionsFragment : DaggerFragment() {
             }
         }
         binding.extendedBolusCancel.setOnClickListener {
-            if (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) != null) {
-                uel.log(Action.CANCEL_EXTENDED_BOLUS, Sources.Actions)
-                commandQueue.cancelExtended(object : Callback() {
-                    override fun run() {
-                        if (!result.success) {
-                            uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.extendedbolusdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                        }
-                    }
-                })
-            }
+            confirmExtendedBolusCancellation()
         }
         binding.setTempBasal.setOnClickListener {
             activity?.let { activity ->
@@ -217,7 +209,16 @@ class ActionsFragment : DaggerFragment() {
             }
             if (pump.pumpDescription.isExtendedBolusCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && !pump.isFakingTempsByExtendedBoluses && notClient) {
                 val eb = persistenceLayer.getExtendedBolusActiveAt(now)
-                if (eb != null) add(TherapyAction(ActionId.EXTENDED_BOLUS_CANCEL, "Extended Bolus", eb.toStringMedium(dateUtil, rh), cancelable = true))
+                if (eb != null) add(
+                    TherapyAction(
+                        ActionId.EXTENDED_BOLUS_CANCEL,
+                        "Extended Bolus",
+                        eb.toStringMedium(dateUtil, rh),
+                        cancelable = true,
+                        enabled = !commandQueue.extendedBolusInQueue(),
+                        disabledSub = rh.gs(R.string.extended_bolus_cancellation_pending),
+                    )
+                )
                 else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended Bolus"))
             }
             if (activePlugin.activeProfileSource.profile != null && pump.pumpDescription.isSetBasalProfileCapable && pump.isInitialized() && notDisconnected && !pump.isSuspended())
@@ -261,12 +262,7 @@ class ActionsFragment : DaggerFragment() {
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), rh.gs(R.string.ebstopsloop), { uiInteraction.runExtendedBolusDialog(childFragmentManager) }, null)
             }
 
-            ActionId.EXTENDED_BOLUS_CANCEL -> if (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) != null) {
-                uel.log(Action.CANCEL_EXTENDED_BOLUS, Sources.Actions)
-                commandQueue.cancelExtended(object : Callback() {
-                    override fun run() { if (!result.success) uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.extendedbolusdeliveryerror), app.aaps.core.ui.R.raw.boluserror) }
-                })
-            }
+            ActionId.EXTENDED_BOLUS_CANCEL -> confirmExtendedBolusCancellation()
 
             ActionId.PROFILE_SWITCH -> bolusProtected { uiInteraction.runProfileSwitchDialog(childFragmentManager) }
             ActionId.FILL          -> bolusProtected { uiInteraction.runFillDialog(childFragmentManager) }
@@ -279,6 +275,33 @@ class ActionsFragment : DaggerFragment() {
             ActionId.QUESTION      -> care(UiInteraction.EventType.QUESTION, app.aaps.core.ui.R.string.careportal_question)
             ActionId.HISTORY       -> startActivity(Intent(context, uiInteraction.historyActivity))
         }
+    }
+
+    private fun confirmExtendedBolusCancellation() {
+        val activity = activity ?: return
+        if (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) == null ||
+            commandQueue.extendedBolusInQueue() || extendedBolusCancellationConfirmationOpen
+        ) return
+        extendedBolusCancellationConfirmationOpen = true
+        OKDialog.showConfirmation(
+            activity,
+            rh.gs(app.aaps.core.ui.R.string.cancel) + " " + rh.gs(app.aaps.core.ui.R.string.extended_bolus),
+            rh.gs(R.string.confirm_cancel_extended_bolus),
+            Runnable {
+                extendedBolusCancellationConfirmationOpen = false
+                if (commandQueue.extendedBolusInQueue()) return@Runnable
+                uel.log(Action.CANCEL_EXTENDED_BOLUS, Sources.Actions)
+                if (commandQueue.cancelExtended(object : Callback() {
+                        override fun run() {
+                            if (!result.success) {
+                                uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.extendedbolusdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
+                            }
+                            activity?.runOnUiThread { if (_binding != null) updateGui() }
+                        }
+                    })) activity.runOnUiThread { if (_binding != null) updateGui() }
+            },
+            Runnable { extendedBolusCancellationConfirmationOpen = false },
+        )
     }
 
     @Synchronized
@@ -309,11 +332,13 @@ class ActionsFragment : DaggerFragment() {
 
     @Synchronized
     override fun onPause() {
+        extendedBolusCancellationConfirmationOpen = false
         super.onPause()
         disposable.clear()
     }
 
     override fun onDestroyView() {
+        extendedBolusCancellationConfirmationOpen = false
         super.onDestroyView()
         _binding = null
     }
@@ -341,6 +366,7 @@ class ActionsFragment : DaggerFragment() {
                 binding.extendedBolusCancel.visibility = View.VISIBLE
                 @Suppress("SetTextI18n")
                 binding.extendedBolusCancel.text = rh.gs(app.aaps.core.ui.R.string.cancel) + " " + activeExtendedBolus.toStringMedium(dateUtil, rh)
+                binding.extendedBolusCancel.isEnabled = !commandQueue.extendedBolusInQueue()
             } else {
                 binding.extendedBolus.visibility = View.VISIBLE
                 binding.extendedBolusCancel.visibility = View.GONE
