@@ -1007,6 +1007,27 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `generic authentication GATT failure is retryable and never claims key rejection`() {
+        val gatt: BluetoothGatt = mock()
+        val auth: BluetoothGattCharacteristic = mock()
+        whenever(auth.uuid).thenReturn(CHAR_AUTH)
+        ownGatt(gatt, ConnectionState.READY)
+        val generation = manager.session!!.activeRecord()!!.generation
+
+        manager.gattCallback.onCharacteristicWrite(gatt, auth, 129)
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        verify(provisioning).recordCandidateOrUnavailable(
+            eq(generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.AUTHENTICATION)),
+            eq("ble"), any(), anyOrNull(), eq(129)
+        )
+        verify(provisioning, never()).failCandidateOrRecord(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
     fun `status read code 140 is attributed to the captured attempt rather than globally`() {
         val fixture = connectedGatt()
         val results = mutableListOf<Boolean>()
