@@ -441,6 +441,9 @@ class PumpSyncImplementation @Inject constructor(
             .blockingGet()
     }
 
+    override fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB? =
+        persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial)
+
     override fun syncStopExtendedBolusWithPumpId(timestamp: Long, endPumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean {
         if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return false
         return persistenceLayer.syncPumpStopExtendedBolusWithPumpId(timestamp, endPumpId, pumpType, pumpSerial)

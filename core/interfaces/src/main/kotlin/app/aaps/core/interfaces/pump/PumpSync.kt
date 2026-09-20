@@ -522,6 +522,9 @@ interface PumpSync {
 
     fun syncExtendedBolusWithPumpId(timestamp: Long, amount: Double, duration: Long, isEmulatingTB: Boolean, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean
 
+    /** Read back an extended bolus by the same stable identity used for synchronization. */
+    fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): app.aaps.core.data.model.EB?
+
     /**
      * Synchronization of extended bolus end event
      * (for pumps having separate event for end of EB or not having history)

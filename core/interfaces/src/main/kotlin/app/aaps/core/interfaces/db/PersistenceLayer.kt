@@ -948,6 +948,9 @@ interface PersistenceLayer {
      */
     fun getExtendedBolusByNSId(nsId: String): EB?
 
+    /** Get the current extended-bolus record by its stable pump identity. */
+    fun getExtendedBolusByPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB?
+
     /**
      * Get running extended bolus starting in time interval
      *

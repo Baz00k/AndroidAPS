@@ -19,7 +19,7 @@ implementation ledger; a finding is not closed until its regression evidence is 
 | ID | Validation | Status | Fix commit | Evidence |
 |---|---|---|---|---|
 | Gate | Confirmed | Fixed | Pending | `READ_ONLY_MODE` restored to `true` |
-| S1 | Pending | Open | — | — |
+| S1 | Confirmed | In progress | Pending | Stable `pumpId` read-back verifier added; plugin switch pending validated commit |
 | S2 | Pending | Open | — | — |
 | S3 | Pending | Open | — | — |
 | S4 | Pending | Open | — | — |
@@ -30,7 +30,7 @@ implementation ledger; a finding is not closed until its regression evidence is 
 | S9 | Pending | Open | — | — |
 | S10 | Pending | Open | — | — |
 | S11 | Pending | Open | — | — |
-| S12 | Pending | Open | — | — |
+| S12 | Confirmed | In progress | Pending | Redundant stop removed in working tree; pending validated plugin commit |
 | S13.1 | Pending | Open | — | — |
 | S13.2 | Pending | Open | — | — |
 | S13.3 | Pending | Open | — | — |
