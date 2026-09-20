@@ -33,6 +33,11 @@ missing selector re-anchoring, and missing operator recovery. Passing 407 unit t
 not establish these production properties. The historical table records candidate
 fix commits, not current closure or therapy approval.
 
+Stop-starvation follow-up: `YpsoStopHistoryYieldTest` reproduced the permanent
+Stop predicate (`expected false, was true`). The controller now separates durable
+cancellation intent from a consumed one-shot history-yield signal; the focused test
+passes. This does not close the hardware timeout/accounting incident.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 

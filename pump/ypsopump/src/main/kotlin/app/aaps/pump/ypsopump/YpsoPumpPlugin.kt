@@ -419,7 +419,7 @@ class YpsoPumpPlugin @Inject constructor(
                     val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                     if (remaining > 0) readHistoryBlocking(
                         timeoutMs = minOf(20_000L, remaining),
-                        stopWhen = { bolusController.cancellationRequested },
+                        stopWhen = bolusController::consumeHistoryYield,
                     )?.let(::ingestHistory)
                     Thread.sleep(250L)
                     continue
@@ -446,7 +446,7 @@ class YpsoPumpPlugin @Inject constructor(
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                 if (remaining > 0) readHistoryBlocking(
                     timeoutMs = minOf(20_000L, remaining),
-                    stopWhen = { bolusController.cancellationRequested },
+                    stopWhen = bolusController::consumeHistoryYield,
                 )?.let(::ingestHistory)
             }
             Thread.sleep(250L)

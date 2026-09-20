@@ -32,10 +32,12 @@ internal class YpsoImmediateBolusController(
 
     private val delivering = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
+    private val historyYieldRequested = AtomicBoolean(false)
     private val commandOwner = AtomicReference<YpsoBleManager.BolusCommandOwner?>()
 
     val isBusy: Boolean get() = delivering.get()
     val cancellationRequested: Boolean get() = stopRequested.get()
+    fun consumeHistoryYield(): Boolean = historyYieldRequested.getAndSet(false)
     fun currentAttempt(): YpsoBolusAttempt? = journal.current()
     fun expireStaleAttempt(immediateWindowMs: Long, extendedMarginMs: Long): YpsoBolusAttempt? =
         journal.expireObservationWindow(now(), immediateWindowMs, extendedMarginMs)
@@ -43,6 +45,7 @@ internal class YpsoImmediateBolusController(
     fun beginDelivery(): Boolean {
         if (!delivering.compareAndSet(false, true)) return false
         stopRequested.set(false)
+        historyYieldRequested.set(false)
         return true
     }
 
@@ -202,7 +205,7 @@ internal class YpsoImmediateBolusController(
     }
 
     fun requestStop(): StopResult {
-        stopRequested.set(true)
+        if (stopRequested.compareAndSet(false, true)) historyYieldRequested.set(true)
         val attempt = journal.current() ?: return StopResult.NOT_APPLICABLE
         if (attempt.cancelRequestId != null) return StopResult.DISPATCHED_OR_PENDING
         if (attempt.provenCancelBlock == null) return StopResult.RETRY
