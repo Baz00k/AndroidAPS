@@ -125,6 +125,36 @@ class YpsoProfileSelectorCoordinatorTest {
     }
 
     @Test
+    fun `lower bound recovery state blocks profile selectors`() {
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = store.saved.copy(records = store.saved.records.map {
+            it.copy(
+                write = 9_035,
+                writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                lowerBoundRecoveryReboot = 21,
+            )
+        })
+        val session = PumpSession(store)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val coordinator = YpsoProfileSelectorCoordinator(session, SessionCrypto(), YpsoSerializedWriteTransport({ _, _ -> }, {}))
+
+        assertFalse(
+            coordinator.write(
+                "profile-recovery-block",
+                YpsoProfileSelectorCoordinator.Owner(Any(), "connection", session.open("pump", key)),
+                1,
+                null,
+                8_000,
+                { error("dispatch") },
+                outcomes::add,
+            ),
+        )
+        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
+        assertNull(session.snapshot()!!.reservation)
+    }
+
+    @Test
     fun `strict next selector remains blocking until exact readback reconciliation`() {
         val store = MemoryStore()
         PumpSession(store).provisionReadBaseline("pump", key, 21, 100)

@@ -93,6 +93,65 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `unavailable journal replacement retires stale anchors before publishing recovery`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        val publishedAlias = org.json.JSONObject(checkNotNull(storage.file)).getString("anchor")
+        storage.keys.remove(publishedAlias)
+        storage.keys["ypso.session.revision.stale-restored-backup"] = byteArrayOf(1)
+        assertThrows(Exception::class.java) { journal.load() }
+
+        journal.replaceUnavailable(next)
+
+        assertEquals(next, SessionJournal(storage).load())
+        assertEquals(1, storage.anchors().size)
+        assertNotEquals("ypso.session.revision.stale-restored-backup", storage.anchors().single())
+    }
+
+    @Test
+    fun `healthy journal cannot be replaced through disaster recovery`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+
+        assertThrows(IllegalStateException::class.java) { journal.replaceUnavailable(next) }
+
+        assertEquals(old, journal.load())
+    }
+
+    @Test
+    fun `replacement interruption stays unavailable and can be retried without rollback`() {
+        val boundaries = listOf(
+            "after-create",
+            "before-delete",
+            "after-delete",
+            "before-truncate",
+            "after-truncate",
+            "partial-write",
+            "before-sync",
+            "after-sync",
+        )
+        for (boundary in boundaries) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(old)
+            val publishedAlias = org.json.JSONObject(checkNotNull(storage.file)).getString("anchor")
+            storage.keys.remove(publishedAlias)
+            storage.keys["ypso.session.revision.stale-restored-backup"] = byteArrayOf(1)
+            storage.terminateAt = boundary
+
+            assertThrows(ThreadDeath::class.java, { journal.replaceUnavailable(next) }, boundary)
+
+            storage.terminateAt = ""
+            assertThrows(Exception::class.java, { SessionJournal(storage).load() }, boundary)
+            journal.replaceUnavailable(next)
+            assertEquals(next, SessionJournal(storage).load(), boundary)
+            assertEquals(1, storage.anchors().size, boundary)
+        }
+    }
+
+    @Test
     fun `process termination before retiring prior anchor keeps prior revision authoritative`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
@@ -136,6 +195,35 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `version seventeen roundtrip preserves lower bound recovery epoch`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val recovering = PumpSession.State(
+            records = listOf(
+                PumpSession.Record(
+                    pump = "pump",
+                    keyId = "00".repeat(32),
+                    generation = "generation",
+                    reboot = null,
+                    read = null,
+                    write = 9_035,
+                    writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                    lowerBoundRecoveryReboot = 21,
+                ),
+            ),
+            activeGeneration = "generation",
+            availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+        )
+
+        journal.commit(recovering)
+
+        assertEquals(recovering, journal.load())
+        val envelope = org.json.JSONObject(checkNotNull(storage.file))
+        val body = storage.open(envelope.getString("anchor"), envelope.getString("sealed"))
+        assertEquals(17, org.json.JSONObject(body).getInt("version"))
+    }
+
+    @Test
     fun `version nine roundtrip preserves exact durable write evidence`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
@@ -164,7 +252,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(16, org.json.JSONObject(body).getInt("version"))
+        assertEquals(17, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test

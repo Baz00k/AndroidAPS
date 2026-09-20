@@ -132,6 +132,19 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
+    private val lowerBoundRecoveryRequested = AtomicBoolean(false)
+
+    internal fun requestLowerBoundHistoryRecovery(enqueue: () -> Boolean): Boolean {
+        if (provisioning.owner.committedRecord()?.writeBootstrapState != PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND ||
+            !lowerBoundRecoveryRequested.compareAndSet(false, true)
+        ) return false
+        return try {
+            enqueue().also { accepted -> if (!accepted) lowerBoundRecoveryRequested.compareAndSet(true, false) }
+        } catch (error: RuntimeException) {
+            lowerBoundRecoveryRequested.compareAndSet(true, false)
+            throw error
+        }
+    }
     @Volatile private var historyRecoveryEnabled = true
 
     init {
@@ -254,7 +267,15 @@ class YpsoPumpPlugin @Inject constructor(
         // BLE round trips (and a stalled transfer used to hold this queue for two minutes), so it must
         // never run inline here: queued boluses and Stop would be unable to overtake it. Immediate
         // boluses reconcile their authoritative terminal history in awaitBolusTerminal().
-        if (statusRead) scheduleHistoryRecovery(reason)
+        if (reason == LOWER_BOUND_RECOVERY_REASON) {
+            if (statusRead && lowerBoundRecoveryRequested.compareAndSet(true, false)) {
+                scheduleLowerBoundHistoryRecovery(reason)
+            } else if (!statusRead) {
+                lowerBoundRecoveryRequested.set(false)
+            }
+        } else if (statusRead) {
+            scheduleHistoryRecovery(reason)
+        }
     }
 
     override val lastDataTime: Long get() = pumpState.lastStatusTime
@@ -711,6 +732,39 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
+    private fun scheduleLowerBoundHistoryRecovery(reason: String) {
+        if (!bleManager.isConnected) return
+        if (!historyRecoveryActive.compareAndSet(false, true)) {
+            lowerBoundRecoveryRequested.set(true)
+            return
+        }
+        dispatchHistoryRecovery {
+            try {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var recovered = false
+                bleManager.recoverHistorySelectorLowerBound {
+                    recovered = it
+                    latch.countDown()
+                }
+                if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    aapsLogger.error(LTag.PUMP, "YpsoPump lower-bound history recovery timed out after $reason")
+                    bleManager.disconnect()
+                } else if (!recovered) {
+                    aapsLogger.info(LTag.PUMP, "YpsoPump lower-bound history recovery was not confirmed after $reason")
+                }
+            } catch (exception: RuntimeException) {
+                aapsLogger.error(LTag.PUMP, "YpsoPump lower-bound history recovery failed after $reason: ${exception.message}")
+            } finally {
+                historyRecoveryActive.set(false)
+                if (idleDisconnectDeferredToHistory.getAndSet(false) &&
+                    commandQueue.size() == 0 && !bolusController.isBusy
+                ) {
+                    bleManager.disconnect(preserveStatus = true)
+                }
+            }
+        }
+    }
+
     private fun historyRecoveryMustYield(): Boolean =
         !historyRecoveryEnabled || bolusController.isBusy ||
             commandQueue.size() > 0 || commandQueue.bolusInQueue()
@@ -1125,6 +1179,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     companion object {
+        internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"

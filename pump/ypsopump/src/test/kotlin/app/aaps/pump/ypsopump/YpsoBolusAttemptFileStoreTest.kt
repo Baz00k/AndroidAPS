@@ -32,6 +32,7 @@ class YpsoBolusAttemptFileStoreTest {
         YpsoBolusAttemptFileStore(file).commit(expected)
 
         assertEquals(expected, YpsoBolusAttemptFileStore(file).load())
+        assertEquals(expected, YpsoBolusAttemptFileStore(file).recoveryEvidence()?.attempt)
     }
 
     @Test
@@ -47,6 +48,7 @@ class YpsoBolusAttemptFileStoreTest {
         assertEquals(0, loaded?.immediateCentiUnits)
         assertEquals(null, loaded?.pumpSlowSequence)
         assertEquals(null, loaded?.cancelBlock)
+        assertEquals(null, loaded?.sessionKeyId)
         assertEquals("pre-upgrade rejection", loaded?.detail)
     }
 
@@ -66,6 +68,24 @@ class YpsoBolusAttemptFileStoreTest {
         assertEquals(YpsoBolusBlock.FAST, loaded?.cancelBlock)
         assertEquals("cancel-1", loaded?.cancelRequestId)
         assertEquals(4811, loaded?.cancelCounter)
+    }
+
+    @Test
+    fun `version 3 journals remain readable but have no recovery key binding`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val current = attempt()
+        YpsoBolusAttemptFileStore(file).commit(current)
+        file.writeText(
+            file.readText()
+                .replaceFirst("\"version\":4", "\"version\":3")
+                .replace(Regex(",\"sessionKeyId\":\"[0-9a-f]{64}\""), ""),
+        )
+
+        val loaded = YpsoBolusAttemptFileStore(file).load()
+
+        assertEquals(current.copy(sessionKeyId = null), loaded)
+        assertEquals(null, YpsoBolusAttemptFileStore(file).recoveryEvidence()?.attempt?.sessionKeyId)
     }
 
     @Test
@@ -96,6 +116,7 @@ class YpsoBolusAttemptFileStoreTest {
         requestId = "request-1",
         pumpSerial = "10000001",
         sessionGeneration = "generation-1",
+        sessionKeyId = "cd".repeat(32),
         treatment = YpsoBolusTreatment.SMB,
         requestedCentiUnits = 100,
         payloadHash = "ab".repeat(32),

@@ -21,6 +21,10 @@ class ProductionPumpSessionTest {
             saved = state
             check(fault != 2) { "Crash after persistence before return" }
         }
+        override fun replaceUnavailable(state: PumpSession.State) {
+            check(fault == 0) { "Recovery store unavailable" }
+            saved = state
+        }
     }
 
     private fun initialized(store: MemoryStore) = PumpSession(store).apply { provisionReadBaseline(pump, key, 8, 100) }
@@ -167,6 +171,77 @@ class ProductionPumpSessionTest {
         val unavailable = PumpSession(store)
         assertThrows(SecurityException::class.java) { unavailable.open(pump, key) }
         assertThrows(SecurityException::class.java) { unavailable.provisionReadBaseline(pump, key, 8, Long.MAX_VALUE) }
+    }
+
+    @Test
+    fun `explicit journal loss recovery installs only a selector recovery lower bound`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+
+        unavailable.recoverLostJournalLowerBound(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            lowerBound = 9_035,
+            recoveryReboot = 21,
+            evidenceHash = "ab".repeat(32),
+        )
+
+        val recovered = PumpSession(store).committedRecord()!!
+        assertNull(recovered.reboot)
+        assertNull(recovered.read)
+        assertEquals(9_035, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals("ab".repeat(32), recovered.source["journal_loss_recovery_evidence_sha256"])
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        val transaction = restarted.begin(token)
+        restarted.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 21, 1))
+        restarted.finish(token, transaction)
+        restarted.markVerified("10000001", 3)
+        assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in restarted.availability().causes)
+    }
+
+    @Test
+    fun `healthy journal cannot enter lower bound disaster recovery`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.recoverLostJournalLowerBound(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                lowerBound = 9_035,
+                recoveryReboot = 21,
+                evidenceHash = "ab".repeat(32),
+            )
+        }
+    }
+
+    @Test
+    fun `journal recovery rejects an authenticated read from another reboot epoch`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+        unavailable.recoverLostJournalLowerBound(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            lowerBound = 9_035,
+            recoveryReboot = 21,
+            evidenceHash = "ab".repeat(32),
+        )
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        val transaction = restarted.begin(token)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            restarted.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 22, 1))
+        }
+
+        assertNull(restarted.committedRecord()!!.reboot)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, restarted.committedRecord()!!.writeBootstrapState)
+        assertEquals(21, restarted.committedRecord()!!.lowerBoundRecoveryReboot)
     }
 
     @Test

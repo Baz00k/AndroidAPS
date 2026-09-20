@@ -1390,6 +1390,94 @@ class YpsoBleManager @Inject constructor(
         return attempt
     }
 
+    /**
+     * One selector-only attempt to recover ownership from a durable lower bound. It never reads or
+     * mutates therapy state and never treats transport ACK as acceptance; exact same-link selector
+     * identity read-back is mandatory.
+     */
+    internal fun recoverHistorySelectorLowerBound(onResult: (Boolean) -> Unit) {
+        val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
+        val gatt = captured.first
+        val token = captured.second
+        val connectionId = captured.third
+        val record = session?.snapshot()
+        val reboot = record?.reboot
+        val selector = gatt?.let { findChar(it, YpsoWritePolicy.EVENT_INDEX_UUID) }
+        if (!isConnected || gatt == null || token == null || reboot == null ||
+            record.writeBootstrapState != PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND ||
+            selector == null || selector.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0 ||
+            findChar(gatt, CHAR_EVENT_COUNT) == null
+        ) {
+            onResult(false)
+            return
+        }
+        val owner = YpsoHistorySelectorCoordinator.Owner(gatt, connectionId, token)
+        var completed = false
+        fun finish(success: Boolean) {
+            if (completed) return
+            completed = true
+            onResult(success)
+        }
+        fun owned(): Boolean = synchronized(opLock) {
+            bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
+        }
+        fun readEncrypted(uuid: UUID, done: (ByteArray) -> Unit) {
+            if (!owned()) return finish(false)
+            readMultiframe(uuid, expectedGatt = gatt, onFailure = { finish(false) }) { ownerGatt, frames ->
+                if (ownerGatt !== gatt || !owned()) return@readMultiframe finish(false)
+                val body = runCatching { decryptOwned(frames) }.getOrElse { return@readMultiframe finish(false) }
+                done(body)
+            }
+        }
+        enableProfileSetup(gatt) { setup ->
+            if (!setup) return@enableProfileSetup finish(false)
+            readEncrypted(CHAR_EVENT_COUNT) { countBody ->
+                val count = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(countBody)
+                    ?: return@readEncrypted finish(false)
+                if (count < 2) return@readEncrypted finish(false)
+                readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { beforeBody ->
+                    val before = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(beforeBody)
+                        ?: return@readEncrypted finish(false)
+                    val target = if (before == 0) 1 else 0
+                    if (target >= count) return@readEncrypted finish(false)
+                    val writeId = "history-lower-bound-$connectionId-$target-${UUID.randomUUID()}"
+                    val started = historySelectorCoordinator.recoverLowerBound(
+                        writeId,
+                        owner,
+                        target,
+                        pumpState.masterVersion.takeIf(String::isNotBlank),
+                        OP_TIMEOUT_MS,
+                        dispatch = { frame -> writeHistoryFrame(gatt, frame) },
+                    ) { outcome ->
+                        val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
+                            outcome is YpsoWriteOutcome.PossiblyApplied &&
+                            outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK
+                        if (!canReconcile) return@recoverLowerBound finish(false)
+                        readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { selectedBody ->
+                            val selected = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(selectedBody)
+                                ?: return@readEncrypted finish(false)
+                            if (selected != target) return@readEncrypted finish(false)
+                            val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
+                                "${owner.token.generation}|$reboot|$connectionId|$target|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
+                            )
+                            val reconciled = runCatching {
+                                historySelectorCoordinator.reconcileLowerBoundAccepted(
+                                    writeId,
+                                    owner,
+                                    evidenceHash,
+                                    "same-link exact-GLB selector identity read-back recovered event index $target from durable lower bound",
+                                )
+                            }.getOrDefault(false)
+                            if (reconciled) provisioning.refreshState()
+                            finish(reconciled)
+                        }
+                    }
+                    if (!started) finish(false)
+                }
+            }
+        }
+    }
+
     /** Read CHAR_BOLUS_STATUS and parse the immediate-delivery block via [BolusCommand.decode]. */
     fun readBolusStatus(onResult: (BolusCommand?) -> Unit) {
         if (bolusWriteActive.get()) { onResult(null); return }

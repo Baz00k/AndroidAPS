@@ -14,6 +14,7 @@ import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import java.security.MessageDigest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -49,6 +50,35 @@ class YpsoBolusWriteCoordinatorTest {
         )
         assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
         assertEquals(null, session.snapshot()?.reservation)
+    }
+
+    @Test
+    fun `lower bound recovery state cannot dispatch therapy`() {
+        val key = ByteArray(32) { 7 }
+        val record = PumpSession.Record(
+            pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
+            read = 10, write = 9_035, serial = "10000001", keyHex = key.joinToString("") { "%02x".format(it) },
+            writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+            lowerBoundRecoveryReboot = 21,
+        )
+        val session = PumpSession(Store(PumpSession.State(records = listOf(record), activeGeneration = "generation")))
+        val token = session.open("pump", key)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+
+        assertFalse(
+            coordinator(session).start(
+                "bolus-recovery-block",
+                YpsoBolusWriteCoordinator.Owner(Any(), "connection", token),
+                YpsoBolusRequestValidator.validate(1.0, YpsoBolusTreatment.NORMAL, 30.0),
+                null,
+                5_000,
+                beforeDispatch = { error("journal") },
+                dispatch = { error("dispatch") },
+                onOutcome = outcomes::add,
+            ),
+        )
+        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
+        assertNull(session.snapshot()!!.reservation)
     }
 
     @Test

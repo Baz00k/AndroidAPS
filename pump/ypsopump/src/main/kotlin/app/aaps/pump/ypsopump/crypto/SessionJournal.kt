@@ -65,7 +65,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
         val json = JSONObject(body)
         val version = json.getInt("version")
-        check(version in 1..6 || version in 8..16)
+        check(version in 1..6 || version in 8..17)
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -90,6 +90,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 require(r.has("benchDuplicateCounterPredecessor"))
             }
             if (version >= 14) require(r.has("retiredLegacyBenchAlarmCursorRecovery"))
+            if (version >= 17) require(r.has("lowerBoundRecoveryReboot"))
             fun reservation(value: JSONObject): PumpSession.Reservation {
                 val it = value
                 if (version >= 8) {
@@ -218,6 +219,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                         null
                     },
                 counterRecoveryExponent = if (version >= 16) r.getInt("counterRecoveryExponent") else 0,
+                lowerBoundRecoveryReboot = if (version >= 17) r.optIntOrNull("lowerBoundRecoveryReboot") else null,
             )
         }
         val availabilityObject = json.optJSONObject("availability")
@@ -408,6 +410,15 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
 
     override fun commit(state: PumpSession.State) {
+        writeState(state, replaceUnavailable = false)
+    }
+
+    override fun replaceUnavailable(state: PumpSession.State) {
+        runCatching { load() }.onSuccess { error("Session journal is available") }
+        writeState(state, replaceUnavailable = true)
+    }
+
+    private fun writeState(state: PumpSession.State, replaceUnavailable: Boolean) {
         PumpSession.validate(state)
         val records = JSONArray()
         state.records.forEach { r ->
@@ -439,6 +450,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
                 .put("benchAmbiguityConvergenceAttempted", r.benchAmbiguityConvergenceAttempted)
                 .put("benchDuplicateCounterPredecessor", r.benchDuplicateCounterPredecessor?.let(::acceptedWriteBindingJson) ?: JSONObject.NULL)
                 .put("counterRecoveryExponent", r.counterRecoveryExponent)
+                .put("lowerBoundRecoveryReboot", r.lowerBoundRecoveryReboot ?: JSONObject.NULL)
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
                     JSONObject()
                         .put("operationId", evidence.operationId)
@@ -467,7 +479,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("code", value.code ?: JSONObject.NULL).put("operation", value.operation ?: JSONObject.NULL)
             .put("firmware", value.firmware ?: JSONObject.NULL).put("failures", value.failures)
             .put("retryAt", value.retryAt ?: JSONObject.NULL)
-        val body = JSONObject().put("version", 16).put("records", records)
+        val body = JSONObject().put("version", 17).put("records", records)
             .put("activeGeneration", state.activeGeneration ?: JSONObject.NULL).put("availability", availability)
             .put("candidateGeneration", state.candidateGeneration ?: JSONObject.NULL)
             .put("candidateReplacesGeneration", state.candidateReplacesGeneration ?: JSONObject.NULL)
@@ -479,6 +491,15 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         try {
             storage.create(alias)
             val nextEnvelope = JSONObject().put("anchor", alias).put("sealed", storage.seal(alias, body))
+            if (replaceUnavailable) {
+                // Recovery starts from a journal that is already unavailable. Retire every stale
+                // anchor before publishing so a restored old file cannot authenticate during a
+                // crash window. Interruption remains unavailable and the reviewed operation can be
+                // retried; it can never expose an older replay floor.
+                old.forEach(storage::delete)
+                storage.writeAndSync(nextEnvelope.toString())
+                return
+            }
             val currentContents = storage.read()
             if (currentContents == null && old.isEmpty()) {
                 storage.writeAndSync(nextEnvelope.toString())

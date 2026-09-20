@@ -114,6 +114,7 @@ internal class YpsoImmediateBolusController(
                 requestId = requestId,
                 pumpSerial = serial,
                 sessionGeneration = generation,
+                sessionKeyId = session.keyId,
                 treatment = request.treatment,
                 requestedCentiUnits = request.centiUnits,
                 payloadHash = payloadHash,

@@ -6,6 +6,20 @@ import org.json.JSONObject
 
 /** Atomic no-backup storage adapter. The caller must place [file] under Android's noBackupFilesDir. */
 class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore {
+    internal data class RecoveryEvidence(val attempt: YpsoBolusAttempt, val bytes: ByteArray)
+
+    /** Decode and hash callers' evidence from one immutable read, avoiding a file-change race. */
+    internal fun recoveryEvidence(): RecoveryEvidence? {
+        if (!file.isFile) return null
+        val bytes = file.readBytes()
+        return try {
+            RecoveryEvidence(decode(JSONObject(bytes.toString(Charsets.UTF_8))), bytes)
+        } catch (error: Exception) {
+            bytes.fill(0)
+            throw error
+        }
+    }
+
     override fun load(): YpsoBolusAttempt? {
         if (!file.exists()) return null
         return decode(JSONObject(file.readText()))
@@ -30,10 +44,11 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
     }
 
     private fun encode(value: YpsoBolusAttempt): JSONObject = JSONObject()
-        .put("version", 3)
+        .put("version", 4)
         .put("requestId", value.requestId)
         .put("pumpSerial", value.pumpSerial)
         .put("sessionGeneration", value.sessionGeneration)
+        .putNullable("sessionKeyId", value.sessionKeyId)
         .put("treatment", value.treatment.name)
         .put("shape", value.shape.name)
         .put("durationMinutes", value.durationMinutes)
@@ -68,7 +83,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
 
     private fun decode(json: JSONObject): YpsoBolusAttempt {
         val version = json.getInt("version")
-        require(version in 2..3) { "unsupported bolus journal version" }
+        require(version in 2..4) { "unsupported bolus journal version" }
         require(json.keys().asSequence().toSet() == rootFields(version)) { "unexpected bolus journal fields" }
         val baseline = json.getJSONObject("baseline")
         require(baseline.keys().asSequence().toSet() == BASELINE_FIELDS)
@@ -77,6 +92,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             requestId = json.getString("requestId"),
             pumpSerial = json.getString("pumpSerial"),
             sessionGeneration = json.getString("sessionGeneration"),
+            sessionKeyId = if (version >= 4) json.stringOrNull("sessionKeyId") else null,
             treatment = YpsoBolusTreatment.valueOf(json.getString("treatment")),
             requestedCentiUnits = json.getInt("requestedCentiUnits"),
             payloadHash = json.getString("payloadHash"),
@@ -128,11 +144,16 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             "shape", "durationMinutes", "immediateCentiUnits", "pumpSlowSequence",
             "cancelBlock", "cancelObservedCentiUnits",
         )
+        private val VERSION_4_FIELDS = VERSION_3_FIELDS + "sessionKeyId"
         private val BASELINE_FIELDS = setOf(
             "fastSequence", "slowSequence", "historyPumpId", "historyFingerprintHigh", "historyFingerprintLow",
             "pumpReboot", "observedAt",
         )
 
-        private fun rootFields(version: Int) = if (version == 2) VERSION_2_FIELDS else VERSION_3_FIELDS
+        private fun rootFields(version: Int) = when (version) {
+            2 -> VERSION_2_FIELDS
+            3 -> VERSION_3_FIELDS
+            else -> VERSION_4_FIELDS
+        }
     }
 }

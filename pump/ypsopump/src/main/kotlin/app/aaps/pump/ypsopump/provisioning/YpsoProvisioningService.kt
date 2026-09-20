@@ -24,7 +24,7 @@ class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
     private val legacyStore: LegacyStore,
-    private val durableBolusWriteFloor: () -> Pair<String, Long>? = { null },
+    private val durableBolusRecoveryEvidence: () -> YpsoBolusAttemptFileStore.RecoveryEvidence? = { null },
     private val bondedSerialForMac: (String) -> String? = { null },
 ) {
 
@@ -32,14 +32,7 @@ class YpsoProvisioningService internal constructor(
         PumpSession(SessionJournal(context)),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
-        {
-            YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json"))
-                .load()
-                ?.let { attempt ->
-                    listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
-                        ?.let { floor -> attempt.pumpSerial to floor }
-                }
-        },
+        { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },
         { mac -> bondedPumpSerial(context, mac) },
     )
 
@@ -234,6 +227,66 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
+    /**
+     * Operator-gated recovery from an undecryptable protected journal. This installs no read floor
+     * and no ordinary write ownership; only selector lower-bound recovery can proceed afterward.
+     */
+    internal fun recoverLostJournalForHistory(
+        stream: InputStream,
+        expectedDocumentSha256: String,
+        expectedBolusEvidenceSha256: String,
+        now: Instant = Instant.now(),
+    ) = synchronized(provisioningLock) {
+        require(expectedDocumentSha256.matches(Regex("[0-9a-f]{64}")))
+        require(expectedBolusEvidenceSha256.matches(Regex("[0-9a-f]{64}")))
+        val documentBytes = boundedRead(stream)
+        try {
+            val documentHash = MessageDigest.getInstance("SHA-256").digest(documentBytes)
+            require(MessageDigest.isEqual(documentHash, expectedDocumentSha256.hexBytes())) { "Session document hash does not match review" }
+            val document = YpsoSessionDocumentParser.parse(documentBytes, now)
+            val recoveryEvidence = durableBolusRecoveryEvidence()
+                ?: throw SecurityException("Durable bolus allocation evidence is missing")
+            val evidence = recoveryEvidence.bytes
+            try {
+                val evidenceHash = MessageDigest.getInstance("SHA-256").digest(evidence)
+                require(MessageDigest.isEqual(evidenceHash, expectedBolusEvidenceSha256.hexBytes())) {
+                    "Bolus allocation evidence hash does not match review"
+                }
+                val attempt = recoveryEvidence.attempt
+                val floor = listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
+                    ?: throw SecurityException("Durable bolus write lower bound is missing")
+                val normalizedSerial = PumpIdentity.normalizeSerial(document.serial)
+                PumpIdentity.validatePair(normalizedSerial, document.mac)
+                require(attempt.pumpSerial == normalizedSerial) { "Bolus allocation evidence belongs to another pump" }
+                val expectedKeyId = PumpSession.fingerprint(document.sharedKey)
+                require(attempt.sessionKeyId == expectedKeyId) {
+                    "Bolus allocation evidence is not bound to the reviewed pump key"
+                }
+                quiesceConnection()
+                owner.recoverLostJournalLowerBound(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        normalizedSerial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source + mapOf("session_document_sha256" to expectedDocumentSha256),
+                    ),
+                    lowerBound = floor,
+                    recoveryReboot = attempt.baseline.pumpReboot,
+                    evidenceHash = expectedBolusEvidenceSha256,
+                )
+                refreshState()
+                publishAvailability()
+            } finally {
+                evidence.fill(0)
+                document.sharedKey.fill(0)
+            }
+        } finally {
+            documentBytes.fill(0)
+        }
+    }
+
     fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
         try {
             val serial = PumpIdentity.normalizeSerial(document.serial)
@@ -300,9 +353,22 @@ class YpsoProvisioningService internal constructor(
                         "ownership_source_apk_sha256" to reviewed.source.apkSha256,
                         "ownership_source_journal_sha256" to reviewed.source.journalSha256,
                     ),
-                    minimumKnownWriteFloor = durableBolusWriteFloor()?.let { (serial, floor) ->
-                        check(serial == reviewed.record.serial) { "Durable bolus allocation belongs to another pump" }
-                        floor
+                    minimumKnownWriteFloor = durableBolusRecoveryEvidence()?.let { evidence ->
+                        try {
+                            val attempt = evidence.attempt
+                            check(attempt.pumpSerial == reviewed.record.serial) {
+                                "Durable bolus allocation belongs to another pump"
+                            }
+                            check(attempt.sessionKeyId == reviewed.record.keyId) {
+                                "Durable bolus allocation is not bound to the reviewed ownership key"
+                            }
+                            check(attempt.baseline.pumpReboot == reviewed.record.reboot) {
+                                "Durable bolus allocation belongs to another pump epoch"
+                            }
+                            listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
+                        } finally {
+                            evidence.bytes.fill(0)
+                        }
                     },
                 )
                 pumpState.invalidateStatus()

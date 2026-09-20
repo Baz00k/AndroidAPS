@@ -10,6 +10,8 @@ class PumpSession(private val store: Store) {
         /** Missing, corrupt, restored or incompletely committed storage throws. */
         fun load(): State
         fun commit(state: State)
+        /** Explicit disaster-recovery replacement; ordinary stores must reject it. */
+        fun replaceUnavailable(state: State) { throw UnsupportedOperationException("Store cannot replace unavailable state") }
     }
 
     enum class Phase { RESERVED, POSSIBLY_SENT, ACKED, VERIFIED }
@@ -22,6 +24,8 @@ class PumpSession(private val store: Store) {
         BENCH_AMBIGUITY_CONVERGENCE_SELECTOR,
         BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR,
         BENCH_DUPLICATE_COUNTER_SELECTOR,
+        /** Production, selector-only recovery from a durable lower bound after journal loss. */
+        LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
         /**
          * Read-only compatibility for the one completed alarm-cursor recovery experiment recorded
          * before Step 08. No reservation API exposes this candidate, so a current artifact can
@@ -29,7 +33,7 @@ class PumpSession(private val store: Store) {
          */
         LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
     }
-    enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, ESTABLISHED }
+    enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, RECOVERING_LOWER_BOUND, ESTABLISHED }
     enum class HistoryFamily { ALARM, SYSTEM }
     enum class AvailabilityCause {
         UNCONFIGURED,
@@ -266,6 +270,8 @@ class PumpSession(private val store: Store) {
         val benchDuplicateCounterPredecessor: AcceptedWriteBinding? = null,
         /** Number of consecutive pump-confirmed APPERR_COUNTER_ERROR responses. */
         val counterRecoveryExponent: Int = 0,
+        /** Exact epoch of independently bound lower-bound evidence; present only during recovery. */
+        val lowerBoundRecoveryReboot: Int? = null,
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -359,6 +365,59 @@ class PumpSession(private val store: Store) {
         )
         quiesce()
         return plan.installation
+    }
+
+    /**
+     * One-way recovery when the protected journal is already unreadable. This records only an
+     * independently proven local allocation lower bound. It does not establish a read floor or
+     * authorize ordinary selectors, profile writes, configuration, cancellation, or therapy.
+     */
+    @Synchronized
+    internal fun recoverLostJournalLowerBound(
+        provisioning: Provisioning,
+        lowerBound: Long,
+        recoveryReboot: Int,
+        evidenceHash: String,
+    ) {
+        check(state == null && loadedState.isFailure) { "Journal-loss recovery requires an unavailable journal" }
+        require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
+        require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
+        require(lowerBound > 0)
+        require(recoveryReboot >= 0)
+        require(evidenceHash.matches(Regex("[0-9a-f]{64}")))
+        val record = Record(
+            pump = provisioning.pump,
+            keyId = fingerprint(provisioning.sharedKey),
+            generation = UUID.randomUUID().toString(),
+            reboot = null,
+            read = null,
+            write = lowerBound,
+            serial = provisioning.serial,
+            keyHex = provisioning.sharedKey.toHex(),
+            createdAt = provisioning.createdAt,
+            importedAt = provisioning.importedAt,
+            source = provisioning.source + mapOf(
+                "journal_loss_recovery_evidence_sha256" to evidenceHash,
+                "journal_loss_failure" to checkNotNull(loadFailureLocation),
+            ),
+            writeBootstrapState = WriteBootstrapState.RECOVERING_LOWER_BOUND,
+            lowerBoundRecoveryReboot = recoveryReboot,
+        )
+        val recovered = State(
+            records = listOf(record),
+            activeGeneration = record.generation,
+            availability = Availability(setOf(AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE, AvailabilityCause.COUNTER_UNCERTAIN)),
+        )
+        try {
+            validate(recovered)
+            store.replaceUnavailable(recovered)
+            state = recovered
+        } catch (e: Exception) {
+            state = null
+            quiesce()
+            throw SecurityException("Session journal recovery failed", e)
+        }
+        quiesce()
     }
 
     /** Validates a replacement before callers quiesce the current transport. */
@@ -486,13 +545,16 @@ class PumpSession(private val store: Store) {
                 candidateAttemptId = null,
                 lastAttempt = AttemptResult(checkNotNull(current.candidateAttemptId), AttemptStatus.SUCCEEDED),
                 availability = Availability(
-                    causes = if (next.write == null) setOf(AvailabilityCause.COUNTER_UNCERTAIN) else emptySet(),
+                    causes = if (next.writeBootstrapState == WriteBootstrapState.ESTABLISHED) emptySet() else setOf(AvailabilityCause.COUNTER_UNCERTAIN),
                     since = at
                 )
             )
         } ?: current.copy(
             records = current.records.map { if (it.generation == next.generation) next else it },
-            availability = Availability(if (next.write == null) setOf(AvailabilityCause.COUNTER_UNCERTAIN) else emptySet(), at)
+            availability = Availability(
+                if (next.writeBootstrapState == WriteBootstrapState.ESTABLISHED) emptySet() else setOf(AvailabilityCause.COUNTER_UNCERTAIN),
+                at,
+            )
         )
         persist(promoted)
         // A candidate promotion changes the installed credential bundle, so any token opened with
@@ -801,6 +863,11 @@ class PumpSession(private val store: Store) {
         require(message.reboot >= 0 && message.counter >= 0) { "Counter outside supported signed range" }
         if (old.reboot == null || old.read == null) {
             require(message.counter > 0) { "Initial current-pump read counter must be positive" }
+            if (old.writeBootstrapState == WriteBootstrapState.RECOVERING_LOWER_BOUND) {
+                require(message.reboot == checkNotNull(old.lowerBoundRecoveryReboot)) {
+                    "Authenticated pump epoch does not match lower-bound evidence"
+                }
+            }
             update(old.copy(reboot = message.reboot, read = message.counter))
             return message.body
         }
@@ -870,6 +937,25 @@ class PumpSession(private val store: Store) {
         return reserveCandidate(origin, id, intent, forwardGap = 0, candidate = WriteCandidate.STANDARD)
     }
 
+    /** Reserve only an event-history selector while recovering from an independently proven lower bound. */
+    @Synchronized
+    internal fun reserveLowerBoundHistoryRecovery(origin: Token, id: String, intent: WriteIntent): Reservation {
+        val old = owned(origin)
+        check(old.writeBootstrapState == WriteBootstrapState.RECOVERING_LOWER_BOUND && old.write != null) {
+            "Session is not recovering a lower write bound"
+        }
+        require(intent.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC && intent.purpose == "HISTORY_SELECTOR") {
+            "Lower-bound recovery permits only the event-history selector"
+        }
+        return reserveCandidate(
+            origin,
+            id,
+            intent,
+            forwardGap = 0,
+            candidate = WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
+        )
+    }
+
     private fun reserveCandidate(
         origin: Token,
         id: String,
@@ -885,7 +971,12 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
         val last = bootstrapPriorWrite ?: old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
-        val standardIncrement = if (candidate == WriteCandidate.STANDARD) counterRecoveryIncrement(old.counterRecoveryExponent) else 1L
+        val standardIncrement =
+            if (candidate in setOf(WriteCandidate.STANDARD, WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR)) {
+                counterRecoveryIncrement(old.counterRecoveryExponent)
+            } else {
+                1L
+            }
         val increment = standardIncrement + forwardGap
         check(last <= Long.MAX_VALUE - increment) { "Write counter exhausted" }
         intent?.let {
@@ -981,7 +1072,10 @@ class PumpSession(private val store: Store) {
         val old = owned(origin)
         check(transaction == null) { "Another session transaction is active" }
         val reserved = old.reservation?.takeIf { it.phase != Phase.VERIFIED } ?: return
-        check(old.writeBootstrapState == WriteBootstrapState.ESTABLISHED && old.write != null) {
+        val lowerBoundRecovery =
+            old.writeBootstrapState == WriteBootstrapState.RECOVERING_LOWER_BOUND &&
+                reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR
+        check((old.writeBootstrapState == WriteBootstrapState.ESTABLISHED || lowerBoundRecovery) && old.write != null) {
             "Write high-water mark is unavailable"
         }
         check(old.write >= reserved.counter) { "Reservation exceeds write high-water mark" }
@@ -1068,7 +1162,11 @@ class PumpSession(private val store: Store) {
                     reservation = reserved.copy(phase = Phase.VERIFIED),
                     writeEvidence = old.writeEvidence + evidence,
                     writeBootstrapState =
-                        if (reserved.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR) {
+                        if (reserved.candidate in setOf(
+                                WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+                                WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
+                            )
+                        ) {
                             WriteBootstrapState.ESTABLISHED
                         } else {
                             old.writeBootstrapState
@@ -1076,6 +1174,9 @@ class PumpSession(private val store: Store) {
                     benchStrictNextAccepted =
                         old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
                     counterRecoveryExponent = 0,
+                    lowerBoundRecoveryReboot =
+                        if (reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR) null
+                        else old.lowerBoundRecoveryReboot,
                 )
             WriteResolution.REJECTED_COUNTER_CONSUMED ->
                 old.copy(
@@ -1092,6 +1193,17 @@ class PumpSession(private val store: Store) {
                 restoreAfterNotConsumed(old, reserved, evidence)
         }
         update(next)
+        if (reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR &&
+            resolution == WriteResolution.ACCEPTED
+        ) {
+            val current = checkNotNull(state)
+            val available = current.availability.copy(
+                causes = current.availability.causes - AvailabilityCause.COUNTER_UNCERTAIN,
+                retryAt = null,
+            )
+            persist(current.copy(availability = available))
+            record = next
+        }
     }
 
     @Synchronized
@@ -1125,6 +1237,8 @@ class PumpSession(private val store: Store) {
         return when (reservation.candidate) {
             WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR ->
                 old.copy(write = null, reservation = null, writeEvidence = evidenceList)
+            WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR ->
+                old.copy(write = priorWrite(reservation), reservation = null, writeEvidence = evidenceList)
             WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR, WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR -> {
                 val predecessor = checkNotNull(reservation.unresolvedPredecessor).reservation()
                 old.copy(write = predecessor.counter, reservation = predecessor, writeEvidence = evidenceList)
@@ -1274,8 +1388,10 @@ class PumpSession(private val store: Store) {
                                 r.write == 1L &&
                                 r.reservation?.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
                         )
-                    WriteBootstrapState.ESTABLISHED -> require(r.write != null)
+                    WriteBootstrapState.RECOVERING_LOWER_BOUND -> require(r.write != null && r.lowerBoundRecoveryReboot != null)
+                    WriteBootstrapState.ESTABLISHED -> require(r.write != null && r.lowerBoundRecoveryReboot == null)
                 }
+                if (r.writeBootstrapState != WriteBootstrapState.RECOVERING_LOWER_BOUND) require(r.lowerBoundRecoveryReboot == null)
                 require(!r.benchNewEpochBootstrapAttempted || r.writeBootstrapState != WriteBootstrapState.UNKNOWN_MID_EPOCH)
                 require(!r.benchNewEpochBootstrapAttempted || r.benchNewEpochBootstrapReference != null)
                 require(!r.benchForwardGapAttempted || r.benchStrictNextAccepted)
@@ -1366,6 +1482,17 @@ class PumpSession(private val store: Store) {
                             require(r.benchDuplicateCounterPredecessor == null || r.benchDuplicateCounterPredecessor == predecessor)
                             requireAcceptedPredecessor(r, predecessor, AcceptedPredecessorEpoch.CURRENT)
                         }
+                        WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR -> {
+                            require(it.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC && it.purpose == "HISTORY_SELECTOR")
+                            require(
+                                if (it.phase == Phase.VERIFIED) {
+                                    r.writeBootstrapState == WriteBootstrapState.ESTABLISHED && isCounterRecoveryIncrement(it.counter - priorWrite)
+                                } else {
+                                    r.writeBootstrapState == WriteBootstrapState.RECOVERING_LOWER_BOUND &&
+                                        it.counter - priorWrite == counterRecoveryIncrement(r.counterRecoveryExponent)
+                                },
+                            )
+                        }
                         WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR -> {
                             // This candidate was emitted by a short-lived bench experiment before
                             // Step 08. Accept only its completed audit record; no current code can
@@ -1444,6 +1571,10 @@ class PumpSession(private val store: Store) {
                         WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR -> {
                             require(it.counter == it.priorWrite)
                             requireAcceptedPredecessor(r, checkNotNull(it.acceptedPredecessor), AcceptedPredecessorEpoch.CURRENT_OR_PAST)
+                        }
+                        WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR -> {
+                            require(it.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC && it.purpose == "HISTORY_SELECTOR")
+                            require(isCounterRecoveryIncrement(it.counter - it.priorWrite))
                         }
                         WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR ->
                             require(it.counter == 33L && it.priorWrite == 32L && it.resolution == WriteResolution.ACCEPTED)

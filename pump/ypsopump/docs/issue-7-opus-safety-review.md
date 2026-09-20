@@ -100,6 +100,33 @@ the highest durable bolus start/cancel allocation for the same pump and rejects 
 handoff. The existing pump-confirmed 139 search remains inapplicable without a durable
 ownership record; missing/corrupt journal recovery needs its own reviewed contract.
 
+### Candidate selector-only lower-bound recovery
+
+Implemented a distinct protected state, `RECOVERING_LOWER_BOUND`, for the confirmed
+journal-loss incident. It cannot satisfy ordinary history, profile, cancellation, bolus,
+or therapy readiness. Entry is one-way and allowed only when the protected journal is
+already unreadable; the operator must provide reviewed SHA-256 values for the canonical
+session document and the current durable bolus-attempt journal. Pump serials must agree,
+and the highest persisted start/cancel allocation becomes a lower bound rather than a
+claim about the exact pump counter. One explicit diagnostic action requests one bounded
+history-selector attempt through the plugin's background-history connection lease. The
+search advances only on pump-confirmed final-frame 139, preserves ambiguous candidates as
+unknown evidence across restart, and transitions to `ESTABLISHED` only after exact same-link
+selector identity read-back. Journal schema is version 17 so older implementations reject
+this state. Therapy remains compile-time/read-only blocked. Software tests pass; this path
+has not yet been installed or exercised against hardware and is not acceptance evidence.
+
+Subsequent evidence-binding review tightened the entry contract: a lower-bound artifact
+must bind the counter to the exact protected key fingerprint and pump reboot epoch, and
+the first authenticated read must match that epoch. Bolus-attempt journal version 4 now
+persists the key fingerprint and the recovery service hashes and decodes one immutable
+file read. Versions 2/3 remain readable for insulin accounting but cannot authorize
+journal-loss ownership recovery. Therefore the preserved incident version-3 attempt
+(counters 9034/9035, reboot 21) is **not sufficient by itself** to reconstruct ownership;
+the current live recovery remains blocked unless independent authenticated evidence binds
+its session generation to the reviewed canonical key. No inference from serial alone is
+permitted.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 

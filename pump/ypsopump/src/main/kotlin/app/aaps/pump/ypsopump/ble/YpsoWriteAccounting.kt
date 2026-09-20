@@ -17,6 +17,7 @@ internal open class YpsoWriteAccounting(
     protected val session: PumpSession,
     private val crypto: SessionCrypto,
     private val transport: YpsoSerializedWriteTransport,
+    private val reservationPolicy: ((Owner, String, PumpSession.WriteIntent) -> PumpSession.Reservation)? = null,
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
 
@@ -239,7 +240,9 @@ internal open class YpsoWriteAccounting(
         owner: Owner,
         transaction: String,
         intent: PumpSession.WriteIntent,
-    ): PumpSession.Reservation = session.reserve(owner.token, transaction, intent)
+    ): PumpSession.Reservation =
+        reservationPolicy?.invoke(owner, transaction, intent)
+            ?: session.reserve(owner.token, transaction, intent)
 
     protected open fun prepareSession(owner: Owner) {
         session.recoverInterruptedWrite(owner.token)

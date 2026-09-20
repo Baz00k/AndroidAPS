@@ -288,6 +288,67 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `lower bound recovery request is one shot and requires recovery state`() {
+        val owner: PumpSession = mock()
+        whenever(provisioning.owner).thenReturn(owner)
+        whenever(owner.committedRecord()).thenReturn(
+            PumpSession.Record(
+                pump = "12:34:56:78:9A:BC",
+                keyId = "ab".repeat(32),
+                generation = "generation",
+                reboot = 21,
+                read = 100,
+                write = 9_035,
+                writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                lowerBoundRecoveryReboot = 21,
+            ),
+        )
+
+        assertTrue(plugin.requestLowerBoundHistoryRecovery { true })
+        assertFalse(plugin.requestLowerBoundHistoryRecovery { true })
+    }
+
+    @Test
+    fun `established session cannot request lower bound recovery`() {
+        val owner: PumpSession = mock()
+        whenever(provisioning.owner).thenReturn(owner)
+        whenever(owner.committedRecord()).thenReturn(
+            PumpSession.Record(
+                pump = "12:34:56:78:9A:BC",
+                keyId = "ab".repeat(32),
+                generation = "generation",
+                reboot = 21,
+                read = 100,
+                write = 9_035,
+                writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            ),
+        )
+
+        assertFalse(plugin.requestLowerBoundHistoryRecovery { true })
+    }
+
+    @Test
+    fun `failed lower bound recovery enqueue disarms the one shot request`() {
+        val owner: PumpSession = mock()
+        whenever(provisioning.owner).thenReturn(owner)
+        whenever(owner.committedRecord()).thenReturn(
+            PumpSession.Record(
+                pump = "12:34:56:78:9A:BC",
+                keyId = "ab".repeat(32),
+                generation = "generation",
+                reboot = 21,
+                read = 100,
+                write = 9_035,
+                writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                lowerBoundRecoveryReboot = 21,
+            ),
+        )
+
+        assertFalse(plugin.requestLowerBoundHistoryRecovery { false })
+        assertTrue(plugin.requestLowerBoundHistoryRecovery { true })
+    }
+
+    @Test
     fun `a pump side program switch raises a mismatch alert and clears it when it agrees again`() {
         state.elapsedRealtime = { 2_001L }
         state.currentZone = { ZoneId.of("Europe/Warsaw") }

@@ -69,9 +69,12 @@ data class YpsoBolusAttempt(
     /** Pump-reported delivered amount observed for the cancel target during the cancellation run. */
     val cancelObservedCentiUnits: Int? = null,
     val detail: String? = null,
+    /** SHA-256 identity of the protected pump key; required for journal-loss ownership recovery. */
+    val sessionKeyId: String? = null,
 ) {
     init {
         require(requestId.isNotBlank() && pumpSerial.isNotBlank() && sessionGeneration.isNotBlank())
+        require(sessionKeyId == null || sessionKeyId.matches(Regex("[0-9a-f]{64}")))
         require(requestedCentiUnits in BolusCommand.MIN_BOLUS_X100..BolusCommand.MAX_BOLUS_X100)
         require(requestedCentiUnits % BolusCommand.BOLUS_STEP_X100 == 0)
         when (shape) {

@@ -2,10 +2,15 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline
+import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import java.io.ByteArrayInputStream
+import java.security.MessageDigest
 import java.time.Instant
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -1088,9 +1093,9 @@ class YpsoProvisioningServiceTest {
         val store = MemoryStore()
         val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(null, mac, key.hex()))
 
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy) { observedMac ->
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy, bondedSerialForMac = { observedMac ->
             serial.takeIf { observedMac == mac }
-        }
+        })
 
         assertNull(service.installed())
         assertEquals(serial, service.pending()!!.serial)
@@ -1307,6 +1312,108 @@ class YpsoProvisioningServiceTest {
         assertFalse(service.notificationRequired())
     }
 
+    @Test
+    fun `journal loss recovery requires reviewed document and durable bolus evidence hashes`() {
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline(mac, key, 21, 100)
+        store.unavailable = true
+        val document = validDocument().toByteArray()
+        val evidence = "durable-bolus-allocation".toByteArray()
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) { store.unavailable = false; store.saved = state }
+                override fun replaceUnavailable(state: PumpSession.State) { store.unavailable = false; store.saved = state }
+            }),
+            YpsoPumpState(),
+            Legacy(),
+            durableBolusRecoveryEvidence = {
+                YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt(), evidence.copyOf())
+            },
+        )
+
+        service.recoverLostJournalForHistory(
+            ByteArrayInputStream(document),
+            document.sha256(),
+            evidence.sha256(),
+            Instant.parse("2026-09-20T04:00:00Z"),
+        )
+
+        val recovered = service.owner.committedRecord()!!
+        assertEquals(9_035, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals(21, recovered.lowerBoundRecoveryReboot)
+        assertEquals(evidence.sha256(), recovered.source["journal_loss_recovery_evidence_sha256"])
+    }
+
+    @Test
+    fun `journal loss recovery rejects mismatched evidence hash`() {
+        val evidence = "durable-bolus-allocation".toByteArray()
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) = Unit
+            }),
+            YpsoPumpState(),
+            Legacy(),
+            durableBolusRecoveryEvidence = {
+                YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt(), evidence.copyOf())
+            },
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            service.recoverLostJournalForHistory(
+                ByteArrayInputStream(validDocument().toByteArray()),
+                validDocument().toByteArray().sha256(),
+                "00".repeat(32),
+            )
+        }
+        assertNull(service.owner.committedRecord())
+    }
+
+    @Test
+    fun `legacy bolus evidence without key binding cannot recover journal ownership`() {
+        val document = validDocument().toByteArray()
+        val evidence = "legacy-durable-bolus-allocation".toByteArray()
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) = Unit
+                override fun replaceUnavailable(state: PumpSession.State) = Unit
+            }),
+            YpsoPumpState(),
+            Legacy(),
+            durableBolusRecoveryEvidence = {
+                YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt().copy(sessionKeyId = null), evidence.copyOf())
+            },
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            service.recoverLostJournalForHistory(
+                ByteArrayInputStream(document),
+                document.sha256(),
+                evidence.sha256(),
+            )
+        }
+        assertNull(service.owner.committedRecord())
+    }
+
+    private fun recoveryAttempt() = YpsoBolusAttempt(
+        requestId = "incident",
+        pumpSerial = serial,
+        sessionGeneration = "generation",
+        sessionKeyId = PumpSession.fingerprint(key),
+        treatment = YpsoBolusTreatment.NORMAL,
+        requestedCentiUnits = 10,
+        payloadHash = "ab".repeat(32),
+        baseline = YpsoBolusBaseline(0, 0, 1, 2, 3, 21, 1),
+        createdAt = 1,
+        dispatchCounter = 9_034,
+        cancelRequestId = "cancel",
+        cancelCounter = 9_035,
+        cancelBlock = app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.SLOW,
+    )
+
     private fun validDocument() = """
         {
           "schema_version": 1,
@@ -1320,4 +1427,5 @@ class YpsoProvisioningServiceTest {
     """.trimIndent()
 
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
+    private fun ByteArray.sha256() = MessageDigest.getInstance("SHA-256").digest(this).hex()
 }
