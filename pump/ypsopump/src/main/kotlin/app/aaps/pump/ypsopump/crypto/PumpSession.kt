@@ -465,6 +465,66 @@ class PumpSession(private val store: Store) {
         quiesce()
     }
 
+    /**
+     * Upgrade a verified identity-only/unknown-mid-epoch journal into selector-only exponential
+     * recovery. Older recovered journals did not persist a provenance marker, so eligibility is bound
+     * to the state invariants below rather than one source-map key. The handoff contributes a lower
+     * bound, never its read floor, reservations, evidence, or established-ownership claim.
+     */
+    @Synchronized
+    internal fun recoverIdentityOnlyLowerBound(
+        imported: Record,
+        importedAt: Long,
+        source: Map<String, String>,
+    ) {
+        val current = state ?: throw SecurityException("Session storage unavailable")
+        check(current.candidateGeneration == null) { "Credential verification is still pending" }
+        val active = current.records.singleOrNull { it.generation == current.activeGeneration }
+            ?: throw SecurityException("No installed pump session")
+        check(active.verifiedAt != null && active.verifiedSerial == active.serial) {
+            "Identity-only session has not been verified against the pump"
+        }
+        check(active.writeBootstrapState == WriteBootstrapState.UNKNOWN_MID_EPOCH && active.write == null) {
+            "Session is not awaiting mid-epoch write recovery"
+        }
+        check(active.reservation == null && active.writeEvidence.isEmpty()) {
+            "Identity-only session contains conflicting local write accounting"
+        }
+        check(imported.pump == active.pump && imported.keyId == active.keyId && imported.serial == active.serial) {
+            "Lower-bound handoff belongs to another pump, key, or serial"
+        }
+        check(imported.reboot != null && imported.read != null && imported.write != null && imported.write > 0) {
+            "Lower-bound handoff has no complete replay floor"
+        }
+        check(imported.writeBootstrapState == WriteBootstrapState.ESTABLISHED) {
+            "Lower-bound handoff write floor was not established by its source"
+        }
+        check(imported.reservation == null || imported.reservation.phase == Phase.VERIFIED) {
+            "Lower-bound handoff has unresolved write accounting"
+        }
+        check(active.reboot != null && active.read != null && active.reboot == imported.reboot) {
+            "Lower-bound handoff belongs to another or unverified pump epoch"
+        }
+        val recovered = active.copy(
+            write = imported.write,
+            importedAt = importedAt,
+            source = active.source + source,
+            writeBootstrapState = WriteBootstrapState.RECOVERING_LOWER_BOUND,
+            counterRecoveryExponent = 0,
+            lowerBoundRecoveryReboot = active.reboot,
+        )
+        persist(
+            current.copy(
+                records = current.records.map { if (it.generation == active.generation) recovered else it },
+                availability = current.availability.copy(
+                    causes = current.availability.causes + AvailabilityCause.COUNTER_UNCERTAIN,
+                    since = importedAt,
+                ),
+            ),
+        )
+        quiesce()
+    }
+
     /** Validates a replacement before callers quiesce the current transport. */
     @Synchronized
     fun preflight(provisioning: Provisioning): Installation = planInstallation(provisioning).installation
@@ -708,6 +768,9 @@ class PumpSession(private val store: Store) {
         val sameEpoch = active.reboot == null || active.reboot == imported.reboot
         check(active.reboot == null || imported.reboot >= active.reboot) { "Ownership handoff would roll back the pump epoch" }
         if (sameEpoch) {
+            check(active.read == null || imported.read >= active.read) {
+                "Ownership handoff predates the authenticated local read floor"
+            }
             check(
                 active.write == null ||
                     active.write == imported.write && active.reservation == imported.reservation &&

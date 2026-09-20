@@ -108,6 +108,73 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `lower bound recovery owns GATT lane permits selector frames and releases lease`() {
+        val fixture = connectedGatt(eventCountPresent = true)
+        val record = manager.session!!.snapshot()!!
+        val store = object : PumpSession.Store {
+            var state = PumpSession.State(
+                records = listOf(
+                    record.copy(
+                        write = 4_280,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                        lowerBoundRecoveryReboot = record.reboot,
+                    ),
+                ),
+                activeGeneration = record.generation,
+                availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+            )
+            override fun load() = state
+            override fun commit(state: PumpSession.State) { this.state = state }
+        }
+        manager.session = PumpSession(store)
+        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
+        manager.sdkInt = 33
+        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
+        val service = fixture.gatt.services.first()
+        val selector: BluetoothGattCharacteristic = mock()
+        whenever(selector.uuid).thenReturn(YpsoWritePolicy.EVENT_INDEX_UUID)
+        whenever(selector.properties).thenReturn(
+            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+        )
+        whenever(service.getCharacteristic(YpsoWritePolicy.EVENT_INDEX_UUID)).thenReturn(selector)
+        whenever(fixture.gatt.readCharacteristic(selector)).thenReturn(true)
+        val notify: BluetoothGattCharacteristic = mock()
+        whenever(notify.uuid).thenReturn(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
+        val descriptor: BluetoothGattDescriptor = mock()
+        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
+        whenever(descriptor.characteristic).thenReturn(notify)
+        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
+        whenever(service.getCharacteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)).thenReturn(notify)
+        var readCounter = 0L
+        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
+        }
+        val recovery = mutableListOf<YpsoBleManager.LowerBoundRecoveryResult>()
+        val competingStatus = mutableListOf<Boolean>()
+
+        manager.recoverHistorySelectorLowerBound(recovery::add)
+        manager.readStatus(competingStatus::add)
+
+        assertEquals(listOf(false), competingStatus)
+        verify(fixture.gatt, never()).readCharacteristic(fixture.status)
+        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
+        respond(fixture.eventCount!!, YpsoGlb.encode(2))
+        respond(selector, YpsoGlb.encode(0))
+        repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
+        respond(selector, YpsoGlb.encode(1))
+
+        val logCalls = org.mockito.Mockito.mockingDetails(logger).invocations.joinToString("\n") {
+            it.arguments.joinToString(" | ")
+        }
+        assertEquals(listOf(YpsoBleManager.LowerBoundRecoveryResult.RECOVERED), recovery, logCalls)
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, manager.session!!.snapshot()!!.writeBootstrapState)
+        verify(fixture.gatt, times(4)).writeCharacteristic(eq(selector), any(), any())
+        manager.readStatus()
+        verify(fixture.gatt).readCharacteristic(fixture.status)
+    }
+
+    @Test
     fun `profile read fails closed before any selector when durable write floor is unknown`() {
         connectedGatt()
         val results = mutableListOf<Boolean>()

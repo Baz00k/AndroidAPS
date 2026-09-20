@@ -12,9 +12,17 @@ internal class YpsoHistorySelectorCoordinator(
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
     private val accounting = YpsoWriteAccounting(session, crypto, transport)
-    private val recoveryAccounting = YpsoWriteAccounting(session, crypto, transport) { owner, transaction, intent ->
-        session.reserveLowerBoundHistoryRecovery(owner.token, transaction, intent)
-    }
+    private val recoveryAccounting = YpsoWriteAccounting(
+        session,
+        crypto,
+        transport,
+        reservationPolicy = { owner, transaction, intent ->
+            session.reserveLowerBoundHistoryRecovery(owner.token, transaction, intent)
+        },
+        // An ambiguous recovery probe must remain blocking. Only confirmed pump error 139 may advance
+        // the exponential search; reconnect is not evidence that an uncertain selector was rejected.
+        retireInterruptedWrite = false,
+    )
 
     fun select(
         writeId: String,

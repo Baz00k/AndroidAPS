@@ -149,6 +149,7 @@ class YpsoPumpPlugin @Inject constructor(
             throw error
         }
     }
+    internal fun readinessStatus(): String = bleManager.readinessStatus()
     @Volatile private var historyRecoveryEnabled = true
 
     init {
@@ -752,15 +753,35 @@ class YpsoPumpPlugin @Inject constructor(
         dispatchHistoryRecovery {
             try {
                 val latch = java.util.concurrent.CountDownLatch(1)
-                var recovered = false
-                bleManager.recoverHistorySelectorLowerBound {
-                    recovered = it
-                    latch.countDown()
+                var result = YpsoBleManager.LowerBoundRecoveryResult.STOPPED
+                fun attempt() {
+                    bleManager.recoverHistorySelectorLowerBound { outcome ->
+                        if (outcome == YpsoBleManager.LowerBoundRecoveryResult.COUNTER_TOO_LOW) {
+                            try {
+                                aapsLogger.info(
+                                    LTag.PUMP,
+                                    "YpsoPump lower-bound selector counter rejected; retrying persisted exponential candidate",
+                                )
+                                attempt()
+                            } catch (exception: RuntimeException) {
+                                aapsLogger.error(
+                                    LTag.PUMP,
+                                    "YpsoPump lower-bound selector recovery stopped: ${exception.message}",
+                                )
+                                result = YpsoBleManager.LowerBoundRecoveryResult.STOPPED
+                                latch.countDown()
+                            }
+                        } else {
+                            result = outcome
+                            latch.countDown()
+                        }
+                    }
                 }
-                if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                attempt()
+                if (!latch.await(5, java.util.concurrent.TimeUnit.MINUTES)) {
                     aapsLogger.error(LTag.PUMP, "YpsoPump lower-bound history recovery timed out after $reason")
                     bleManager.disconnect()
-                } else if (!recovered) {
+                } else if (result != YpsoBleManager.LowerBoundRecoveryResult.RECOVERED) {
                     aapsLogger.info(LTag.PUMP, "YpsoPump lower-bound history recovery was not confirmed after $reason")
                 }
             } catch (exception: RuntimeException) {

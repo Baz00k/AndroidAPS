@@ -2,18 +2,27 @@ package app.aaps.pump.ypsopump.bolus
 
 import java.io.File
 import java.io.FileOutputStream
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Atomic no-backup storage adapter. The caller must place [file] under Android's noBackupFilesDir. */
 class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore {
-    internal data class RecoveryEvidence(val attempt: YpsoBolusAttempt, val bytes: ByteArray)
+    internal data class RecoveryEvidence(val attempts: List<YpsoBolusAttempt>, val bytes: ByteArray) {
+        constructor(attempt: YpsoBolusAttempt, bytes: ByteArray) : this(listOf(attempt), bytes)
+
+        val attempt: YpsoBolusAttempt
+            get() = attempts.maxWithOrNull(
+                compareBy<YpsoBolusAttempt> { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }
+                    .thenBy { it.createdAt },
+            ) ?: error("bolus recovery evidence is empty")
+    }
 
     /** Decode and hash callers' evidence from one immutable read, avoiding a file-change race. */
     internal fun recoveryEvidence(): RecoveryEvidence? {
         if (!file.isFile) return null
         val bytes = file.readBytes()
         return try {
-            RecoveryEvidence(decode(JSONObject(bytes.toString(Charsets.UTF_8))), bytes)
+            RecoveryEvidence(decodeAll(JSONObject(bytes.toString(Charsets.UTF_8))), bytes)
         } catch (error: Exception) {
             bytes.fill(0)
             throw error
@@ -22,13 +31,25 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
 
     override fun load(): YpsoBolusAttempt? {
         if (!file.exists()) return null
-        return decode(JSONObject(file.readText()))
+        return loadAll().lastOrNull()
+    }
+
+    internal fun loadAll(): List<YpsoBolusAttempt> {
+        if (!file.exists()) return emptyList()
+        return decodeAll(JSONObject(file.readText()))
     }
 
     override fun commit(attempt: YpsoBolusAttempt) {
         file.parentFile?.mkdirs()
         val temporary = File(file.parentFile, "${file.name}.next")
-        val bytes = encode(attempt).toString().toByteArray(Charsets.UTF_8)
+        val prior = loadAll()
+        val matching = prior.indexOfFirst { it.requestId == attempt.requestId }
+        val attempts = if (matching >= 0) prior.toMutableList().also { it[matching] = attempt } else prior + attempt
+        val bytes = JSONObject()
+            .put("version", 5)
+            .put("attempts", JSONArray().also { array -> attempts.forEach { array.put(encode(it)) } })
+            .toString()
+            .toByteArray(Charsets.UTF_8)
         FileOutputStream(temporary).use { output ->
             output.write(bytes)
             output.fd.sync()
@@ -126,6 +147,18 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             cancelObservedCentiUnits = if (version >= 3) json.intOrNull("cancelObservedCentiUnits") else null,
             detail = json.stringOrNull("detail"),
         )
+    }
+
+    private fun decodeAll(json: JSONObject): List<YpsoBolusAttempt> {
+        if (json.optInt("version", -1) != 5) return listOf(decode(json))
+        require(json.keys().asSequence().toSet() == setOf("version", "attempts")) { "unexpected bolus journal fields" }
+        val attempts = json.getJSONArray("attempts")
+        require(attempts.length() > 0) { "bolus journal is empty" }
+        return (0 until attempts.length()).map { decode(attempts.getJSONObject(it)) }.also { values ->
+            require(values.map(YpsoBolusAttempt::requestId).distinct().size == values.size) {
+                "duplicate bolus request identity"
+            }
+        }
     }
 
     private fun JSONObject.putNullable(name: String, value: Any?): JSONObject = put(name, value ?: JSONObject.NULL)

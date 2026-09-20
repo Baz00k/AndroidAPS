@@ -132,7 +132,7 @@ class YpsoHistorySelectorCoordinatorTest {
         val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
         val coordinator = YpsoHistorySelectorCoordinator(session, SessionCrypto(), transport)
 
-        fun run(id: String, status: Int): Pair<Long, YpsoWriteOutcome> {
+        fun run(id: String, status: Int, disconnectAfter: Boolean = true): Pair<Long, YpsoWriteOutcome> {
             val gatt = Any()
             val frames = mutableListOf<ByteArray>()
             val outcomes = mutableListOf<YpsoWriteOutcome>()
@@ -140,13 +140,14 @@ class YpsoHistorySelectorCoordinatorTest {
             repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
             val counter = SessionCrypto().decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter
             transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, status)
-            coordinator.ownerDisconnected(gatt, "test teardown")
+            if (disconnectAfter) coordinator.ownerDisconnected(gatt, "test teardown")
             return counter to outcomes.last()
         }
 
-        val counterError = run("counter-error", 139)
+        val counterError = run("counter-error", 139, disconnectAfter = false)
         assertEquals(9_036, counterError.first)
         assertTrue(counterError.second is YpsoWriteOutcome.ProvenRejected)
+        assertFalse(transport.hasUnresolvedWrite())
         assertEquals(1, session.snapshot()!!.counterRecoveryExponent)
         assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in session.availability().causes)
 
@@ -164,7 +165,8 @@ class YpsoHistorySelectorCoordinatorTest {
         val restartedCoordinator = YpsoHistorySelectorCoordinator(restarted, SessionCrypto(), restartedTransport)
         val restartedGatt = Any()
         val restartedFrames = mutableListOf<ByteArray>()
-        assertTrue(
+        val restartedOutcomes = mutableListOf<YpsoWriteOutcome>()
+        assertFalse(
             restartedCoordinator.recoverLowerBound(
                 "after-ambiguous-restart",
                 YpsoHistorySelectorCoordinator.Owner(restartedGatt, "restart", restartedToken),
@@ -172,13 +174,14 @@ class YpsoHistorySelectorCoordinatorTest {
                 null,
                 8_000,
                 { restartedFrames += it; true },
-                {},
+                restartedOutcomes::add,
             ),
         )
-        repeat(3) { restartedTransport.onCharacteristicWrite(restartedGatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
-        assertEquals(9_038, SessionCrypto().decrypt(YpsoFraming.parseMultiFrameRead(restartedFrames), key).counter)
-        assertEquals(2, restarted.snapshot()!!.writeEvidence.size)
-        assertEquals(1, restarted.snapshot()!!.writeEvidence.count { it.resolution == null })
+        assertTrue(restartedOutcomes.single() is YpsoWriteOutcome.NotSent)
+        assertTrue(restartedFrames.isEmpty())
+        assertEquals(9_037, restarted.snapshot()!!.write)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, restarted.snapshot()!!.reservation!!.phase)
+        assertEquals(1, restarted.snapshot()!!.counterRecoveryExponent)
     }
 
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it) }

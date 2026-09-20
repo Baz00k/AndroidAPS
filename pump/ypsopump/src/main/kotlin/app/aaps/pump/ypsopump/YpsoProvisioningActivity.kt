@@ -170,7 +170,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             val outcome = withContext(NonCancellable + Dispatchers.IO) {
                 runCatching {
                     when (intent.action) {
-                        ACTION_INSPECT_OWNERSHIP -> provisioning.ownershipStatus()
+                        ACTION_INSPECT_OWNERSHIP -> "${provisioning.ownershipStatus()},readiness={${plugin.readinessStatus()}}"
                         ACTION_IMPORT_OWNERSHIP -> {
                             val path = intent.getStringExtra(EXTRA_HANDOFF_PATH)?.takeIf(String::isNotBlank)
                                 ?: error("ownership handoff path is required")

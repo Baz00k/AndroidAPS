@@ -8,6 +8,7 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import java.nio.file.Files
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -97,9 +98,67 @@ class YpsoBolusAttemptFileStoreTest {
         file.writeText(file.readText().replaceFirst("{", "{\"unexpected\":1,"))
         assertThrows(IllegalArgumentException::class.java) { store.load() }
 
+        file.delete()
         store.commit(attempt())
-        file.writeText(file.readText().replace("\"requestedCentiUnits\":100", "\"requestedCentiUnits\":0"))
+        file.writeText(file.readText().replaceFirst("\"requestedCentiUnits\":100", "\"requestedCentiUnits\":0"))
         assertThrows(IllegalArgumentException::class.java) { store.load() }
+    }
+
+    @Test
+    fun `later not sent attempts cannot erase older durable counter allocations`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val store = YpsoBolusAttemptFileStore(file)
+        val allocated = attempt().copy(
+            requestId = "allocated",
+            dispatchCounter = 9_034,
+            dispatchedAt = 2_000,
+            cancelRequestId = "cancel-allocated",
+            cancelCounter = 9_035,
+            cancelBlock = YpsoBolusBlock.SLOW,
+            outcome = YpsoBolusOutcome.UNRESOLVED,
+        )
+        val notSent = attempt().copy(requestId = "not-sent", createdAt = 3_000)
+
+        store.commit(allocated)
+        store.commit(notSent)
+
+        assertEquals(notSent, store.load())
+        assertEquals(listOf(allocated, notSent), store.loadAll())
+        assertEquals(allocated, store.recoveryEvidence()?.attempt)
+    }
+
+    @Test
+    fun `updates replace the matching attempt without discarding earlier attempts`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val store = YpsoBolusAttemptFileStore(directory.resolve("attempt.json"))
+        val first = attempt().copy(requestId = "first", outcome = YpsoBolusOutcome.COMPLETED,
+            confirmedCentiUnits = 100, deliveryTimestamp = 2_000)
+        val current = attempt().copy(requestId = "current", createdAt = 3_000)
+
+        store.commit(first)
+        store.commit(current)
+        store.commit(current.copy(outcome = YpsoBolusOutcome.PROVEN_REJECTED, detail = "pump rejected"))
+
+        assertEquals(2, store.loadAll().size)
+        assertEquals(YpsoBolusOutcome.COMPLETED, store.loadAll().first().outcome)
+        assertEquals(YpsoBolusOutcome.PROVEN_REJECTED, store.load()?.outcome)
+    }
+
+    @Test
+    fun `legacy singleton journal migrates to multi attempt storage on next commit`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val store = YpsoBolusAttemptFileStore(file)
+        val legacy = attempt().copy(requestId = "legacy", dispatchCounter = 4_810, dispatchedAt = 2_000)
+        store.commit(legacy)
+        val singleton = JSONObject(file.readText()).getJSONArray("attempts").getJSONObject(0).toString()
+        file.writeText(singleton)
+
+        store.commit(attempt().copy(requestId = "next", createdAt = 3_000))
+
+        assertEquals(listOf("legacy", "next"), store.loadAll().map { it.requestId })
+        assertEquals(5, JSONObject(file.readText()).getInt("version"))
     }
 
     private fun version2Json() = """

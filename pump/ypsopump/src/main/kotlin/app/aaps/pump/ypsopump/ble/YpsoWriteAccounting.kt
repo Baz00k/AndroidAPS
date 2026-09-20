@@ -18,6 +18,7 @@ internal open class YpsoWriteAccounting(
     private val crypto: SessionCrypto,
     private val transport: YpsoSerializedWriteTransport,
     private val reservationPolicy: ((Owner, String, PumpSession.WriteIntent) -> PumpSession.Reservation)? = null,
+    private val retireInterruptedWrite: Boolean = true,
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
 
@@ -168,6 +169,7 @@ internal open class YpsoWriteAccounting(
                                         sha256("${request.writeId}:${reservation.counter}:139".toByteArray()),
                                         "pump returned APPERR_COUNTER_ERROR (139) for final command frame",
                                     )
+                                    transport.releaseOwner(request.owner.gatt)
                                     release(request.writeId)
                                     YpsoWriteOutcome.ProvenRejected(request.writeId, reservation.counter, outcome.failure)
                                 }.getOrElse { failure ->
@@ -245,7 +247,7 @@ internal open class YpsoWriteAccounting(
             ?: session.reserve(owner.token, transaction, intent)
 
     protected open fun prepareSession(owner: Owner) {
-        session.recoverInterruptedWrite(owner.token)
+        if (retireInterruptedWrite) session.recoverInterruptedWrite(owner.token)
     }
 
     protected open val automaticCounterRecovery: Boolean = true

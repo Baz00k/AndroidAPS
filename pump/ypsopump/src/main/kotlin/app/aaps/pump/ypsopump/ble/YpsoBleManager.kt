@@ -71,6 +71,49 @@ class YpsoBleManager @Inject constructor(
         } == true
     val canReadHistory: Boolean
         get() = canReadProfile && !profileReadActive.get() && !historyReadActive.get()
+    internal fun writeReadinessFailure(): String? {
+        val gatt = bluetoothGatt
+        val token = sessionToken
+        val record = session?.snapshot()
+        return when {
+            !isConnected -> "pump connection state is ${pumpState.connectionState}"
+            gatt == null -> "GATT connection owner is unavailable"
+            token == null -> "authenticated session token is unavailable"
+            !hasCompatibleStatusProtocol() ->
+                "unsupported status protocol: master=${pumpState.masterVersion.ifBlank { "missing" }}," +
+                    "supervisor=${pumpState.supervisorVersion.ifBlank { "missing" }}," +
+                    "control=${pumpState.controlServiceVersion.ifBlank { "missing" }}"
+            record == null -> "durable session record is unavailable"
+            record.reboot == null -> "authenticated pump reboot counter is unavailable"
+            record.read == null -> "authenticated read counter is unavailable"
+            record.write == null -> "durable write counter is unavailable (bootstrap=${record.writeBootstrapState})"
+            record.writeBootstrapState != PumpSession.WriteBootstrapState.ESTABLISHED ->
+                "write counter bootstrap is ${record.writeBootstrapState}"
+            record.reservation?.phase != null && record.reservation.phase != PumpSession.Phase.VERIFIED ->
+                "unresolved write reservation ${record.reservation.operationId ?: record.reservation.id} is ${record.reservation.phase}"
+            profileWriteTransportInstance?.hasUnresolvedWrite() == true -> "profile selector transport has an unresolved write"
+            historyWriteTransportInstance?.hasUnresolvedWrite() == true -> "history selector transport has an unresolved write"
+            bolusWriteTransportInstance?.hasUnresolvedWrite() == true -> "bolus transport has an unresolved write"
+            else -> null
+        }
+    }
+    internal fun readinessStatus(): String {
+        val gatt = bluetoothGatt
+        val record = session?.snapshot()
+        fun capability(uuid: UUID, property: Int): Boolean =
+            gatt?.let { findChar(it, uuid)?.properties?.and(property) != 0 } == true
+        return "connection=${pumpState.connectionState},gatt=${gatt != null},token=${sessionToken != null}," +
+            "protocol=${hasCompatibleStatusProtocol()},setting_selector_read=" +
+            capability(YpsoWritePolicy.SETTING_ID_UUID, BluetoothGattCharacteristic.PROPERTY_READ) +
+            ",setting_selector_write=" + capability(YpsoWritePolicy.SETTING_ID_UUID, BluetoothGattCharacteristic.PROPERTY_WRITE) +
+            ",history_selector_read=" + capability(YpsoWritePolicy.EVENT_INDEX_UUID, BluetoothGattCharacteristic.PROPERTY_READ) +
+            ",history_selector_write=" + capability(YpsoWritePolicy.EVENT_INDEX_UUID, BluetoothGattCharacteristic.PROPERTY_WRITE) +
+            ",bolus_write=" + capability(YpsoWritePolicy.BOLUS_START_STOP_UUID, BluetoothGattCharacteristic.PROPERTY_WRITE) +
+            ",reboot=${record?.reboot},read=${record?.read},write=${record?.write}," +
+            "bootstrap=${record?.writeBootstrapState},recovery_exponent=${record?.counterRecoveryExponent}," +
+            "reservation=${record?.reservation?.phase ?: "none"}," +
+            "failure=${writeReadinessFailure() ?: "none"}"
+    }
     @Volatile internal var session: PumpSession? = null
     @Volatile private var sessionToken: PumpSession.Token? = null
     @Volatile private var configuredKey: ByteArray? = null
@@ -79,9 +122,20 @@ class YpsoBleManager @Inject constructor(
     @Volatile private var configuredConnection: YpsoProvisioningService.ConnectionSession? = null
     private var bondedIdentitySerial: String? = null
     private val readCounter: Long get() = session?.snapshot()?.read ?: 0L
+    private val statusReadActive = AtomicBoolean(false)
     private val profileReadActive = AtomicBoolean(false)
     private val historyReadActive = AtomicBoolean(false)
     private val bolusWriteActive = AtomicBoolean(false)
+
+    /** Claim one whole logical pump operation before it can enqueue anything on Android's GATT lane. */
+    private fun acquirePumpOperation(claim: AtomicBoolean): Boolean = synchronized(opLock) {
+        if (statusReadActive.get() || profileReadActive.get() || historyReadActive.get() || bolusWriteActive.get()) {
+            false
+        } else {
+            claim.set(true)
+            true
+        }
+    }
     @Volatile private var controlNotificationsEnabled = false
 
     companion object {
@@ -277,7 +331,7 @@ class YpsoBleManager @Inject constructor(
     /** Read SYSTEM_STATUS over the already-open connection and update [YpsoPumpState]. No disconnect. */
     fun readStatus(onDone: (Boolean) -> Unit = {}): StatusReadAttempt {
         val attempt = StatusReadAttempt()
-        if (profileReadActive.get()) {
+        if (!acquirePumpOperation(statusReadActive)) {
             attempt.tryComplete()
             onDone(false)
             return attempt
@@ -288,6 +342,7 @@ class YpsoBleManager @Inject constructor(
         }
         val originGatt = ownership.gatt
         attempt.onCancel = {
+            statusReadActive.set(false)
             synchronized(opLock) {
                 if (originGatt != null && bluetoothGatt === originGatt)
                     fail(originGatt, "status read cancelled", cause = PumpSession.AvailabilityCause.TRANSPORT, ownership = ownership)
@@ -298,6 +353,7 @@ class YpsoBleManager @Inject constructor(
         // every attempt. A failed current read must never inherit a recent successful timestamp or values.
         if (!isConnected || originGatt == null) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump readStatus: not connected")
+            statusReadActive.set(false)
             if (attempt.tryComplete()) onDone(false)
             return attempt
         }
@@ -440,6 +496,7 @@ class YpsoBleManager @Inject constructor(
             session?.quiesce()
             sessionToken = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
+            statusReadActive.set(false)
             profileReadActive.set(false)
             historyReadActive.set(false)
             bolusWriteActive.set(false)
@@ -864,7 +921,15 @@ class YpsoBleManager @Inject constructor(
     private fun authPassword(mac: String): ByteArray = YpsoAuthentication.password(mac)
 
     private fun readStatusInternal(originGatt: BluetoothGatt, ownership: ReadOwnership, attempt: StatusReadAttempt, onDone: (Boolean) -> Unit) {
-        readMultiframe(CHAR_STATUS, expectedGatt = originGatt, failureOwner = ownership, onFailure = { if (attempt.tryComplete()) onDone(false) }) { gatt, frame ->
+        readMultiframe(
+            CHAR_STATUS,
+            expectedGatt = originGatt,
+            failureOwner = ownership,
+            onFailure = {
+                statusReadActive.set(false)
+                if (attempt.tryComplete()) onDone(false)
+            },
+        ) { gatt, frame ->
             var decodeFailure: Throwable? = null
             var publicationFailure: Throwable? = null
             var completionClaimed = false
@@ -926,6 +991,7 @@ class YpsoBleManager @Inject constructor(
                 }.onFailure { publicationFailure = it }.isSuccess
             } ?: false
             if (!completionClaimed) return@readMultiframe
+            statusReadActive.set(false)
             // Identity failures record their own specific cause inside markVerified; only a decode
             // failure is an unattributed encrypted-status failure. Key rejection is terminal; other
             // decode failures keep the candidate with bounded retry.
@@ -967,13 +1033,7 @@ class YpsoBleManager @Inject constructor(
 
     fun readProfileConfiguration(activeOnly: Boolean, shouldYield: () -> Boolean, onDone: (Boolean) -> Unit): ProfileReadAttempt {
         val attempt = ProfileReadAttempt()
-        if (!profileReadActive.compareAndSet(false, true)) {
-            attempt.tryComplete()
-            onDone(false)
-            return attempt
-        }
-        if (historyReadActive.get() || bolusWriteActive.get()) {
-            profileReadActive.set(false)
+        if (!acquirePumpOperation(profileReadActive)) {
             attempt.tryComplete()
             onDone(false)
             return attempt
@@ -1203,13 +1263,7 @@ class YpsoBleManager @Inject constructor(
     ): HistoryReadAttempt {
         require(maxRows > 0)
         val attempt = HistoryReadAttempt()
-        if (!historyReadActive.compareAndSet(false, true)) {
-            attempt.tryComplete()
-            onResult(null)
-            return attempt
-        }
-        if (profileReadActive.get() || bolusWriteActive.get()) {
-            historyReadActive.set(false)
+        if (!acquirePumpOperation(historyReadActive)) {
             attempt.tryComplete()
             onResult(null)
             return attempt
@@ -1395,7 +1449,13 @@ class YpsoBleManager @Inject constructor(
      * mutates therapy state and never treats transport ACK as acceptance; exact same-link selector
      * identity read-back is mandatory.
      */
-    internal fun recoverHistorySelectorLowerBound(onResult: (Boolean) -> Unit) {
+    internal enum class LowerBoundRecoveryResult { RECOVERED, COUNTER_TOO_LOW, STOPPED }
+
+    internal fun recoverHistorySelectorLowerBound(onResult: (LowerBoundRecoveryResult) -> Unit) {
+        if (!acquirePumpOperation(historyReadActive)) {
+            onResult(LowerBoundRecoveryResult.STOPPED)
+            return
+        }
         val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
         val gatt = captured.first
         val token = captured.second
@@ -1408,38 +1468,48 @@ class YpsoBleManager @Inject constructor(
             selector == null || selector.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0 ||
             findChar(gatt, CHAR_EVENT_COUNT) == null
         ) {
-            onResult(false)
+            historyReadActive.set(false)
+            onResult(LowerBoundRecoveryResult.STOPPED)
             return
         }
         val owner = YpsoHistorySelectorCoordinator.Owner(gatt, connectionId, token)
         var completed = false
-        fun finish(success: Boolean) {
+        fun finish(result: LowerBoundRecoveryResult) {
             if (completed) return
             completed = true
-            onResult(success)
+            historyReadActive.set(false)
+            onResult(result)
+        }
+        fun stop(detail: String) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump lower-bound selector recovery stopped: $detail")
+            finish(LowerBoundRecoveryResult.STOPPED)
         }
         fun owned(): Boolean = synchronized(opLock) {
             bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
         }
         fun readEncrypted(uuid: UUID, done: (ByteArray) -> Unit) {
-            if (!owned()) return finish(false)
-            readMultiframe(uuid, expectedGatt = gatt, onFailure = { finish(false) }) { ownerGatt, frames ->
-                if (ownerGatt !== gatt || !owned()) return@readMultiframe finish(false)
-                val body = runCatching { decryptOwned(frames) }.getOrElse { return@readMultiframe finish(false) }
+            if (!owned()) return stop("connection owner changed before encrypted read $uuid")
+            readMultiframe(uuid, expectedGatt = gatt, onFailure = { stop("encrypted read failed for $uuid") }) { ownerGatt, frames ->
+                if (ownerGatt !== gatt || !owned()) return@readMultiframe stop("connection owner changed during encrypted read $uuid")
+                val body = runCatching { decryptOwned(frames) }.getOrElse {
+                    return@readMultiframe stop("authenticated decrypt failed for $uuid: ${it.message}")
+                }
                 done(body)
             }
         }
         enableProfileSetup(gatt) { setup ->
-            if (!setup) return@enableProfileSetup finish(false)
+            if (!setup) return@enableProfileSetup stop("required control notification setup failed")
             readEncrypted(CHAR_EVENT_COUNT) { countBody ->
                 val count = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(countBody)
-                    ?: return@readEncrypted finish(false)
-                if (count < 2) return@readEncrypted finish(false)
+                    ?: return@readEncrypted stop("event count is not exact GLB (${countBody.size} bytes)")
+                if (count < 2) return@readEncrypted stop("event count $count cannot prove a selector transition")
                 readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { beforeBody ->
                     val before = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(beforeBody)
-                        ?: return@readEncrypted finish(false)
+                        ?: return@readEncrypted stop("event selector is not exact GLB (${beforeBody.size} bytes)")
                     val target = if (before == 0) 1 else 0
-                    if (target >= count) return@readEncrypted finish(false)
+                    if (before !in 0 until count || target >= count) {
+                        return@readEncrypted stop("event selector $before is outside event count $count")
+                    }
                     val writeId = "history-lower-bound-$connectionId-$target-${UUID.randomUUID()}"
                     val started = historySelectorCoordinator.recoverLowerBound(
                         writeId,
@@ -1449,14 +1519,30 @@ class YpsoBleManager @Inject constructor(
                         OP_TIMEOUT_MS,
                         dispatch = { frame -> writeHistoryFrame(gatt, frame) },
                     ) { outcome ->
+                        // Semantic reconciliation publishes the terminal Verified outcome through the
+                        // same callback. The read-back branch below owns final RECOVERED publication.
+                        if (outcome is YpsoWriteOutcome.Verified) return@recoverLowerBound
+                        if (outcome is YpsoWriteOutcome.ProvenRejected && outcome.failure.isPumpCounterError()) {
+                            return@recoverLowerBound finish(LowerBoundRecoveryResult.COUNTER_TOO_LOW)
+                        }
                         val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
                             outcome is YpsoWriteOutcome.PossiblyApplied &&
                             outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK
-                        if (!canReconcile) return@recoverLowerBound finish(false)
+                        if (!canReconcile) {
+                            val detail = when (outcome) {
+                                is YpsoWriteOutcome.NotSent -> "${outcome.failure.layer}: ${outcome.failure.detail}"
+                                is YpsoWriteOutcome.ProvenRejected -> "${outcome.failure.layer}: ${outcome.failure.detail}"
+                                is YpsoWriteOutcome.PossiblyApplied -> "${outcome.failure.layer}: ${outcome.failure.detail}"
+                                else -> outcome.javaClass.simpleName
+                            }
+                            return@recoverLowerBound stop(
+                                "selector write stopped at $detail",
+                            )
+                        }
                         readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { selectedBody ->
                             val selected = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(selectedBody)
-                                ?: return@readEncrypted finish(false)
-                            if (selected != target) return@readEncrypted finish(false)
+                                ?: return@readEncrypted stop("selector read-back is not exact GLB (${selectedBody.size} bytes)")
+                            if (selected != target) return@readEncrypted stop("selector read-back $selected did not match target $target")
                             val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
                                 "${owner.token.generation}|$reboot|$connectionId|$target|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
                             )
@@ -1469,10 +1555,10 @@ class YpsoBleManager @Inject constructor(
                                 )
                             }.getOrDefault(false)
                             if (reconciled) provisioning.refreshState()
-                            finish(reconciled)
+                            finish(if (reconciled) LowerBoundRecoveryResult.RECOVERED else LowerBoundRecoveryResult.STOPPED)
                         }
                     }
-                    if (!started) finish(false)
+                    if (!started) stop("selector recovery write was not started")
                 }
             }
         }
@@ -1594,33 +1680,30 @@ class YpsoBleManager @Inject constructor(
             ),
             null,
         )
-        if (!isConnected || gatt == null || token == null || !canReadProfile || !hasCompatibleStatusProtocol()) {
-            notSent("authenticated write-ready session is unavailable")
+        writeReadinessFailure()?.let {
+            notSent(it)
             return
         }
-        if (expectedConnectionKey != null && "${System.identityHashCode(gatt)}:${token.generation}" != expectedConnectionKey) {
+        val readyGatt = checkNotNull(gatt)
+        val readyToken = checkNotNull(token)
+        if (expectedConnectionKey != null && "${System.identityHashCode(readyGatt)}:${readyToken.generation}" != expectedConnectionKey) {
             notSent("connection changed after bolus preflight")
             return
         }
-        val therapyCharacteristic = findChar(gatt, YpsoWritePolicy.BOLUS_START_STOP_UUID)
+        val therapyCharacteristic = findChar(readyGatt, YpsoWritePolicy.BOLUS_START_STOP_UUID)
         if (therapyCharacteristic == null ||
             therapyCharacteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
             notSent("bolus command characteristic is unavailable or not writable")
             return
         }
-        if (!bolusWriteActive.compareAndSet(false, true)) {
-            notSent("another bolus command owns the connection")
-            return
-        }
-        if (profileReadActive.get() || historyReadActive.get()) {
-            releaseBolusWrite()
+        if (!acquirePumpOperation(bolusWriteActive)) {
             notSent("another pump operation owns the connection")
             return
         }
-        val owner = YpsoBolusWriteCoordinator.Owner(gatt, captured.third, token)
+        val owner = YpsoBolusWriteCoordinator.Owner(readyGatt, captured.third, readyToken)
         val publicOwner = BolusCommandOwner(owner)
-        enableProfileSetup(gatt) { setup ->
-            if (!setup || bluetoothGatt !== gatt || sessionToken?.generation != token.generation) {
+        enableProfileSetup(readyGatt) { setup ->
+            if (!setup || bluetoothGatt !== readyGatt || sessionToken?.generation != readyToken.generation) {
                 releaseBolusWrite()
                 notSent("required control notification setup failed")
                 return@enableProfileSetup
@@ -1637,7 +1720,7 @@ class YpsoBleManager @Inject constructor(
                     pumpState.masterVersion.takeIf(String::isNotBlank),
                     30_000,
                     beforeDispatch,
-                    { frame -> writeBolusFrame(gatt, frame) },
+                    { frame -> writeBolusFrame(readyGatt, frame) },
                     outcome,
                 )
             } else {
@@ -1648,7 +1731,7 @@ class YpsoBleManager @Inject constructor(
                     pumpState.masterVersion.takeIf(String::isNotBlank),
                     30_000,
                     beforeDispatch,
-                    { frame -> writeBolusFrame(gatt, frame) },
+                    { frame -> writeBolusFrame(readyGatt, frame) },
                     outcome,
                 )
             }
@@ -1697,6 +1780,7 @@ class YpsoBleManager @Inject constructor(
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         historySelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         bolusWriteCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
+                        statusReadActive.set(false)
                         profileReadActive.set(false)
                         historyReadActive.set(false)
                         bolusWriteActive.set(false)
@@ -1761,12 +1845,13 @@ class YpsoBleManager @Inject constructor(
                     if (pumpState.connectionState != ConnectionState.READY) return
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
+                    markConnected(controlNotificationsEnabled = false)
                     aapsLogger.info(
                         LTag.PUMP,
                         if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
-                        else "YpsoPump authenticated; bolus therapy is available after readiness checks",
+                        else writeReadinessFailure()?.let { "YpsoPump authenticated; writes are not ready: $it" }
+                            ?: "YpsoPump authenticated; durable write prerequisites are currently satisfied",
                     )
-                    markConnected(controlNotificationsEnabled = false)
                     null
                 }
                 failure?.let {
@@ -1865,6 +1950,7 @@ class YpsoBleManager @Inject constructor(
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
             bolusWriteCoordinatorInstance?.ownerDisconnected(g, message)
+            statusReadActive.set(false)
             bolusWriteActive.set(false)
             profileReadActive.set(false)
             historyReadActive.set(false)

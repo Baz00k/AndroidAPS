@@ -405,33 +405,44 @@ class YpsoProvisioningService internal constructor(
         try {
             quiesceConnection()
             synchronized(this) {
-                owner.adoptOwnershipHandoff(
-                    reviewed.record,
-                    now.toEpochMilli(),
-                    mapOf(
-                        "ownership_handoff_sha256" to reviewed.documentSha256,
-                        "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
-                        "ownership_source_apk_sha256" to reviewed.source.apkSha256,
-                        "ownership_source_journal_sha256" to reviewed.source.journalSha256,
-                    ),
-                    minimumKnownWriteFloor = durableBolusRecoveryEvidence()?.let { evidence ->
-                        try {
-                            val attempt = evidence.attempt
-                            check(attempt.pumpSerial == reviewed.record.serial) {
-                                "Durable bolus allocation belongs to another pump"
-                            }
-                            check(attempt.sessionKeyId == reviewed.record.keyId) {
-                                "Durable bolus allocation is not bound to the reviewed ownership key"
-                            }
-                            check(attempt.baseline.pumpReboot == reviewed.record.reboot) {
-                                "Durable bolus allocation belongs to another pump epoch"
-                            }
-                            listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
-                        } finally {
-                            evidence.bytes.fill(0)
-                        }
-                    },
+                val source = mapOf(
+                    "ownership_handoff_sha256" to reviewed.documentSha256,
+                    "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
+                    "ownership_source_apk_sha256" to reviewed.source.apkSha256,
+                    "ownership_source_journal_sha256" to reviewed.source.journalSha256,
                 )
+                val active = owner.committedRecord() ?: throw SecurityException("No installed pump session")
+                if (active.writeBootstrapState == PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH) {
+                    owner.recoverIdentityOnlyLowerBound(reviewed.record, now.toEpochMilli(), source)
+                } else {
+                    owner.adoptOwnershipHandoff(
+                        reviewed.record,
+                        now.toEpochMilli(),
+                        source,
+                        minimumKnownWriteFloor = durableBolusRecoveryEvidence()?.let { evidence ->
+                            try {
+                                val allocated = evidence.attempts.filter {
+                                    it.dispatchCounter != null || it.cancelCounter != null
+                                }
+                                allocated.forEach { attempt ->
+                                    check(attempt.pumpSerial == reviewed.record.serial) {
+                                        "Durable bolus allocation belongs to another pump"
+                                    }
+                                    check(attempt.sessionKeyId == reviewed.record.keyId) {
+                                        "Durable bolus allocation is not bound to the reviewed ownership key"
+                                    }
+                                    check(attempt.baseline.pumpReboot == reviewed.record.reboot) {
+                                        "Durable bolus allocation belongs to another pump epoch"
+                                    }
+                                }
+                                allocated.maxOfOrNull { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }
+                                    ?.takeIf { it >= 0 }
+                            } finally {
+                                evidence.bytes.fill(0)
+                            }
+                        },
+                    )
+                }
                 pumpState.invalidateStatus()
                 pumpState.invalidateProfileEvidence()
                 refreshState()

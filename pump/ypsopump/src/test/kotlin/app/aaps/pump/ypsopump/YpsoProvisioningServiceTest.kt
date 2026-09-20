@@ -9,6 +9,7 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
+import app.aaps.pump.ypsopump.provisioning.YpsoOwnershipHandoff
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 import java.time.Instant
@@ -1456,6 +1457,59 @@ class YpsoProvisioningServiceTest {
         assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
         assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
         connection.key.fill(0)
+    }
+
+    @Test
+    fun `verified identity only session imports a stale handoff only as selector recovery lower bound`() {
+        val local = PumpSession.Record(
+            pump = mac,
+            keyId = PumpSession.fingerprint(key),
+            generation = "local-generation",
+            reboot = 21,
+            read = 73_051,
+            write = null,
+            serial = serial,
+            keyHex = key.hex(),
+            verifiedAt = 3_000,
+            verifiedSerial = serial,
+            source = mapOf("journal_loss_read_only_document_sha256" to "aa".repeat(32)),
+            writeBootstrapState = PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH,
+        )
+        val store = MemoryStore(
+            PumpSession.State(
+                records = listOf(local),
+                activeGeneration = local.generation,
+                availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+            ),
+        )
+        val service = service(store).first
+        val handoff = local.copy(
+            generation = "handoff-generation",
+            read = 2_998,
+            write = 4_280,
+            keyHex = null,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+        )
+        val reviewed = YpsoOwnershipHandoff.Reviewed(
+            handoff,
+            createdAt = 2_000,
+            reviewedEvidenceSha256 = "bb".repeat(32),
+            source = YpsoOwnershipHandoff.SourceArtifacts(
+                "app.aaps.ypso.writebench",
+                "01".repeat(32), "02".repeat(32), "03".repeat(32),
+                "04".repeat(32), "05".repeat(32), "06".repeat(32),
+            ),
+            documentSha256 = "cc".repeat(32),
+        )
+
+        service.installOwnershipHandoff(reviewed, Instant.ofEpochMilli(4_000))
+
+        val recovered = service.owner.committedRecord()!!
+        assertEquals(73_051, recovered.read)
+        assertEquals(4_280, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals(21, recovered.lowerBoundRecoveryReboot)
+        assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in service.availability().causes)
     }
 
     @Test

@@ -239,6 +239,128 @@ class ProductionPumpSessionTest {
     }
 
     @Test
+    fun `matching identity only record can enter selector lower bound recovery without adopting ownership`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+        unavailable.recoverLostJournalReadOnly(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            documentHash = "cd".repeat(32),
+        )
+        val readable = PumpSession(store)
+        val token = readable.open(pump, key)
+        accept(readable, token, 73051, reboot = 21)
+        readable.markVerified("10000001", 3)
+        readable.quiesce()
+        val imported = readable.committedRecord()!!.copy(
+            generation = "handoff-generation",
+            read = 2_998,
+            write = 4_280,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            lowerBoundRecoveryReboot = null,
+        )
+
+        readable.recoverIdentityOnlyLowerBound(
+            imported,
+            importedAt = 4,
+            source = mapOf("ownership_handoff_sha256" to "ab".repeat(32)),
+        )
+
+        val recovered = readable.committedRecord()!!
+        assertEquals(21, recovered.reboot)
+        assertEquals(73051, recovered.read)
+        assertEquals(4_280, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals(21, recovered.lowerBoundRecoveryReboot)
+        assertEquals("ab".repeat(32), recovered.source["ownership_handoff_sha256"])
+        assertNull(recovered.reservation)
+        assertTrue(recovered.writeEvidence.isEmpty())
+    }
+
+    @Test
+    fun `identity only lower bound recovery rejects another pump key epoch or exact ownership state`() {
+        fun recovered(): Pair<PumpSession, PumpSession.Record> {
+            val store = MemoryStore()
+            initialized(store)
+            store.fault = 3
+            val unavailable = PumpSession(store)
+            store.fault = 0
+            unavailable.recoverLostJournalReadOnly(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                documentHash = "cd".repeat(32),
+            )
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            accept(owner, token, 100, reboot = 21)
+            owner.markVerified("10000001", 3)
+            owner.quiesce()
+            return owner to owner.committedRecord()!!.copy(
+                generation = "handoff-generation",
+                read = 90,
+                write = 4_280,
+                writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            )
+        }
+
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(pump = "EC:2A:F0:00:00:02"), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(keyId = "00".repeat(32)), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(reboot = 22), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported, 5, emptyMap())
+            }
+        }
+    }
+
+    @Test
+    fun `legacy identity only record without provenance marker can enter selector recovery`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(
+                    reboot = 21,
+                    read = 73_051,
+                    write = null,
+                    serial = "10000001",
+                    verifiedAt = 3,
+                    verifiedSerial = "10000001",
+                    source = emptyMap(),
+                    writeBootstrapState = PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH,
+                )
+            },
+        )
+        val owner = PumpSession(store)
+        val imported = owner.committedRecord()!!.copy(
+            generation = "handoff-generation",
+            read = 2_998,
+            write = 4_280,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+        )
+
+        owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
+
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, owner.committedRecord()!!.writeBootstrapState)
+        assertEquals(4_280, owner.committedRecord()!!.write)
+        assertEquals(73_051, owner.committedRecord()!!.read)
+    }
+
+    @Test
     fun `healthy journal cannot enter read only disaster recovery`() {
         val store = MemoryStore()
         val owner = initialized(store)
