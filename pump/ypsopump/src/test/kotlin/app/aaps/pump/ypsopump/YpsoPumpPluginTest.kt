@@ -82,8 +82,7 @@ class YpsoPumpPluginTest {
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
         assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isExtendedBolusCapable)
         verifyNoInteractions(sync)
-        verify(manager, times(2)).noBackupDirectory()
-        verifyNoMoreInteractions(manager)
+        verifyNoInteractions(manager)
     }
 
     @Test

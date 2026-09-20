@@ -1,6 +1,7 @@
 # Issue 7: Opus safety review
 
-> **Status:** Not safe for real therapy.
+> **Status:** Software remediation implemented and locally verified; still not approved
+> for real therapy pending independent safety re-review and hardware acceptance.
 >
 > **Source:** Extracted in four sequential responses from the original resumed Opus
 > review session `ses_f44538f79ffeYEL2lq4Ab0YIyo`. Outputs from two accidentally
@@ -18,25 +19,36 @@ implementation ledger; a finding is not closed until its regression evidence is 
 
 | ID | Validation | Status | Fix commit | Evidence |
 |---|---|---|---|---|
-| Gate | Confirmed | Fixed | Pending | `READ_ONLY_MODE` restored to `true` |
-| S1 | Confirmed | In progress | Pending | Stable `pumpId` read-back verifier added; plugin switch pending validated commit |
-| S2 | Confirmed | Fixed in working tree | Pending | Extended deadline = duration + 90 s; epoch change becomes durable warning |
-| S3 | Confirmed | Fixed in working tree | Pending | Split dose inhibition/reconciliation/row holdback; backwards-clock regression passes |
-| S4 | Confirmed | Fixed | Pending | Restored independent selector identity proof; stable-history regression passes |
-| S5 | Confirmed | Fixed | Pending | Stop retries until dispatch/pending; history yields locally; BLE watchdog moved off main looper; BLE suite passes |
-| S6 | Confirmed | Fixed in working tree | Pending | Authoritative terminal amount publishes final progress |
-| S7 | Confirmed | Fixed in working tree | Pending | Live PumpSync row without durable identity now fails explicitly |
-| S8 | Confirmed | Fixed in working tree | Pending | Synchronized message lifecycle dismisses, raises, clears, and can re-raise |
-| S9 | Confirmed | Fixed in working tree | Pending | Background history removed from queue `isBusy` |
-| S10 | Confirmed | Fixed in working tree | Pending | Queued therapy can repeatedly bypass transport-only backoff; rekey remains blocking |
-| S11 | Confirmed | Fixed in working tree | Pending | Post-dispatch identity loss is enacted uncertainty; confirmed partial is successful enacted result |
-| S12 | Confirmed | Fixed in working tree | Pending | Removed redundant post-terminal stop transaction |
-| S13.1 | Confirmed | Fixed | Pending | Alarm runs before any UI work; refresh is main-thread and binding-guarded |
-| S13.2 | Confirmed | Fixed | Pending | Confirmation latch resets on pause and view destruction |
-| S13.3 | Confirmed | Fixed | Pending | Pending state localized; queue and confirmation guards are visible/disabled |
-| S13.4 | Confirmed | Fixed | Pending | Pending cancel deduplicated and tested; queued set is explicitly superseded |
-| S14 | Confirmed naming/test gap | Fixed | Pending | Presentation renamed; paired GATT 129 and pump 140 tests cover retry vs rekey |
-| S15 | Confirmed | Fixed | Pending | Four unsafe-contract tests rewritten; broader full-suite evidence pending |
+| Gate | Confirmed | Fixed | `5fe8765ba9` | `READ_ONLY_MODE` restored to `true` |
+| S1 | Confirmed | Fixed | `6ce1521334`, `a206ff0757` | Stable `pumpId` read-back verifies inserted or updated terminal rows |
+| S2 | Confirmed | Fixed | `a206ff0757` | Extended deadline = duration + 90 s; epoch change becomes durable warning |
+| S3 | Confirmed | Fixed | `a206ff0757` | Split dose inhibition/reconciliation/row holdback; backwards-clock regression passes |
+| S4 | Confirmed | Fixed | Restored reviewed baseline | Independent selector identity proof retained; dropped write cannot be proven by auto-advancing event value |
+| S5 | Confirmed | Fixed | `ba3435d492` | Stop retries until dispatch/pending; history yields locally; BLE watchdog moved off main looper |
+| S6 | Confirmed | Fixed | `a206ff0757` | Authoritative terminal amount publishes final progress |
+| S7 | Confirmed | Fixed | `a206ff0757` | Live PumpSync row without durable identity now fails explicitly |
+| S8 | Confirmed | Fixed | `a206ff0757` | Synchronized warning lifecycle dismisses, raises, clears, and can re-raise |
+| S9 | Confirmed | Fixed | `a206ff0757` | Background history removed from queue `isBusy` |
+| S10 | Confirmed | Fixed | `a206ff0757` | Queued therapy can repeatedly bypass transport-only backoff; rekey remains blocking |
+| S11 | Confirmed | Fixed | `a206ff0757` | Post-dispatch identity loss is enacted uncertainty; confirmed partial is successful enacted result |
+| S12 | Confirmed | Fixed | `a206ff0757` | Removed redundant post-terminal stop transaction |
+| S13.1 | Confirmed | Fixed | `e14a906696` | Alarm runs before UI work; refresh is main-thread and binding-guarded |
+| S13.2 | Confirmed | Fixed | `e14a906696` | Confirmation latch resets on pause and view destruction |
+| S13.3 | Confirmed | Fixed | `e14a906696` | Pending state localized; queue and confirmation guards are visible/disabled |
+| S13.4 | Confirmed | Fixed | `e14a906696` | Pending cancel deduplicated and tested; queued set is explicitly superseded |
+| S14 | Confirmed naming/test gap | Fixed | `b5b0b5fea8` | Presentation renamed; paired GATT 129 and pump 140 tests cover retry vs rekey |
+| S15 | Confirmed | Fixed | `a206ff0757`, `b5b0b5fea8` | Unsafe-contract tests rewritten; 407 YpsoPump tests pass |
+
+### Local verification after remediation
+
+- `:pump:ypsopump:testFullDebugUnitTest`: **407 tests, 0 failures, 0 errors**.
+- `:pump:ypsopump:lintFullDebug`: passed in the combined module verification run.
+- `:implementation:testFullDebugUnitTest --tests app.aaps.implementation.queue.CommandQueueImplementationTest`: passed.
+- `:plugins:main:compileFullDebugKotlin`: passed.
+- `:plugins:main:lintFullDebug`: analysis reached `lintAnalyzeFullDebug` twice but exceeded the
+  local 2-minute and 5-minute command limits without reporting an error; a completed lint result
+  is still required before therapy approval.
+- `git diff --check`: passed.
 
 ## Finding inventory
 
