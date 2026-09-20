@@ -1,5 +1,6 @@
 package app.aaps.implementations
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -173,6 +174,10 @@ class UiInteractionImpl @Inject constructor(
     }
 
     override fun dismissNotification(id: Int) {
+        // Rx delivery removes the in-app alert, but its Android counterpart survives process death
+        // and APK replacement. Cancel synchronously so cleanup does not depend on OverviewPlugin's
+        // subscriber having started before the producer emits this dismissal.
+        (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(id)
         rxBus.send(EventDismissNotification(id))
     }
 

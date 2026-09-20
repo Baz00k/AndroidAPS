@@ -15,4 +15,9 @@ interface AppLifecycle {
 
     /** True between the first activity's onStart and the last activity's onStop. */
     val uiVisible: Boolean
+
+    /** Observe process-level UI visibility without tying work to one fragment or activity. */
+    fun addVisibilityListener(listener: (Boolean) -> Unit) = Unit
+
+    fun removeVisibilityListener(listener: (Boolean) -> Unit) = Unit
 }

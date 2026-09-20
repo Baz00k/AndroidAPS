@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -55,9 +56,10 @@ class YpsoPumpPluginTest {
         on { getMaxBolusAllowed() } doReturn maxBolusConstraint
         on { getMaxExtendedBolusAllowed() } doReturn maxBolusConstraint
     }
+    private val appLifecycle: AppLifecycle = mock()
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, commandQueue, state, manager, sync, rxBus, ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker, appLifecycle
     )
 
     @Test
@@ -148,9 +150,19 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `completed setup remains initialized while disconnected and status is stale`() {
+        whenever(provisioning.installed()).thenReturn(installed.copy(verifiedAt = Instant.EPOCH))
+
+        assertTrue(plugin.isInitialized())
+        assertFalse(plugin.isConnected())
+        assertFalse(state.hasVerifiedStatus)
+    }
+
+    @Test
     fun `polling alarms use verified measurements and failed reads cannot fabricate empty reservoir`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(provisioning.retryAllowed(any())).thenReturn(true)
         whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
         whenever(manager.isConnected).thenReturn(true)
         whenever(preferences.get(IntKey.OverviewResCritical)).thenReturn(10)
@@ -181,6 +193,7 @@ class YpsoPumpPluginTest {
     fun `status polling never acquires configuration even with durable selectors ready`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(provisioning.retryAllowed(any())).thenReturn(true)
         whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
         whenever(manager.isConnected).thenReturn(true)
         whenever(manager.canReadProfile).thenReturn(true)
@@ -285,6 +298,59 @@ class YpsoPumpPluginTest {
         plugin.disconnect("Queue empty")
 
         verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `foreground app requests status immediately and retains idle connection`() {
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(provisioning.retryAllowed(any())).thenReturn(true)
+        whenever(appLifecycle.uiVisible).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.configureInstalledSession()).thenReturn(true)
+        whenever(commandQueue.readStatus(YpsoPumpPlugin.FOREGROUND_CONNECTION_REASON, null)).thenReturn(true)
+
+        plugin.onAppVisibilityChanged(true)
+        plugin.disconnect("Queue empty")
+
+        verify(commandQueue).readStatus(YpsoPumpPlugin.FOREGROUND_CONNECTION_REASON, null)
+        verify(manager).configureInstalledSession()
+        verify(manager).connectConfiguredSession()
+        verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `authoritative visible lifecycle suppresses queue teardown after callback race`() {
+        whenever(appLifecycle.uiVisible).thenReturn(true)
+
+        plugin.disconnect("Queue empty")
+
+        verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `background app releases an idle foreground connection`() {
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(provisioning.retryAllowed(any())).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.configureInstalledSession()).thenReturn(true)
+        whenever(commandQueue.readStatus(YpsoPumpPlugin.FOREGROUND_CONNECTION_REASON, null)).thenReturn(true)
+        whenever(commandQueue.performing()).thenReturn(null)
+        whenever(commandQueue.size()).thenReturn(0)
+
+        plugin.onAppVisibilityChanged(true)
+        plugin.onAppVisibilityChanged(false)
+
+        verify(manager).disconnect(preserveStatus = true)
+    }
+
+    @Test
+    fun `foreground app with unavailable session reports setup without queue timeout`() {
+        whenever(provisioning.isConfigured()).thenReturn(false)
+
+        plugin.onAppVisibilityChanged(true)
+
+        verify(commandQueue, never()).readStatus(any(), anyOrNull())
+        verify(provisioning).refreshState()
     }
 
     @Test
@@ -484,9 +550,9 @@ class YpsoPumpPluginTest {
         plugin.publishAvailabilityNotification() // unchanged presentation is a no-op
 
         inOrder(ui, rxBus) {
-            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
             verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
-            verify(rxBus).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+            verify(ui).dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
             verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
         }
         verifyNoMoreInteractions(rxBus)
@@ -500,8 +566,8 @@ class YpsoPumpPluginTest {
         plugin.publishAvailabilityNotification()
         plugin.publishAvailabilityNotification()
 
-        verify(rxBus, times(1)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
-        verifyNoInteractions(ui)
+        verify(ui, times(1)).dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
+        verifyNoMoreInteractions(ui)
     }
 
     @Test
@@ -516,7 +582,7 @@ class YpsoPumpPluginTest {
         plugin.onStop()
         plugin.onStop()
 
-        verify(rxBus, times(2)).send(check<EventDismissNotification> { assertEquals(Notification.YPSOPUMP_UNAVAILABLE, it.id) })
+        verify(ui, times(2)).dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
         verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }
 

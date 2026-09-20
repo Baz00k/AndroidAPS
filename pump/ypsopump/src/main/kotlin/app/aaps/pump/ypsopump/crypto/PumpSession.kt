@@ -420,6 +420,51 @@ class PumpSession(private val store: Store) {
         quiesce()
     }
 
+    /**
+     * Replace an already-unreadable journal with identity/key only. The first authenticated pump read
+     * may establish a read replay floor, but write ownership remains UNKNOWN_MID_EPOCH permanently
+     * until a separately qualified ownership-recovery protocol succeeds.
+     */
+    @Synchronized
+    internal fun recoverLostJournalReadOnly(provisioning: Provisioning, documentHash: String) {
+        check(state == null && loadedState.isFailure) { "Read-only recovery requires an unavailable journal" }
+        require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
+        require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
+        require(documentHash.matches(Regex("[0-9a-f]{64}")))
+        val record = Record(
+            pump = provisioning.pump,
+            keyId = fingerprint(provisioning.sharedKey),
+            generation = UUID.randomUUID().toString(),
+            reboot = null,
+            read = null,
+            write = null,
+            serial = provisioning.serial,
+            keyHex = provisioning.sharedKey.toHex(),
+            createdAt = provisioning.createdAt,
+            importedAt = provisioning.importedAt,
+            source = provisioning.source + mapOf(
+                "journal_loss_read_only_document_sha256" to documentHash,
+                "journal_loss_failure" to checkNotNull(loadFailureLocation),
+            ),
+            writeBootstrapState = WriteBootstrapState.UNKNOWN_MID_EPOCH,
+        )
+        val recovered = State(
+            records = listOf(record),
+            activeGeneration = record.generation,
+            availability = Availability(setOf(AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE, AvailabilityCause.COUNTER_UNCERTAIN)),
+        )
+        try {
+            validate(recovered)
+            store.replaceUnavailable(recovered)
+            state = recovered
+        } catch (e: Exception) {
+            state = null
+            quiesce()
+            throw SecurityException("Read-only session journal recovery failed", e)
+        }
+        quiesce()
+    }
+
     /** Validates a replacement before callers quiesce the current transport. */
     @Synchronized
     fun preflight(provisioning: Provisioning): Installation = planInstallation(provisioning).installation

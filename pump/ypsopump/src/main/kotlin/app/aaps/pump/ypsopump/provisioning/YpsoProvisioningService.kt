@@ -287,10 +287,71 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
+    /**
+     * Hash-gated, identity-only recovery for status/connectivity. It deliberately imports no write
+     * counter and therefore cannot authorize selectors, profile writes, cancellation, or therapy.
+     */
+    internal fun recoverLostJournalReadOnly(
+        stream: InputStream,
+        expectedDocumentSha256: String,
+        now: Instant = Instant.now(),
+    ) = synchronized(provisioningLock) {
+        require(expectedDocumentSha256.matches(Regex("[0-9a-f]{64}")))
+        val documentBytes = boundedRead(stream)
+        try {
+            val documentHash = MessageDigest.getInstance("SHA-256").digest(documentBytes)
+            require(MessageDigest.isEqual(documentHash, expectedDocumentSha256.hexBytes())) {
+                "Session document hash does not match review"
+            }
+            val document = YpsoSessionDocumentParser.parse(documentBytes, now)
+            try {
+                val serial = PumpIdentity.normalizeSerial(document.serial)
+                PumpIdentity.validatePair(serial, document.mac)
+                quiesceConnection()
+                owner.recoverLostJournalReadOnly(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        serial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source,
+                    ),
+                    expectedDocumentSha256,
+                )
+                refreshState()
+                publishAvailability()
+            } finally {
+                document.sharedKey.fill(0)
+            }
+        } finally {
+            documentBytes.fill(0)
+        }
+    }
+
     fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
         try {
             val serial = PumpIdentity.normalizeSerial(document.serial)
             PumpIdentity.validatePair(serial, document.mac)
+            if (owner.committedRecord() == null && owner.loadFailureLocation != null) {
+                val documentHash = document.documentSha256
+                    ?: throw SecurityException("Reviewed session document hash is required for journal recovery")
+                quiesceConnection()
+                owner.recoverLostJournalReadOnly(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        serial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source,
+                    ),
+                    documentHash,
+                )
+                refreshState()
+                publishAvailability()
+                return@synchronized PumpSession.Installation.FIRST_PUMP
+            }
             if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
                 val currentHex = owner.activeRecord()?.keyHex
                 if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
@@ -408,7 +469,9 @@ class YpsoProvisioningService internal constructor(
         val installation = install()
         val candidate = synchronized(this) {
             val value = connectionSession()
-            check(value?.candidate == true && value.attemptId != null) { "Provisioning did not stage a verification candidate" }
+            check(value != null && (value.candidate.not() || value.attemptId != null)) {
+                "Provisioning did not stage a verification session"
+            }
             verificationAttemptRequested = true
             value
         }
@@ -416,6 +479,10 @@ class YpsoProvisioningService internal constructor(
             if (!enqueue()) throw IllegalStateException("Verification status read was not accepted")
             return installation
         } catch (error: Throwable) {
+            if (!candidate.candidate) {
+                synchronized(this) { verificationAttemptRequested = false }
+                throw error
+            }
             synchronized(this) { mutationEpoch.incrementAndGet() }
             try {
                 quiesceConnection()

@@ -127,6 +127,38 @@ the current live recovery remains blocked unless independent authenticated evide
 its session generation to the reviewed canonical key. No inference from serial alone is
 permitted.
 
+### Foreground connection and identity-only journal recovery
+
+Live testing on September 20 reproduced the connection failure with AndroidAPS in the
+foreground. The command queue repeatedly called `connect`, but the plugin refused before
+opening GATT because the protected journal was still unavailable:
+`JOURNAL_UNAVAILABLE:anchor_count=1,contains_current=false`. The bonded pump and Bluetooth
+permissions were intact; Android's GATT client map contained no AndroidAPS registration.
+This was therefore not a radio timeout. The UI also conflated durable setup completion
+with a fresh status sample, hiding capabilities whenever the transient link/status expired.
+
+The connection lifecycle now holds a process-foreground lease: bringing any AAPS activity
+to the foreground immediately starts configured-session GATT authentication and queues a
+status read; queue-empty teardown is suppressed while AAPS remains visible. Backgrounding
+releases only an otherwise idle link. Setup initialization is derived from durable verified
+identity rather than transient connection/status freshness. Therapy readiness remains a
+separate live gate.
+
+For an already-unreadable journal, a reviewed canonical session document may now replace
+the journal in an explicit **identity-only read mode**. The exact document bytes are
+SHA-256-gated. No reboot/read/write counter is imported. The first authenticated pump
+response establishes only the replay-read floor; `write=null` and
+`UNKNOWN_MID_EPOCH` remain durable, so all selector, profile, cancellation, and therapy
+writes remain blocked. This does not recover ownership, does not consume or rotate a pump
+key, and does not make the legacy version-3 bolus evidence sufficient for lower-bound
+recovery. Unit tests, static write-ownership guards, and Ypso lint pass; live read-only
+hardware verification now confirms: foreground entry starts and authenticates GATT,
+encrypted status succeeds, queue-empty retains the registered client while AAPS remains
+visible, and backgrounding releases the idle client without reconnecting. A stale urgent
+Android notification also survived an APK/process replacement after its in-memory alert
+was resolved; notification dismissal now cancels the Android notification synchronously,
+independently of Rx subscriber startup order. Therapy remains unavailable and unqualified.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 

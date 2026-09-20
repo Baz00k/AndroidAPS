@@ -161,6 +161,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         if (intent.action !in setOf(
                 ACTION_INSPECT_OWNERSHIP,
                 ACTION_IMPORT_OWNERSHIP,
+                ACTION_RECOVER_LOST_JOURNAL_READ_ONLY,
                 ACTION_RECOVER_LOST_JOURNAL,
                 ACTION_RECOVER_HISTORY_SELECTOR,
             )
@@ -190,6 +191,17 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                 provisioning.recoverLostJournalForHistory(it, documentHash, evidenceHash)
                             }
                             provisioning.ownershipStatus()
+                        }
+                        ACTION_RECOVER_LOST_JOURNAL_READ_ONLY -> {
+                            val path = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_PATH)?.takeIf(String::isNotBlank)
+                                ?: error("session document path is required")
+                            val documentHash = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_SHA256)?.lowercase()
+                                ?: error("session document SHA-256 is required")
+                            File(path).inputStream().use {
+                                provisioning.recoverLostJournalReadOnly(it, documentHash)
+                            }
+                            plugin.onAppVisibilityChanged(true)
+                            "REQUESTED:${provisioning.ownershipStatus()}"
                         }
                         ACTION_RECOVER_HISTORY_SELECTOR -> {
                             check(plugin.requestLowerBoundHistoryRecovery {
@@ -440,6 +452,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     result.onSuccess {
                         serialError = null; macError = null; keyError = null; generalError = null
                         key = ""; verificationState = service.verificationState()
+                        plugin.onAppVisibilityChanged(true)
                     }
                     .onFailure {
                         when (it) {
@@ -491,6 +504,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                 installing = false
                                 result.onSuccess {
                                     generalError = null; verificationState = service.verificationState()
+                                    plugin.onAppVisibilityChanged(true)
                                 }
                                 .onFailure {
                                     selectedDocument = null
@@ -582,6 +596,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     companion object {
         const val ACTION_INSPECT_OWNERSHIP = "app.aaps.pump.ypsopump.action.INSPECT_OWNERSHIP"
         const val ACTION_IMPORT_OWNERSHIP = "app.aaps.pump.ypsopump.action.IMPORT_REVIEWED_OWNERSHIP"
+        const val ACTION_RECOVER_LOST_JOURNAL_READ_ONLY = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL_READ_ONLY"
         const val ACTION_RECOVER_LOST_JOURNAL = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL"
         const val ACTION_RECOVER_HISTORY_SELECTOR = "app.aaps.pump.ypsopump.action.RECOVER_HISTORY_SELECTOR"
         const val EXTRA_HANDOFF_PATH = "ownership_handoff_path"

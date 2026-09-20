@@ -14,7 +14,9 @@ data class YpsoSessionDocument(
     val createdAt: Instant,
     val capturedAt: Instant,
     val rebootCounter: Int?,
-    val source: Map<String, String>
+    val source: Map<String, String>,
+    /** SHA-256 of the exact reviewed document bytes; absent only for programmatic/manual drafts. */
+    val documentSha256: String? = null,
 ) {
     val fingerprint: String get() = PumpSession.fingerprint(sharedKey).take(16)
 }
@@ -61,7 +63,16 @@ object YpsoSessionDocumentParser {
                 require(sourceValue.matches(text)) { "Session source value is malformed" }
                 name to text
             }.filterKeys { it != "donor" }
-            YpsoSessionDocument(serial, mac, key, created, captured, reboot, source)
+            YpsoSessionDocument(
+                serial,
+                mac,
+                key,
+                created,
+                captured,
+                reboot,
+                source,
+                PumpSession.fingerprint(data),
+            )
         } catch (e: Exception) {
             key.fill(0)
             throw e

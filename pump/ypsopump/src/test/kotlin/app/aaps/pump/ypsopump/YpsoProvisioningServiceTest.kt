@@ -1347,6 +1347,143 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `ordinary reviewed document import replaces unavailable journal as read only session`() {
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline(mac, key, 21, 100)
+        store.unavailable = true
+        val replacementStore = object : PumpSession.Store {
+            override fun load(): PumpSession.State = error("lost journal")
+            override fun commit(state: PumpSession.State) { store.saved = state }
+            override fun replaceUnavailable(state: PumpSession.State) { store.saved = state }
+        }
+        val service = YpsoProvisioningService(PumpSession(replacementStore), YpsoPumpState(), Legacy())
+        val document = service.reviewDocument(
+            ByteArrayInputStream(validDocument().toByteArray()),
+            Instant.parse("2026-09-20T04:00:00Z"),
+        )
+
+        service.installDocumentAndStartVerification(document, Instant.parse("2026-09-20T04:01:00Z")) { true }
+
+        val recovered = service.owner.committedRecord()!!
+        assertNull(service.pending())
+        assertNull(recovered.reboot)
+        assertNull(recovered.read)
+        assertNull(recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
+        assertEquals(validDocument().toByteArray().sha256(), recovered.source["journal_loss_read_only_document_sha256"])
+        assertTrue(service.connectionSession() != null)
+    }
+
+    @Test
+    fun `hash gated read only recovery rejects a changed session document`() {
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) = Unit
+                override fun replaceUnavailable(state: PumpSession.State) = Unit
+            }),
+            YpsoPumpState(),
+            Legacy(),
+        )
+        val document = validDocument().toByteArray()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            service.recoverLostJournalReadOnly(
+                ByteArrayInputStream(document),
+                "00".repeat(32),
+            )
+        }
+
+        assertNull(service.owner.committedRecord())
+    }
+
+    @Test
+    fun `hash gated read only recovery imports no counter evidence`() {
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) = Unit
+                override fun replaceUnavailable(state: PumpSession.State) { saved = state }
+                var saved = PumpSession.State()
+            }),
+            YpsoPumpState(),
+            Legacy(),
+        )
+        val document = validDocument().toByteArray()
+
+        service.recoverLostJournalReadOnly(
+            ByteArrayInputStream(document),
+            document.sha256(),
+            Instant.parse("2026-09-20T04:01:00Z"),
+        )
+
+        val recovered = service.owner.committedRecord()!!
+        assertNull(recovered.reboot)
+        assertNull(recovered.read)
+        assertNull(recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
+        assertEquals(document.sha256(), recovered.source["journal_loss_read_only_document_sha256"])
+    }
+
+    @Test
+    fun `read only recovered session verifies setup while write ownership stays uncertain`() {
+        val store = object : PumpSession.Store {
+            var saved = PumpSession.State()
+            override fun load(): PumpSession.State = error("lost journal")
+            override fun commit(state: PumpSession.State) { saved = state }
+            override fun replaceUnavailable(state: PumpSession.State) { saved = state }
+        }
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val document = validDocument().toByteArray()
+        service.recoverLostJournalReadOnly(
+            ByteArrayInputStream(document),
+            document.sha256(),
+            Instant.parse("2026-09-20T04:01:00Z"),
+        )
+        val connection = service.connectionSession()!!
+        val token = service.owner.openGeneration(connection.generation, connection.mac, connection.key)
+        val transaction = service.owner.begin(token)
+        service.owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 21, 1))
+        service.owner.finish(token, transaction)
+
+        service.markVerified(connection.generation, connection.attemptId, serial, 4_000)
+
+        val recovered = service.owner.committedRecord()!!
+        assertEquals(Instant.ofEpochMilli(4_000), service.installed()!!.verifiedAt)
+        assertEquals(21, recovered.reboot)
+        assertEquals(1, recovered.read)
+        assertNull(recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
+        assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
+        connection.key.fill(0)
+    }
+
+    @Test
+    fun `programmatic document without reviewed byte hash cannot replace unavailable journal`() {
+        val service = YpsoProvisioningService(
+            PumpSession(object : PumpSession.Store {
+                override fun load(): PumpSession.State = error("lost journal")
+                override fun commit(state: PumpSession.State) = Unit
+                override fun replaceUnavailable(state: PumpSession.State) = Unit
+            }),
+            YpsoPumpState(),
+            Legacy(),
+        )
+        val document = YpsoSessionDocument(
+            serial,
+            mac,
+            key.copyOf(),
+            Instant.parse("2026-09-08T00:00:00Z"),
+            Instant.parse("2026-09-08T00:01:00Z"),
+            null,
+            emptyMap(),
+        )
+
+        assertThrows(SecurityException::class.java) { service.installDocument(document) }
+        assertNull(service.owner.committedRecord())
+    }
+
+    @Test
     fun `journal loss recovery rejects mismatched evidence hash`() {
         val evidence = "durable-bolus-allocation".toByteArray()
         val service = YpsoProvisioningService(

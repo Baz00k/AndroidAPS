@@ -204,6 +204,54 @@ class ProductionPumpSessionTest {
     }
 
     @Test
+    fun `read only journal recovery authenticates reads but cannot reserve any write`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+
+        unavailable.recoverLostJournalReadOnly(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            documentHash = "cd".repeat(32),
+        )
+
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        accept(restarted, token, 1, reboot = 21)
+        restarted.markVerified("10000001", 3)
+        val record = restarted.committedRecord()!!
+        assertEquals(21, record.reboot)
+        assertEquals(1, record.read)
+        assertNull(record.write)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, record.writeBootstrapState)
+        assertEquals("cd".repeat(32), record.source["journal_loss_read_only_document_sha256"])
+
+        val transaction = restarted.begin(token)
+        assertThrows(SecurityException::class.java) {
+            restarted.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("blocked", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)),
+            )
+        }
+        restarted.finish(token, transaction)
+    }
+
+    @Test
+    fun `healthy journal cannot enter read only disaster recovery`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.recoverLostJournalReadOnly(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                documentHash = "cd".repeat(32),
+            )
+        }
+    }
+
+    @Test
     fun `healthy journal cannot enter lower bound disaster recovery`() {
         val store = MemoryStore()
         val owner = initialized(store)

@@ -7,6 +7,7 @@ import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.pump.defs.TimeChangeType
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
@@ -90,6 +91,7 @@ class YpsoPumpPlugin @Inject constructor(
     private val provisioning: YpsoProvisioningService,
     private val profileFunction: ProfileFunction,
     private val constraintsChecker: ConstraintsChecker,
+    private val appLifecycle: AppLifecycle,
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -133,6 +135,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
     private val lowerBoundRecoveryRequested = AtomicBoolean(false)
+    private val foregroundConnectionLease = AtomicBoolean(false)
+    private val visibilityListener: (Boolean) -> Unit = ::onAppVisibilityChanged
 
     internal fun requestLowerBoundHistoryRecovery(enqueue: () -> Boolean): Boolean {
         if (provisioning.owner.committedRecord()?.writeBootstrapState != PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND ||
@@ -167,7 +171,10 @@ class YpsoPumpPlugin @Inject constructor(
         pumpEnactResultProvider.get().success(false).enacted(false).comment(rh.gs(R.string.ypsopump_not_implemented))
 
     // ---- state (read-only) ----
-    override fun isInitialized(): Boolean = pumpState.hasVerifiedStatus
+    // Setup completion is durable and must not disappear merely because an idle BLE link closes or a
+    // fresh status read is in progress. Command readiness still independently requires a live,
+    // authenticated connection and current status at the dispatch boundary.
+    override fun isInitialized(): Boolean = provisioning.installed()?.verifiedAt != null
     // A status-only build must not drive AAPS running-mode transitions from the still-unverified delivery
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
@@ -227,6 +234,10 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun disconnect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "disconnect: $reason")
+        if (reason == "Queue empty" && appLifecycle.uiVisible) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect suppressed by foreground connection lease")
+            return
+        }
         if (reason == "Queue empty" && historyRecoveryActive.get()) {
             idleDisconnectDeferredToHistory.set(true)
             aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect deferred until history recovery releases the connection")
@@ -1039,13 +1050,51 @@ class YpsoPumpPlugin @Inject constructor(
         provisioning.refreshState()
         publishAvailabilityNotification()
         publishUnresolvedBolusWarningIfNeeded()
+        appLifecycle.addVisibilityListener(visibilityListener)
+        onAppVisibilityChanged(appLifecycle.uiVisible)
     }
 
     override fun onStop() {
+        appLifecycle.removeVisibilityListener(visibilityListener)
+        foregroundConnectionLease.set(false)
         historyRecoveryEnabled = false
         cancelHistoryRecovery()
         super.onStop()
         dismissAvailabilityNotification()
+    }
+
+    /**
+     * myLife-style foreground lease: opening any AAPS screen requests one status command, which opens
+     * and authenticates the GATT link. Queue-empty teardown is suppressed while the app remains in
+     * front, so subsequent commands reuse that link. Backgrounding releases only an otherwise idle
+     * link; an in-flight command/history operation keeps its normal ownership until completion.
+     */
+    internal fun onAppVisibilityChanged(visible: Boolean) {
+        if (!visible) {
+            foregroundConnectionLease.set(false)
+            if (commandQueue.performing() == null && commandQueue.size() == 0 && !historyRecoveryActive.get()) {
+                bleManager.disconnect(preserveStatus = true)
+            }
+            return
+        }
+        if (!foregroundConnectionLease.compareAndSet(false, true)) return
+        provisioning.refreshState()
+        publishAvailabilityNotification()
+        if (!configured()) {
+            foregroundConnectionLease.set(false)
+            aapsLogger.info(
+                LTag.PUMP,
+                "YpsoPump foreground connection unavailable (${provisioning.ownershipStatus()})",
+            )
+            return
+        }
+        // Do not wait for QueueWorker's next loop to begin the radio handshake. Opening AAPS should
+        // behave like myLife: start the authenticated GATT connection immediately, then let the
+        // serialized queue perform the status read once the link is ready.
+        seedAndConnect()
+        if (!commandQueue.readStatus(FOREGROUND_CONNECTION_REASON, null)) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump foreground status command already queued or not accepted; retaining connection lease")
+        }
     }
 
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
@@ -1139,7 +1188,7 @@ class YpsoPumpPlugin @Inject constructor(
         // NotificationStore preserves existing text for a repeated ID. A plugin can also start
         // after a prior process left this ID in the store, so replace the first publication of
         // this plugin lifetime and every later changed instruction.
-        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        uiInteraction.dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
         uiInteraction.addNotification(
             Notification.YPSOPUMP_UNAVAILABLE,
             rh.gs(
@@ -1155,7 +1204,7 @@ class YpsoPumpPlugin @Inject constructor(
     @Synchronized
     private fun dismissAvailabilityNotification() {
         if (publishedAvailabilityPresentation == null && availabilityNotificationSynchronized) return
-        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_UNAVAILABLE))
+        uiInteraction.dismissNotification(Notification.YPSOPUMP_UNAVAILABLE)
         publishedAvailabilityPresentation = null
         availabilityNotificationSynchronized = true
     }
@@ -1179,6 +1228,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     companion object {
+        internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
