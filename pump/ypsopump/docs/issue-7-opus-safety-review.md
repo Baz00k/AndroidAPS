@@ -1,7 +1,8 @@
 # Issue 7: Opus safety review
 
-> **Status:** Software remediation implemented and locally verified; still not approved
-> for real therapy pending independent safety re-review and hardware acceptance.
+> **Status:** UNSAFE. Hardware incident reproduces missing immediate-bolus accounting,
+> failed cancellation confirmation, and stale dose inhibition. Previous closure claims
+> below are superseded by this incident and the independent re-review. Therapy remains disabled.
 >
 > **Source:** Extracted in four sequential responses from the original resumed Opus
 > review session `ses_f44538f79ffeYEL2lq4Ab0YIyo`. Outputs from two accidentally
@@ -13,6 +14,24 @@
 > uncommitted working tree reviewed on 2026-09-20 and will drift as fixes are applied.
 
 ## Remediation tracking
+
+### Reopened: 2026-09-20 hardware incident
+
+Preserved private captures: `/tmp/opencode/ypso-incident-app.log` and
+`/tmp/opencode/ypso-incident-logcat.txt`. Do not commit these patient/device logs.
+At 03:11 immediate-bolus terminal history timed out after 20 seconds; no immediate
+bolus database insertion is present in the captured interval. At 03:12 extended start
+inserted a provisional row; cancellation at 03:13 and 03:15 never obtained terminal
+history, ultimately returning uncertainty at 03:16:39. At 03:14:47 another request
+was blocked as an earlier bolus still processing. Private journal/DB access through
+`run-as` is unavailable on the non-debuggable installed APK.
+
+S1–S10 and S15 remain OPEN for end-to-end verification. The independent spec review
+also identifies a level-triggered Stop latch aborting every subsequent history read,
+unbounded terminal-row holdback after epoch change, backwards-clock dose guard removal,
+missing selector re-anchoring, and missing operator recovery. Passing 407 unit tests did
+not establish these production properties. The historical table records candidate
+fix commits, not current closure or therapy approval.
 
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
