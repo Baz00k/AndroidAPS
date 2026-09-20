@@ -38,6 +38,21 @@ Stop predicate (`expected false, was true`). The controller now separates durabl
 cancellation intent from a consumed one-shot history-yield signal; the focused test
 passes. This does not close the hardware timeout/accounting incident.
 
+### Private-data inspection after authorized debug update
+
+Installed the same-package/same-certificate `ypso-diagnostic-readonly` debug APK
+with `READ_ONLY_MODE=true`, using an in-place update. No uninstall or data clear.
+The initial archive was inconsistent because the app appears to have restarted
+after update; force-stopped again and validated a complete archive at
+`/tmp/opencode/ypso-private-stopped.tar` (private; do not commit).
+Database inspection confirms no immediate test-bolus row. The extended record
+retains the originally programmed amount and duration, with no terminal correction.
+Its journal is UNRESOLVED, has a slow-block cancellation identity and observed
+delivery, but no confirmed amount/history ID. History cursor file remains dated
+September 19; no pending bolus outbox record exists. The immediate attempt is no
+longer in the single-record journal, which now holds the extended attempt.
+Recovery must preserve multiple unresolved attempts rather than overwrite them.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 
