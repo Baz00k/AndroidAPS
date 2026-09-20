@@ -7,9 +7,12 @@ See [write-counter recovery](../../docs/counter-recovery.md) before interpreting
 one-shot experiments below. Their gap limits and review gates are experimental controls, not
 pump requirements. Normal profile/history acquisition and bolus transport recover interrupted
 reservations automatically after teardown, preserving unknown command outcomes and advancing
-above the durable allocated high-water mark. A lost callback at 4281 permits 4282 without
-establishing whether 4281 was consumed. Only a pump-originated final-frame counter error 139 starts
-a persisted exponential search (`+1,+2,+4,+8,...`); other failures never enlarge the gap. Bolus retry and cancellation
+above the durable allocated high-water mark. An unknown floor is normal and starts at zero: the
+first candidate is counter `1`, and the same pump-confirmed search establishes the floor when the
+pump accepts. A lost callback at 4281 permits 4282 without establishing whether 4281 was consumed.
+Only a pump-originated final-frame counter error 139 starts a persisted exponential search
+(`+1,+2,+4,+8,...`); the driver persists the rejection and redispatches the same logical write
+above the retained position, and other failures never enlarge the gap. Bolus retry and cancellation
 ownership remain governed by the durable bolus attempt journal.
 
 This is a separate Android application and UID. It compiles the driver's real session owner,
@@ -204,6 +207,11 @@ APK signer, APK, and all protected artifact hashes. AndroidAPS requires the sepa
 SHA-256 before parsing, verifies the HMAC with its already-installed pump key, checks pump/key/serial and
 epoch identity, rejects unresolved or conflicting local ownership, and commits the imported record under
 a fresh AndroidAPS Keystore journal revision. Copying only the numeric write counter is forbidden.
+
+AndroidAPS no longer requires the handoff to make a session writable: an unknown write floor is
+reconciled from zero against the pump through the pump-confirmed counter search. The handoff remains
+the strongest transfer when the bench holds measured ownership, and it seeds the selector lower-bound
+recovery state.
 
 ## Import the session; measured floors are optional validation evidence
 

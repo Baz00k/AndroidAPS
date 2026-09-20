@@ -289,7 +289,8 @@ class YpsoProvisioningService internal constructor(
 
     /**
      * Hash-gated, identity-only recovery for status/connectivity. It deliberately imports no write
-     * counter and therefore cannot authorize selectors, profile writes, cancellation, or therapy.
+     * counter; writes reconcile from zero against the pump through the pump-confirmed exponential
+     * search and establish ownership on acceptance.
      */
     internal fun recoverLostJournalReadOnly(
         stream: InputStream,

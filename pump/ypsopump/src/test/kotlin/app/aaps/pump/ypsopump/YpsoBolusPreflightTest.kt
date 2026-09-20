@@ -13,7 +13,7 @@ class YpsoBolusPreflightTest {
         assertSame(YpsoBolusPreflight.Ready, YpsoBolusPreflightPolicy.evaluate(ready()))
         val fields = listOf<(YpsoBolusReadiness) -> YpsoBolusReadiness>(
             { it.copy(connected = false) }, { it.copy(authenticatedCurrentSession = false) }, { it.copy(statusCurrent = false) },
-            { it.copy(writeCounterCertain = false) }, { it.copy(pumpRunning = false) },
+            { it.copy(pumpRunning = false) },
             { it.copy(reservoirHasInsulin = false) }, { it.copy(immediateBolusIdle = false) },
             { it.copy(extendedOrMixedBolusIdle = false) }, { it.copy(stableHistoryCursorCaptured = false) },
             { it.copy(unresolvedInsulinAbsent = false) },
@@ -28,13 +28,13 @@ class YpsoBolusPreflightTest {
     fun `cancellation does not depend on profile reservoir or new-dose status preflight`() {
         assertSame(
             YpsoBolusPreflight.Ready,
-            YpsoBolusPreflightPolicy.evaluateCancellation(true, true, true, true, true),
+            YpsoBolusPreflightPolicy.evaluateCancellation(true, true, true, true),
         )
         assertEquals(
             YpsoBolusPreflight.Reason.SESSION_NOT_CURRENT,
-            (YpsoBolusPreflightPolicy.evaluateCancellation(true, false, true, true, true) as YpsoBolusPreflight.Blocked).reason,
+            (YpsoBolusPreflightPolicy.evaluateCancellation(true, false, true, true) as YpsoBolusPreflight.Blocked).reason,
         )
     }
 
-    private fun ready() = YpsoBolusReadiness(true, true, true, true, true, true, true, true, true, true)
+    private fun ready() = YpsoBolusReadiness(true, true, true, true, true, true, true, true, true)
 }

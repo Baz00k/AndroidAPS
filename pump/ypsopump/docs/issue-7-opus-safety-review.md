@@ -159,11 +159,35 @@ Android notification also survived an APK/process replacement after its in-memor
 was resolved; notification dismissal now cancels the Android notification synchronously,
 independently of Rx subscriber startup order. Therapy remains unavailable and unqualified.
 
+### Unknown write floor is reconciled, never a capability block
+
+A canonical `ypso-keys` import, the identity-only journal recovery, or an observed reboot all leave
+`write=null` with `UNKNOWN_MID_EPOCH`/`OBSERVED_NEW_EPOCH`. Every selector, history, bolus and
+cancellation path then refused before dispatch, while status reads kept working. The UI reported a
+complete setup and the only feedback was the generic "Not completed; previous schedules retained"
+toast, so a pump could look ready while profile acquisition, history accounting and therapy were
+all impossible.
+
+An unknown floor is now a normal state. `PumpSession` allocates the first write at counter `1` from
+an implicit floor of `0`; only a pump-confirmed final-frame `APPERR_COUNTER_ERROR` (139) advances the
+durable exponential search (`+1,+2,+4,+8,...`). `YpsoWriteAccounting` persists that rejection and
+redispatches the same logical write above the retained position until the pump accepts a counter;
+acceptance promotes the record to `ESTABLISHED` and clears `COUNTER_UNCERTAIN`. Non-139 failures,
+ambiguous callbacks, deadlines and lost acknowledgements never retry and keep every existing durable
+uncertainty rule. The reviewed ownership handoff and selector lower-bound recovery remain available
+as evidence-seeded entry points, but they are no longer required to make a session writable.
+
+Software tests cover allocation from zero, automatic redispatch across four consecutive 139s with
+acceptance at the fifth candidate, exponent reset on acceptance, non-139 blocking, coordinator and
+bolus-journal readiness, and re-dispatch journaling. The change alters pump wire behavior for
+previously blocked sessions and has not been exercised against hardware in this revision.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 
 | ID | Validation | Status | Fix commit | Evidence |
 |---|---|---|---|---|
+| S16 | Confirmed | Fixed (software) | this change | Unknown floor reconciles from zero; automatic 139 redispatch; 463 YpsoPump tests pass; hardware not yet exercised |
 | Gate | Confirmed | Fixed | `5fe8765ba9` | `READ_ONLY_MODE` restored to `true` |
 | S1 | Confirmed | Fixed | `6ce1521334`, `a206ff0757` | Stable `pumpId` read-back verifies inserted or updated terminal rows |
 | S2 | Confirmed | Fixed | `a206ff0757` | Extended deadline = duration + 90 s; epoch change becomes durable warning |

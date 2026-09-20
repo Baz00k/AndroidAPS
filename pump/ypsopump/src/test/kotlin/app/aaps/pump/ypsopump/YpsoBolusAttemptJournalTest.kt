@@ -35,7 +35,28 @@ class YpsoBolusAttemptJournalTest {
         val afterRestart = YpsoBolusAttemptJournal(store)
         assertTrue(requireNotNull(store.value).inhibitsNewDose(3_000, 90_000, 90_000))
         assertThrows(IllegalArgumentException::class.java) { afterRestart.prepare(attempt(requestId = "request-2"), 3_000) }
-        assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4811, 3_000) }
+        // Only a pump-confirmed counter rejection may advance the allocation, and it must advance.
+        assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4810, 3_000) }
+        assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4809, 3_000) }
+        val redispatched = afterRestart.beforeDispatch("request-1", 4811, 3_000)
+        assertEquals(4811L, redispatched.dispatchCounter)
+        assertEquals(YpsoBolusOutcome.POSSIBLY_APPLIED, redispatched.outcome)
+    }
+
+    @Test
+    fun `cancellation redispatch advances only the same cancel allocation`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt())
+        journal.beforeDispatch("request-1", 4810, 2_000)
+        journal.observeFastDelivering("request-1", 45, 100)
+        journal.requestCancel("request-1", "cancel-1", 4811, YpsoBolusBlock.FAST)
+
+        assertThrows(IllegalArgumentException::class.java) { journal.requestCancel("request-1", "cancel-2", 4812, YpsoBolusBlock.FAST) }
+        assertThrows(IllegalArgumentException::class.java) { journal.requestCancel("request-1", "cancel-1", 4811, YpsoBolusBlock.FAST) }
+        val redispatched = journal.requestCancel("request-1", "cancel-1", 4812, YpsoBolusBlock.FAST)
+        assertEquals(4812L, redispatched.cancelCounter)
+        assertEquals(YpsoBolusOutcome.CANCEL_PENDING, redispatched.outcome)
     }
 
     @Test

@@ -15,8 +15,10 @@ an unmeasured `floor+3` as a reason to stop was an incorrect driver restriction.
 ## Runtime contract
 
 `PumpSession.Record.write` is the durable **local allocated high-water mark**, not a claim to know
-the pump's exact last accepted counter. Persist a reservation before encryption and the dispatch
-boundary before sending frames. After an interrupted transport is torn down:
+the pump's exact last accepted counter. An unknown floor (`write == null`, `UNKNOWN_MID_EPOCH` or
+`OBSERVED_NEW_EPOCH`) is a normal, fully supported state, not a write block: the first allocation
+starts at zero, so the initial candidate is counter `1`. Persist a reservation before encryption
+and the dispatch boundary before sending frames. After an interrupted transport is torn down:
 
 1. Preserve its complete command binding as `WriteEvidence`, with unknown resolution.
 2. Retain the allocated counter, even if the pump might not have consumed it.
@@ -44,10 +46,22 @@ consecutive-error state is durable. Relative to the pre-recovery baseline, candi
 N+1, N+2, N+4, N+8, ...
 ```
 
+`YpsoWriteAccounting` performs the search inline: it persists the `139` as a proven rejection and
+redispatches the same logical write above the retained position, so a caller sees one logical
+operation rather than one failure per candidate. An unknown floor uses exactly the same mechanism
+from baseline `0` (`1, 2, 4, 8, ...`), and a pump-accepted counter durably promotes the record to
+`ESTABLISHED`. This is the runtime path for sessions imported from `ypso-keys`, identity-only journal
+recovery and observed pump reboots. The reviewed ownership handoff and selector lower-bound recovery
+remain available as evidence-seeded entry points, but they are no longer required to make an unknown
+floor writable.
+
 Each 139 is persisted as a proven rejection before another candidate can be allocated. Semantic
 acceptance resets the exponent to zero. An unrelated GATT status, timeout, disconnect, lost or
 ambiguous callback, local dispatch failure, or unknown command outcome does not increase it. The
-sequence is bounded at exponent 20 and counter arithmetic cannot wrap.
+exponent is bounded at 20: the increment stops doubling there, further rejections are still
+persisted, later candidates advance by the maximum increment, and counter arithmetic cannot wrap.
+A single logical write redispatches at most once per exponent step; beyond that budget the
+persisted `139` is surfaced as a proven rejection with the reservation closed.
 
 This follows the research repository's established facts: write counters are monotonically
 increasing, 139 identifies counter mismatch, pump reads synchronize reboot state, and parallel

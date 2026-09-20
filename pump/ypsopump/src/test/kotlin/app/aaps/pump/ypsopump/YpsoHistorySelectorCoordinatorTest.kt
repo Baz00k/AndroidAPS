@@ -46,7 +46,7 @@ class YpsoHistorySelectorCoordinatorTest {
     }
 
     @Test
-    fun `unknown write floor blocks before dispatch`() {
+    fun `unknown write floor reconciles history selection from zero`() {
         val key = ByteArray(32) { 4 }
         val record = PumpSession.Record(
             pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
@@ -54,16 +54,20 @@ class YpsoHistorySelectorCoordinatorTest {
         )
         val session = PumpSession(Store(PumpSession.State(records = listOf(record), activeGeneration = "generation")))
         val owner = YpsoHistorySelectorCoordinator.Owner(Any(), "connection", session.open("pump", key))
+        val frames = mutableListOf<ByteArray>()
         val outcomes = mutableListOf<YpsoWriteOutcome>()
         val coordinator = YpsoHistorySelectorCoordinator(session, SessionCrypto(), YpsoSerializedWriteTransport({ _, _ -> }, {}))
 
-        assertFalse(coordinator.select("history-0", owner, 0, null, 5_000, { error("dispatch") }, outcomes::add))
-        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
-        assertEquals(null, session.snapshot()?.reservation)
+        assertTrue(coordinator.select("history-0", owner, 0, null, 5_000, { frames += it; true }, outcomes::add))
+        val reservation = requireNotNull(session.snapshot()?.reservation)
+        assertEquals(1L, reservation.counter)
+        assertEquals(0L, reservation.priorWrite)
+        assertTrue(frames.isNotEmpty())
+        assertTrue(outcomes.isEmpty())
     }
 
     @Test
-    fun `durable lower bound allows only explicit history selector recovery`() {
+    fun `durable lower bound permits ordinary selection above the seeded floor`() {
         val key = ByteArray(32) { 5 }
         val record = PumpSession.Record(
             pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
@@ -76,10 +80,9 @@ class YpsoHistorySelectorCoordinatorTest {
         val outcomes = mutableListOf<YpsoWriteOutcome>()
         val coordinator = YpsoHistorySelectorCoordinator(session, SessionCrypto(), YpsoSerializedWriteTransport({ _, _ -> }, {}))
 
-        assertFalse(coordinator.select("ordinary-history", owner, 0, null, 5_000, { error("dispatch") }, outcomes::add))
-        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
-        assertTrue(coordinator.recoverLowerBound("recover-history", owner, 0, null, 5_000, { true }, outcomes::add))
-        assertEquals(9_036, session.snapshot()!!.reservation!!.counter)
+        assertTrue(coordinator.select("ordinary-history", owner, 0, null, 5_000, { true }, outcomes::add))
+        assertEquals(9_036L, session.snapshot()!!.reservation!!.counter)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, session.snapshot()!!.reservation!!.candidate)
     }
 
     @Test
@@ -111,58 +114,74 @@ class YpsoHistorySelectorCoordinatorTest {
     }
 
     @Test
-    fun `only pump counter error advances durable lower bound search`() {
+    fun `pump counter error redispatches the recovery probe one exponential step higher`() {
         val key = ByteArray(32) { 8 }
-        val store = Store(
-            PumpSession.State(
-                records = listOf(
-                    PumpSession.Record(
-                        pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
-                        read = 100, write = 9_035, serial = "10000001", keyHex = key.toHex(),
-                        writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
-            lowerBoundRecoveryReboot = 21,
-                    ),
-                ),
-                activeGeneration = "generation",
-                availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
-            ),
-        )
+        val store = lowerBoundStore(key)
         val session = PumpSession(store)
         val token = session.open("pump", key)
         val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
         val coordinator = YpsoHistorySelectorCoordinator(session, SessionCrypto(), transport)
+        val gatt = Any()
+        val frames = mutableListOf<ByteArray>()
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val owner = YpsoHistorySelectorCoordinator.Owner(gatt, "recovery", token)
+        val crypto = SessionCrypto()
 
-        fun run(id: String, status: Int, disconnectAfter: Boolean = true): Pair<Long, YpsoWriteOutcome> {
-            val gatt = Any()
-            val frames = mutableListOf<ByteArray>()
-            val outcomes = mutableListOf<YpsoWriteOutcome>()
-            assertTrue(coordinator.recoverLowerBound(id, YpsoHistorySelectorCoordinator.Owner(gatt, id, token), 0, null, 8_000, { frames += it; true }, outcomes::add))
-            repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
-            val counter = SessionCrypto().decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter
-            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, status)
-            if (disconnectAfter) coordinator.ownerDisconnected(gatt, "test teardown")
-            return counter to outcomes.last()
-        }
+        assertTrue(coordinator.recoverLowerBound("counter-error", owner, 0, null, 8_000, { frames += it.copyOf(); true }, outcomes::add))
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
+        assertEquals(9_036L, crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter)
+        frames.clear()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 139)
 
-        val counterError = run("counter-error", 139, disconnectAfter = false)
-        assertEquals(9_036, counterError.first)
-        assertTrue(counterError.second is YpsoWriteOutcome.ProvenRejected)
-        assertFalse(transport.hasUnresolvedWrite())
+        // The rejection is durable, nothing is reported to the caller, and the same logical selector
+        // write is redispatched one exponential candidate above the retained position.
+        assertTrue(outcomes.isEmpty())
         assertEquals(1, session.snapshot()!!.counterRecoveryExponent)
-        assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in session.availability().causes)
+        assertEquals(9_037L, session.snapshot()!!.reservation!!.counter)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
+        repeat(4) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
+        assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
+        assertEquals(9_037L, crypto.decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter)
+        assertTrue(coordinator.reconcileLowerBoundAccepted("counter-error", owner, "ab".repeat(32), "exact selector read-back matched"))
+        assertTrue(outcomes.last() is YpsoWriteOutcome.Verified)
+        assertEquals(0, session.snapshot()!!.counterRecoveryExponent)
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, session.snapshot()!!.writeBootstrapState)
+        assertEquals(9_037L, session.snapshot()!!.write)
+    }
 
-        val ambiguous = run("ambiguous", 133)
-        assertEquals(9_037, ambiguous.first)
-        assertTrue(ambiguous.second is YpsoWriteOutcome.PossiblyApplied)
-        assertEquals(1, session.snapshot()!!.counterRecoveryExponent)
-        assertEquals(9_037, session.snapshot()!!.write)
+    @Test
+    fun `unrelated status neither advances nor retries an ambiguous recovery probe across restart`() {
+        val key = ByteArray(32) { 9 }
+        val store = lowerBoundStore(key)
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
+        val coordinator = YpsoHistorySelectorCoordinator(session, SessionCrypto(), transport)
+        val gatt = Any()
+        val frames = mutableListOf<ByteArray>()
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val owner = YpsoHistorySelectorCoordinator.Owner(gatt, "ambiguous", token)
+
+        assertTrue(coordinator.recoverLowerBound("ambiguous", owner, 0, null, 8_000, { frames += it; true }, outcomes::add))
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.EVENT_INDEX_UUID, 133)
+
+        val ambiguous = outcomes.single()
+        assertTrue(ambiguous is YpsoWriteOutcome.PossiblyApplied)
+        assertEquals(9_036L, ambiguous.counter)
+        assertEquals(0, session.snapshot()!!.counterRecoveryExponent)
+        assertEquals(9_036L, session.snapshot()!!.write)
         assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, session.snapshot()!!.writeBootstrapState)
         assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in session.availability().causes)
 
+        // A restart cannot retire an ambiguous recovery probe: the unresolved reservation blocks.
         val restarted = PumpSession(store)
         val restartedToken = restarted.open("pump", key)
-        val restartedTransport = YpsoSerializedWriteTransport({ _, _ -> }, {})
-        val restartedCoordinator = YpsoHistorySelectorCoordinator(restarted, SessionCrypto(), restartedTransport)
+        val restartedCoordinator = YpsoHistorySelectorCoordinator(
+            restarted,
+            SessionCrypto(),
+            YpsoSerializedWriteTransport({ _, _ -> }, {}),
+        )
         val restartedGatt = Any()
         val restartedFrames = mutableListOf<ByteArray>()
         val restartedOutcomes = mutableListOf<YpsoWriteOutcome>()
@@ -179,10 +198,25 @@ class YpsoHistorySelectorCoordinatorTest {
         )
         assertTrue(restartedOutcomes.single() is YpsoWriteOutcome.NotSent)
         assertTrue(restartedFrames.isEmpty())
-        assertEquals(9_037, restarted.snapshot()!!.write)
+        assertEquals(9_036L, restarted.snapshot()!!.write)
         assertEquals(PumpSession.Phase.POSSIBLY_SENT, restarted.snapshot()!!.reservation!!.phase)
-        assertEquals(1, restarted.snapshot()!!.counterRecoveryExponent)
+        assertEquals(0, restarted.snapshot()!!.counterRecoveryExponent)
     }
+
+    private fun lowerBoundStore(key: ByteArray) = Store(
+        PumpSession.State(
+            records = listOf(
+                PumpSession.Record(
+                    pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
+                    read = 100, write = 9_035, serial = "10000001", keyHex = key.toHex(),
+                    writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                    lowerBoundRecoveryReboot = 21,
+                ),
+            ),
+            activeGeneration = "generation",
+            availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+        ),
+    )
 
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it) }
 }

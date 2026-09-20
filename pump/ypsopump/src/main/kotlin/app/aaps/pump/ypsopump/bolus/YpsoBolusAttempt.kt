@@ -236,9 +236,21 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
         return attempt
     }
 
+    /**
+     * Persist the dispatch boundary before frames are sent. Write-counter reconciliation re-enters
+     * this hook with a higher counter only after the pump definitively rejected (139) the previous
+     * dispatch, so the retained allocation is known not to have been consumed.
+     */
     fun beforeDispatch(requestId: String, counter: Long, now: Long): YpsoBolusAttempt =
         update(requestId) {
-            require(it.outcome == YpsoBolusOutcome.NOT_SENT && it.dispatchCounter == null)
+            if (it.outcome == YpsoBolusOutcome.NOT_SENT) {
+                require(it.dispatchCounter == null) { "dispatch counter is already allocated" }
+            } else {
+                require(it.outcome in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.PROVEN_REJECTED)) {
+                    "bolus attempt cannot be re-dispatched"
+                }
+                require(it.dispatchCounter != null && counter > it.dispatchCounter) { "re-dispatched counter must advance" }
+            }
             it.copy(outcome = YpsoBolusOutcome.POSSIBLY_APPLIED, dispatchCounter = counter, dispatchedAt = now)
         }
 
@@ -289,10 +301,25 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             it.copy(outcome = YpsoBolusOutcome.DELIVERING, pumpSlowSequence = slowSequence)
         }
 
+    /**
+     * Binds the cancellation dispatch boundary before frames are sent. Write-counter reconciliation
+     * re-enters this hook with a higher counter only after the pump definitively rejected (139) the
+     * previous dispatch, so the retained allocation is known not to have been consumed.
+     */
     fun requestCancel(requestId: String, cancelRequestId: String, counter: Long, block: YpsoBolusBlock): YpsoBolusAttempt =
         update(requestId) {
-            require(it.outcome in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED, YpsoBolusOutcome.DELIVERING))
-            require(it.cancelRequestId == null) { "cancellation is already owned" }
+            require(
+                it.outcome in setOf(
+                    YpsoBolusOutcome.POSSIBLY_APPLIED,
+                    YpsoBolusOutcome.ACCEPTED_UNVERIFIED,
+                    YpsoBolusOutcome.DELIVERING,
+                    YpsoBolusOutcome.CANCEL_PENDING,
+                ),
+            )
+            if (it.cancelRequestId != null) {
+                require(it.cancelRequestId == cancelRequestId) { "cancellation is already owned" }
+                require(it.cancelCounter != null && counter > it.cancelCounter) { "re-dispatched cancel counter must advance" }
+            }
             requireNotNull(it.programmedCentiUnits(block)) { "attempt has no such delivery block" }
             require(it.provenSequence(block) != null) { "cancellation target identity was never proven" }
             require(it.provenCancelBlock == block) { "attempt prefers a different cancellation target" }

@@ -57,143 +57,180 @@ internal open class YpsoWriteAccounting(
             request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "previous transport owner must be released before recovery"))
             return false
         }
-        val transaction = runCatching {
-            prepareSession(request.owner)
-            session.begin(request.owner.token)
-        }.getOrElse {
-            releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "session unavailable"))
-            return false
-        }
-        var transactionOpen = true
-        fun finish() {
-            if (!transactionOpen) return
-            transactionOpen = false
-            session.finish(request.owner.token, transaction)
+        var transaction: String? = null
+        var attempts = 0
+
+        fun finishTransaction() {
+            val open = transaction ?: return
+            transaction = null
+            session.finish(request.owner.token, open)
         }
 
-        val intent = PumpSession.WriteIntent(
-            request.writeId,
-            request.characteristic.toString(),
-            request.category.name,
-            sha256(request.plaintext),
-        )
-        val reservation = runCatching { reserve(request.owner, transaction, intent) }.getOrElse {
-            finish()
-            releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "counter reservation failed"))
-            return false
+        fun emit(outcome: YpsoWriteOutcome) {
+            finishTransaction()
+            when (outcome) {
+                // A rejected/undispatched command owns nothing; reconciliation owners stay claimed
+                // until semantic reconciliation or connection teardown releases them. A semantic
+                // reconciliation may publish a second (Verified) outcome for the same write.
+                is YpsoWriteOutcome.NotSent -> release(request.writeId)
+                else -> synchronized(lock) {
+                    if (pending[request.writeId] == null) claimedWriteIds.remove(request.writeId)
+                }
+            }
+            request.onOutcome(outcome)
         }
-        val encrypted = runCatching {
-            session.encryptReserved(request.owner.token, transaction, request.plaintext, crypto)
-        }.getOrElse {
-            runCatching { session.markNotSent(request.owner.token, transaction) }
-            finish()
-            releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.ENCRYPTION, it.message ?: "encryption failed", reservation.counter))
-            return false
-        }
-        val frames = runCatching { YpsoFraming.chunkPayload(encrypted) }.getOrElse {
-            encrypted.fill(0)
-            runCatching { session.markNotSent(request.owner.token, transaction) }
-            finish()
-            releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.ENCRYPTION, it.message ?: "framing failed", reservation.counter))
-            return false
-        }
-        encrypted.fill(0)
-        runCatching { request.beforeDispatch(reservation) }.getOrElse {
-            runCatching { session.markNotSent(request.owner.token, transaction) }
-            finish()
-            releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "domain dispatch journal failed", reservation.counter))
-            return false
-        }
-        runCatching { session.advance(request.owner.token, transaction, PumpSession.Phase.POSSIBLY_SENT) }.getOrElse {
-            finish()
-            releaseClaim(request.writeId)
-            request.onOutcome(
+
+        fun mappedOutcome(outcome: YpsoWriteOutcome, currentTransaction: String): YpsoWriteOutcome = when (outcome) {
+            is YpsoWriteOutcome.NotSent -> runCatching {
+                session.markNotSent(request.owner.token, currentTransaction)
+                outcome
+            }.getOrElse {
                 YpsoWriteOutcome.PossiblyApplied(
                     request.writeId,
-                    reservation.counter,
-                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "could not persist dispatch boundary"),
-                ),
+                    outcome.counter,
+                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "not-sent rollback failed"),
+                )
+            }
+            is YpsoWriteOutcome.AcceptedUnverified -> runCatching {
+                session.advance(request.owner.token, currentTransaction, PumpSession.Phase.ACKED)
+                outcome
+            }.getOrElse {
+                YpsoWriteOutcome.PossiblyApplied(
+                    request.writeId,
+                    outcome.counter,
+                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "ACK persistence failed"),
+                )
+            }
+            is YpsoWriteOutcome.ProvenRejected -> outcome
+            is YpsoWriteOutcome.PossiblyApplied -> outcome
+            is YpsoWriteOutcome.Verified -> outcome
+        }
+
+        /**
+         * Persist a pump-confirmed APPERR_COUNTER_ERROR (139) rejection and advance the exponential
+         * search. The rejection proves the command was not applied, so the same logical write is
+         * redispatched above the retained position. Returns true to retry, false when the search
+         * budget is spent (the rejection is still persisted), and null for an ordinary outcome.
+         * Unknown floors reconcile exactly like stale ones.
+         */
+        fun prepareCounterRetry(outcome: YpsoWriteOutcome, reservation: PumpSession.Reservation): Boolean? {
+            if (!automaticCounterRecovery || outcome !is YpsoWriteOutcome.PossiblyApplied || !outcome.failure.isPumpCounterError()) return null
+            val persisted = runCatching {
+                finishTransaction()
+                session.rejectCounterTooLow(
+                    request.owner.token,
+                    reservation.id,
+                    sha256("${request.writeId}:${reservation.counter}:139".toByteArray()),
+                    "pump returned APPERR_COUNTER_ERROR (139) for final command frame",
+                )
+                transport.releaseOwner(request.owner.gatt)
+            }
+            if (persisted.isFailure) return null
+            return attempts < MAX_COUNTER_RECONCILIATION_ATTEMPTS
+        }
+
+        var dispatchNext: (() -> Boolean)? = null
+        fun runAttempt(): Boolean {
+            attempts++
+            val currentTransaction = runCatching {
+                prepareSession(request.owner)
+                session.begin(request.owner.token)
+            }.getOrElse {
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "session unavailable"))
+                return false
+            }
+            transaction = currentTransaction
+            val intent = PumpSession.WriteIntent(
+                request.writeId,
+                request.characteristic.toString(),
+                request.category.name,
+                sha256(request.plaintext),
             )
-            return false
-        }
-        synchronized(lock) {
-            pending[request.writeId] = Pending(request.owner.gatt, request.owner.connectionId, request.owner.token.generation, reservation.id)
-        }
-        val started = transport.start(
-            YpsoSerializedWriteTransport.Request(
-                writeId = request.writeId,
-                owner = YpsoSerializedWriteTransport.Owner(request.owner.gatt, request.owner.connectionId, request.owner.token.generation),
-                category = request.category,
-                characteristic = request.characteristic,
-                counter = reservation.counter,
-                firmware = request.firmware,
-                frames = frames,
-                deadlineMs = request.deadlineMs,
-                dispatch = request.dispatch,
-                onOutcome = { outcome ->
-                    val delivered = when (outcome) {
-                        is YpsoWriteOutcome.NotSent -> runCatching {
-                            session.markNotSent(request.owner.token, transaction)
-                            release(request.writeId)
-                            outcome
-                        }.getOrElse {
-                            YpsoWriteOutcome.PossiblyApplied(
-                                request.writeId,
-                                reservation.counter,
-                                failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "not-sent rollback failed"),
-                            )
-                        }
-                        is YpsoWriteOutcome.AcceptedUnverified -> runCatching {
-                            session.advance(request.owner.token, transaction, PumpSession.Phase.ACKED)
-                            outcome
-                        }.getOrElse {
-                            YpsoWriteOutcome.PossiblyApplied(
-                                request.writeId,
-                                reservation.counter,
-                                failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "ACK persistence failed"),
-                            )
-                        }
-                        is YpsoWriteOutcome.ProvenRejected -> outcome
-                        is YpsoWriteOutcome.PossiblyApplied ->
-                            if (automaticCounterRecovery && outcome.failure.isPumpCounterError()) {
-                                runCatching {
-                                    finish()
-                                    session.rejectCounterTooLow(
-                                        request.owner.token,
-                                        reservation.id,
-                                        sha256("${request.writeId}:${reservation.counter}:139".toByteArray()),
-                                        "pump returned APPERR_COUNTER_ERROR (139) for final command frame",
-                                    )
-                                    transport.releaseOwner(request.owner.gatt)
-                                    release(request.writeId)
-                                    YpsoWriteOutcome.ProvenRejected(request.writeId, reservation.counter, outcome.failure)
-                                }.getOrElse { failure ->
+            val reservation = runCatching { reserve(request.owner, currentTransaction, intent) }.getOrElse {
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "counter reservation failed"))
+                return false
+            }
+            val encrypted = runCatching {
+                session.encryptReserved(request.owner.token, currentTransaction, request.plaintext, crypto)
+            }.getOrElse {
+                runCatching { session.markNotSent(request.owner.token, currentTransaction) }
+                emit(notSent(request, YpsoWriteFailure.Layer.ENCRYPTION, it.message ?: "encryption failed", reservation.counter))
+                return false
+            }
+            val frames = runCatching { YpsoFraming.chunkPayload(encrypted) }.getOrElse {
+                encrypted.fill(0)
+                runCatching { session.markNotSent(request.owner.token, currentTransaction) }
+                emit(notSent(request, YpsoWriteFailure.Layer.ENCRYPTION, it.message ?: "framing failed", reservation.counter))
+                return false
+            }
+            encrypted.fill(0)
+            runCatching { request.beforeDispatch(reservation) }.getOrElse {
+                runCatching { session.markNotSent(request.owner.token, currentTransaction) }
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "domain dispatch journal failed", reservation.counter))
+                return false
+            }
+            runCatching { session.advance(request.owner.token, currentTransaction, PumpSession.Phase.POSSIBLY_SENT) }.getOrElse {
+                emit(
+                    YpsoWriteOutcome.PossiblyApplied(
+                        request.writeId,
+                        reservation.counter,
+                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "could not persist dispatch boundary"),
+                    ),
+                )
+                return false
+            }
+            synchronized(lock) {
+                pending[request.writeId] = Pending(request.owner.gatt, request.owner.connectionId, request.owner.token.generation, reservation.id)
+            }
+            val started = transport.start(
+                YpsoSerializedWriteTransport.Request(
+                    writeId = request.writeId,
+                    owner = YpsoSerializedWriteTransport.Owner(request.owner.gatt, request.owner.connectionId, request.owner.token.generation),
+                    category = request.category,
+                    characteristic = request.characteristic,
+                    counter = reservation.counter,
+                    firmware = request.firmware,
+                    frames = frames,
+                    deadlineMs = request.deadlineMs,
+                    dispatch = request.dispatch,
+                    onOutcome = { outcome ->
+                        when (prepareCounterRetry(outcome, reservation)) {
+                            null -> emit(mappedOutcome(outcome, currentTransaction))
+                            true -> runCatching { dispatchNext?.invoke() }.getOrElse {
+                                emit(
                                     YpsoWriteOutcome.PossiblyApplied(
                                         request.writeId,
                                         reservation.counter,
-                                        failure(request, YpsoWriteFailure.Layer.SESSION, failure.message ?: "counter recovery persistence failed"),
-                                    )
-                                }
-                            } else outcome
-                        is YpsoWriteOutcome.Verified -> outcome
-                    }
-                    finish()
-                    request.onOutcome(delivered)
-                },
-            ),
-        )
-        if (!started) {
-            runCatching { session.markNotSent(request.owner.token, transaction) }
-            release(request.writeId)
-            finish()
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "transport already owns a whole write", reservation.counter))
+                                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "counter reconciliation retry failed"),
+                                    ),
+                                )
+                            }
+                            false -> {
+                                // The search budget is spent; the durable 139 still proves the command
+                                // was not applied, so report a proven rejection rather than uncertainty.
+                                release(request.writeId)
+                                request.onOutcome(
+                                    YpsoWriteOutcome.ProvenRejected(
+                                        request.writeId,
+                                        reservation.counter,
+                                        (outcome as YpsoWriteOutcome.PossiblyApplied).failure,
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            if (!started) {
+                runCatching { session.markNotSent(request.owner.token, currentTransaction) }
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, "transport already owns a whole write", reservation.counter))
+                return false
+            }
+            return true
         }
-        return started
+        dispatchNext = { runAttempt() }
+
+        return runAttempt()
     }
 
     fun reconcile(
@@ -290,6 +327,9 @@ internal open class YpsoWriteAccounting(
         YpsoWriteFailure(layer, request.characteristic, request.firmware, detail = detail)
 
     companion object {
+        /** One initial dispatch plus one dispatch per exponential counter-recovery step. */
+        private const val MAX_COUNTER_RECONCILIATION_ATTEMPTS = PumpSession.MAX_COUNTER_RECOVERY_EXPONENT + 1
+
         fun sha256(value: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
     }
 }

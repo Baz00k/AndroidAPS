@@ -162,10 +162,12 @@ controllers were force-stopped. Final protected hashes were journal
 `e0d846ed4d19df7f8f9f1caffcec157b20613b5825fdc2d51fc6165b0865e54e`, history
 `bbad34be816f1d2f7b81b395925db3331c9e6158100cca8e2c42fc27308ca60d`, and profile capture as above.
 
-Production ownership is transferred only through the reviewed, HMAC-authenticated complete journal
+Production ownership may be transferred through the reviewed, HMAC-authenticated complete journal
 record. AndroidAPS requires an independently supplied file SHA-256 and validates pump/key/serial, epoch,
 verified reservation, evidence chain, and local non-conflict before committing under its own Keystore.
-Importing or seeding numeric floor `4280` alone is explicitly unsupported.
+Importing or seeding numeric floor `4280` alone is still explicitly unsupported. The handoff is no
+longer required for an unknown floor: the driver reconciles it from zero against the pump through the
+pump-confirmed counter search described in [write-counter recovery](counter-recovery.md).
 
 The pinned SandraK82 repository implements this sequence but explicitly says its payloads still
 require real-pump verification. A separate researcher reported viewing Profiles A and B on a real

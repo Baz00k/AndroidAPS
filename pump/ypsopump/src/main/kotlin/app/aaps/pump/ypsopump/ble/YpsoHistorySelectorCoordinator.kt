@@ -58,8 +58,7 @@ internal class YpsoHistorySelectorCoordinator(
             return false
         }
         val record = session.snapshot()
-        val ready = record?.reboot != null && record.read != null && record.write != null &&
-            record.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED
+        val ready = record?.reboot != null && record.read != null
         if (!ready || transport.hasUnresolvedWrite()) {
             onOutcome(
                 YpsoWriteOutcome.NotSent(
@@ -69,7 +68,7 @@ internal class YpsoHistorySelectorCoordinator(
                         YpsoWriteFailure.Layer.SESSION,
                         YpsoWritePolicy.EVENT_INDEX_UUID,
                         firmware,
-                        detail = "durable write high-water mark is unavailable",
+                        detail = "durable pump session counters are unavailable",
                     ),
                 ),
             )

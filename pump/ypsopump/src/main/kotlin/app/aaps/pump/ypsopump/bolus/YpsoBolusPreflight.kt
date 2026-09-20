@@ -4,7 +4,6 @@ data class YpsoBolusReadiness(
     val connected: Boolean,
     val authenticatedCurrentSession: Boolean,
     val statusCurrent: Boolean,
-    val writeCounterCertain: Boolean,
     val pumpRunning: Boolean,
     val reservoirHasInsulin: Boolean,
     val immediateBolusIdle: Boolean,
@@ -21,7 +20,6 @@ sealed interface YpsoBolusPreflight {
         DISCONNECTED,
         SESSION_NOT_CURRENT,
         STATUS_NOT_CURRENT,
-        COUNTER_UNCERTAIN,
         PUMP_NOT_RUNNING,
         RESERVOIR_EMPTY,
         IMMEDIATE_BOLUS_ACTIVE,
@@ -37,7 +35,6 @@ object YpsoBolusPreflightPolicy {
             !value.connected -> YpsoBolusPreflight.Reason.DISCONNECTED
             !value.authenticatedCurrentSession -> YpsoBolusPreflight.Reason.SESSION_NOT_CURRENT
             !value.statusCurrent -> YpsoBolusPreflight.Reason.STATUS_NOT_CURRENT
-            !value.writeCounterCertain -> YpsoBolusPreflight.Reason.COUNTER_UNCERTAIN
             !value.pumpRunning -> YpsoBolusPreflight.Reason.PUMP_NOT_RUNNING
             !value.reservoirHasInsulin -> YpsoBolusPreflight.Reason.RESERVOIR_EMPTY
             !value.immediateBolusIdle -> YpsoBolusPreflight.Reason.IMMEDIATE_BOLUS_ACTIVE
@@ -53,14 +50,12 @@ object YpsoBolusPreflightPolicy {
     fun evaluateCancellation(
         connected: Boolean,
         authenticatedCurrentSession: Boolean,
-        writeCounterCertain: Boolean,
         intendedBolusIdentityKnown: Boolean,
         cancellationNotAlreadyDispatched: Boolean,
     ): YpsoBolusPreflight {
         val reason = when {
             !connected -> YpsoBolusPreflight.Reason.DISCONNECTED
             !authenticatedCurrentSession -> YpsoBolusPreflight.Reason.SESSION_NOT_CURRENT
-            !writeCounterCertain -> YpsoBolusPreflight.Reason.COUNTER_UNCERTAIN
             !intendedBolusIdentityKnown -> YpsoBolusPreflight.Reason.HISTORY_BASELINE_MISSING
             !cancellationNotAlreadyDispatched -> YpsoBolusPreflight.Reason.UNRESOLVED_INSULIN
             else -> null

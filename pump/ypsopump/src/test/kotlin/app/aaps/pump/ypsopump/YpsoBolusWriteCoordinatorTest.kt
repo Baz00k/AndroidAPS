@@ -25,11 +25,11 @@ class YpsoBolusWriteCoordinatorTest {
     }
 
     @Test
-    fun `unready session rejects before dispatch or reservation`() {
+    fun `session without an authenticated read floor rejects before dispatch or reservation`() {
         val key = ByteArray(32) { 1 }
         val record = PumpSession.Record(
-            pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
-            read = 10, write = null, serial = "10000001", keyHex = key.joinToString("") { "%02x".format(it) },
+            pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = null,
+            read = null, write = null, serial = "10000001", keyHex = key.joinToString("") { "%02x".format(it) },
         )
         val session = PumpSession(Store(PumpSession.State(records = listOf(record), activeGeneration = "generation")))
         val token = session.open("pump", key)
@@ -53,7 +53,37 @@ class YpsoBolusWriteCoordinatorTest {
     }
 
     @Test
-    fun `lower bound recovery state cannot dispatch therapy`() {
+    fun `unknown floor dispatches therapy from zero`() {
+        val key = ByteArray(32) { 2 }
+        val record = PumpSession.Record(
+            pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
+            read = 10, write = null, serial = "10000001", keyHex = key.joinToString("") { "%02x".format(it) },
+        )
+        val session = PumpSession(Store(PumpSession.State(records = listOf(record), activeGeneration = "generation")))
+        val token = session.open("pump", key)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val frames = mutableListOf<ByteArray>()
+
+        assertTrue(
+            coordinator(session).start(
+                "bolus-unknown-floor",
+                YpsoBolusWriteCoordinator.Owner(Any(), "connection", token),
+                YpsoBolusRequestValidator.validate(1.0, YpsoBolusTreatment.NORMAL, 30.0),
+                null,
+                5_000,
+                beforeDispatch = {},
+                dispatch = { frames += it; true },
+                onOutcome = outcomes::add,
+            ),
+        )
+        assertEquals(1L, session.snapshot()!!.reservation!!.counter)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, session.snapshot()!!.reservation!!.candidate)
+        assertTrue(frames.isNotEmpty())
+        assertTrue(outcomes.isEmpty())
+    }
+
+    @Test
+    fun `lower bound recovery state dispatches therapy above the seeded floor`() {
         val key = ByteArray(32) { 7 }
         val record = PumpSession.Record(
             pump = "pump", keyId = PumpSession.fingerprint(key), generation = "generation", reboot = 21,
@@ -65,20 +95,20 @@ class YpsoBolusWriteCoordinatorTest {
         val token = session.open("pump", key)
         val outcomes = mutableListOf<YpsoWriteOutcome>()
 
-        assertFalse(
+        assertTrue(
             coordinator(session).start(
-                "bolus-recovery-block",
+                "bolus-recovery",
                 YpsoBolusWriteCoordinator.Owner(Any(), "connection", token),
                 YpsoBolusRequestValidator.validate(1.0, YpsoBolusTreatment.NORMAL, 30.0),
                 null,
                 5_000,
-                beforeDispatch = { error("journal") },
-                dispatch = { error("dispatch") },
+                beforeDispatch = {},
+                dispatch = { true },
                 onOutcome = outcomes::add,
             ),
         )
-        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
-        assertNull(session.snapshot()!!.reservation)
+        assertEquals(9_036L, session.snapshot()!!.reservation!!.counter)
+        assertTrue(outcomes.isEmpty())
     }
 
     @Test

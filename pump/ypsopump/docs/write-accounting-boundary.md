@@ -9,6 +9,9 @@ be required to authenticate and preserve an older journal without authorizing an
 ### Production safety state
 
 - `PumpSession` identity, generation, read/write floors, transaction ownership and key binding.
+- Unknown-floor reconciliation: allocation from zero, pump-confirmed `139` exponential search
+  (`+1,+2,+4,...`), automatic redispatch of the same logical write, and `ESTABLISHED` promotion on
+  acceptance. Unknown is a normal state, never a write authorization failure.
 - Exact write intent (`operationId`, characteristic, purpose and plaintext hash), reservation phase,
   prior floor, accepted/unresolved predecessor bindings, immutable evidence and resolution.
 - Persist-before-encrypt and persist-`POSSIBLY_SENT`-before-dispatch ordering; not-sent rollback,

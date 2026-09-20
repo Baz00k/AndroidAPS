@@ -6,9 +6,13 @@
 ## Supported artifact
 
 The default artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes permit
-access authentication, the required control-notification CCCD, and profile setting selectors `1`
-and `14–61`. Selectors require an established durable write floor and strict-next accounting;
-an unknown floor or unresolved write blocks profile acquisition. They do not change configuration.
+access authentication, the required control-notification CCCD, profile setting selectors `1` and
+`14–61`, and history selectors. Selectors use strict-next accounting above a durable floor. An
+unknown write floor is a normal state: the first write starts at zero and only a pump-confirmed
+final-frame counter error `139` advances a persisted exponential search (`+1,+2,+4,...`) until the
+pump accepts a counter, which durably establishes the floor and clears the uncertainty. An
+unresolved write still blocks new selectors until its outcome is reconciled or retired. Selectors
+do not change configuration.
 
 After a successful verified encrypted status read, the UI shows reservoir values and battery percent.
 The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent. Status fields have bench
@@ -133,12 +137,13 @@ Availability causes are persisted separately: unconfigured, bond/permission, tra
 encrypted-status unavailable, suspected re-key required, counter uncertain and identity mismatch.
 The presentation boundary translates these diagnostic facts into one operator-facing state and next
 action. Screens and notifications consume that presentation model rather than displaying cause sets.
-Write-counter uncertainty (`COUNTER_UNCERTAIN`) remains internal replay protection; a verified status-only
-session normally retains it because no write floor exists, without making status monitoring unavailable.
+Write-counter uncertainty (`COUNTER_UNCERTAIN`) is an informational replay-protection fact, not a
+capability gate. A verified session without a known floor reconciles it on the first selector or
+therapy write, starting at zero; it clears only when a pump-accepted counter establishes the floor.
 Transport retries back off at 5 s, 15 s, 30 s, 60 s and 5 min; a durable alert is raised after the third
 consecutive transport failure, while actionable non-transport failures alert immediately. Dismissing an
 alert does not clear the condition. Only a verified current-pump encrypted status clears status-related
-causes; status-only write-counter uncertainty remains explicit.
+causes.
 
 Code 140 is reported as **suspected re-key/session loss**, preserving the code, operation and observed
 firmware. Its exact pump semantics and lifetime trigger remain unproven. Automatic retries stop until an
@@ -157,7 +162,8 @@ another verification attempt is allowed.
   missing protected records block reads. Re-importing the same key cannot erase replay protection.
 - A second controller cannot be reliably excluded by Android inspection alone. Exclusive ownership also
   requires the operator to quiesce and physically control the other phone.
-- Therapy remains blocked unless a future exact artifact is independently qualified.
+- Therapy capability is governed by the `YpsoPumpConst.READ_ONLY_MODE` source gate; released
+  artifacts keep it enabled until the therapy path is independently qualified.
 
 Implementation details are in [status lifecycle](docs/status-lifecycle.md), [session ownership](docs/session-ownership.md)
 and [status protocol](docs/status-protocol.md). The qualified read-only event schema, pump-local time
@@ -168,7 +174,7 @@ the same change. Unverified observations must not be presented as supported beha
 ## Build
 
 ```bash
-./gradlew :app:assembleFullLoop   # non-debuggable; YpsoPump remains status-only
+./gradlew :app:assembleFullLoop   # non-debuggable; therapy follows the READ_ONLY_MODE source gate
 ./gradlew :app:assembleFullDebug  # debuggable setup/testing artifact
 ```
 

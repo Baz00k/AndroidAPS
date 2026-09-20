@@ -204,7 +204,7 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `read only journal recovery authenticates reads but cannot reserve any write`() {
+    fun `read only journal recovery authenticates reads and reconciles writes from zero`() {
         val store = MemoryStore()
         initialized(store)
         store.fault = 3
@@ -228,13 +228,14 @@ class ProductionPumpSessionTest {
         assertEquals("cd".repeat(32), record.source["journal_loss_read_only_document_sha256"])
 
         val transaction = restarted.begin(token)
-        assertThrows(SecurityException::class.java) {
-            restarted.reserve(
-                token,
-                transaction,
-                PumpSession.WriteIntent("blocked", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)),
-            )
-        }
+        val reservation = restarted.reserve(
+            token,
+            transaction,
+            PumpSession.WriteIntent("reconciled", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)),
+        )
+        assertEquals(1L, reservation.counter)
+        assertEquals(0L, reservation.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, reservation.candidate)
         restarted.finish(token, transaction)
     }
 
@@ -473,12 +474,21 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `overflow and unvalidated write recovery fail without reservation`() {
+    fun `unknown floor reconciles from zero while overflow still fails closed`() {
         val store = MemoryStore()
         var owner = initialized(store)
         var token = owner.open(pump, key)
-        assertThrows(SecurityException::class.java) { owner.reserve(token, owner.begin(token)) }
-        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE) })
+        val firstTransaction = owner.begin(token)
+        val first = owner.reserve(token, firstTransaction)
+        assertEquals(1L, first.counter)
+        assertEquals(0L, first.priorWrite)
+        owner.finish(token, firstTransaction)
+
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE, reservation = null)
+            },
+        )
         owner = PumpSession(store)
         token = owner.open(pump, key)
         assertThrows(SecurityException::class.java) { accept(owner, token, Long.MAX_VALUE) }
@@ -544,6 +554,75 @@ class ProductionPumpSessionTest {
         owner.finish(token, acceptedTransaction)
         owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "01".repeat(32), "semantic read-back accepted")
         assertEquals(0, owner.snapshot()!!.counterRecoveryExponent)
+    }
+
+    @Test
+    fun `unknown floor starts at zero and establishes ownership on acceptance`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(4) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("unknown-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)),
+            )
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        assertEquals(listOf(1L, 2L, 4L, 8L), candidates)
+        assertEquals(4, owner.snapshot()!!.counterRecoveryExponent)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, owner.snapshot()!!.writeBootstrapState)
+
+        val acceptedTransaction = owner.begin(token)
+        val accepted = owner.reserve(
+            token,
+            acceptedTransaction,
+            PumpSession.WriteIntent("accepted", "characteristic", "SETTINGS_SELECTOR", "ef".repeat(32)),
+        )
+        assertEquals(16L, accepted.counter)
+        assertEquals(8L, accepted.priorWrite)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.ACKED)
+        owner.finish(token, acceptedTransaction)
+        owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "01".repeat(32), "semantic read-back accepted")
+
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, owner.snapshot()!!.writeBootstrapState)
+        assertEquals(16L, owner.snapshot()!!.write)
+        assertEquals(0, owner.snapshot()!!.counterRecoveryExponent)
+    }
+
+    @Test
+    fun `counter rejections persist and keep advancing at the exponent cap`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT + 2) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("capped-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)),
+            )
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        val record = owner.snapshot()!!
+        assertEquals(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT, record.counterRecoveryExponent)
+        assertEquals(candidates.sorted(), candidates)
+        assertEquals(candidates.distinct().size, candidates.size)
+        assertEquals(
+            PumpSession.counterRecoveryIncrement(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT),
+            candidates[21] - candidates[20],
+        )
+        assertEquals(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT + 2, record.writeEvidence.size)
     }
 
     @Test

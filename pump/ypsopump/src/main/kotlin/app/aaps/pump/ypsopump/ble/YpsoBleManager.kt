@@ -41,10 +41,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BLE manager for authenticated status and read-only profile acquisition. Therapy and remote
- * configuration mutations remain blocked by policy.
+ * BLE manager for authenticated status, profile/history selector acquisition and bolus dispatch.
+ * An unknown write floor is reconciled from zero through pump-confirmed counter errors. Pump
+ * configuration and temporary-basal mutations remain blocked by policy.
  *
- * Set the captured session key with [setSharedKey] before connecting. No write/dosing path here yet.
+ * Set the captured session key with [setSharedKey] before connecting.
  */
 @Singleton
 class YpsoBleManager @Inject constructor(
@@ -64,11 +65,12 @@ class YpsoBleManager @Inject constructor(
 
     @Volatile private var bluetoothGatt: BluetoothGatt? = null
     val isConnected: Boolean get() = pumpState.connectionState == ConnectionState.CONNECTED
+    /**
+     * A verified session with an authenticated read floor can acquire selectors. An unknown write
+     * floor is normal: the first write reconciles it from zero through the pump-confirmed search.
+     */
     val canReadProfile: Boolean
-        get() = session?.snapshot()?.let {
-            it.reboot != null && it.read != null && it.write != null &&
-                it.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED
-        } == true
+        get() = session?.snapshot()?.let { it.reboot != null && it.read != null } == true
     val canReadHistory: Boolean
         get() = canReadProfile && !profileReadActive.get() && !historyReadActive.get()
     internal fun writeReadinessFailure(): String? {
@@ -86,9 +88,6 @@ class YpsoBleManager @Inject constructor(
             record == null -> "durable session record is unavailable"
             record.reboot == null -> "authenticated pump reboot counter is unavailable"
             record.read == null -> "authenticated read counter is unavailable"
-            record.write == null -> "durable write counter is unavailable (bootstrap=${record.writeBootstrapState})"
-            record.writeBootstrapState != PumpSession.WriteBootstrapState.ESTABLISHED ->
-                "write counter bootstrap is ${record.writeBootstrapState}"
             record.reservation?.phase != null && record.reservation.phase != PumpSession.Phase.VERIFIED ->
                 "unresolved write reservation ${record.reservation.operationId ?: record.reservation.id} is ${record.reservation.phase}"
             profileWriteTransportInstance?.hasUnresolvedWrite() == true -> "profile selector transport has an unresolved write"
@@ -1067,8 +1066,8 @@ class YpsoBleManager @Inject constructor(
         }
         val initial = session?.snapshot()
         val reboot = initial?.reboot
-        if (initial?.write == null || initial.writeBootstrapState != PumpSession.WriteBootstrapState.ESTABLISHED || reboot == null) {
-            aapsLogger.warn(LTag.PUMP, "YpsoPump profile read blocked: durable strict-next write floor is unavailable")
+        if (initial == null || reboot == null) {
+            aapsLogger.warn(LTag.PUMP, "YpsoPump profile read blocked: durable pump session floor is unavailable")
             profileReadActive.set(false)
             if (attempt.tryComplete()) onDone(false)
             return attempt
@@ -1285,8 +1284,7 @@ class YpsoBleManager @Inject constructor(
         val initial = session?.snapshot()
         val reboot = initial?.reboot
         val selector = findChar(gatt, YpsoWritePolicy.EVENT_INDEX_UUID)
-        if (reboot == null || initial.write == null ||
-            initial.writeBootstrapState != PumpSession.WriteBootstrapState.ESTABLISHED ||
+        if (reboot == null ||
             selector == null || selector.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0 ||
             findChar(gatt, CHAR_EVENT_COUNT) == null || findChar(gatt, CHAR_EVENT_VALUE) == null
         ) {

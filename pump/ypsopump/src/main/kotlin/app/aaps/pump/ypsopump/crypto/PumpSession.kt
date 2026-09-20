@@ -368,9 +368,9 @@ class PumpSession(private val store: Store) {
     }
 
     /**
-     * One-way recovery when the protected journal is already unreadable. This records only an
-     * independently proven local allocation lower bound. It does not establish a read floor or
-     * authorize ordinary selectors, profile writes, configuration, cancellation, or therapy.
+     * One-way recovery when the protected journal is already unreadable. This records an
+     * independently proven local allocation lower bound; the read floor is established by the first
+     * authenticated read, and writes reconcile above the bound through the pump-confirmed search.
      */
     @Synchronized
     internal fun recoverLostJournalLowerBound(
@@ -422,8 +422,8 @@ class PumpSession(private val store: Store) {
 
     /**
      * Replace an already-unreadable journal with identity/key only. The first authenticated pump read
-     * may establish a read replay floor, but write ownership remains UNKNOWN_MID_EPOCH permanently
-     * until a separately qualified ownership-recovery protocol succeeds.
+     * establishes a read replay floor; the write floor stays UNKNOWN_MID_EPOCH until the first
+     * accepted write, reconciled from zero against the pump.
      */
     @Synchronized
     internal fun recoverLostJournalReadOnly(provisioning: Provisioning, documentHash: String) {
@@ -466,10 +466,10 @@ class PumpSession(private val store: Store) {
     }
 
     /**
-     * Upgrade a verified identity-only/unknown-mid-epoch journal into selector-only exponential
-     * recovery. Older recovered journals did not persist a provenance marker, so eligibility is bound
-     * to the state invariants below rather than one source-map key. The handoff contributes a lower
-     * bound, never its read floor, reservations, evidence, or established-ownership claim.
+     * Upgrade a verified identity-only/unknown-mid-epoch journal with a reviewed lower bound. Older
+     * recovered journals did not persist a provenance marker, so eligibility is bound to the state
+     * invariants below rather than one source-map key. The handoff contributes a lower bound, never
+     * its read floor, reservations, evidence, or established-ownership claim.
      */
     @Synchronized
     internal fun recoverIdentityOnlyLowerBound(
@@ -484,11 +484,13 @@ class PumpSession(private val store: Store) {
         check(active.verifiedAt != null && active.verifiedSerial == active.serial) {
             "Identity-only session has not been verified against the pump"
         }
-        check(active.writeBootstrapState == WriteBootstrapState.UNKNOWN_MID_EPOCH && active.write == null) {
+        check(active.writeBootstrapState == WriteBootstrapState.UNKNOWN_MID_EPOCH) {
             "Session is not awaiting mid-epoch write recovery"
         }
-        check(active.reservation == null && active.writeEvidence.isEmpty()) {
-            "Identity-only session contains conflicting local write accounting"
+        // Local standard allocations may already have advanced the search without acceptance; the
+        // handoff seeds the search, so only an unresolved reservation or bench-only evidence blocks.
+        check(active.reservation == null) {
+            "Identity-only session contains an unresolved local write"
         }
         check(imported.pump == active.pump && imported.keyId == active.keyId && imported.serial == active.serial) {
             "Lower-bound handoff belongs to another pump, key, or serial"
@@ -506,7 +508,8 @@ class PumpSession(private val store: Store) {
             "Lower-bound handoff belongs to another or unverified pump epoch"
         }
         val recovered = active.copy(
-            write = imported.write,
+            // Never search below an allocation this owner already made; the handoff is a lower bound.
+            write = maxOf(active.write ?: 0L, imported.write),
             importedAt = importedAt,
             source = active.source + source,
             writeBootstrapState = WriteBootstrapState.RECOVERING_LOWER_BOUND,
@@ -1039,7 +1042,11 @@ class PumpSession(private val store: Store) {
     /** Persisted transition; discard this response and reconnect with a new connection token. */
     class RebootAdoptedException : SecurityException("Authenticated reboot adopted; reconnect required")
 
-    /** Reserve above the durable local high-water mark; the pump does not require contiguous counters. */
+    /**
+     * Reserve above the durable local high-water mark; the pump does not require contiguous counters.
+     * An unknown floor is a normal state: allocation starts at zero and each pump-confirmed
+     * counter rejection advances the exponential search through [counterRecoveryExponent].
+     */
     @Synchronized
     fun reserve(origin: Token, id: String, intent: WriteIntent? = null): Reservation {
         return reserveCandidate(origin, id, intent, forwardGap = 0, candidate = WriteCandidate.STANDARD)
@@ -1078,7 +1085,10 @@ class PumpSession(private val store: Store) {
         val old = retireLegacyReservation(owned(origin))
         check(transaction == id) { "Stale transaction" }
         check(old.reservation == null || old.reservation.phase == Phase.VERIFIED) { "Unresolved write" }
-        val last = bootstrapPriorWrite ?: old.write ?: throw SecurityException("Write counter uncertain; bench validation required")
+        // A missing floor is the unknown-mid-epoch starting point, not a blocker. The pump accepts
+        // any counter above its last accepted value, so the search starts at zero and only a
+        // pump-confirmed rejection advances it.
+        val last = bootstrapPriorWrite ?: old.write ?: 0L
         val standardIncrement =
             if (candidate in setOf(WriteCandidate.STANDARD, WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR)) {
                 counterRecoveryIncrement(old.counterRecoveryExponent)
@@ -1180,12 +1190,9 @@ class PumpSession(private val store: Store) {
         val old = owned(origin)
         check(transaction == null) { "Another session transaction is active" }
         val reserved = old.reservation?.takeIf { it.phase != Phase.VERIFIED } ?: return
-        val lowerBoundRecovery =
-            old.writeBootstrapState == WriteBootstrapState.RECOVERING_LOWER_BOUND &&
-                reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR
-        check((old.writeBootstrapState == WriteBootstrapState.ESTABLISHED || lowerBoundRecovery) && old.write != null) {
-            "Write high-water mark is unavailable"
-        }
+        // Every reconciliation candidate allocates above its durable floor, so the retained counter
+        // is a safe next search start regardless of write-bootstrap state.
+        check(old.write != null) { "Write high-water mark is unavailable" }
         check(old.write >= reserved.counter) { "Reservation exceeds write high-water mark" }
         val detail = "Interrupted transport retired at phase=${reserved.phase}; counter retained as high-water mark; command outcome unknown"
         val hash = MessageDigest.getInstance("SHA-256")
@@ -1194,7 +1201,12 @@ class PumpSession(private val store: Store) {
         update(old.copy(reservation = null, writeEvidence = old.writeEvidence + evidence))
     }
 
-    /** Pump-originated APPERR_COUNTER_ERROR (139): the command was rejected and the next gap doubles. */
+    /**
+     * Pump-originated APPERR_COUNTER_ERROR (139): the command was rejected and the next gap doubles
+     * until [MAX_COUNTER_RECOVERY_EXPONENT]. The exponent bounds the increment, not the rejection
+     * record: a 139 at the cap is still persisted, and later candidates advance by the largest
+     * increment while counter arithmetic cannot wrap.
+     */
     @Synchronized
     fun rejectCounterTooLow(origin: Token, reservationId: String, evidenceHash: String, detail: String) {
         val old = owned(origin)
@@ -1204,9 +1216,11 @@ class PumpSession(private val store: Store) {
             "Write is not awaiting counter-error recovery"
         }
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
-        check(old.counterRecoveryExponent < MAX_COUNTER_RECOVERY_EXPONENT) { "Counter recovery exhausted" }
+        val nextExponent =
+            if (old.counterRecoveryExponent < MAX_COUNTER_RECOVERY_EXPONENT) old.counterRecoveryExponent + 1
+            else old.counterRecoveryExponent
         val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
-        update(old.copy(reservation = null, writeEvidence = old.writeEvidence + evidence, counterRecoveryExponent = old.counterRecoveryExponent + 1))
+        update(old.copy(reservation = null, writeEvidence = old.writeEvidence + evidence, counterRecoveryExponent = nextExponent))
     }
 
     /** Persist reviewed evidence that does not yet classify counter consumption; the reservation remains blocking. */
@@ -1265,27 +1279,27 @@ class PumpSession(private val store: Store) {
         require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, resolution, evidenceHash, detail)
         val next = when (resolution) {
-            WriteResolution.ACCEPTED ->
+            WriteResolution.ACCEPTED -> {
+                // A pump-confirmed acceptance proves the durable floor for every ordinary candidate.
+                // An unknown mid-epoch allocation therefore becomes ESTABLISHED on its first
+                // accepted counter instead of remaining permanently write-blocked.
+                val establishes = reserved.candidate in setOf(
+                    WriteCandidate.STANDARD,
+                    WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+                    WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
+                )
                 old.copy(
                     reservation = reserved.copy(phase = Phase.VERIFIED),
                     writeEvidence = old.writeEvidence + evidence,
                     writeBootstrapState =
-                        if (reserved.candidate in setOf(
-                                WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
-                                WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
-                            )
-                        ) {
-                            WriteBootstrapState.ESTABLISHED
-                        } else {
-                            old.writeBootstrapState
-                        },
+                        if (establishes) WriteBootstrapState.ESTABLISHED else old.writeBootstrapState,
                     benchStrictNextAccepted =
                         old.benchStrictNextAccepted || reserved.candidate == WriteCandidate.BENCH_STRICT_NEXT_SELECTOR,
                     counterRecoveryExponent = 0,
                     lowerBoundRecoveryReboot =
-                        if (reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR) null
-                        else old.lowerBoundRecoveryReboot,
+                        if (establishes) null else old.lowerBoundRecoveryReboot,
                 )
+            }
             WriteResolution.REJECTED_COUNTER_CONSUMED ->
                 old.copy(
                     reservation = reserved.copy(phase = Phase.VERIFIED),
@@ -1301,8 +1315,10 @@ class PumpSession(private val store: Store) {
                 restoreAfterNotConsumed(old, reserved, evidence)
         }
         update(next)
-        if (reserved.candidate == WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR &&
-            resolution == WriteResolution.ACCEPTED
+        // Establishing the floor clears the informational uncertainty cause for every candidate,
+        // not only the lower-bound recovery path.
+        if (next.writeBootstrapState == WriteBootstrapState.ESTABLISHED &&
+            old.writeBootstrapState != WriteBootstrapState.ESTABLISHED
         ) {
             val current = checkNotNull(state)
             val available = current.availability.copy(
@@ -1489,12 +1505,17 @@ class PumpSession(private val store: Store) {
                     require(r.read != null && it.read > 0 && it.read <= r.read)
                 }
                 when (r.writeBootstrapState) {
-                    WriteBootstrapState.UNKNOWN_MID_EPOCH -> require(r.write == null && r.reservation == null)
+                    // Unknown floor is reconciled by ordinary strict-next allocation starting at
+                    // zero; `write` holds the highest allocated search position until acceptance
+                    // establishes ownership.
+                    WriteBootstrapState.UNKNOWN_MID_EPOCH ->
+                        require(r.reservation == null || r.reservation.candidate == WriteCandidate.STANDARD)
                     WriteBootstrapState.OBSERVED_NEW_EPOCH ->
                         require(
-                            r.write == null && r.reservation == null ||
+                            r.reservation == null ||
+                                r.reservation.candidate == WriteCandidate.STANDARD ||
                                 r.write == 1L &&
-                                r.reservation?.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
+                                r.reservation.candidate == WriteCandidate.BENCH_NEW_EPOCH_BOOTSTRAP_SELECTOR,
                         )
                     WriteBootstrapState.RECOVERING_LOWER_BOUND -> require(r.write != null && r.lowerBoundRecoveryReboot != null)
                     WriteBootstrapState.ESTABLISHED -> require(r.write != null && r.lowerBoundRecoveryReboot == null)

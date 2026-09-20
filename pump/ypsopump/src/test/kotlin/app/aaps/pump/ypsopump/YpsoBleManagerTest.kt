@@ -26,6 +26,7 @@ import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -175,15 +176,11 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `profile read fails closed before any selector when durable write floor is unknown`() {
+    fun `profile readiness depends on the authenticated read floor not the write allocation`() {
         connectedGatt()
-        val results = mutableListOf<Boolean>()
 
-        manager.readProfile(results::add)
-
-        assertEquals(listOf(false), results)
-        assertFalse(manager.canReadProfile)
-        assertEquals(null, pumpState.profileEvidence)
+        assertNull(manager.session!!.snapshot()!!.write)
+        assertTrue(manager.canReadProfile)
     }
 
     @Test

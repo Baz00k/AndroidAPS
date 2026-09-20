@@ -58,7 +58,7 @@ class YpsoProfileSelectorCoordinatorTest {
     }
 
     @Test
-    fun `only pump counter error advances exponential recovery`() {
+    fun `pump counter error automatically redispatches with the next exponential candidate`() {
         val store = MemoryStore()
         PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
@@ -66,36 +66,68 @@ class YpsoProfileSelectorCoordinatorTest {
         })
         val session = PumpSession(store)
         val token = session.open("pump", key)
+        val gatt = Any()
+        val owner = YpsoProfileSelectorCoordinator.Owner(gatt, "connection", token)
         val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
         val coordinator = YpsoProfileSelectorCoordinator(session, SessionCrypto(), transport)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        val frames = mutableListOf<ByteArray>()
 
-        fun run(writeId: String, status: Int): Pair<Long, YpsoWriteOutcome> {
-            val gatt = Any()
-            val outcomes = mutableListOf<YpsoWriteOutcome>()
-            assertTrue(coordinator.write(writeId, YpsoProfileSelectorCoordinator.Owner(gatt, writeId, token), 14, null, 8_000, { true }, outcomes::add))
-            repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
-            transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, status)
-            coordinator.ownerDisconnected(gatt, "test teardown")
-            return checkNotNull(outcomes.last().counter) to outcomes.last()
-        }
+        assertTrue(coordinator.write("counter-error", owner, 14, null, 8_000, { frames += it.copyOf(); true }, outcomes::add))
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        assertEquals(4_281L, SessionCrypto().decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter)
+        frames.clear()
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 139)
 
-        val counterError = run("counter-error", 139)
-        assertEquals(4_281L, counterError.first)
-        assertTrue(counterError.second is YpsoWriteOutcome.ProvenRejected)
+        // The rejection is durable, nothing is reported to the caller, and the same logical write
+        // is redispatched above the retained search position without caller involvement.
         assertEquals(1, session.snapshot()!!.counterRecoveryExponent)
-
-        val unrelated = run("unrelated-error", 133)
-        assertEquals(4_282L, unrelated.first)
-        assertTrue(unrelated.second is YpsoWriteOutcome.PossiblyApplied)
-        assertEquals(1, session.snapshot()!!.counterRecoveryExponent)
-
-        val recovered = run("counter-error-2", 139)
-        assertEquals(4_283L, recovered.first)
-        assertEquals(2, session.snapshot()!!.counterRecoveryExponent)
+        assertEquals(4_282L, session.snapshot()!!.reservation!!.counter)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
+        assertTrue(outcomes.isEmpty())
+        repeat(4) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
+        assertEquals(4_282L, SessionCrypto().decrypt(YpsoFraming.parseMultiFrameRead(frames), key).counter)
+        assertTrue(
+            coordinator.reconcileAccepted(
+                "counter-error",
+                owner,
+                "ab".repeat(32),
+                "same-link exact-GLB selector identity read-back matched setting 14",
+            ),
+        )
+        assertTrue(outcomes.last() is YpsoWriteOutcome.Verified)
+        assertEquals(0, session.snapshot()!!.counterRecoveryExponent)
+        assertEquals(4_282L, session.snapshot()!!.write)
     }
 
     @Test
-    fun `unknown floor blocks before reservation encryption or dispatch`() {
+    fun `unrelated status neither advances the search nor retries`() {
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = store.saved.copy(records = store.saved.records.map {
+            it.copy(write = 4_280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
+        })
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val gatt = Any()
+        val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})
+        val coordinator = YpsoProfileSelectorCoordinator(session, SessionCrypto(), transport)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+
+        assertTrue(coordinator.write("unrelated-error", YpsoProfileSelectorCoordinator.Owner(gatt, "unrelated-error", token), 14, null, 8_000, { true }, outcomes::add))
+        repeat(3) { transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0) }
+        transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 133)
+
+        val outcome = outcomes.single()
+        assertTrue(outcome is YpsoWriteOutcome.PossiblyApplied)
+        assertEquals(4_281L, outcome.counter)
+        assertEquals(0, session.snapshot()!!.counterRecoveryExponent)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
+    }
+
+    @Test
+    fun `unknown floor reconciles the first selector from zero`() {
         val store = MemoryStore()
         val session = PumpSession(store)
         session.provisionReadBaseline("pump", key, 21, 100)
@@ -108,7 +140,7 @@ class YpsoProfileSelectorCoordinatorTest {
             YpsoSerializedWriteTransport({ _, _ -> }, {}),
         )
 
-        assertFalse(
+        assertTrue(
             coordinator.write(
                 "profile-1",
                 YpsoProfileSelectorCoordinator.Owner(Any(), "connection", token),
@@ -119,13 +151,16 @@ class YpsoProfileSelectorCoordinatorTest {
                 outcomes::add,
             ),
         )
-        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
-        assertTrue(frames.isEmpty())
-        assertNull(session.snapshot()!!.reservation)
+        val reservation = requireNotNull(session.snapshot()!!.reservation)
+        assertEquals(1L, reservation.counter)
+        assertEquals(0L, reservation.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, reservation.candidate)
+        assertTrue(frames.isNotEmpty())
+        assertTrue(outcomes.isEmpty())
     }
 
     @Test
-    fun `lower bound recovery state blocks profile selectors`() {
+    fun `lower bound recovery state permits profile selectors above the seeded floor`() {
         val store = MemoryStore()
         PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
@@ -139,19 +174,19 @@ class YpsoProfileSelectorCoordinatorTest {
         val outcomes = mutableListOf<YpsoWriteOutcome>()
         val coordinator = YpsoProfileSelectorCoordinator(session, SessionCrypto(), YpsoSerializedWriteTransport({ _, _ -> }, {}))
 
-        assertFalse(
+        assertTrue(
             coordinator.write(
-                "profile-recovery-block",
+                "profile-recovery",
                 YpsoProfileSelectorCoordinator.Owner(Any(), "connection", session.open("pump", key)),
                 1,
                 null,
                 8_000,
-                { error("dispatch") },
+                { true },
                 outcomes::add,
             ),
         )
-        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
-        assertNull(session.snapshot()!!.reservation)
+        assertEquals(9_036L, session.snapshot()!!.reservation!!.counter)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, session.snapshot()!!.reservation!!.candidate)
     }
 
     @Test
