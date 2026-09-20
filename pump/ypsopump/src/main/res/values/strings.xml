@@ -31,7 +31,8 @@
     <string name="ypsopump_read_only_bolus_blocked">Insulin delivery is disabled: bolus blocked</string>
     <string name="ypsopump_bolus_invalid">Bolus rejected: %1$s</string>
     <string name="ypsopump_bolus_failed">Bolus not delivered: %1$s</string>
-    <string name="ypsopump_bolus_uncertain">Bolus delivery is uncertain. Do not retry: %1$s</string>
+    <string name="ypsopump_bolus_uncertain">Bolus delivery is uncertain. Check the pump and glucose before giving more insulin: %1$s</string>
+    <string name="ypsopump_bolus_uncertain_notification">A previous bolus could not be fully confirmed. Check the pump and glucose before giving more insulin.</string>
     <string name="ypsopump_bolus_started">Bolus accepted and matched to the pump delivery.</string>
     <string name="ypsopump_bolus_completed">Pump-confirmed bolus delivered: %1$.2f U.</string>
     <string name="ypsopump_reservoir_empty_notification">Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.</string>
@@ -85,7 +86,7 @@
     <string name="ypsopump_cause_unconfigured">Pump setup isn’t finished.</string>
     <string name="ypsopump_cause_bond_permission">Turn Bluetooth on.</string>
     <string name="ypsopump_cause_transport">Can’t reach the pump. Keep it close.</string>
-    <string name="ypsopump_cause_authentication">The pump refused the saved key.</string>
+    <string name="ypsopump_cause_authentication">The Bluetooth connection could not be authenticated. Keep the pump nearby and try again.</string>
     <string name="ypsopump_cause_encrypted_status">Can’t read the pump right now.</string>
     <string name="ypsopump_cause_rekey">The saved pump key is wrong or expired. Enter the current key.</string>
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>

@@ -20,17 +20,17 @@ implementation ledger; a finding is not closed until its regression evidence is 
 |---|---|---|---|---|
 | Gate | Confirmed | Fixed | Pending | `READ_ONLY_MODE` restored to `true` |
 | S1 | Confirmed | In progress | Pending | Stable `pumpId` read-back verifier added; plugin switch pending validated commit |
-| S2 | Pending | Open | — | — |
-| S3 | Pending | Open | — | — |
-| S4 | Pending | Open | — | — |
+| S2 | Confirmed | Fixed in working tree | Pending | Extended deadline = duration + 90 s; epoch change becomes durable warning |
+| S3 | Confirmed | Fixed in working tree | Pending | Split dose inhibition/reconciliation/row holdback; backwards-clock regression passes |
+| S4 | Confirmed | Fixed | Pending | Restored independent selector identity proof; stable-history regression passes |
 | S5 | Pending | Open | — | — |
-| S6 | Pending | Open | — | — |
-| S7 | Pending | Open | — | — |
-| S8 | Pending | Open | — | — |
-| S9 | Pending | Open | — | — |
-| S10 | Pending | Open | — | — |
-| S11 | Pending | Open | — | — |
-| S12 | Confirmed | In progress | Pending | Redundant stop removed in working tree; pending validated plugin commit |
+| S6 | Confirmed | Fixed in working tree | Pending | Authoritative terminal amount publishes final progress |
+| S7 | Confirmed | Fixed in working tree | Pending | Live PumpSync row without durable identity now fails explicitly |
+| S8 | Confirmed | Fixed in working tree | Pending | Synchronized message lifecycle dismisses, raises, clears, and can re-raise |
+| S9 | Confirmed | Fixed in working tree | Pending | Background history removed from queue `isBusy` |
+| S10 | Confirmed | Fixed in working tree | Pending | Queued therapy can repeatedly bypass transport-only backoff; rekey remains blocking |
+| S11 | Confirmed | Fixed in working tree | Pending | Post-dispatch identity loss is enacted uncertainty; confirmed partial is successful enacted result |
+| S12 | Confirmed | Fixed in working tree | Pending | Removed redundant post-terminal stop transaction |
 | S13.1 | Pending | Open | — | — |
 | S13.2 | Pending | Open | — | — |
 | S13.3 | Pending | Open | — | — |

@@ -596,6 +596,14 @@ class YpsoProvisioningService internal constructor(
         return availability.retryAt?.let { now >= it } ?: true
     }
 
+    /** Each queued-therapy connection cycle may bypass transport backoff; hard rekey remains blocking. */
+    @Synchronized
+    fun requestTherapyConnectionAttempt(): Boolean {
+        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in pumpState.availability.causes) return false
+        verificationAttemptRequested = true
+        return true
+    }
+
     @Synchronized
     fun requestVerificationAttempt() {
         verificationAttemptRequested = true

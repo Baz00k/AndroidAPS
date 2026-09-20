@@ -361,7 +361,7 @@ class BolusBenchActivity : Activity() {
 
     private fun dispatchCancel(owner: BluetoothGatt) {
         val attempt = attempts.current() ?: error("no durable bolus attempt")
-        require(attempt.inhibitsAutomatedDelivery && attempt.cancelRequestId == null) { "attempt is not cancellable" }
+        require(attempt.awaitsReconciliation && attempt.cancelRequestId == null) { "attempt is not cancellable" }
         val document = YpsoSessionDocumentParser.parse(File(filesDir, "ypso-keys.json").readBytes())
         try {
             require(attempt.pumpSerial == document.serial) { "attempt belongs to another pump" }
@@ -397,7 +397,7 @@ class BolusBenchActivity : Activity() {
 
     private fun reconcileTerminal(owner: BluetoothGatt, status: BolusCommand) {
         val attempt = attempts.current() ?: error("no durable bolus attempt")
-        require(attempt.inhibitsAutomatedDelivery) { "attempt is already terminal or certainly not sent" }
+        require(attempt.awaitsReconciliation) { "attempt is already terminal or certainly not sent" }
         val document = YpsoSessionDocumentParser.parse(File(filesDir, "ypso-keys.json").readBytes())
         try {
             require(attempt.pumpSerial == document.serial) { "attempt belongs to another pump" }

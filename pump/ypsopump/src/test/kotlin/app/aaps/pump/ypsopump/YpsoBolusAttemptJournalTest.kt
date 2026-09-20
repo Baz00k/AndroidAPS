@@ -33,9 +33,53 @@ class YpsoBolusAttemptJournalTest {
         journal.beforeDispatch("request-1", counter = 4810, now = 2_000)
 
         val afterRestart = YpsoBolusAttemptJournal(store)
-        assertTrue(requireNotNull(store.value).inhibitsAutomatedDelivery)
-        assertThrows(IllegalArgumentException::class.java) { afterRestart.prepare(attempt(requestId = "request-2")) }
+        assertTrue(requireNotNull(store.value).inhibitsNewDose(3_000, 90_000, 90_000))
+        assertThrows(IllegalArgumentException::class.java) { afterRestart.prepare(attempt(requestId = "request-2"), 3_000) }
         assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4811, 3_000) }
+    }
+
+    @Test
+    fun `unresolved active uncertainty blocks only through its finite observation window`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt())
+        journal.beforeDispatch("request-1", 4810, 2_000)
+
+        val unresolved = journal.unresolved("request-1", "terminal delivery could not be confirmed")
+
+        assertTrue(unresolved.hasUnresolvedWarning)
+        assertTrue(unresolved.inhibitsNewDose(91_999, 90_000, 90_000))
+        assertThrows(IllegalArgumentException::class.java) { journal.prepare(attempt(requestId = "request-2"), 91_999) }
+        assertFalse(unresolved.inhibitsNewDose(92_000, 90_000, 90_000))
+        assertEquals("request-2", journal.prepare(attempt(requestId = "request-2"), 92_000).requestId)
+    }
+
+    @Test
+    fun `restart expiry preserves finite immediate and extended observation windows`() {
+        val immediateStore = MemoryStore()
+        val immediate = YpsoBolusAttemptJournal(immediateStore)
+        immediate.prepare(attempt())
+        immediate.beforeDispatch("request-1", 4810, 2_000)
+        immediate.observeFastDelivering("request-1", 45, 100)
+
+        assertTrue(requireNotNull(immediate.expireObservationWindow(91_999, 90_000, 90_000)).inhibitsNewDose(91_999, 90_000, 90_000))
+        val expired = requireNotNull(immediate.expireObservationWindow(92_000, 90_000, 90_000))
+        assertEquals(YpsoBolusOutcome.UNRESOLVED, expired.outcome)
+        assertFalse(expired.inhibitsNewDose(92_000, 90_000, 90_000))
+
+        val extendedStore = MemoryStore()
+        val extended = YpsoBolusAttemptJournal(extendedStore)
+        extended.prepare(attempt(shape = YpsoBolusShape.EXTENDED))
+        extended.beforeDispatch("request-1", 4810, 2_000)
+        extended.observeSlowDelivering("request-1", 46, 100)
+        assertTrue(requireNotNull(extended.expireObservationWindow(991_999, 90_000, 90_000)).inhibitsNewDose(991_999, 90_000, 90_000))
+        val extendedExpired = requireNotNull(extended.expireObservationWindow(992_000, 90_000, 90_000))
+        assertEquals(YpsoBolusOutcome.UNRESOLVED, extendedExpired.outcome)
+        assertFalse(extendedExpired.inhibitsNewDose(992_000, 90_000, 90_000))
+
+        val backwardsClock = extendedExpired.copy(outcome = YpsoBolusOutcome.DELIVERING, dispatchedAt = 1_000_000)
+        assertFalse(backwardsClock.inhibitsNewDose(900_000, 90_000, 90_000))
+        assertTrue(backwardsClock.awaitsReconciliation)
     }
 
     @Test
@@ -61,7 +105,7 @@ class YpsoBolusAttemptJournalTest {
         assertEquals(YpsoBolusOutcome.ACCEPTED_UNVERIFIED, acked.outcome)
         assertEquals(null, acked.confirmedCentiUnits)
         assertEquals(null, acked.deliveryTimestamp)
-        assertTrue(acked.inhibitsAutomatedDelivery)
+        assertTrue(acked.inhibitsNewDose(3_000, 90_000, 90_000))
     }
 
     @Test
@@ -129,7 +173,7 @@ class YpsoBolusAttemptJournalTest {
         val stopped = partial.confirmTerminal("request-1", 37, 2_500, YpsoBolusBlock.FAST, 45, 101, cancelled = true)
         assertEquals(YpsoBolusOutcome.CANCELLED_PARTIAL, stopped.outcome)
         assertEquals(0.37, stopped.confirmedUnits)
-        assertFalse(stopped.inhibitsAutomatedDelivery)
+        assertFalse(stopped.inhibitsNewDose(3_000, 90_000, 90_000))
         assertEquals(null, stopped.detail)
 
         val completeStore = MemoryStore()
@@ -190,7 +234,7 @@ class YpsoBolusAttemptJournalTest {
 
         assertEquals(YpsoBolusOutcome.PROVEN_REJECTED, rejected.outcome)
         assertEquals(4810, rejected.dispatchCounter)
-        assertFalse(rejected.inhibitsAutomatedDelivery)
+        assertFalse(rejected.inhibitsNewDose(3_000, 90_000, 90_000))
         assertEquals(null, rejected.confirmedCentiUnits)
     }
 
@@ -224,7 +268,7 @@ class YpsoBolusAttemptJournalTest {
         assertEquals(null, restored.cancelRequestId)
         assertEquals(null, restored.cancelCounter)
         assertEquals(null, restored.cancelBlock)
-        assertTrue(restored.inhibitsAutomatedDelivery)
+        assertTrue(restored.inhibitsNewDose(3_000, 90_000, 90_000))
     }
 
     @Test

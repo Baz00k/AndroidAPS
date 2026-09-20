@@ -35,6 +35,8 @@ internal class YpsoImmediateBolusController(
     val isBusy: Boolean get() = delivering.get()
     val cancellationRequested: Boolean get() = stopRequested.get()
     fun currentAttempt(): YpsoBolusAttempt? = journal.current()
+    fun expireStaleAttempt(immediateWindowMs: Long, extendedMarginMs: Long): YpsoBolusAttempt? =
+        journal.expireObservationWindow(now(), immediateWindowMs, extendedMarginMs)
 
     fun beginDelivery(): Boolean {
         if (!delivering.compareAndSet(false, true)) return false
@@ -69,7 +71,7 @@ internal class YpsoImmediateBolusController(
 
     fun markUnresolved(detail: String): YpsoBolusAttempt? {
         val attempt = journal.current() ?: return null
-        return if (attempt.inhibitsAutomatedDelivery) journal.unresolved(attempt.requestId, detail) else attempt
+        return if (attempt.awaitsReconciliation) journal.unresolved(attempt.requestId, detail) else attempt
     }
 
     fun deliver(request: YpsoValidatedBolusRequest): DeliveryResult {
@@ -81,8 +83,8 @@ internal class YpsoImmediateBolusController(
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
             val cursor = historyCursor() ?: return DeliveryResult.NotSent("pump history has not been initialized")
-            journal.current()?.takeIf { it.inhibitsAutomatedDelivery }?.let {
-                return DeliveryResult.NotSent("earlier bolus ${it.requestId} remains ${it.outcome}")
+            journal.current()?.takeIf { it.inhibitsNewDose(now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS) }?.let {
+                return DeliveryResult.NotSent("the pump is still processing an earlier bolus")
             }
             if (stopRequested.get()) return DeliveryResult.NotSent("bolus cancelled before dispatch")
             val baselineConnection = bleManager.currentBolusConnectionKey()
@@ -124,7 +126,7 @@ internal class YpsoImmediateBolusController(
                 durationMinutes = request.durationMinutes,
                 immediateCentiUnits = request.immediateCentiUnits,
             )
-            journal.prepare(attempt)
+            journal.prepare(attempt, now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS)
             if (stopRequested.get()) return DeliveryResult.NotSent("bolus cancelled before dispatch")
 
             val outcome = runCatching { awaitWrite { callback ->
@@ -326,6 +328,11 @@ internal class YpsoImmediateBolusController(
     }
 
     private fun cents(units: Double): Int = Math.round(units * 100.0).toInt()
+
+    companion object {
+        const val OBSERVATION_WINDOW_MS = 90_000L
+        const val EXTENDED_RECONCILIATION_MARGIN_MS = 90_000L
+    }
 }
 
 internal fun BS.Type.toYpsoTreatment(): YpsoBolusTreatment = when (this) {

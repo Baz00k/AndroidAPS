@@ -665,6 +665,24 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
+    fun `queued therapy may repeatedly bypass transport backoff but never bypasses rekey`() {
+        val (service) = service()
+        install(service)
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "poll", now = 1_000)
+        assertFalse(service.retryAllowed(1_000))
+
+        assertTrue(service.requestTherapyConnectionAttempt())
+        assertTrue(service.retryAllowed(1_000))
+        assertFalse(service.retryAllowed(1_000))
+        assertTrue(service.requestTherapyConnectionAttempt())
+        assertTrue(service.retryAllowed(1_000))
+
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), operation = "auth", now = 2_000)
+        assertFalse(service.requestTherapyConnectionAttempt())
+        assertFalse(service.retryAllowed(Long.MAX_VALUE))
+    }
+
+    @Test
     fun `legacy MAC key waits for real serial then upgrades the existing replay generation`() {
         val legacyRecord = PumpSession.Record(mac, PumpSession.fingerprint(key), "legacy-generation", 8, 77, null)
         val store = MemoryStore(PumpSession.State(records = listOf(legacyRecord)))

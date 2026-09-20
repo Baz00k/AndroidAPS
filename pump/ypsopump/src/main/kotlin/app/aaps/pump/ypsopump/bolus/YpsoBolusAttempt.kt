@@ -2,7 +2,7 @@ package app.aaps.pump.ypsopump.bolus
 
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 
-/** Durable command state. Any state from POSSIBLY_APPLIED onward inhibits another automated dose. */
+/** Durable command state. Active or still-dispatch-uncertain states inhibit another dose. */
 enum class YpsoBolusOutcome {
     NOT_SENT,
     PROVEN_REJECTED,
@@ -146,7 +146,7 @@ data class YpsoBolusAttempt(
                 else null
         }
 
-    val inhibitsAutomatedDelivery: Boolean
+    private val isUncertainOrActive: Boolean
         get() = outcome in setOf(
             YpsoBolusOutcome.POSSIBLY_APPLIED,
             YpsoBolusOutcome.ACCEPTED_UNVERIFIED,
@@ -154,6 +154,29 @@ data class YpsoBolusAttempt(
             YpsoBolusOutcome.CANCEL_PENDING,
             YpsoBolusOutcome.UNRESOLVED,
         )
+
+    /** Whether another dose is unsafe inside this attempt's finite physical-delivery window. */
+    fun inhibitsNewDose(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): Boolean {
+        if (!isUncertainOrActive) return false
+        val dispatched = dispatchedAt ?: return false
+        val elapsed = now - dispatched
+        // A backwards wall-clock jump cannot turn a finite safety block into an indefinite one.
+        if (elapsed < 0) return false
+        val window = when (shape) {
+            YpsoBolusShape.IMMEDIATE -> immediateWindowMs
+            YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> durationMinutes * 60_000L + extendedMarginMs
+        }
+        return elapsed < window
+    }
+
+    /** Terminal history may still resolve an old warning after its dosing block has elapsed. */
+    val awaitsReconciliation: Boolean get() = isUncertainOrActive
+
+    /** Identity reconciliation gets first claim on a matching terminal row. */
+    val holdsTerminalRow: Boolean get() = isUncertainOrActive
+
+    /** Visible accounting warning which must not permanently prevent the operator from treating. */
+    val hasUnresolvedWarning: Boolean get() = outcome == YpsoBolusOutcome.UNRESOLVED
 }
 
 interface YpsoBolusAttemptStore {
@@ -171,11 +194,30 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     @Synchronized
     fun current(): YpsoBolusAttempt? = store.load()
 
+    /** Preserve finite physical-delivery observation windows across process death. */
     @Synchronized
-    fun prepare(attempt: YpsoBolusAttempt): YpsoBolusAttempt {
+    fun expireObservationWindow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): YpsoBolusAttempt? {
+        val attempt = store.load() ?: return null
+        if (!attempt.awaitsReconciliation || attempt.inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)) {
+            return attempt
+        }
+        if (attempt.outcome == YpsoBolusOutcome.UNRESOLVED) return attempt
+        return attempt.copy(
+            outcome = YpsoBolusOutcome.UNRESOLVED,
+            detail = "terminal bolus evidence was not recovered before the observation deadline",
+        ).also(store::commit)
+    }
+
+    @Synchronized
+    fun prepare(
+        attempt: YpsoBolusAttempt,
+        now: Long = attempt.createdAt,
+        immediateWindowMs: Long = 90_000L,
+        extendedMarginMs: Long = 90_000L,
+    ): YpsoBolusAttempt {
         require(attempt.outcome == YpsoBolusOutcome.NOT_SENT && attempt.dispatchCounter == null)
         val existing = store.load()
-        require(existing == null || !existing.inhibitsAutomatedDelivery) { "an earlier bolus remains unresolved" }
+        require(existing == null || !existing.inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)) { "an earlier bolus remains unresolved" }
         store.commit(attempt)
         return attempt
     }
