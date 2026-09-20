@@ -57,5 +57,5 @@ object YpsoPumpConst {
 
     // Setup safety gate. Keep true until read-only status/reconnect testing is complete and pump writes
     // are explicitly approved; this also blocks production dosing paths.
-    const val READ_ONLY_MODE = false
+    const val READ_ONLY_MODE = true
 }
