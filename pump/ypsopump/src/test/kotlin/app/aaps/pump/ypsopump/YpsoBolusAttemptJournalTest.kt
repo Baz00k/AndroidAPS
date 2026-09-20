@@ -78,8 +78,35 @@ class YpsoBolusAttemptJournalTest {
         assertFalse(extendedExpired.inhibitsNewDose(992_000, 90_000, 90_000))
 
         val backwardsClock = extendedExpired.copy(outcome = YpsoBolusOutcome.DELIVERING, dispatchedAt = 1_000_000)
-        assertFalse(backwardsClock.inhibitsNewDose(900_000, 90_000, 90_000))
+        assertTrue(backwardsClock.inhibitsNewDose(900_000, 90_000, 90_000))
         assertTrue(backwardsClock.awaitsReconciliation)
+    }
+
+    @Test
+    fun `terminal row holdback expires with dose inhibition while reconciliation remains eligible`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt(shape = YpsoBolusShape.EXTENDED))
+        journal.beforeDispatch("request-1", 4810, 2_000)
+        journal.observeSlowDelivering("request-1", 46, 100)
+        val active = requireNotNull(journal.current())
+
+        assertTrue(active.holdsTerminalRow(991_999, 90_000, 90_000))
+        assertFalse(active.holdsTerminalRow(992_000, 90_000, 90_000))
+        assertTrue(active.awaitsReconciliation)
+    }
+
+    @Test
+    fun `backwards clock reanchors a finite dose block`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt())
+        journal.beforeDispatch("request-1", 4810, 1_000_000)
+
+        val reanchored = requireNotNull(journal.expireObservationWindow(900_000, 90_000, 90_000))
+        assertEquals(900_000, reanchored.dispatchedAt)
+        assertTrue(reanchored.inhibitsNewDose(900_000, 90_000, 90_000))
+        assertFalse(reanchored.inhibitsNewDose(990_000, 90_000, 90_000))
     }
 
     @Test

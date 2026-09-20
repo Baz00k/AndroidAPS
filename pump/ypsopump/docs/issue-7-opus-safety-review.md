@@ -65,6 +65,13 @@ queue-empty disconnect while recovery is active, lets a new command cancel/preem
 recovery, and releases the idle connection when recovery finishes. Focused handoff
 and one-shot Stop-yield tests pass. Hardware re-verification remains required.
 
+Hardware re-verification of the handoff fix: the formerly failing read-only scan
+deferred queue-empty teardown and continuously read valid history through the full
+90-second capture, with no stable-history failure or timeout. Also bounded terminal
+row holdback to the physical-delivery window while retaining reconciliation eligibility,
+and changed backwards-clock handling to re-anchor a finite safety block instead of
+immediately permitting another dose. Focused state regressions pass.
+
 The original findings below are retained as the review record. This table is the live
 implementation ledger; a finding is not closed until its regression evidence is recorded.
 

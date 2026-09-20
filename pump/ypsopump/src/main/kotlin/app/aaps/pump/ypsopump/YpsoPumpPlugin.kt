@@ -738,7 +738,11 @@ class YpsoPumpPlugin @Inject constructor(
             YpsoBolusShape.COMBINED -> setOf(app.aaps.pump.ypsopump.history.YpsoHistoryKind.COMBINED_BOLUS_COMPLETED)
             null -> emptySet()
         }
-        if (attempt?.holdsTerminalRow == true && terminalSequence != null && snapshot.rowsNewestFirst.any {
+        if (attempt?.holdsTerminalRow(
+                System.currentTimeMillis(),
+                YpsoImmediateBolusController.OBSERVATION_WINDOW_MS,
+                YpsoImmediateBolusController.EXTENDED_RECONCILIATION_MARGIN_MS,
+            ) == true && terminalSequence != null && snapshot.rowsNewestFirst.any {
                 it.sequence == terminalSequence && app.aaps.pump.ypsopump.history.YpsoHistoryClassifier.classify(it).kind in terminalKinds
             }) {
             return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")

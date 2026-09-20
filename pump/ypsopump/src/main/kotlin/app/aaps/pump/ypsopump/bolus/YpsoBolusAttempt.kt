@@ -160,8 +160,9 @@ data class YpsoBolusAttempt(
         if (!isUncertainOrActive) return false
         val dispatched = dispatchedAt ?: return false
         val elapsed = now - dispatched
-        // A backwards wall-clock jump cannot turn a finite safety block into an indefinite one.
-        if (elapsed < 0) return false
+        // A backwards wall-clock jump is uncertain: retain the finite physical safety block. The
+        // journal expiry path below re-anchors it so this cannot become an indefinite lockout.
+        if (elapsed < 0) return true
         val window = when (shape) {
             YpsoBolusShape.IMMEDIATE -> immediateWindowMs
             YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> durationMinutes * 60_000L + extendedMarginMs
@@ -172,8 +173,9 @@ data class YpsoBolusAttempt(
     /** Terminal history may still resolve an old warning after its dosing block has elapsed. */
     val awaitsReconciliation: Boolean get() = isUncertainOrActive
 
-    /** Identity reconciliation gets first claim on a matching terminal row. */
-    val holdsTerminalRow: Boolean get() = isUncertainOrActive
+    /** Identity reconciliation gets first claim only inside the finite physical-delivery window. */
+    fun holdsTerminalRow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): Boolean =
+        awaitsReconciliation && inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)
 
     /** Visible accounting warning which must not permanently prevent the operator from treating. */
     val hasUnresolvedWarning: Boolean get() = outcome == YpsoBolusOutcome.UNRESOLVED
@@ -198,6 +200,15 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     @Synchronized
     fun expireObservationWindow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): YpsoBolusAttempt? {
         val attempt = store.load() ?: return null
+        val dispatched = attempt.dispatchedAt
+        if (attempt.awaitsReconciliation && dispatched != null && now < dispatched) {
+            val reanchored = attempt.copy(
+                dispatchedAt = now,
+                detail = "wall clock moved backwards; bolus observation window was re-anchored",
+            )
+            store.commit(reanchored)
+            return reanchored
+        }
         if (!attempt.awaitsReconciliation || attempt.inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)) {
             return attempt
         }
