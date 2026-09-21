@@ -1202,7 +1202,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         enableProfileSetup(gatt) { setup ->
-            if (!setup) return@enableProfileSetup failProfile("required control notification setup failed")
+            if (!setup) return@enableProfileSetup failProfile("Could not prepare the pump. Please try again.")
             scheduleProfileContinuation(Runnable {
                 readExactGlb(CHAR_EVENT_COUNT, "event count before profile acquisition") { initialEventCount, _ ->
                     if (initialEventCount < 0) return@readExactGlb failProfile("event count before profile acquisition is negative")
@@ -1446,7 +1446,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         enableProfileSetup(gatt) { setup ->
-            if (!setup) return@enableProfileSetup failHistory("required control notification setup failed")
+            if (!setup) return@enableProfileSetup failHistory("Could not prepare the pump. Please try again.")
             if (yieldAtSafeBoundary()) return@enableProfileSetup
             readCount { count ->
                 countBefore = count
@@ -1520,7 +1520,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         enableProfileSetup(gatt) { setup ->
-            if (!setup) return@enableProfileSetup stop("required control notification setup failed")
+            if (!setup) return@enableProfileSetup stop("Could not prepare the pump. Please try again.")
             readEncrypted(CHAR_EVENT_COUNT) { countBody ->
                 val count = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(countBody)
                     ?: return@readEncrypted stop("event count is not exact GLB (${countBody.size} bytes)")
@@ -1724,17 +1724,17 @@ class YpsoBleManager @Inject constructor(
         val readyGatt = checkNotNull(gatt)
         val readyToken = checkNotNull(token)
         if (expectedConnectionKey != null && "${System.identityHashCode(readyGatt)}:${readyToken.generation}" != expectedConnectionKey) {
-            notSent("connection changed after bolus preflight")
+            notSent("The pump connection dropped. No insulin was given.")
             return
         }
         val therapyCharacteristic = findChar(readyGatt, YpsoWritePolicy.BOLUS_START_STOP_UUID)
         if (therapyCharacteristic == null ||
             therapyCharacteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
-            notSent("bolus command characteristic is unavailable or not writable")
+            notSent("This pump does not accept bolus commands.")
             return
         }
         if (!acquirePumpOperation(bolusWriteActive)) {
-            notSent("another pump operation owns the connection")
+            notSent("The pump is busy. Please try again in a moment.")
             return
         }
         val owner = YpsoBolusWriteCoordinator.Owner(readyGatt, captured.third, readyToken)
@@ -1742,7 +1742,7 @@ class YpsoBleManager @Inject constructor(
         enableProfileSetup(readyGatt) { setup ->
             if (!setup || bluetoothGatt !== readyGatt || sessionToken?.generation != readyToken.generation) {
                 releaseBolusWrite()
-                notSent("required control notification setup failed")
+                notSent("Could not prepare the pump. Please try again.")
                 return@enableProfileSetup
             }
             val outcome: (YpsoWriteOutcome) -> Unit = {

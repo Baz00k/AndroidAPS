@@ -380,7 +380,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
-        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus is active")
+        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "Another bolus is already in progress.")
         try {
         return runCatching {
         if (detailedBolusInfo.carbs != 0.0) return fail(R.string.ypsopump_bolus_invalid, "carbohydrates are not stored on this pump")
@@ -394,13 +394,13 @@ class YpsoPumpPlugin @Inject constructor(
         }.getOrElse { return fail(R.string.ypsopump_bolus_invalid, it.message ?: "invalid request") }
         when (readTherapyStatus(stopWhen = { bolusController.cancellationRequested })) {
             TherapyStatusReadiness.READY              -> Unit
-            TherapyStatusReadiness.CANCELLED          -> return fail(R.string.ypsopump_bolus_failed, "bolus cancelled before dispatch")
-            TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
-            TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "fresh pump status is unavailable")
+            TherapyStatusReadiness.CANCELLED          -> return fail(R.string.ypsopump_bolus_failed, "Bolus cancelled before it started.")
+            TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "The pump is busy. Please try again in a moment.")
+            TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "Could not read the pump. Check that it is in range.")
         }
-        if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
+        if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "The pump is stopped or the reservoir is empty.")
         val reboot = bleManager.session?.snapshot()?.reboot
-            ?: return fail(R.string.ypsopump_bolus_failed, "pump reboot epoch is unavailable")
+            ?: return fail(R.string.ypsopump_bolus_failed, "Could not read the pump. Check that it is in range.")
         historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let {
             return fail(R.string.ypsopump_bolus_failed, it)
         }
@@ -424,7 +424,7 @@ class YpsoPumpPlugin @Inject constructor(
         }
         }.getOrElse {
             aapsLogger.error(LTag.PUMP, "YpsoPump bolus lifecycle failed: ${it.message}")
-            fail(R.string.ypsopump_bolus_failed, it.message ?: "internal bolus failure")
+            fail(R.string.ypsopump_bolus_failed, it.message ?: "The bolus could not be completed. Check the pump.")
         }
         } finally {
             bolusController.finishDelivery()
@@ -512,28 +512,15 @@ class YpsoPumpPlugin @Inject constructor(
             }
             val attempt = bolusController.currentAttempt()
             if (attempt?.requestId != requestId) {
-                bolusController.markUnresolved("durable bolus identity changed after dispatch")
+                bolusController.markUnresolved("This bolus could not be matched to the pump. Check the pump before giving more insulin.")
                 publishUnresolvedBolusWarningIfNeeded()
                 return pumpEnactResultProvider.get()
                     .success(false)
                     .enacted(true)
                     .bolusDelivered(0.0)
-                    .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "durable bolus identity changed after dispatch"))
+                    .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "This bolus could not be matched to the pump. Check the pump before giving more insulin."))
             }
             if (attempt.confirmedCentiUnits != null) {
-                val pumpHistoryId = attempt.pumpHistoryId
-                if (pumpHistoryId == null || !historyIngestion.isAccounted(pumpHistoryId)) {
-                    val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-                    if (remaining > 0) readHistoryBlocking(
-                        timeoutMs = minOf(THERAPY_HISTORY_TIMEOUT_MS, remaining),
-                        maxRows = THERAPY_HISTORY_MAX_ROWS,
-                        stopWhen = bolusController::consumeHistoryYield,
-                    )?.let(::ingestHistory)
-                    if (android.os.SystemClock.elapsedRealtime() < deadline) {
-                        Thread.sleep(250L)
-                        continue
-                    }
-                }
                 val delivered = attempt.confirmedUnits ?: 0.0
                 publishProgress(delivered)
                 return pumpEnactResultProvider.get()
@@ -552,40 +539,43 @@ class YpsoPumpPlugin @Inject constructor(
                 // authoritative for the final delivered amount and PumpSync accounting.
                 publishProgress(status.deliveredUnits)
             }
-            // The pump announced this exact fast sequence stopped, so read the terminal row now rather
-            // than polling a cleared status block until the command times out.
-            if (attempt.blockTerminalAt != null || status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
-                val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-                if (remaining > 0) readHistoryBlocking(
-                    timeoutMs = minOf(THERAPY_HISTORY_TIMEOUT_MS, remaining),
-                    maxRows = THERAPY_HISTORY_MAX_ROWS,
-                    stopWhen = bolusController::consumeHistoryYield,
-                )?.let(::ingestHistory)
+            // The pump announced that this exact dose finished. Insulin is already accounted for, so the
+            // command completes here; background history replaces the requested amount with the
+            // delivered one. History is never read on the therapy path: it cannot finish in time.
+            if (attempt.blockTerminalAt != null) {
+                val delivered = attempt.requestedUnits
+                publishProgress(delivered)
+                return pumpEnactResultProvider.get()
+                    .success(true)
+                    .enacted(true)
+                    .bolusDelivered(delivered)
+                    .comment(rh.gs(R.string.ypsopump_bolus_completed, delivered))
             }
             Thread.sleep(250L)
         }
-        bolusController.markUnresolved("terminal bolus status/history was not confirmed before timeout")
+        // Insulin was recorded at dispatch, so nothing is unaccounted; only the exact amount is pending.
+        bolusController.markUnresolved("the pump did not report the end of this bolus")
         publishUnresolvedBolusWarningIfNeeded()
         return pumpEnactResultProvider.get()
             .success(false)
             .enacted(true)
             .bolusDelivered(0.0)
-            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "terminal delivery was not confirmed"))
+            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "the pump did not confirm this bolus finished"))
     }
 
     private fun deliverExtended(request: YpsoValidatedBolusRequest): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
-        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus is active")
+        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "Another bolus is already in progress.")
         try {
             when (readTherapyStatus()) {
                 TherapyStatusReadiness.READY              -> Unit
-                TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
+                TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "The pump is busy. Please try again in a moment.")
                 TherapyStatusReadiness.CANCELLED,
-                TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "fresh pump status is unavailable")
+                TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "Could not read the pump. Check that it is in range.")
             }
-            if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
+            if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "The pump is stopped or the reservoir is empty.")
             val reboot = bleManager.session?.snapshot()?.reboot
-                ?: return fail(R.string.ypsopump_bolus_failed, "pump reboot epoch is unavailable")
+                ?: return fail(R.string.ypsopump_bolus_failed, "Could not read the pump. Check that it is in range.")
             historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let {
                 return fail(R.string.ypsopump_bolus_failed, it)
             }
@@ -607,7 +597,7 @@ class YpsoPumpPlugin @Inject constructor(
                         bolusController.markUnresolved("AAPS rejected the extended bolus accounting record")
                         publishUnresolvedBolusWarningIfNeeded()
                         return pumpEnactResultProvider.get().success(false).enacted(true)
-                            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "extended bolus accounting failed"))
+                            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "The extended bolus could not be saved. Check the pump."))
                     }
                     pumpEnactResultProvider.get().success(true).enacted(true)
                         .duration(request.durationMinutes)
@@ -801,7 +791,9 @@ class YpsoPumpPlugin @Inject constructor(
             if (latch.await(HISTORY_YIELD_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
         }
         if (!attempt.cancel()) {
-            latch.await()
+            // The read already reached a completion path. Wait only briefly for its callback: an
+            // unbounded wait here blocks the therapy command forever if that callback never arrives.
+            latch.await(HISTORY_COMPLETION_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
             return snapshot
         }
         if (yielded) {
@@ -1148,23 +1140,23 @@ class YpsoPumpPlugin @Inject constructor(
         // Therapy cancellation outranks abandonable accounting. Do not overlap bolus status/cancel I/O
         // with an in-flight selector transaction; it must first reconcile at a selector-safe boundary.
         if (!yieldHistoryRecoveryForTherapy()) {
-            return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
+            return fail(R.string.ypsopump_bolus_failed, "The pump is busy. Please try again in a moment.")
         }
         val attempt = bolusController.currentAttempt()
         if (attempt == null || attempt.shape == YpsoBolusShape.IMMEDIATE || !attempt.awaitsReconciliation) {
             if (pumpSync.expectedPumpState().extendedBolus != null) {
-                return fail(R.string.ypsopump_bolus_failed, "active extended bolus has no durable cancellation identity; stop it on the pump")
+                return fail(R.string.ypsopump_bolus_failed, "This extended bolus was not started by AAPS. Please stop it on the pump.")
             }
             return pumpEnactResultProvider.get().success(true).enacted(false).isTempCancel(true)
         }
-        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus operation is active")
+        if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "Another bolus is already in progress.")
         try {
             bolusController.requestStop()
             val deadline = android.os.SystemClock.elapsedRealtime() + 90_000L
             while (android.os.SystemClock.elapsedRealtime() < deadline) {
                 bolusController.requestStop()
                 val current = bolusController.currentAttempt()
-                    ?: return fail(R.string.ypsopump_bolus_failed, "durable extended bolus identity was lost")
+                    ?: return fail(R.string.ypsopump_bolus_failed, "This extended bolus could not be matched to the pump. Check the pump.")
                 if (current.confirmedCentiUnits != null) {
                     return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
                         .comment(rh.gs(R.string.ypsopump_bolus_completed, current.confirmedUnits ?: 0.0))
@@ -1285,7 +1277,7 @@ class YpsoPumpPlugin @Inject constructor(
             bolusController.markUnresolved("post-cancel extended bolus accounting was rejected")
             publishUnresolvedBolusWarningIfNeeded()
             return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
-                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "cancelled delivery accounting failed"))
+                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "The bolus was stopped, but the delivered amount could not be saved. Check the pump."))
         }
         bolusController.confirmTerminal(
             deliveredCentiUnits,
@@ -1506,6 +1498,7 @@ class YpsoPumpPlugin @Inject constructor(
          */
         private const val THERAPY_HISTORY_MAX_ROWS = 8
         private const val THERAPY_HISTORY_TIMEOUT_MS = 30_000L
+        private const val HISTORY_COMPLETION_GRACE_MS = 2_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HISTORY_YIELD_GRACE_MS = 10_000L

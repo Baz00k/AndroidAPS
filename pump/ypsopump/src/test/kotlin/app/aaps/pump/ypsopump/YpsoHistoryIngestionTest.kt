@@ -61,12 +61,12 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val ingestion = YpsoHistoryIngestion(store, sync)
 
-        assertEquals("pump history has not been initialized", ingestion.bolusReadiness("10000001", 21))
+        assertEquals("AAPS is still syncing with the pump. Please try again shortly.", ingestion.bolusReadiness("10000001", 21))
         store.value = YpsoHistoryState(
             cursor = YpsoHistoryCursor(YpsoEventIdentity("10000001", 0, 100), row(100, 2, 80).fingerprint(), 21),
         )
         assertNull(ingestion.bolusReadiness("10000001", 21))
-        assertEquals("pump history cursor belongs to another pump epoch", ingestion.bolusReadiness("10000001", 22))
+        assertEquals("The pump was restarted. AAPS needs to sync before the next bolus.", ingestion.bolusReadiness("10000001", 22))
         verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 

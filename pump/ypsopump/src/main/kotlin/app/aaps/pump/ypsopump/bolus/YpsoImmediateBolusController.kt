@@ -104,32 +104,32 @@ internal class YpsoImmediateBolusController(
         check(delivering.get()) { "delivery lifecycle was not acquired" }
         run {
             val session = bleManager.session?.snapshot()
-                ?: return DeliveryResult.NotSent("durable pump session is unavailable")
+                ?: return DeliveryResult.NotSent("The pump is not set up yet.")
             // Use the durable cursor maintained by ordinary history synchronization. A bolus must not
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
-            val cursor = historyCursor() ?: return DeliveryResult.NotSent("pump history has not been initialized")
-            if (stopRequested.get()) return DeliveryResult.NotSent("bolus cancelled before dispatch")
+            val cursor = historyCursor() ?: return DeliveryResult.NotSent("AAPS is still syncing with the pump. Please try again shortly.")
+            if (stopRequested.get()) return DeliveryResult.NotSent("Bolus cancelled before it started.")
             val baselineConnection = bleManager.currentBolusConnectionKey()
-                ?: return DeliveryResult.NotSent("authenticated connection is unavailable")
-            val baselineStatus = readBolusStatus() ?: return DeliveryResult.NotSent("bolus status could not be read")
+                ?: return DeliveryResult.NotSent("Not connected to the pump. Check that it is in range.")
+            val baselineStatus = readBolusStatus() ?: return DeliveryResult.NotSent("Could not read the pump. Check that it is in range.")
             if (bleManager.currentBolusConnectionKey() != baselineConnection) {
-                return DeliveryResult.NotSent("connection changed while acquiring bolus baseline")
+                return DeliveryResult.NotSent("The pump connection dropped. No insulin was given.")
             }
             // The pump itself is the only authority on whether it is busy. An unreachable pump cannot be
             // dosed anyway, so this read is both the readiness check and the liveness check.
             if (baselineStatus.bolusStatusCode != BolusCommand.STATUS_IDLE) {
-                return DeliveryResult.NotSent("the pump is delivering a bolus")
+                return DeliveryResult.NotSent("The pump is already giving a bolus.")
             }
             if (baselineStatus.extendedStatusCode != BolusCommand.STATUS_IDLE) {
-                return DeliveryResult.NotSent("the pump is delivering an extended bolus")
+                return DeliveryResult.NotSent("The pump is already giving an extended bolus.")
             }
             val serial = serialNumber()
             val generation = bleManager.session?.activeRecord()?.generation
-                ?: return DeliveryResult.NotSent("authenticated session generation is unavailable")
-            val reboot = session.reboot ?: return DeliveryResult.NotSent("pump reboot epoch is unavailable")
+                ?: return DeliveryResult.NotSent("Not connected to the pump. Check that it is in range.")
+            val reboot = session.reboot ?: return DeliveryResult.NotSent("Could not read the pump. Check that it is in range.")
             if (cursor.identity.pumpSerial != serial || cursor.pumpReboot != reboot.toLong()) {
-                return DeliveryResult.NotSent("pump history cursor belongs to another pump epoch")
+                return DeliveryResult.NotSent("The pump was restarted. AAPS needs to sync before the next bolus.")
             }
             val requestId = "bolus-${UUID.randomUUID()}"
             val payloadHash = YpsoWriteAccounting.sha256(YpsoCrc.appendCrc(request.payload()))
@@ -156,7 +156,7 @@ internal class YpsoImmediateBolusController(
                 immediateCentiUnits = request.immediateCentiUnits,
             )
             journal.prepare(attempt, now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS)
-            if (stopRequested.get()) return DeliveryResult.NotSent("bolus cancelled before dispatch")
+            if (stopRequested.get()) return DeliveryResult.NotSent("Bolus cancelled before it started.")
 
             val outcome = runCatching { awaitWrite { callback ->
                 bleManager.startBolus(
@@ -164,13 +164,13 @@ internal class YpsoImmediateBolusController(
                     request,
                     baselineConnection,
                     beforeDispatch = { reservation ->
-                        check(!stopRequested.get()) { "bolus cancelled before dispatch" }
+                        check(!stopRequested.get()) { "Bolus cancelled before it started." }
                         journal.beforeDispatch(requestId, reservation.counter, now())
                     },
                     onOutcome = callback,
                 )
             } }.getOrElse {
-                return DeliveryResult.Uncertain(it.message ?: "bolus write callback timed out")
+                return DeliveryResult.Uncertain(it.message ?: "The pump did not respond. Check the pump before giving more insulin.")
             }
             when (val value = outcome.first) {
                 is YpsoWriteOutcome.NotSent -> {
@@ -185,19 +185,19 @@ internal class YpsoImmediateBolusController(
                 is YpsoWriteOutcome.AcceptedUnverified -> journal.transportAccepted(requestId)
                 is YpsoWriteOutcome.Verified -> Unit
             }
-            val owner = outcome.second ?: return DeliveryResult.Uncertain("bolus write owner was lost")
+            val owner = outcome.second ?: return DeliveryResult.Uncertain("The pump connection dropped while sending. Check the pump before giving more insulin.")
             if (bleManager.connectionKey(owner) != baselineConnection) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "connection changed between baseline and dispatch")
-                journal.unresolved(requestId, "connection changed between baseline and dispatch")
-                return DeliveryResult.Uncertain("connection changed between baseline and dispatch")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "The pump connection dropped while sending. Check the pump before giving more insulin.")
+                journal.unresolved(requestId, "The pump connection dropped while sending. Check the pump before giving more insulin.")
+                return DeliveryResult.Uncertain("The pump connection dropped while sending. Check the pump before giving more insulin.")
             }
             commandOwner.set(owner)
 
             val proof = pollIdentity(attempt, request, owner)
             if (proof == null) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "same-link bolus-block identity was not observed")
-                journal.unresolved(requestId, "same-link bolus-block identity was not observed")
-                return DeliveryResult.Uncertain("delivery may have occurred; pump identity was not observed")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "The bolus may have been given. Check the pump before giving more insulin.")
+                journal.unresolved(requestId, "The bolus may have been given. Check the pump before giving more insulin.")
+                return DeliveryResult.Uncertain("The bolus may have been given. Check the pump before giving more insulin.")
             }
             val programmed = runCatching {
                 when (request.shape) {
@@ -207,17 +207,17 @@ internal class YpsoImmediateBolusController(
                         journal.observeSlowDelivering(requestId, proof.extendedSequence, cents(proof.extendedTotalUnits))
                 }
             }.getOrElse {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "bolus identity proof rejected")
-                journal.unresolved(requestId, it.message ?: "bolus identity proof rejected")
-                return DeliveryResult.Uncertain(it.message ?: "bolus identity proof rejected")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
+                journal.unresolved(requestId, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
+                return DeliveryResult.Uncertain(it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
             }
             val proofDetail = when (request.shape) {
                 YpsoBolusShape.IMMEDIATE -> "fast block ${proof.fastSequence}"
                 YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> "slow block ${proof.extendedSequence}"
             }
             if (!bleManager.verifyBolusAccepted(owner, requestId, payloadHash, "$proofDetail programmed ${request.centiUnits} centi-units")) {
-                journal.unresolved(requestId, "same-link write reconciliation owner was lost")
-                return DeliveryResult.Uncertain("delivery identity was observed but write ownership was lost")
+                journal.unresolved(requestId, "The bolus may have been given. Check the pump before giving more insulin.")
+                return DeliveryResult.Uncertain("The bolus may have been given. Check the pump before giving more insulin.")
             }
             if (stopRequested.get()) cancelProven(programmed, proof, bleManager.connectionKey(owner))
             val observedDelivered = when (request.shape) {
@@ -355,7 +355,7 @@ internal class YpsoImmediateBolusController(
             value.set(outcome to owner)
             latch.countDown()
         }
-        if (!latch.await(45, TimeUnit.SECONDS)) error("bolus write callback timed out")
+        if (!latch.await(45, TimeUnit.SECONDS)) error("The pump did not respond. Check the pump before giving more insulin.")
         return requireNotNull(value.get())
     }
 

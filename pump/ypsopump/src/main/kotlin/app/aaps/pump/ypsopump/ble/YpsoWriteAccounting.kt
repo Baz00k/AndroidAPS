@@ -52,9 +52,12 @@ internal open class YpsoWriteAccounting(
             request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "write ID is already owned"))
             return false
         }
-        if (transport.hasUnresolvedWrite()) {
+        // Only a write still in flight on this same connection can conflict. A write parked for
+        // reconciliation, or stranded by a replaced connection, can never be answered by the pump and
+        // must not keep refusing new commands.
+        if (transport.hasUnresolvedWriteOn(request.owner.gatt)) {
             releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "previous transport owner must be released before recovery"))
+            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "the pump is still finishing the previous command"))
             return false
         }
         var transaction: String? = null

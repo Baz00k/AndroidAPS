@@ -24,10 +24,10 @@ class YpsoHistoryIngestion(
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
     /** Cheap local gate for a new dose. Never performs pump I/O. */
     fun bolusReadiness(pumpSerial: String, reboot: Long): String? {
-        if (!retryPending(pumpSerial)) return "previous pump insulin is still awaiting AAPS accounting"
-        val cursor = store.load().cursor ?: return "pump history has not been initialized"
+        if (!retryPending(pumpSerial)) return "AAPS is still saving a previous dose. Please try again shortly."
+        val cursor = store.load().cursor ?: return "AAPS is still syncing with the pump. Please try again shortly."
         if (cursor.identity.pumpSerial != pumpSerial || cursor.pumpReboot != reboot) {
-            return "pump history cursor belongs to another pump epoch"
+            return "The pump was restarted. AAPS needs to sync before the next bolus."
         }
         return null
     }
