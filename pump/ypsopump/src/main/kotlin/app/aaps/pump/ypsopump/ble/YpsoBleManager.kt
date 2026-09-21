@@ -145,6 +145,27 @@ class YpsoBleManager @Inject constructor(
     @Volatile private var controlNotificationsEnabled = false
 
     companion object {
+        /**
+         * Whether rows kept from an interrupted scan may be reused. Continuity can only be claimed
+         * across an identical ring, so the reboot epoch, the event count and the head row must all
+         * still match, and the rows must still be the contiguous prefix the scan walks.
+         */
+        internal fun resumableRows(
+            cachedReboot: Long,
+            cachedCount: Int,
+            cachedHead: YpsoHistoryEntry,
+            cachedRows: List<YpsoHistoryEntry>,
+            reboot: Long,
+            count: Int,
+            head: YpsoHistoryEntry,
+        ): List<YpsoHistoryEntry>? {
+            if (cachedReboot != reboot || cachedCount != count) return null
+            if (cachedHead.sequence != head.sequence || cachedHead.fingerprint() != head.fingerprint()) return null
+            if (cachedRows.firstOrNull()?.sequence != head.sequence) return null
+            if (cachedRows.withIndex().any { (position, row) -> row.index != position }) return null
+            return cachedRows
+        }
+
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val EXPECTED_PROFILE_SELECTOR_FRAME_COUNT = 4
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
@@ -514,6 +535,8 @@ class YpsoBleManager @Inject constructor(
             profileReadActive.set(false)
             historyReadActive.set(false)
             bolusWriteActive.set(false)
+            // Retained rows belong to the connection that read them; a new link must re-verify the ring.
+            partialScan = null
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
@@ -1270,6 +1293,43 @@ class YpsoBleManager @Inject constructor(
      * Produce a stable event-history snapshot by explicitly selecting every logical row. Selector
      * writes are strict-next journaled and accepted only after same-link selector identity read-back.
      */
+    /**
+     * Rows already read by a scan that yielded before completing. Only reusable while the ring is
+     * provably identical, so a partial scan can be continued instead of restarted from the head.
+     */
+    private class PartialScan(
+        val reboot: Long,
+        val count: Int,
+        val head: YpsoHistoryEntry,
+        val rows: List<YpsoHistoryEntry>,
+    )
+
+    @Volatile
+    private var partialScan: PartialScan? = null
+
+    private fun retainPartialScan(reboot: Long, count: Int, head: YpsoHistoryEntry?, rows: List<YpsoHistoryEntry>) {
+        if (head == null || count <= 0 || rows.size < 2) {
+            partialScan = null
+            return
+        }
+        partialScan = PartialScan(reboot, count, head, rows.toList())
+    }
+
+    /**
+     * Returns previously scanned rows when the ring has not moved. Any change to the reboot epoch,
+     * the event count, or the head row invalidates them: continuity can only be claimed across a
+     * snapshot that is still identical, so a moved ring restarts the scan.
+     */
+    private fun resumePartialScan(reboot: Long, count: Int, head: YpsoHistoryEntry): List<YpsoHistoryEntry>? {
+        val cached = partialScan ?: return null
+        partialScan = null
+        return resumableRows(cached.reboot, cached.count, cached.head, cached.rows, reboot, count, head)
+    }
+
+    internal fun clearPartialHistoryScan() {
+        partialScan = null
+    }
+
     fun readStableHistory(
         cursor: YpsoHistoryCursor?,
         maxRows: Int = 128,
@@ -1317,16 +1377,23 @@ class YpsoBleManager @Inject constructor(
         }
         fun finish(value: YpsoHistorySnapshot?) {
             if (!attempt.tryComplete()) return
+            // A completed scan supersedes any retained prefix; only yieldAtSafeBoundary retains one.
+            if (value != null) partialScan = null
             historyReadActive.set(false)
             onResult(value)
         }
         fun yieldAtSafeBoundary(): Boolean {
             if (!attempt.shouldYield) return false
+            // Keep what was already read. Routine status polling interrupts long scans every few
+            // minutes, and restarting at the head each time means the scan can never reach the cursor.
+            retainPartialScan(reboot.toLong(), countBefore, headBefore, rows)
             finish(null)
             return true
         }
         fun failHistory(detail: String) {
             aapsLogger.error(LTag.PUMP, "YpsoPump stable history failed: $detail")
+            // A failed scan proves nothing about the rows it collected, so no prefix may survive it.
+            partialScan = null
             finish(null)
         }
         fun readEncrypted(uuid: UUID, done: (ByteArray) -> Unit) {
@@ -1458,8 +1525,16 @@ class YpsoBleManager @Inject constructor(
                     headBefore = head
                     val limit = minOf(count, maxRows)
                     rows += head
+                    // Reuse an earlier interrupted scan only when the ring is provably unchanged: same
+                    // reboot epoch, same count, and the same head row still at index 0.
+                    val resumed = resumePartialScan(reboot.toLong(), count, head)
+                    if (resumed != null) {
+                        rows.clear()
+                        rows += resumed
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history scan resumed with ${resumed.size} cached rows")
+                    }
                     if (yieldAtSafeBoundary()) return@select
-                    readRows(1, limit)
+                    readRows(rows.size, limit)
                 }
             }
         }
