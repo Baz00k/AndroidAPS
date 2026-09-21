@@ -167,7 +167,16 @@ internal class YpsoSerializedWriteTransport(
         require(request.deadlineMs > 0)
         val deadline = Runnable { onDeadline(request.writeId) }
         synchronized(lock) {
-            if (active != null) return false
+            val current = active
+            // A write parked for reconciliation, or stranded by a connection that has since been
+            // replaced, can never be answered on this link. Its uncertainty is already durable in
+            // PumpSession and the bolus journal, so it must not keep the transport occupied and block
+            // further therapy. Only a write still in flight on this same connection may refuse a start.
+            val occupied = current != null &&
+                !current.awaitingReconciliation &&
+                current.request.owner.gatt === request.owner.gatt
+            if (occupied) return false
+            if (current != null) current.deadline?.let { runCatching { cancelDeadline(it) } }
             active = Active(request = request.copy(frames = request.frames.map(ByteArray::copyOf)), deadline = deadline)
         }
         recorder.record(

@@ -301,6 +301,30 @@ class YpsoSerializedWriteTransportTest {
         assertTrue(transport.start(request(frames, onDispatch)))
     }
 
+    @Test
+    fun `a write parked for reconciliation never blocks the next therapy command`() {
+        start(frames = 1) { true }
+        transport.onCharacteristicWrite(gatt, characteristic, 0)
+        // A duplicate same-UUID callback moves the write to durable uncertainty, where it waits for
+        // semantic evidence that may never arrive on this link.
+        transport.onCharacteristicWrite(gatt, characteristic, 0)
+        assertTrue(transport.hasUnresolvedWrite())
+
+        val started = transport.start(request(frames = 1) { true }.copy(writeId = "write-2"))
+
+        // Therapy must never be refused because an earlier write is still awaiting reconciliation.
+        assertTrue(started)
+        // The replacement write now owns the transport, so its own frames are dispatched.
+        assertEquals(2, dispatches.size)
+    }
+
+    @Test
+    fun `a write still in flight on the same connection still refuses a second start`() {
+        start(frames = 2) { true }
+
+        assertFalse(transport.start(request(frames = 1) { true }.copy(writeId = "write-2")))
+    }
+
     private fun request(
         frames: Int = 1,
         onDispatch: (ByteArray) -> Boolean,

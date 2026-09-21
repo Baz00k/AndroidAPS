@@ -49,7 +49,7 @@ internal open class YpsoWriteAccounting(
 
     fun execute(request: Request): Boolean {
         if (!claim(request.writeId)) {
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "write ID is already owned"))
+            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "The pump is still finishing the previous command."))
             return false
         }
         // Only a write still in flight on this same connection can conflict. A write parked for
@@ -57,7 +57,7 @@ internal open class YpsoWriteAccounting(
         // must not keep refusing new commands.
         if (transport.hasUnresolvedWriteOn(request.owner.gatt)) {
             releaseClaim(request.writeId)
-            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "the pump is still finishing the previous command"))
+            request.onOutcome(notSent(request, YpsoWriteFailure.Layer.SESSION, "The pump is still finishing the previous command."))
             return false
         }
         var transaction: String? = null
@@ -91,7 +91,7 @@ internal open class YpsoWriteAccounting(
                 YpsoWriteOutcome.PossiblyApplied(
                     request.writeId,
                     outcome.counter,
-                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "not-sent rollback failed"),
+                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not save the pump command. No insulin was given."),
                 )
             }
             is YpsoWriteOutcome.AcceptedUnverified -> runCatching {
@@ -101,7 +101,7 @@ internal open class YpsoWriteAccounting(
                 YpsoWriteOutcome.PossiblyApplied(
                     request.writeId,
                     outcome.counter,
-                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "ACK persistence failed"),
+                    failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not save the pump command. Check the pump before giving more insulin."),
                 )
             }
             is YpsoWriteOutcome.ProvenRejected -> outcome
@@ -139,7 +139,7 @@ internal open class YpsoWriteAccounting(
                 prepareSession(request.owner)
                 session.begin(request.owner.token)
             }.getOrElse {
-                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "session unavailable"))
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Not connected to the pump. Check that it is in range."))
                 return false
             }
             transaction = currentTransaction
@@ -150,7 +150,7 @@ internal open class YpsoWriteAccounting(
                 sha256(request.plaintext),
             )
             val reservation = runCatching { reserve(request.owner, currentTransaction, intent) }.getOrElse {
-                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "counter reservation failed"))
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not reach the pump. No insulin was given."))
                 return false
             }
             val encrypted = runCatching {
@@ -169,7 +169,7 @@ internal open class YpsoWriteAccounting(
             encrypted.fill(0)
             runCatching { request.beforeDispatch(reservation) }.getOrElse {
                 runCatching { session.markNotSent(request.owner.token, currentTransaction) }
-                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "domain dispatch journal failed", reservation.counter))
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not save the pump command. No insulin was given.", reservation.counter))
                 return false
             }
             runCatching { session.advance(request.owner.token, currentTransaction, PumpSession.Phase.POSSIBLY_SENT) }.getOrElse {
@@ -177,7 +177,7 @@ internal open class YpsoWriteAccounting(
                     YpsoWriteOutcome.PossiblyApplied(
                         request.writeId,
                         reservation.counter,
-                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "could not persist dispatch boundary"),
+                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not save the pump command. No insulin was given."),
                     ),
                 )
                 return false
@@ -204,7 +204,7 @@ internal open class YpsoWriteAccounting(
                                     YpsoWriteOutcome.PossiblyApplied(
                                         request.writeId,
                                         reservation.counter,
-                                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "counter reconciliation retry failed"),
+                                        failure(request, YpsoWriteFailure.Layer.SESSION, it.message ?: "Could not reach the pump. No insulin was given."),
                                     ),
                                 )
                             }
@@ -226,7 +226,7 @@ internal open class YpsoWriteAccounting(
             )
             if (!started) {
                 runCatching { session.markNotSent(request.owner.token, currentTransaction) }
-                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, "transport already owns a whole write", reservation.counter))
+                emit(notSent(request, YpsoWriteFailure.Layer.SESSION, "The pump is still finishing the previous command.", reservation.counter))
                 return false
             }
             return true

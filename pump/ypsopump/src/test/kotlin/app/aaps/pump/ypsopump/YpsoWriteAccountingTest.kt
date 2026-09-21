@@ -48,7 +48,7 @@ class YpsoWriteAccountingTest {
 
         val rejection = outcomes.single() as YpsoWriteOutcome.NotSent
         assertEquals(YpsoWriteFailure.Layer.SESSION, rejection.failure.layer)
-        assertEquals("write ID is already owned", rejection.failure.detail)
+        assertEquals("The pump is still finishing the previous command.", rejection.failure.detail)
         assertEquals(reservation, session.snapshot()!!.reservation)
         assertEquals(commits, store.commits)
     }
