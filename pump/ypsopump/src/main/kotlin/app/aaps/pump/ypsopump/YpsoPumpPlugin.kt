@@ -745,8 +745,10 @@ class YpsoPumpPlugin @Inject constructor(
             bleManager.disconnect()
             return null
         }
-        aapsLogger.error(LTag.PUMP, "YpsoPump history read timed out after ${timeoutMs}ms")
-        bleManager.disconnect()
+        // The pump serves history rows steadily at roughly 60ms each, so a large scan can simply outlast
+        // this budget while every read succeeds. Abandoning the scan must not tear down a healthy link;
+        // dropping it here is what starved the status reads that confirm therapy.
+        aapsLogger.warn(LTag.PUMP, "YpsoPump history read did not finish within ${timeoutMs}ms")
         return null
     }
 
@@ -1110,11 +1112,11 @@ class YpsoPumpPlugin @Inject constructor(
                         stoppedAt,
                     )
                 }
-                // The pump routinely drops the link right after accepting the cancel write. Without
-                // reconnecting, every status and history read below fails and cancellation can never be
-                // proven even though the pump already stopped.
                 if (!bleManager.isConnected) {
                     aapsLogger.debug(LTag.PUMP, "YpsoPump reconnecting to confirm extended bolus cancellation")
+                    // Release the stale GATT client first; reconnecting without closing it registers a
+                    // new client per attempt and exhausts the platform's client interfaces.
+                    bleManager.disconnect(preserveStatus = true)
                     seedAndConnect()
                     if (!awaitConnection(10_000L)) { Thread.sleep(250L); continue }
                 }
@@ -1128,13 +1130,16 @@ class YpsoPumpPlugin @Inject constructor(
                         observed.cancelStoppedAt,
                     )
                 }
-                val remaining = deadline - android.os.SystemClock.elapsedRealtime()
-                if (remaining > 0) readHistoryBlocking(minOf(20_000L, remaining))?.let(::ingestHistory)
+                // History is deliberately not read here. A large scan cannot finish inside this window
+                // and previously consumed it entirely, starving the status read that proves cancellation.
+                // Background recovery reconciles the durable record after the command returns.
                 Thread.sleep(250L)
             }
             return finishUnprovenExtendedCancellation(bolusController.currentAttempt())
         } finally {
             bolusController.finishDelivery()
+            // Reconcile the authoritative record without holding up the command result.
+            scheduleHistoryRecovery("extended bolus cancellation")
         }
     }
 

@@ -80,23 +80,23 @@ class YpsoBolusAttemptJournalTest {
         immediate.beforeDispatch("request-1", 4810, 2_000)
         immediate.observeFastDelivering("request-1", 45, 100)
 
-        assertTrue(requireNotNull(immediate.expireObservationWindow(91_999, 90_000, 90_000)).inhibitsNewDose(91_999, 90_000, 90_000))
+        assertTrue(requireNotNull(immediate.expireObservationWindow(91_999, 90_000, 90_000)).withinDeliveryWindow(91_999, 90_000, 90_000))
         val expired = requireNotNull(immediate.expireObservationWindow(92_000, 90_000, 90_000))
         assertEquals(YpsoBolusOutcome.UNRESOLVED, expired.outcome)
-        assertFalse(expired.inhibitsNewDose(92_000, 90_000, 90_000))
+        assertFalse(expired.withinDeliveryWindow(92_000, 90_000, 90_000))
 
         val extendedStore = MemoryStore()
         val extended = YpsoBolusAttemptJournal(extendedStore)
         extended.prepare(attempt(shape = YpsoBolusShape.EXTENDED))
         extended.beforeDispatch("request-1", 4810, 2_000)
         extended.observeSlowDelivering("request-1", 46, 100)
-        assertTrue(requireNotNull(extended.expireObservationWindow(991_999, 90_000, 90_000)).inhibitsNewDose(991_999, 90_000, 90_000))
+        assertTrue(requireNotNull(extended.expireObservationWindow(991_999, 90_000, 90_000)).withinDeliveryWindow(991_999, 90_000, 90_000))
         val extendedExpired = requireNotNull(extended.expireObservationWindow(992_000, 90_000, 90_000))
         assertEquals(YpsoBolusOutcome.UNRESOLVED, extendedExpired.outcome)
-        assertFalse(extendedExpired.inhibitsNewDose(992_000, 90_000, 90_000))
+        assertFalse(extendedExpired.withinDeliveryWindow(992_000, 90_000, 90_000))
 
         val backwardsClock = extendedExpired.copy(outcome = YpsoBolusOutcome.DELIVERING, dispatchedAt = 1_000_000)
-        assertTrue(backwardsClock.inhibitsNewDose(900_000, 90_000, 90_000))
+        assertTrue(backwardsClock.withinDeliveryWindow(900_000, 90_000, 90_000))
         assertTrue(backwardsClock.awaitsReconciliation)
     }
 
@@ -123,8 +123,8 @@ class YpsoBolusAttemptJournalTest {
 
         val reanchored = requireNotNull(journal.expireObservationWindow(900_000, 90_000, 90_000))
         assertEquals(900_000, reanchored.dispatchedAt)
-        assertTrue(reanchored.inhibitsNewDose(900_000, 90_000, 90_000))
-        assertFalse(reanchored.inhibitsNewDose(990_000, 90_000, 90_000))
+        assertTrue(reanchored.withinDeliveryWindow(900_000, 90_000, 90_000))
+        assertFalse(reanchored.withinDeliveryWindow(990_000, 90_000, 90_000))
     }
 
     @Test
@@ -150,7 +150,7 @@ class YpsoBolusAttemptJournalTest {
         assertEquals(YpsoBolusOutcome.ACCEPTED_UNVERIFIED, acked.outcome)
         assertEquals(null, acked.confirmedCentiUnits)
         assertEquals(null, acked.deliveryTimestamp)
-        assertTrue(acked.inhibitsNewDose(3_000, 90_000, 90_000))
+        assertTrue(acked.withinDeliveryWindow(3_000, 90_000, 90_000))
     }
 
     @Test
@@ -218,7 +218,7 @@ class YpsoBolusAttemptJournalTest {
         val stopped = partial.confirmTerminal("request-1", 37, 2_500, YpsoBolusBlock.FAST, 45, 101, cancelled = true)
         assertEquals(YpsoBolusOutcome.CANCELLED_PARTIAL, stopped.outcome)
         assertEquals(0.37, stopped.confirmedUnits)
-        assertFalse(stopped.inhibitsNewDose(3_000, 90_000, 90_000))
+        assertFalse(stopped.withinDeliveryWindow(3_000, 90_000, 90_000))
         assertEquals(null, stopped.detail)
 
         val completeStore = MemoryStore()
@@ -279,7 +279,7 @@ class YpsoBolusAttemptJournalTest {
 
         assertEquals(YpsoBolusOutcome.PROVEN_REJECTED, rejected.outcome)
         assertEquals(4810, rejected.dispatchCounter)
-        assertFalse(rejected.inhibitsNewDose(3_000, 90_000, 90_000))
+        assertFalse(rejected.withinDeliveryWindow(3_000, 90_000, 90_000))
         assertEquals(null, rejected.confirmedCentiUnits)
     }
 
@@ -313,7 +313,7 @@ class YpsoBolusAttemptJournalTest {
         assertEquals(null, restored.cancelRequestId)
         assertEquals(null, restored.cancelCounter)
         assertEquals(null, restored.cancelBlock)
-        assertTrue(restored.inhibitsNewDose(3_000, 90_000, 90_000))
+        assertTrue(restored.withinDeliveryWindow(3_000, 90_000, 90_000))
     }
 
     @Test

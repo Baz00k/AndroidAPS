@@ -166,8 +166,14 @@ data class YpsoBolusAttempt(
             YpsoBolusOutcome.UNRESOLVED,
         )
 
-    /** Whether another dose is unsafe inside this attempt's finite physical-delivery window. */
-    fun inhibitsNewDose(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): Boolean {
+    /**
+     * Whether this attempt is still inside its finite physical-delivery window.
+     *
+     * This must never gate a new dose: live pump status is the only authority on whether the pump is
+     * busy. It bounds how long the attempt keeps its claim on terminal evidence before the journal
+     * gives up on it.
+     */
+    fun withinDeliveryWindow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): Boolean {
         if (!isUncertainOrActive) return false
         val dispatched = dispatchedAt ?: return false
         val elapsed = now - dispatched
@@ -186,7 +192,7 @@ data class YpsoBolusAttempt(
 
     /** Identity reconciliation gets first claim only inside the finite physical-delivery window. */
     fun holdsTerminalRow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): Boolean =
-        awaitsReconciliation && inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)
+        awaitsReconciliation && withinDeliveryWindow(now, immediateWindowMs, extendedMarginMs)
 
     /** Visible accounting warning which must not permanently prevent the operator from treating. */
     val hasUnresolvedWarning: Boolean get() = outcome == YpsoBolusOutcome.UNRESOLVED
@@ -220,7 +226,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             store.commit(reanchored)
             return reanchored
         }
-        if (!attempt.awaitsReconciliation || attempt.inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)) {
+        if (!attempt.awaitsReconciliation || attempt.withinDeliveryWindow(now, immediateWindowMs, extendedMarginMs)) {
             return attempt
         }
         if (attempt.outcome == YpsoBolusOutcome.UNRESOLVED) return attempt
