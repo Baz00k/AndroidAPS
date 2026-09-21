@@ -286,6 +286,11 @@ object YpsoHistoryReconciler {
     private const val HALF_RANGE = 0x80000000L
     private const val MODULUS = 0x100000000L
 
+    /** Diagnostic detail for the most recent INVALID_SNAPSHOT rejection; not part of the contract. */
+    @Volatile
+    var lastInvalidSnapshotDetail: String? = null
+        private set
+
     fun bootstrap(pumpSerial: String, sequenceGeneration: Int, snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation {
         invalidCounts(snapshot)?.let { return it }
         moving(snapshot)?.let { return it }
@@ -464,6 +469,13 @@ object YpsoHistoryReconciler {
                 duplicateIdenticalSequence ||
                 snapshot.rowsNewestFirst.withIndex().any { (logicalIndex, row) -> row.index != logicalIndex }
         return if (invalid) {
+            lastInvalidSnapshotDetail = when {
+                snapshot.rowsNewestFirst.size > stableCount -> "scanned ${snapshot.rowsNewestFirst.size} rows above count $stableCount"
+                snapshot.fullCoverage && snapshot.rowsNewestFirst.size != stableCount ->
+                    "full coverage claimed with ${snapshot.rowsNewestFirst.size} of $stableCount rows"
+                duplicateIdenticalSequence -> "duplicate sequences in one snapshot"
+                else -> "row index does not match its scan position"
+            }
             YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.INVALID_SNAPSHOT)
         } else {
             null

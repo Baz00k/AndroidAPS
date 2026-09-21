@@ -954,6 +954,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
+        logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
         val zone = pumpState.historyZone
         val reboot = bleManager.session?.snapshot()?.reboot
@@ -997,6 +998,38 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }
         return result
+    }
+
+    /**
+     * Diagnostic only. Reconciliation must find the durable cursor row inside the scan to prove no
+     * events were missed, so when it cannot, the useful evidence is what it was looking for versus
+     * what the ring actually returned. Amounts are not logged.
+     */
+    private fun logHistorySnapshotShape(snapshot: YpsoHistorySnapshot) {
+        val cursor = historyIngestion.currentCursor()
+        val rows = snapshot.rowsNewestFirst
+        val cursorIndex = cursor?.let { target ->
+            rows.indexOfFirst { it.sequence == target.identity.sequence && it.fingerprint() == target.fingerprint }
+        } ?: -1
+        val sequenceOnlyIndex = cursor?.let { target ->
+            rows.indexOfFirst { it.sequence == target.identity.sequence }
+        } ?: -1
+        aapsLogger.debug(
+            LTag.PUMP,
+            "YpsoPump history snapshot: count=${snapshot.countBefore}/${snapshot.countAfter} rows=${rows.size} " +
+                "fullCoverage=${snapshot.fullCoverage} cursorSeq=${cursor?.identity?.sequence} " +
+                "cursorFoundAt=$cursorIndex sequenceOnlyMatchAt=$sequenceOnlyIndex " +
+                "headSeq=${rows.firstOrNull()?.sequence} oldestScannedSeq=${rows.lastOrNull()?.sequence}",
+        )
+        if (cursorIndex < 0 && sequenceOnlyIndex >= 0) {
+            val row = rows[sequenceOnlyIndex]
+            aapsLogger.warn(
+                LTag.PUMP,
+                "YpsoPump history cursor sequence ${row.sequence} matched at index $sequenceOnlyIndex but its " +
+                    "fingerprint changed: type=${row.eventType} storedFingerprint=${cursor?.fingerprint} " +
+                    "rowFingerprint=${row.fingerprint()}",
+            )
+        }
     }
 
     private fun reconcileBolusAttempt(serial: String, zone: java.time.ZoneId, reboot: Int, snapshot: YpsoHistorySnapshot) {

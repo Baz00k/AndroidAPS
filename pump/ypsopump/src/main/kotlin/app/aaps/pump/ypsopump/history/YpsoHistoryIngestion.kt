@@ -84,7 +84,13 @@ class YpsoHistoryIngestion(
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
             is YpsoHistoryReconciliation.Moving -> return YpsoHistoryIngestionResult.Blocked("history moved during scan")
-            is YpsoHistoryReconciliation.Gap -> return YpsoHistoryIngestionResult.Blocked("history gap: ${reconciliation.reason}")
+            is YpsoHistoryReconciliation.Gap -> {
+                val detail = YpsoHistoryReconciler.lastInvalidSnapshotDetail
+                    ?.takeIf { reconciliation.reason == YpsoHistoryReconciliation.Reason.INVALID_SNAPSHOT }
+                return YpsoHistoryIngestionResult.Blocked(
+                    "history gap: ${reconciliation.reason}${detail?.let { " ($it)" } ?: ""}",
+                )
+            }
             is YpsoHistoryReconciliation.Stable -> {
                 for (event in reconciliation.newEventsOldestFirst) {
                     when (event.semantics.kind) {
