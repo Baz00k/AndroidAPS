@@ -70,6 +70,8 @@ data class YpsoBolusAttempt(
     val cancelObservedCentiUnits: Int? = null,
     /** Time of a post-cancel same-sequence idle status that made [cancelObservedCentiUnits] terminal evidence. */
     val cancelStoppedAt: Long? = null,
+    /** Time the cancel frames were dispatched; upper bound on delivery when the pump never proves it. */
+    val cancelDispatchedAt: Long? = null,
     val detail: String? = null,
     /** SHA-256 identity of the protected pump key; required for journal-loss ownership recovery. */
     val sessionKeyId: String? = null,
@@ -110,6 +112,8 @@ data class YpsoBolusAttempt(
         require(cancelObservedCentiUnits == null || cancelRequestId != null)
         require(cancelStoppedAt == null || cancelObservedCentiUnits != null)
         require(cancelStoppedAt == null || dispatchedAt != null && cancelStoppedAt >= dispatchedAt)
+        require(cancelDispatchedAt == null || cancelRequestId != null)
+        require(cancelDispatchedAt == null || dispatchedAt != null && cancelDispatchedAt >= dispatchedAt)
         require(detail == null || detail.isNotBlank())
     }
 
@@ -310,7 +314,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
      * re-enters this hook with a higher counter only after the pump definitively rejected (139) the
      * previous dispatch, so the retained allocation is known not to have been consumed.
      */
-    fun requestCancel(requestId: String, cancelRequestId: String, counter: Long, block: YpsoBolusBlock): YpsoBolusAttempt =
+    fun requestCancel(requestId: String, cancelRequestId: String, counter: Long, block: YpsoBolusBlock, dispatchedAt: Long? = null): YpsoBolusAttempt =
         update(requestId) {
             require(
                 it.outcome in setOf(
@@ -332,6 +336,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
                 cancelRequestId = cancelRequestId,
                 cancelCounter = counter,
                 cancelBlock = block,
+                cancelDispatchedAt = it.cancelDispatchedAt ?: dispatchedAt,
             )
         }
 
@@ -367,6 +372,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
                 cancelBlock = null,
                 cancelObservedCentiUnits = null,
                 cancelStoppedAt = null,
+                cancelDispatchedAt = null,
                 detail = detail,
             )
         }

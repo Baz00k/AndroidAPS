@@ -146,6 +146,53 @@ class YpsoExtendedBolusAccountingTest {
         )
     }
 
+    @Test
+    fun `unproven cancellation truncates the record to the elapsed schedule`() {
+        val cancelling = attempt().copy(
+            outcome = YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = YpsoBolusBlock.SLOW,
+        )
+
+        // 1.0 U over 15 min, stopped 5 min in: the pump can only have scheduled a third of the dose.
+        val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(cancelling, stoppedAt = 301_200L)
+
+        assertEquals(1_200L, window.start)
+        assertEquals(300_000L, window.duration)
+        assertEquals(33, YpsoExtendedBolusAccounting.elapsedCentiUnits(cancelling, window))
+    }
+
+    @Test
+    fun `unproven cancellation never invents delivery beyond the programmed plan`() {
+        val cancelling = attempt().copy(
+            outcome = YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = YpsoBolusBlock.SLOW,
+        )
+
+        val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(cancelling, stoppedAt = 5_000_000L)
+
+        assertEquals(900_000L, window.duration)
+        assertEquals(100, YpsoExtendedBolusAccounting.elapsedCentiUnits(cancelling, window))
+    }
+
+    @Test
+    fun `unproven cancellation keeps proven partial evidence when it exceeds the schedule`() {
+        val cancelling = attempt().copy(
+            outcome = YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = YpsoBolusBlock.SLOW,
+            cancelObservedCentiUnits = 60,
+        )
+
+        val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(cancelling, stoppedAt = 301_200L)
+
+        assertEquals(60, YpsoExtendedBolusAccounting.elapsedCentiUnits(cancelling, window))
+    }
+
     private fun attempt() = YpsoBolusAttempt(
         requestId = "request",
         pumpSerial = "serial",

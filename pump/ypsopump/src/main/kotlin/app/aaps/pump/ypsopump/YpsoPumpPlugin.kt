@@ -1114,13 +1114,49 @@ class YpsoPumpPlugin @Inject constructor(
                 if (remaining > 0) readHistoryBlocking(minOf(20_000L, remaining))?.let(::ingestHistory)
                 Thread.sleep(250L)
             }
-            bolusController.markUnresolved("extended bolus cancellation was not confirmed by terminal pump status or history")
-            publishUnresolvedBolusWarningIfNeeded()
-            return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
-                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "extended bolus cancellation was not confirmed by pump status or history"))
+            return finishUnprovenExtendedCancellation(bolusController.currentAttempt())
         } finally {
             bolusController.finishDelivery()
         }
+    }
+
+    /**
+     * The pump acknowledged the cancel but never proved the delivered amount. Leaving the provisional
+     * record running to its programmed end would keep asserting insulin the pump is no longer giving and
+     * would hold the loop disabled indefinitely, so close it at the cancel instant with the insulin the
+     * schedule can account for. The dose stays uncertain, so the alarm is still raised for verification.
+     */
+    private fun finishUnprovenExtendedCancellation(attempt: YpsoBolusAttempt?): PumpEnactResult {
+        val uncertain = { detail: String ->
+            bolusController.markUnresolved(detail)
+            publishUnresolvedBolusWarningIfNeeded()
+            pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
+                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, detail))
+        }
+        val stoppedAt = attempt?.cancelDispatchedAt
+            ?: return uncertain("extended bolus cancellation was not confirmed by pump status or history")
+        val sequence = attempt.pumpSlowSequence
+            ?: return uncertain("extended bolus cancellation was not confirmed by pump status or history")
+        val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(attempt, stoppedAt)
+        val centiUnits = YpsoExtendedBolusAccounting.elapsedCentiUnits(attempt, window)
+        val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence)
+        pumpSync.syncExtendedBolusWithPumpId(
+            window.start,
+            centiUnits / 100.0,
+            window.duration,
+            false,
+            pumpId,
+            PumpType.YPSOPUMP,
+            serialNumber(),
+        )
+        if (!extendedAccountingMatches(pumpId, window.start, centiUnits / 100.0, window.duration, serialNumber())) {
+            return uncertain("extended bolus cancellation was not confirmed and its accounting was rejected")
+        }
+        aapsLogger.warn(
+            LTag.PUMP,
+            "YpsoPump extended bolus cancellation unproven; truncated to ${centiUnits / 100.0} U over ${window.duration / 60_000} min",
+        )
+        return uncertain("extended bolus delivery was stopped but the delivered amount was not confirmed")
     }
 
     private fun finishStatusConfirmedExtendedCancellation(

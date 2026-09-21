@@ -56,6 +56,30 @@ object YpsoExtendedBolusAccounting {
         return TerminalWindow(start, duration)
     }
 
+    /**
+     * Closing window for a cancellation the pump acknowledged but never proved. The pump has stopped,
+     * so the record must not keep claiming delivery to its programmed end; it is closed at the moment
+     * delivery stopped, clamped to the programmed plan so recovery cannot invent extra delivery time.
+     */
+    fun unprovenCancelWindow(attempt: YpsoBolusAttempt, stoppedAt: Long): TerminalWindow {
+        require(attempt.shape != YpsoBolusShape.IMMEDIATE)
+        require(attempt.cancelRequestId != null) { "cancellation was never dispatched" }
+        val start = requireNotNull(attempt.dispatchedAt)
+        val plannedDuration = attempt.durationMinutes * 60_000L
+        return TerminalWindow(start, (stoppedAt - start).coerceIn(1L, plannedDuration))
+    }
+
+    /**
+     * Insulin the pump can have delivered across [window] at the programmed rate. Proven pump evidence
+     * outranks the schedule, so an observed larger amount is never reduced to the elapsed estimate.
+     */
+    fun elapsedCentiUnits(attempt: YpsoBolusAttempt, window: TerminalWindow): Int {
+        val plannedDuration = attempt.durationMinutes * 60_000L
+        val scheduled = Math.round(attempt.requestedCentiUnits.toDouble() * window.duration / plannedDuration).toInt()
+        return scheduled.coerceIn(0, attempt.requestedCentiUnits)
+            .coerceAtLeast(attempt.cancelObservedCentiUnits ?: 0)
+    }
+
     fun matches(record: EB?, pumpId: Long, timestamp: Long, amount: Double, duration: Long, serial: String): Boolean =
         record?.let {
             it.isValid &&

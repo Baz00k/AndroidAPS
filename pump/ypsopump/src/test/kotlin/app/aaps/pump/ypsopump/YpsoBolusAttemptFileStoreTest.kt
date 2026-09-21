@@ -28,6 +28,7 @@ class YpsoBolusAttemptFileStoreTest {
             cancelBlock = YpsoBolusBlock.SLOW,
             cancelObservedCentiUnits = 17,
             cancelStoppedAt = 2_500,
+            cancelDispatchedAt = 2_400,
             detail = "awaiting terminal pump evidence",
         )
 
@@ -82,7 +83,8 @@ class YpsoBolusAttemptFileStoreTest {
             file.readText()
                 .replaceFirst("\"version\":5", "\"version\":3")
                 .replace(Regex(",\"sessionKeyId\":\"[0-9a-f]{64}\""), "")
-                .replace(",\"cancelStoppedAt\":null", ""),
+                .replace(",\"cancelStoppedAt\":null", "")
+                .replace(",\"cancelDispatchedAt\":null", ""),
         )
 
         val loaded = YpsoBolusAttemptFileStore(file).load()

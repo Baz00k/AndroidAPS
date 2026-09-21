@@ -254,7 +254,7 @@ internal class YpsoImmediateBolusController(
                 cancelId,
                 block,
                 expectedConnection,
-                beforeDispatch = { reservation -> journal.requestCancel(attempt.requestId, cancelId, reservation.counter, block) },
+                beforeDispatch = { reservation -> journal.requestCancel(attempt.requestId, cancelId, reservation.counter, block, now()) },
                 onOutcome = callback,
             )
         } }.getOrElse {

@@ -90,6 +90,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         .putNullable("cancelBlock", value.cancelBlock?.name)
         .putNullable("cancelObservedCentiUnits", value.cancelObservedCentiUnits)
         .putNullable("cancelStoppedAt", value.cancelStoppedAt)
+        .putNullable("cancelDispatchedAt", value.cancelDispatchedAt)
         .putNullable("detail", value.detail)
         .put(
             "baseline",
@@ -147,6 +148,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             else if (cancelRequestId != null) YpsoBolusBlock.FAST else null,
             cancelObservedCentiUnits = if (version >= 3) json.intOrNull("cancelObservedCentiUnits") else null,
             cancelStoppedAt = if (version >= 5) json.longOrNull("cancelStoppedAt") else null,
+            cancelDispatchedAt = if (version >= 5) json.longOrNull("cancelDispatchedAt") else null,
             detail = json.stringOrNull("detail"),
         )
     }
@@ -180,7 +182,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             "cancelBlock", "cancelObservedCentiUnits",
         )
         private val VERSION_4_FIELDS = VERSION_3_FIELDS + "sessionKeyId"
-        private val VERSION_5_FIELDS = VERSION_4_FIELDS + "cancelStoppedAt"
+        private val VERSION_5_FIELDS = VERSION_4_FIELDS + setOf("cancelStoppedAt", "cancelDispatchedAt")
         private val BASELINE_FIELDS = setOf(
             "fastSequence", "slowSequence", "historyPumpId", "historyFingerprintHigh", "historyFingerprintLow",
             "pumpReboot", "observedAt",

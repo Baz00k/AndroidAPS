@@ -1581,15 +1581,30 @@ class YpsoBleManager @Inject constructor(
 
     /** Read CHAR_BOLUS_STATUS and parse the immediate-delivery block via [BolusCommand.decode]. */
     fun readBolusStatus(onResult: (BolusCommand?) -> Unit) {
-        if (bolusWriteActive.get()) { onResult(null); return }
-        if (!isConnected || bluetoothGatt == null) { onResult(null); return }
-        readMultiframe(CHAR_BOLUS_STATUS, onFailure = { onResult(null) }) { _, f ->
+        // These guards used to fail silently, which made a failed cancellation recovery indistinguishable
+        // from one that was never attempted. Name the blocking reason so pump logs can tell them apart.
+        if (bolusWriteActive.get()) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump bolus-status read skipped: a bolus write owns the link")
+            onResult(null); return
+        }
+        if (!isConnected || bluetoothGatt == null) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump bolus-status read skipped: not connected")
+            onResult(null); return
+        }
+        readMultiframe(
+            CHAR_BOLUS_STATUS,
+            onFailure = {
+                aapsLogger.error(LTag.PUMP, "YpsoPump bolus-status read failed")
+                onResult(null)
+            },
+        ) { _, f ->
             val cmd = runCatching {
                 val body = decryptOwned(f)
                 val p = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid bolus-status CRC")
                 if (diagnosticLoggingEnabled()) aapsLogger.debug(LTag.PUMP, "YpsoPump diagnostic bolus-status (${p.size}B): ${p.toHex()}")
                 BolusCommand(0.0).apply { decode(p); require(success) { "invalid bolus-status layout" } }
-            }.getOrNull()
+            }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus-status decode failed: ${it.message}") }
+                .getOrNull()
             onResult(cmd)
         }
     }
