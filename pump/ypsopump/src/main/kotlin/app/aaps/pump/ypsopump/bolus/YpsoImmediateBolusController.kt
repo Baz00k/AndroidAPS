@@ -36,6 +36,9 @@ internal class YpsoImmediateBolusController(
     private val historyYieldRequested = AtomicBoolean(false)
     private val commandOwner = AtomicReference<YpsoBleManager.BolusCommandOwner?>()
 
+    /** Terminal announcement seen before its block identity was journalled: block, sequence, time. */
+    private val pendingTerminal = AtomicReference<Triple<YpsoBolusBlock, Long, Long>?>()
+
     val isBusy: Boolean get() = delivering.get()
     val cancellationRequested: Boolean get() = stopRequested.get()
     fun consumeHistoryYield(): Boolean = historyYieldRequested.getAndSet(false)
@@ -47,6 +50,7 @@ internal class YpsoImmediateBolusController(
         if (!delivering.compareAndSet(false, true)) return false
         stopRequested.set(false)
         historyYieldRequested.set(false)
+        pendingTerminal.set(null)
         return true
     }
 
@@ -88,10 +92,39 @@ internal class YpsoImmediateBolusController(
     fun observeBolusNotification(notification: YpsoBolusNotification, observedAt: Long = now()): YpsoBolusAttempt? {
         val attempt = journal.current() ?: return null
         if (!attempt.awaitsReconciliation) return null
-        val block = attempt.provenCancelBlock ?: return null
-        val sequence = attempt.provenSequence(block) ?: return null
+        val block = when (attempt.shape) {
+            YpsoBolusShape.IMMEDIATE -> YpsoBolusBlock.FAST
+            YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> YpsoBolusBlock.SLOW
+        }
+        // A short bolus can finish while its identity is still being proven, so the terminal
+        // notification may arrive before the sequence is journalled. Remember it against the sequence
+        // the pump named; dropping it here would strand the command until its timeout.
+        val sequence = attempt.provenSequence(block)
+            ?: return rememberPendingTerminal(notification, block, observedAt)
         if (!notification.isTerminalFor(block, sequence)) return null
         return journal.observeBlockTerminal(attempt.requestId, observedAt)
+    }
+
+    /**
+     * Holds a terminal announcement that arrived before its block identity was proven. It is applied
+     * by [applyPendingTerminal] once the proof names the same sequence, and never otherwise.
+     */
+    private fun rememberPendingTerminal(
+        notification: YpsoBolusNotification,
+        block: YpsoBolusBlock,
+        observedAt: Long,
+    ): YpsoBolusAttempt? {
+        val sequence = notification.sequence(block)
+        if (notification.statusCode(block) !in YpsoBolusNotification.TERMINAL_CODES || sequence == 0L) return null
+        pendingTerminal.set(Triple(block, sequence, observedAt))
+        return null
+    }
+
+    /** Applies a terminal announcement that raced ahead of this attempt's identity proof. */
+    internal fun applyPendingTerminal(requestId: String, block: YpsoBolusBlock, sequence: Long) {
+        val pending = pendingTerminal.getAndSet(null) ?: return
+        if (pending.first != block || pending.second != sequence) return
+        runCatching { journal.observeBlockTerminal(requestId, pending.third) }
     }
 
     fun observeCancelledStatus(status: BolusCommand, observedAt: Long = now()): YpsoBolusAttempt? {
@@ -210,6 +243,11 @@ internal class YpsoImmediateBolusController(
                 bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
                 journal.unresolved(requestId, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
                 return DeliveryResult.Uncertain(it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
+            }
+            when (request.shape) {
+                YpsoBolusShape.IMMEDIATE -> applyPendingTerminal(requestId, YpsoBolusBlock.FAST, proof.fastSequence)
+                YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED ->
+                    applyPendingTerminal(requestId, YpsoBolusBlock.SLOW, proof.extendedSequence)
             }
             val proofDetail = when (request.shape) {
                 YpsoBolusShape.IMMEDIATE -> "fast block ${proof.fastSequence}"
