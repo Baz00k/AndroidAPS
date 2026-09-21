@@ -367,6 +367,22 @@ class YpsoBolusAttemptJournalTest {
     }
 
     @Test
+    fun `post cancel idle status makes the exact delivered counter durable`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt(shape = YpsoBolusShape.EXTENDED))
+        journal.beforeDispatch("request-1", 4810, 2_000)
+        journal.observeSlowDelivering("request-1", 46, 100)
+        journal.requestCancel("request-1", "cancel-1", 4811, YpsoBolusBlock.SLOW)
+        journal.observeCancelDelivery("request-1", 17)
+
+        val stopped = journal.observeCancelStopped("request-1", 18, 2_500)
+
+        assertEquals(18, stopped.cancelObservedCentiUnits)
+        assertEquals(2_500, stopped.cancelStoppedAt)
+    }
+
+    @Test
     fun `fast sequence permits only unsigned forward movement including wrap`() {
         val store = MemoryStore()
         val journal = YpsoBolusAttemptJournal(store)

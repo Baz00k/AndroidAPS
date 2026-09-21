@@ -79,6 +79,12 @@ internal class YpsoImmediateBolusController(
         return if (attempt.awaitsReconciliation) journal.unresolved(attempt.requestId, detail) else attempt
     }
 
+    fun observeCancelledStatus(status: BolusCommand, observedAt: Long = now()): YpsoBolusAttempt? {
+        val attempt = journal.current() ?: return null
+        val observation = YpsoExtendedBolusAccounting.cancelledStatusObservation(attempt, status, observedAt) ?: return null
+        return journal.observeCancelStopped(attempt.requestId, observation.deliveredCentiUnits, observation.observedAt)
+    }
+
     fun deliver(request: YpsoValidatedBolusRequest): DeliveryResult {
         check(delivering.get()) { "delivery lifecycle was not acquired" }
         run {
@@ -270,6 +276,7 @@ internal class YpsoImmediateBolusController(
                 journal.observeCancelDelivery(attempt.requestId, delivered)
                 val owner = outcome.second ?: return
                 val after = readBolusStatus(owner)
+                if (after != null) observeCancelledStatus(after)
                 val idle = when (block) {
                     YpsoBolusBlock.FAST -> after?.bolusStatusCode == BolusCommand.STATUS_IDLE
                     YpsoBolusBlock.SLOW -> after?.extendedStatusCode == BolusCommand.STATUS_IDLE
@@ -279,7 +286,7 @@ internal class YpsoImmediateBolusController(
                 } else "post-cancel status unavailable or target bolus block still active"
                 bleManager.recordBolusUnresolved(owner, cancelId, cancelHash, detail)
             }
-            is YpsoWriteOutcome.Verified -> Unit
+            is YpsoWriteOutcome.Verified -> outcome.second?.let { readBolusStatus(it) }?.let { observeCancelledStatus(it) }
         }
     }
 

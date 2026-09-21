@@ -68,6 +68,8 @@ data class YpsoBolusAttempt(
     val cancelBlock: YpsoBolusBlock? = null,
     /** Pump-reported delivered amount observed for the cancel target during the cancellation run. */
     val cancelObservedCentiUnits: Int? = null,
+    /** Time of a post-cancel same-sequence idle status that made [cancelObservedCentiUnits] terminal evidence. */
+    val cancelStoppedAt: Long? = null,
     val detail: String? = null,
     /** SHA-256 identity of the protected pump key; required for journal-loss ownership recovery. */
     val sessionKeyId: String? = null,
@@ -106,6 +108,8 @@ data class YpsoBolusAttempt(
         require((cancelRequestId == null) == (cancelBlock == null))
         require(cancelObservedCentiUnits == null || cancelObservedCentiUnits in 0..requestedCentiUnits)
         require(cancelObservedCentiUnits == null || cancelRequestId != null)
+        require(cancelStoppedAt == null || cancelObservedCentiUnits != null)
+        require(cancelStoppedAt == null || dispatchedAt != null && cancelStoppedAt >= dispatchedAt)
         require(detail == null || detail.isNotBlank())
     }
 
@@ -339,6 +343,16 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             it.copy(cancelObservedCentiUnits = maxOf(it.cancelObservedCentiUnits ?: 0, deliveredCentiUnits))
         }
 
+    /** Persists authoritative post-cancel pump status before PumpSync correction is attempted. */
+    fun observeCancelStopped(requestId: String, deliveredCentiUnits: Int, observedAt: Long): YpsoBolusAttempt =
+        update(requestId) {
+            require(it.outcome in setOf(YpsoBolusOutcome.CANCEL_PENDING, YpsoBolusOutcome.UNRESOLVED))
+            require(it.cancelBlock == YpsoBolusBlock.SLOW && it.cancelRequestId != null)
+            require(deliveredCentiUnits in (it.cancelObservedCentiUnits ?: 0)..it.requestedCentiUnits)
+            require(observedAt >= requireNotNull(it.dispatchedAt))
+            it.copy(cancelObservedCentiUnits = deliveredCentiUnits, cancelStoppedAt = observedAt)
+        }
+
     fun cancelNotSent(requestId: String, detail: String): YpsoBolusAttempt =
         update(requestId) {
             require(it.outcome == YpsoBolusOutcome.CANCEL_PENDING && it.cancelRequestId != null)
@@ -352,6 +366,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
                 cancelCounter = null,
                 cancelBlock = null,
                 cancelObservedCentiUnits = null,
+                cancelStoppedAt = null,
                 detail = detail,
             )
         }

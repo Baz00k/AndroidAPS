@@ -10,6 +10,9 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting
+import app.aaps.pump.ypsopump.comm.commands.BolusCommand
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -83,6 +86,66 @@ class YpsoExtendedBolusAccountingTest {
         assertFalse(YpsoExtendedBolusAccounting.matches(expected.copy(isValid = false), 42L, 1_000L, 1.2, 900_000L, "serial"))
     }
 
+    @Test
+    fun `same sequence idle status after cancel proves exact delivered amount`() {
+        val observation = YpsoExtendedBolusAccounting.cancelledStatusObservation(
+            attempt().copy(
+                outcome = YpsoBolusOutcome.CANCEL_PENDING,
+                cancelRequestId = "cancel",
+                cancelCounter = 2,
+                cancelBlock = YpsoBolusBlock.SLOW,
+            ),
+            slowStatus(BolusCommand.STATUS_IDLE, sequence = 101, deliveredCentiUnits = 8),
+            observedAt = 21_200L,
+        )
+
+        assertEquals(8, observation?.deliveredCentiUnits)
+        assertEquals(21_200L, observation?.observedAt)
+    }
+
+    @Test
+    fun `active stale or malformed status cannot resolve cancellation`() {
+        val cancelling = attempt().copy(
+            outcome = YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = YpsoBolusBlock.SLOW,
+        )
+
+        assertEquals(
+            null,
+            YpsoExtendedBolusAccounting.cancelledStatusObservation(
+                cancelling,
+                slowStatus(BolusCommand.STATUS_DELIVERING, sequence = 101, deliveredCentiUnits = 8),
+                21_200L,
+            ),
+        )
+        assertEquals(
+            null,
+            YpsoExtendedBolusAccounting.cancelledStatusObservation(
+                cancelling,
+                slowStatus(BolusCommand.STATUS_IDLE, sequence = 102, deliveredCentiUnits = 8),
+                21_200L,
+            ),
+        )
+        assertEquals(
+            null,
+            YpsoExtendedBolusAccounting.cancelledStatusObservation(
+                cancelling,
+                slowStatus(BolusCommand.STATUS_IDLE, sequence = 101, deliveredCentiUnits = 8, totalCentiUnits = 90),
+                21_200L,
+            ),
+        )
+        assertEquals(
+            null,
+            YpsoExtendedBolusAccounting.cancelledStatusObservation(
+                cancelling.copy(cancelObservedCentiUnits = 9),
+                slowStatus(BolusCommand.STATUS_IDLE, sequence = 101, deliveredCentiUnits = 8),
+                21_200L,
+            ),
+        )
+    }
+
     private fun attempt() = YpsoBolusAttempt(
         requestId = "request",
         pumpSerial = "serial",
@@ -99,4 +162,18 @@ class YpsoExtendedBolusAccountingTest {
         dispatchedAt = 1_200,
         pumpSlowSequence = 101,
     )
+
+    private fun slowStatus(
+        status: Int,
+        sequence: Long,
+        deliveredCentiUnits: Int,
+        totalCentiUnits: Int = 100,
+    ): BolusCommand {
+        val payload = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN)
+            .put(BolusCommand.STATUS_IDLE.toByte()).putInt(0).putInt(0).putInt(0)
+            .put(status.toByte()).putInt(sequence.toInt()).putInt(deliveredCentiUnits).putInt(totalCentiUnits)
+            .putInt(0).putInt(0).putInt(1).putInt(15)
+            .array()
+        return BolusCommand(0.0).apply { decode(payload) }
+    }
 }

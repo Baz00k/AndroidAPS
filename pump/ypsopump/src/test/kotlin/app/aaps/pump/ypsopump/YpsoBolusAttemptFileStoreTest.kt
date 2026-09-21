@@ -27,6 +27,7 @@ class YpsoBolusAttemptFileStoreTest {
             cancelCounter = 4811,
             cancelBlock = YpsoBolusBlock.SLOW,
             cancelObservedCentiUnits = 17,
+            cancelStoppedAt = 2_500,
             detail = "awaiting terminal pump evidence",
         )
 
@@ -79,8 +80,9 @@ class YpsoBolusAttemptFileStoreTest {
         YpsoBolusAttemptFileStore(file).commit(current)
         file.writeText(
             file.readText()
-                .replaceFirst("\"version\":4", "\"version\":3")
-                .replace(Regex(",\"sessionKeyId\":\"[0-9a-f]{64}\""), ""),
+                .replaceFirst("\"version\":5", "\"version\":3")
+                .replace(Regex(",\"sessionKeyId\":\"[0-9a-f]{64}\""), "")
+                .replace(",\"cancelStoppedAt\":null", ""),
         )
 
         val loaded = YpsoBolusAttemptFileStore(file).load()
@@ -158,7 +160,7 @@ class YpsoBolusAttemptFileStoreTest {
         store.commit(attempt().copy(requestId = "next", createdAt = 3_000))
 
         assertEquals(listOf("legacy", "next"), store.loadAll().map { it.requestId })
-        assertEquals(5, JSONObject(file.readText()).getInt("version"))
+        assertEquals(6, JSONObject(file.readText()).getInt("version"))
     }
 
     private fun version2Json() = """

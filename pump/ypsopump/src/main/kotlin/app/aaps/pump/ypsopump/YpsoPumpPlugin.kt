@@ -1093,17 +1093,68 @@ class YpsoPumpPlugin @Inject constructor(
                     return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
                         .comment(rh.gs(R.string.ypsopump_bolus_completed, current.confirmedUnits ?: 0.0))
                 }
+                current.cancelStoppedAt?.let { stoppedAt ->
+                    return finishStatusConfirmedExtendedCancellation(
+                        current,
+                        requireNotNull(current.cancelObservedCentiUnits),
+                        stoppedAt,
+                    )
+                }
+                val status = readBolusStatusBlocking()
+                val observedAt = System.currentTimeMillis()
+                val observed = status?.let { bolusController.observeCancelledStatus(it, observedAt) }
+                if (observed?.cancelStoppedAt != null) {
+                    return finishStatusConfirmedExtendedCancellation(
+                        observed,
+                        requireNotNull(observed.cancelObservedCentiUnits),
+                        observed.cancelStoppedAt,
+                    )
+                }
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                 if (remaining > 0) readHistoryBlocking(minOf(20_000L, remaining))?.let(::ingestHistory)
                 Thread.sleep(250L)
             }
-            bolusController.markUnresolved("extended bolus cancellation was not confirmed by terminal history")
+            bolusController.markUnresolved("extended bolus cancellation was not confirmed by terminal pump status or history")
             publishUnresolvedBolusWarningIfNeeded()
             return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
-                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "extended bolus cancellation was not confirmed"))
+                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "extended bolus cancellation was not confirmed by pump status or history"))
         } finally {
             bolusController.finishDelivery()
         }
+    }
+
+    private fun finishStatusConfirmedExtendedCancellation(
+        attempt: YpsoBolusAttempt,
+        deliveredCentiUnits: Int,
+        observedAt: Long,
+    ): PumpEnactResult {
+        val sequence = requireNotNull(attempt.pumpSlowSequence)
+        val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence)
+        val terminal = YpsoExtendedBolusAccounting.terminalWindow(attempt, deliveredCentiUnits, observedAt)
+        pumpSync.syncExtendedBolusWithPumpId(
+            terminal.start,
+            deliveredCentiUnits / 100.0,
+            terminal.duration,
+            false,
+            pumpId,
+            PumpType.YPSOPUMP,
+            serialNumber(),
+        )
+        if (!extendedAccountingMatches(pumpId, terminal.start, deliveredCentiUnits / 100.0, terminal.duration, serialNumber())) {
+            bolusController.markUnresolved("post-cancel extended bolus accounting was rejected")
+            publishUnresolvedBolusWarningIfNeeded()
+            return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
+                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "cancelled delivery accounting failed"))
+        }
+        bolusController.confirmTerminal(
+            deliveredCentiUnits,
+            terminal.end,
+            sequence,
+            pumpId,
+            cancelled = deliveredCentiUnits < attempt.requestedCentiUnits,
+        )
+        return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
+            .comment(rh.gs(R.string.ypsopump_bolus_completed, deliveredCentiUnits / 100.0))
     }
     override fun loadTDDs(): PumpEnactResult = notImplemented()
 
