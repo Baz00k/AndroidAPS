@@ -548,6 +548,17 @@ class YpsoPumpPlugin @Inject constructor(
             if (attempt.blockTerminalAt != null) {
                 val delivered = attempt.requestedUnits
                 publishProgress(delivered)
+                // A stop was requested, so the pump may have ended this dose early. The amount is not
+                // knowable here, so report it as uncertain rather than claiming the full request was
+                // given; history reconciliation corrects the record to what was actually delivered.
+                if (cancellationSignalled || bolusController.cancellationRequested) {
+                    publishUnresolvedBolusWarningIfNeeded()
+                    return pumpEnactResultProvider.get()
+                        .success(false)
+                        .enacted(true)
+                        .bolusDelivered(0.0)
+                        .comment(rh.gs(R.string.ypsopump_bolus_uncertain, "The bolus was stopped. Check the pump for the amount actually given."))
+                }
                 return pumpEnactResultProvider.get()
                     .success(true)
                     .enacted(true)
@@ -837,14 +848,29 @@ class YpsoPumpPlugin @Inject constructor(
         dispatchHistoryRecovery {
             try {
                 val cursor = historyIngestion.currentCursor()
-                val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
+                // Reconciling a just-finished dose only needs the newest rows. A full-ring scan cannot
+                // complete before the connection is reclaimed, so it never reaches ingestion at all.
+                val maxRows = when {
+                    cursor == null                          -> 1
+                    bolusController.currentAttempt()?.awaitsReconciliation == true -> THERAPY_HISTORY_MAX_ROWS
+                    else                                    -> HISTORY_RECOVERY_MAX_ROWS
+                }
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
                     stopWhen = ::historyRecoveryMustYield,
                     onAttempt = historyRecoveryAttempt::set,
                 )
-                if (snapshot != null && !historyRecoveryMustYield()) ingestHistory(snapshot)
+                // Report the outcome: a recovery that reads nothing leaves cancelled doses showing
+                // their planned amount, and silence here hides that from the logs entirely.
+                when {
+                    snapshot == null              ->
+                        aapsLogger.warn(LTag.PUMP, "YpsoPump history recovery after $reason read no usable history")
+                    historyRecoveryMustYield()    ->
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason yielded to a pump command")
+                    else                          ->
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot)}")
+                }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
             } finally {
