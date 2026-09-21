@@ -190,6 +190,23 @@ class YpsoBolusAttemptJournalTest {
     }
 
     @Test
+    fun `a pump announced stop leaves the attempt open for history correction`() {
+        val store = MemoryStore()
+        val journal = YpsoBolusAttemptJournal(store)
+        journal.prepare(attempt(shape = YpsoBolusShape.EXTENDED))
+        journal.beforeDispatch("request-1", 4810, 2_000)
+        journal.observeSlowDelivering("request-1", 46, 100)
+        journal.requestCancel("request-1", "cancel-1", 4811, YpsoBolusBlock.SLOW)
+
+        val stopped = journal.observeBlockTerminal("request-1", 2_500)
+
+        // The recorded amount is only the elapsed schedule at this point. The attempt must keep
+        // awaiting reconciliation, otherwise terminal history can never replace the estimate.
+        assertTrue(stopped.awaitsReconciliation)
+        assertEquals(null, stopped.confirmedCentiUnits)
+    }
+
+    @Test
     fun `combination delivery binds the slow block against the whole programmed total`() {
         val store = MemoryStore()
         val journal = YpsoBolusAttemptJournal(store)

@@ -428,6 +428,9 @@ class YpsoPumpPlugin @Inject constructor(
         }
         } finally {
             bolusController.finishDelivery()
+            // The recorded amount is the requested one until the terminal history row proves what was
+            // actually delivered, so reconcile in the background without delaying this command.
+            scheduleHistoryRecovery("bolus delivery")
         }
     }
 
@@ -814,8 +817,23 @@ class YpsoPumpPlugin @Inject constructor(
      * command. Empty stores use a one-row anchor and therefore never import pre-install insulin.
      */
     private fun scheduleHistoryRecovery(reason: String) {
-        if (!historyRecoveryEnabled || !bleManager.isConnected || !bleManager.canReadHistory) return
-        if (!historyRecoveryActive.compareAndSet(false, true)) return
+        // Never fail silently here: a skipped reconciliation leaves cancelled doses showing their
+        // planned amount forever, and the reason must be visible in pump logs.
+        val blocked = when {
+            !historyRecoveryEnabled       -> "history recovery is disabled"
+            !bleManager.isConnected       -> "not connected"
+            !bleManager.canReadHistory    -> "pump session or another read owns the link"
+            else                          -> null
+        }
+        if (blocked != null) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery skipped after $reason: $blocked")
+            return
+        }
+        if (!historyRecoveryActive.compareAndSet(false, true)) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery skipped after $reason: already running")
+            return
+        }
+        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery starting after $reason")
         dispatchHistoryRecovery {
             try {
                 val cursor = historyIngestion.currentCursor()
@@ -1240,12 +1258,12 @@ class YpsoPumpPlugin @Inject constructor(
         }
         if (announced != null) {
             // The pump confirmed this delivery ended, so cancellation succeeded. The recorded amount is
-            // the elapsed schedule until background history supplies the exact delivered figure.
+            // only the elapsed schedule, so the attempt must stay open for reconciliation: closing it
+            // here with confirmTerminal would make the estimate permanent and the record untruthful.
             aapsLogger.info(
                 LTag.PUMP,
                 "YpsoPump extended bolus cancelled; recorded ${centiUnits / 100.0} U over ${window.duration / 60_000} min pending history",
             )
-            bolusController.confirmTerminal(centiUnits, window.end, sequence, pumpId, cancelled = true)
             return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
                 .comment(rh.gs(R.string.ypsopump_bolus_completed, centiUnits / 100.0))
         }
