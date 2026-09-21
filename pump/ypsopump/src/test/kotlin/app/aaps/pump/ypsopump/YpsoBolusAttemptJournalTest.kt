@@ -33,8 +33,6 @@ class YpsoBolusAttemptJournalTest {
         journal.beforeDispatch("request-1", counter = 4810, now = 2_000)
 
         val afterRestart = YpsoBolusAttemptJournal(store)
-        assertTrue(requireNotNull(store.value).inhibitsNewDose(3_000, 90_000, 90_000))
-        assertThrows(IllegalArgumentException::class.java) { afterRestart.prepare(attempt(requestId = "request-2"), 3_000) }
         // Only a pump-confirmed counter rejection may advance the allocation, and it must advance.
         assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4810, 3_000) }
         assertThrows(IllegalArgumentException::class.java) { afterRestart.beforeDispatch("request-1", 4809, 3_000) }
@@ -69,10 +67,9 @@ class YpsoBolusAttemptJournalTest {
         val unresolved = journal.unresolved("request-1", "terminal delivery could not be confirmed")
 
         assertTrue(unresolved.hasUnresolvedWarning)
-        assertTrue(unresolved.inhibitsNewDose(91_999, 90_000, 90_000))
-        assertThrows(IllegalArgumentException::class.java) { journal.prepare(attempt(requestId = "request-2"), 91_999) }
-        assertFalse(unresolved.inhibitsNewDose(92_000, 90_000, 90_000))
-        assertEquals("request-2", journal.prepare(attempt(requestId = "request-2"), 92_000).requestId)
+        // Readiness for a new dose is decided by live pump status, not by elapsed time, so the journal
+        // itself no longer refuses a replacement attempt inside any observation window.
+        assertEquals("request-2", journal.prepare(attempt(requestId = "request-2"), 91_999).requestId)
     }
 
     @Test

@@ -992,6 +992,16 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
+    /** Waits for the authenticated link to come back so pump reads can succeed again. */
+    private fun awaitConnection(timeoutMs: Long): Boolean {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (bleManager.isConnected) return true
+            Thread.sleep(250L)
+        }
+        return false
+    }
+
     private fun readBolusStatusBlocking(timeoutMs: Long = 15_000): BolusCommand? {
         var status: BolusCommand? = null
         val latch = java.util.concurrent.CountDownLatch(1)
@@ -1099,6 +1109,14 @@ class YpsoPumpPlugin @Inject constructor(
                         requireNotNull(current.cancelObservedCentiUnits),
                         stoppedAt,
                     )
+                }
+                // The pump routinely drops the link right after accepting the cancel write. Without
+                // reconnecting, every status and history read below fails and cancellation can never be
+                // proven even though the pump already stopped.
+                if (!bleManager.isConnected) {
+                    aapsLogger.debug(LTag.PUMP, "YpsoPump reconnecting to confirm extended bolus cancellation")
+                    seedAndConnect()
+                    if (!awaitConnection(10_000L)) { Thread.sleep(250L); continue }
                 }
                 val status = readBolusStatusBlocking()
                 val observedAt = System.currentTimeMillis()

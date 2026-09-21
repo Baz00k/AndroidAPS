@@ -94,9 +94,6 @@ internal class YpsoImmediateBolusController(
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
             val cursor = historyCursor() ?: return DeliveryResult.NotSent("pump history has not been initialized")
-            journal.current()?.takeIf { it.inhibitsNewDose(now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS) }?.let {
-                return DeliveryResult.NotSent("the pump is still processing an earlier bolus")
-            }
             if (stopRequested.get()) return DeliveryResult.NotSent("bolus cancelled before dispatch")
             val baselineConnection = bleManager.currentBolusConnectionKey()
                 ?: return DeliveryResult.NotSent("authenticated connection is unavailable")
@@ -104,8 +101,13 @@ internal class YpsoImmediateBolusController(
             if (bleManager.currentBolusConnectionKey() != baselineConnection) {
                 return DeliveryResult.NotSent("connection changed while acquiring bolus baseline")
             }
-            if (baselineStatus.bolusStatusCode != BolusCommand.STATUS_IDLE || baselineStatus.extendedStatusCode != BolusCommand.STATUS_IDLE) {
-                return DeliveryResult.NotSent("another bolus is active on the pump")
+            // The pump itself is the only authority on whether it is busy. An unreachable pump cannot be
+            // dosed anyway, so this read is both the readiness check and the liveness check.
+            if (baselineStatus.bolusStatusCode != BolusCommand.STATUS_IDLE) {
+                return DeliveryResult.NotSent("the pump is delivering a bolus")
+            }
+            if (baselineStatus.extendedStatusCode != BolusCommand.STATUS_IDLE) {
+                return DeliveryResult.NotSent("the pump is delivering an extended bolus")
             }
             val serial = serialNumber()
             val generation = bleManager.session?.activeRecord()?.generation

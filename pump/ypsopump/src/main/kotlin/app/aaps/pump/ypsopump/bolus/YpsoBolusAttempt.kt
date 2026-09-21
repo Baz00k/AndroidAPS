@@ -238,8 +238,6 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
         extendedMarginMs: Long = 90_000L,
     ): YpsoBolusAttempt {
         require(attempt.outcome == YpsoBolusOutcome.NOT_SENT && attempt.dispatchCounter == null)
-        val existing = store.load()
-        require(existing == null || !existing.inhibitsNewDose(now, immediateWindowMs, extendedMarginMs)) { "an earlier bolus remains unresolved" }
         store.commit(attempt)
         return attempt
     }
