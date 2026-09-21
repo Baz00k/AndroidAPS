@@ -35,7 +35,7 @@ class YpsoHistoryIngestion(
         val state = store.load()
         val pending = state.pendingBolus ?: return true
         if (pending.pumpSerial != pumpSerial) return false
-        val result = pumpSync.syncBolusWithPumpIdDetailed(
+        val result = pumpSync.replayConfirmedBolusWithPumpIdDetailed(
             pending.timestamp,
             pending.amountCentiUnits / 100.0,
             pending.type,

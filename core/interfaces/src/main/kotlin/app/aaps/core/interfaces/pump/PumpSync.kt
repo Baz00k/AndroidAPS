@@ -228,6 +228,23 @@ interface PumpSync {
     ): BolusSyncResult
 
     /**
+     * Replay insulin that the pump driver durably recorded as pump-confirmed before asking AAPS to persist it.
+     *
+     * Unlike [syncBolusWithPumpIdDetailed], an event older than the current pump-activation timestamp may be
+     * accepted. Implementations must still require the currently active pump and registered pump identity to
+     * match [pumpType] and [pumpSerial]. This is intended only for retrying a durable driver outbox after a
+     * temporary pump-plugin switch; it must not be used for unconstrained history import.
+     */
+    fun replayConfirmedBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): BolusSyncResult
+
+    /**
      * Synchronization of carbs
      *
      * Assuming there will be no clash on timestamp from different pumps or UI

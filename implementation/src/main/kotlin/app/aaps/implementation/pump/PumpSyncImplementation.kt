@@ -198,6 +198,51 @@ class PumpSyncImplementation @Inject constructor(
         pumpSerial: String,
     ): PumpSync.BolusSyncResult {
         if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return PumpSync.BolusSyncResult.REJECTED
+        return persistBolus(timestamp, amount, type, pumpId, pumpType, pumpSerial)
+    }
+
+    override fun replayConfirmedBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
+        val storedType = preferences.get(StringNonKey.ActivePumpType)
+        val storedSerial = preferences.get(StringNonKey.ActivePumpSerialNumber)
+        val activePump = activePlugin.activePump
+        val activeIdentityMatches =
+            activePump !is VirtualPump &&
+                activePump.model() == pumpType &&
+                activePump.serialNumber() == pumpSerial
+        val storedIdentityMatches =
+            pumpType.description == storedType && pumpSerial == storedSerial
+        val storedIdentityAbsent = storedType.isEmpty() && storedSerial.isEmpty()
+        if (!activeIdentityMatches || (!storedIdentityMatches && !storedIdentityAbsent)) {
+            aapsLogger.error(
+                LTag.PUMP,
+                "Ignoring confirmed bolus replay for inactive pump ${pumpType.description} $pumpSerial"
+            )
+            return PumpSync.BolusSyncResult.REJECTED
+        }
+        if (storedIdentityAbsent) {
+            aapsLogger.debug(LTag.PUMP, "Registering new pump ${pumpType.description} $pumpSerial from confirmed bolus replay")
+            preferences.put(StringNonKey.ActivePumpType, pumpType.description)
+            preferences.put(StringNonKey.ActivePumpSerialNumber, pumpSerial)
+            preferences.put(LongNonKey.ActivePumpChangeTimestamp, dateUtil.now())
+        }
+        return persistBolus(timestamp, amount, type, pumpId, pumpType, pumpSerial)
+    }
+
+    private fun persistBolus(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
         val bolus = BS(
             timestamp = timestamp,
             amount = amount,

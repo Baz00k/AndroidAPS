@@ -67,7 +67,7 @@ class YpsoHistoryIngestionTest {
         )
         assertNull(ingestion.bolusReadiness("10000001", 21))
         assertEquals("pump history cursor belongs to another pump epoch", ingestion.bolusReadiness("10000001", 22))
-        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
     @Test
@@ -86,14 +86,14 @@ class YpsoHistoryIngestionTest {
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals("20000002", store.value.cursor?.identity?.pumpSerial)
         assertEquals(101, store.value.cursor?.identity?.sequence)
-        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
     @Test
     fun `new confirmed bolus persists intent before idempotent PumpSync acknowledgement`() {
         val store = Store()
         val sync: PumpSync = mock()
-        whenever(sync.syncBolusWithPumpIdDetailed(any(), eq(1.0), any(), any(), any(), eq("10000001")))
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), any(), any(), any(), eq("10000001")))
             .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
         val ingestion = YpsoHistoryIngestion(store, sync)
         ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
@@ -103,14 +103,14 @@ class YpsoHistoryIngestionTest {
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(101, store.value.cursor?.identity?.sequence)
         assertNull(store.value.pendingBolus)
-        verify(sync).syncBolusWithPumpIdDetailed(any(), eq(1.0), any(), eq(101L), any(), eq("10000001"))
+        verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), any(), eq(101L), any(), eq("10000001"))
     }
 
     @Test
     fun `attributed SMB type is retained by the durable PumpSync outbox`() {
         val store = Store()
         val sync: PumpSync = mock()
-        whenever(sync.syncBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), any(), any(), eq("10000001")))
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), any(), any(), eq("10000001")))
             .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
         val ingestion = YpsoHistoryIngestion(store, sync)
         ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
@@ -123,14 +123,14 @@ class YpsoHistoryIngestionTest {
         ) { BS.Type.SMB }
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
-        verify(sync).syncBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), eq(101L), any(), eq("10000001"))
+        verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), eq(101L), any(), eq("10000001"))
     }
 
     @Test
     fun `rejected DB operation leaves durable pending insulin and cursor unadvanced`() {
         val store = Store()
         val sync: PumpSync = mock()
-        whenever(sync.syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
             .thenReturn(PumpSync.BolusSyncResult.REJECTED)
         val ingestion = YpsoHistoryIngestion(store, sync)
         ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
@@ -156,7 +156,7 @@ class YpsoHistoryIngestionTest {
 
         assertEquals(false, ingestion.retryPending("20000002"))
         assertNotNull(store.value.pendingBolus)
-        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
     @Test
@@ -171,7 +171,7 @@ class YpsoHistoryIngestionTest {
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(102, store.value.cursor?.identity?.sequence)
         assertNull(store.value.pendingBolus)
-        verify(sync, org.mockito.kotlin.never()).syncBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
     private fun row(sequence: Long, type: Int, value1: Int): YpsoHistoryEntry = YpsoHistoryEntry(
