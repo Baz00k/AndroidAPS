@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.data.pump.defs.ManufacturerType
 import app.aaps.core.data.pump.defs.PumpDescription
+import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.pump.defs.TimeChangeType
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -115,6 +116,7 @@ class YpsoPumpPlugin @Inject constructor(
         YpsoHistoryIngestion(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
+            resolveProvisional = ::bindProvisionalBolusToPumpId,
         )
     }
     private val bolusController by lazy {
@@ -403,16 +405,22 @@ class YpsoPumpPlugin @Inject constructor(
             return fail(R.string.ypsopump_bolus_failed, it)
         }
         when (val result = bolusController.deliver(request)) {
-            is YpsoImmediateBolusController.DeliveryResult.Started ->
+            is YpsoImmediateBolusController.DeliveryResult.Started -> {
+                recordProvisionalBolus(result.attempt, detailedBolusInfo.bolusType)
                 awaitBolusTerminal(result.attempt.requestId, detailedBolusInfo.id, result.observedDeliveredUnits)
+            }
             is YpsoImmediateBolusController.DeliveryResult.NotSent ->
                 fail(R.string.ypsopump_bolus_failed, result.detail)
-            is YpsoImmediateBolusController.DeliveryResult.Uncertain ->
+            is YpsoImmediateBolusController.DeliveryResult.Uncertain -> {
+                // Delivery may have happened. Account for it in full now; terminal history corrects the
+                // amount later. Insulin that is possibly in the body must never be invisible to IOB.
+                bolusController.currentAttempt()?.let { recordProvisionalBolus(it, detailedBolusInfo.bolusType) }
                 pumpEnactResultProvider.get()
                     .success(false)
                     .enacted(true)
                     .bolusDelivered(0.0)
                     .comment(rh.gs(R.string.ypsopump_bolus_uncertain, result.detail))
+            }
         }
         }.getOrElse {
             aapsLogger.error(LTag.PUMP, "YpsoPump bolus lifecycle failed: ${it.message}")
@@ -428,6 +436,56 @@ class YpsoPumpPlugin @Inject constructor(
         if (!YpsoPumpConst.READ_ONLY_MODE) runCatching { bolusController.requestStop() }
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
     }
+
+    /**
+     * Records the dispatched dose immediately so it reaches IOB without waiting for pump history. The
+     * full requested amount is the conservative figure; the terminal history row later replaces it with
+     * the delivered amount through [provisionalTemporaryId], which also prevents a duplicate record.
+     */
+    private fun recordProvisionalBolus(attempt: YpsoBolusAttempt, type: BS.Type) {
+        if (attempt.shape != YpsoBolusShape.IMMEDIATE) return
+        val timestamp = attempt.dispatchedAt ?: attempt.createdAt
+        runCatching {
+            pumpSync.addBolusWithTempId(
+                timestamp,
+                attempt.requestedUnits,
+                provisionalTemporaryId(attempt),
+                type,
+                PumpType.YPSOPUMP,
+                serialNumber(),
+            )
+        }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump provisional bolus accounting failed: ${it.message}") }
+    }
+
+    /**
+     * Links the provisional record for this dose to the pump identity of its terminal history row, so
+     * the authoritative amount updates that record rather than inserting a second one.
+     */
+    private fun bindProvisionalBolusToPumpId(
+        pumpSerial: String,
+        pumpId: Long,
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type,
+    ) {
+        val attempt = bolusController.currentAttempt() ?: return
+        if (attempt.shape != YpsoBolusShape.IMMEDIATE || attempt.pumpHistoryId != pumpId) return
+        runCatching {
+            pumpSync.syncBolusWithTempId(
+                timestamp,
+                amount,
+                provisionalTemporaryId(attempt),
+                type,
+                pumpId,
+                PumpType.YPSOPUMP,
+                pumpSerial,
+            )
+        }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump provisional bolus resolution failed: ${it.message}") }
+    }
+
+    /** Stable per-attempt identity so the provisional record can be found again after a restart. */
+    private fun provisionalTemporaryId(attempt: YpsoBolusAttempt): Long =
+        attempt.requestId.hashCode().toLong() and 0xffffffffL or ((attempt.createdAt / 1000L) shl 32)
 
     private fun awaitBolusTerminal(
         requestId: String,
@@ -471,8 +529,10 @@ class YpsoPumpPlugin @Inject constructor(
                         maxRows = THERAPY_HISTORY_MAX_ROWS,
                         stopWhen = bolusController::consumeHistoryYield,
                     )?.let(::ingestHistory)
-                    Thread.sleep(250L)
-                    continue
+                    if (android.os.SystemClock.elapsedRealtime() < deadline) {
+                        Thread.sleep(250L)
+                        continue
+                    }
                 }
                 val delivered = attempt.confirmedUnits ?: 0.0
                 publishProgress(delivered)
@@ -492,7 +552,9 @@ class YpsoPumpPlugin @Inject constructor(
                 // authoritative for the final delivered amount and PumpSync accounting.
                 publishProgress(status.deliveredUnits)
             }
-            if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
+            // The pump announced this exact fast sequence stopped, so read the terminal row now rather
+            // than polling a cleared status block until the command times out.
+            if (attempt.blockTerminalAt != null || status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                 if (remaining > 0) readHistoryBlocking(
                     timeoutMs = minOf(THERAPY_HISTORY_TIMEOUT_MS, remaining),

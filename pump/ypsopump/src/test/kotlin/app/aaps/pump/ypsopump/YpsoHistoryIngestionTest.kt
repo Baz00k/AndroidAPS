@@ -174,6 +174,36 @@ class YpsoHistoryIngestionTest {
         verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
+    @Test
+    fun `provisional accounting is bound to pump identity before the authoritative row is written`() {
+        val store = Store(YpsoHistoryState(cursor = cursor(100)))
+        val sync: PumpSync = mock()
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+            .thenReturn(PumpSync.BolusSyncResult.UPDATED)
+        val resolved = mutableListOf<Triple<Long, Double, BS.Type>>()
+        val ingestion = YpsoHistoryIngestion(store, sync) { _, pumpId, _, amount, type ->
+            resolved += Triple(pumpId, amount, type)
+        }
+
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 91), row(100, 2, 100))))
+
+        assertTrue(result is YpsoHistoryIngestionResult.Applied)
+        // The provisional record must be linked to the pump id before the authoritative amount is
+        // written, otherwise PumpSync inserts a second record and the dose is counted twice.
+        assertEquals(1, resolved.size)
+        assertEquals(0.91, resolved.single().second)
+        val order = org.mockito.kotlin.inOrder(sync)
+        order.verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(0.91), any(), any(), any(), any())
+    }
+
+    private fun cursor(sequence: Long): YpsoHistoryCursor =
+        YpsoHistoryIngestion(Store(), mock()).let {
+            val bootstrapStore = Store()
+            YpsoHistoryIngestion(bootstrapStore, mock())
+                .ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(sequence, 2, 100))))
+            requireNotNull(bootstrapStore.value.cursor)
+        }
+
     private fun row(sequence: Long, type: Int, value1: Int): YpsoHistoryEntry = YpsoHistoryEntry(
         ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 9, 18, 12, sequence.toInt() % 60)),
         type, value1, 0, 0, sequence, 0,

@@ -14,6 +14,12 @@ sealed interface YpsoHistoryIngestionResult {
 class YpsoHistoryIngestion(
     private val store: YpsoHistoryStateStore,
     private val pumpSync: PumpSync,
+    /**
+     * Resolves a provisional record created for a dispatched dose onto its pump identity. Without this
+     * the terminal history row would insert a second record for the same physical bolus, because
+     * PumpSync matches provisional records by temporary id and terminal rows by pump id.
+     */
+    private val resolveProvisional: (pumpSerial: String, pumpId: Long, timestamp: Long, amount: Double, type: BS.Type) -> Unit = { _, _, _, _, _ -> },
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
     /** Cheap local gate for a new dose. Never performs pump I/O. */
@@ -35,6 +41,15 @@ class YpsoHistoryIngestion(
         val state = store.load()
         val pending = state.pendingBolus ?: return true
         if (pending.pumpSerial != pumpSerial) return false
+        // Bind any provisional record for this dose to its pump identity first, so the authoritative
+        // row below updates that record instead of creating a duplicate.
+        resolveProvisional(
+            pending.pumpSerial,
+            pending.pumpId,
+            pending.timestamp,
+            pending.amountCentiUnits / 100.0,
+            pending.type,
+        )
         val result = pumpSync.replayConfirmedBolusWithPumpIdDetailed(
             pending.timestamp,
             pending.amountCentiUnits / 100.0,

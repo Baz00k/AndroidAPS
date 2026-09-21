@@ -447,7 +447,14 @@ internal class YpsoSerializedWriteTransport(
      * the current link; durable uncertainty is tracked in [PumpSession], not here.
      */
     internal fun hasUnresolvedWriteOn(gatt: Any?): Boolean =
-        synchronized(lock) { active?.request?.owner?.gatt === gatt && gatt != null }
+        synchronized(lock) {
+            val current = active ?: return@synchronized false
+            // A write parked for reconciliation is no longer occupying the transport: its uncertainty is
+            // durable in PumpSession and the bolus journal, which own the therapy decision. Only a write
+            // still in flight on this very connection can conflict with a new command.
+            if (current.awaitingReconciliation) return@synchronized false
+            gatt != null && current.request.owner.gatt === gatt
+        }
 
     internal fun ownsGatt(gatt: Any): Boolean =
         synchronized(lock) {
