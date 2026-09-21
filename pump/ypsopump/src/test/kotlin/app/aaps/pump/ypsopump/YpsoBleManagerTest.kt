@@ -325,6 +325,70 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `stable history yield reconciles an in flight selector before releasing ownership`() {
+        val fixture = connectedGatt(eventCountPresent = true)
+        val record = manager.session!!.snapshot()!!
+        val store = object : PumpSession.Store {
+            var state = PumpSession.State(
+                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
+                activeGeneration = record.generation,
+            )
+            override fun load() = state
+            override fun commit(state: PumpSession.State) { this.state = state }
+        }
+        manager.session = PumpSession(store)
+        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
+        pumpState.masterVersion = "V05.00.52"
+        pumpState.supervisorVersion = "V05.00.52"
+        pumpState.controlServiceVersion = "1.3"
+        manager.sdkInt = 33
+        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
+        val service = fixture.gatt.services.first()
+        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
+            val value: BluetoothGattCharacteristic = mock()
+            whenever(value.uuid).thenReturn(uuid)
+            whenever(value.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
+            whenever(service.getCharacteristic(uuid)).thenReturn(value)
+            whenever(fixture.gatt.readCharacteristic(value)).thenReturn(true)
+            return value
+        }
+        val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
+        val eventValue = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
+        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
+        val descriptor: BluetoothGattDescriptor = mock()
+        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
+        whenever(descriptor.characteristic).thenReturn(notify)
+        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
+        whenever(fixture.gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
+        var readCounter = 0L
+        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
+            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
+            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
+        }
+        fun row(index: Int, sequence: Long): ByteArray {
+            val payload = java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .putInt(100 + index).put(2).putShort(100).putShort(0).putShort(0).putInt(sequence.toInt()).putShort(index.toShort())
+                .array()
+            return YpsoCrc.appendCrc(payload)
+        }
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+
+        val attempt = manager.readStableHistory(null, maxRows = 2, onResult = results::add)
+        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
+        respond(fixture.eventCount!!, YpsoGlb.encode(2))
+        respond(selector, YpsoGlb.encode(9))
+        assertTrue(attempt.requestYield())
+        repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
+        respond(selector, YpsoGlb.encode(0))
+        respond(eventValue, row(0, 101))
+
+        assertEquals(listOf(null), results)
+        assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation?.phase)
+        verify(fixture.gatt, times(2)).readCharacteristic(selector)
+    }
+
+    @Test
     fun `configuration refresh yields after reconciled selector and retains previous complete schedules`() {
         acquireProfile(yieldAfterFirstRow = true)
     }

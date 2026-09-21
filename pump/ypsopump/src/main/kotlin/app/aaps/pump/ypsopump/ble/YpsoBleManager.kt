@@ -472,9 +472,17 @@ class YpsoBleManager @Inject constructor(
 
     class HistoryReadAttempt internal constructor() {
         private val active = AtomicBoolean(true)
+        private val yieldRequested = AtomicBoolean(false)
         internal val isActive: Boolean get() = active.get()
+        internal val shouldYield: Boolean get() = yieldRequested.get()
         internal var onCancel: () -> Unit = {}
         internal fun tryComplete(): Boolean = active.compareAndSet(true, false)
+        /** Stop at the next selector-safe boundary, after any dispatched write is reconciled. */
+        fun requestYield(): Boolean {
+            if (!active.get()) return false
+            yieldRequested.set(true)
+            return true
+        }
         fun cancel(): Boolean {
             if (!active.compareAndSet(true, false)) return false
             onCancel()
@@ -1305,6 +1313,11 @@ class YpsoBleManager @Inject constructor(
             historyReadActive.set(false)
             onResult(value)
         }
+        fun yieldAtSafeBoundary(): Boolean {
+            if (!attempt.shouldYield) return false
+            finish(null)
+            return true
+        }
         fun failHistory(detail: String) {
             aapsLogger.error(LTag.PUMP, "YpsoPump stable history failed: $detail")
             finish(null)
@@ -1393,6 +1406,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         fun finishScan() {
+            if (yieldAtSafeBoundary()) return
             readCount { countAfter ->
                 if (countAfter == 0) {
                     if (countBefore != 0) return@readCount failHistory("event count moved to empty")
@@ -1416,6 +1430,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         fun readRows(index: Int, limit: Int) {
+            if (yieldAtSafeBoundary()) return
             if (index >= limit) return finishScan()
             select(index) { row ->
                 rows += row
@@ -1425,6 +1440,7 @@ class YpsoBleManager @Inject constructor(
         }
         enableProfileSetup(gatt) { setup ->
             if (!setup) return@enableProfileSetup failHistory("required control notification setup failed")
+            if (yieldAtSafeBoundary()) return@enableProfileSetup
             readCount { count ->
                 countBefore = count
                 if (count == 0) {
@@ -1435,6 +1451,7 @@ class YpsoBleManager @Inject constructor(
                     headBefore = head
                     val limit = minOf(count, maxRows)
                     rows += head
+                    if (yieldAtSafeBoundary()) return@select
                     readRows(1, limit)
                 }
             }

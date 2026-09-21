@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt
 import app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
 import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
@@ -22,6 +23,39 @@ class YpsoExtendedBolusReconcilerTest {
             YpsoExtendedBolusReconciler.reconcile(attempt(), listOf(event(type = 3, value1 = 8, value2 = 15))),
         )
         assertEquals(8, result.amountCentiUnits)
+    }
+
+    @Test
+    fun `cancelled square accepts authoritative partial amount when terminal duration differs`() {
+        val result = assertInstanceOf(
+            YpsoExtendedBolusReconciliation.AttemptCompleted::class.java,
+            YpsoExtendedBolusReconciler.reconcile(
+                attempt(cancelPending = true),
+                listOf(event(type = 3, value1 = 8, value2 = 1)),
+            ),
+        )
+
+        assertEquals(8, result.amountCentiUnits)
+    }
+
+    @Test
+    fun `pump cancelled square accepts authoritative partial amount when terminal duration differs`() {
+        val result = assertInstanceOf(
+            YpsoExtendedBolusReconciliation.AttemptCompleted::class.java,
+            YpsoExtendedBolusReconciler.reconcile(attempt(), listOf(event(type = 3, value1 = 8, value2 = 1))),
+        )
+
+        assertEquals(8, result.amountCentiUnits)
+    }
+
+    @Test
+    fun `full square completion still rejects a different terminal duration`() {
+        val result = assertInstanceOf(
+            YpsoExtendedBolusReconciliation.Unresolved::class.java,
+            YpsoExtendedBolusReconciler.reconcile(attempt(), listOf(event(type = 3, value1 = 100, value2 = 1))),
+        )
+
+        assertEquals(YpsoExtendedBolusReconciliation.Reason.HISTORY_SHAPE_MISMATCH, result.reason)
     }
 
     @Test
@@ -83,11 +117,18 @@ class YpsoExtendedBolusReconcilerTest {
         immediate: Int = 0,
         sequence: Long = 101,
         baselinePumpId: Long = 100,
+        cancelPending: Boolean = false,
     ) = YpsoBolusAttempt(
         "request", "10000001", "generation", YpsoBolusTreatment.NORMAL, 100, "ab".repeat(32),
         YpsoBolusBaseline(10, 20, baselinePumpId, 1, 2, 3, 1_000), 1_100,
         shape = shape, durationMinutes = 15, immediateCentiUnits = immediate,
-        outcome = YpsoBolusOutcome.DELIVERING, dispatchCounter = 1, dispatchedAt = 1_200, pumpSlowSequence = sequence,
+        outcome = if (cancelPending) YpsoBolusOutcome.CANCEL_PENDING else YpsoBolusOutcome.DELIVERING,
+        dispatchCounter = 1,
+        dispatchedAt = 1_200,
+        pumpSlowSequence = sequence,
+        cancelRequestId = if (cancelPending) "cancel" else null,
+        cancelCounter = if (cancelPending) 2 else null,
+        cancelBlock = if (cancelPending) YpsoBolusBlock.SLOW else null,
     )
 
     private fun event(generation: Int = 0, sequence: Long = 101, type: Int, value1: Int, value2: Int = 0, value3: Int = 0): YpsoHistoryEvent {

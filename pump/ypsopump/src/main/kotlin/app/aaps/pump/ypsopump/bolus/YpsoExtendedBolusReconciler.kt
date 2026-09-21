@@ -35,17 +35,23 @@ object YpsoExtendedBolusReconciler {
         if (compatible.isEmpty()) return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY)
         if (compatible.size > 1) return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.MULTIPLE_COMPATIBLE_HISTORY)
         val event = compatible.single()
-        val shapeMatches = when (attempt.shape) {
-            YpsoBolusShape.EXTENDED -> event.semantics.durationMinutes == attempt.durationMinutes
-            YpsoBolusShape.COMBINED ->
-                event.entry.value2 == attempt.immediateCentiUnits && event.entry.value3 == attempt.durationMinutes
-            YpsoBolusShape.IMMEDIATE -> false
-        }
-        if (!shapeMatches) return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.HISTORY_SHAPE_MISMATCH)
         val amount = Math.round(requireNotNull(event.semantics.amountUnits) * 100.0).toInt()
         if (amount !in 0..attempt.requestedCentiUnits) {
             return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.HISTORY_AMOUNT_INVALID)
         }
+        val partial = amount < attempt.requestedCentiUnits
+        val shapeMatches = when (attempt.shape) {
+            // A pump-side or AAPS-side cancellation can rewrite the terminal duration while preserving
+            // the proven slow sequence and reporting an authoritative partial amount. Full completion
+            // still requires the programmed duration so a malformed same-sequence row fails closed.
+            YpsoBolusShape.EXTENDED ->
+                partial || attempt.cancelRequestId != null || event.semantics.durationMinutes == attempt.durationMinutes
+            YpsoBolusShape.COMBINED ->
+                event.entry.value2 == attempt.immediateCentiUnits &&
+                    (partial || attempt.cancelRequestId != null || event.entry.value3 == attempt.durationMinutes)
+            YpsoBolusShape.IMMEDIATE -> false
+        }
+        if (!shapeMatches) return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.HISTORY_SHAPE_MISMATCH)
         return YpsoExtendedBolusReconciliation.AttemptCompleted(event, amount)
     }
 

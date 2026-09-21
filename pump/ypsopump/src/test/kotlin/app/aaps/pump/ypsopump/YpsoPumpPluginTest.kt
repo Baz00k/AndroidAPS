@@ -301,6 +301,70 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `therapy waits until requested history yield releases operation ownership`() {
+        val attempt = YpsoBleManager.HistoryReadAttempt()
+        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        val attemptRef = plugin.javaClass.getDeclaredField("historyRecoveryAttempt").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicReference<YpsoBleManager.HistoryReadAttempt?>
+        active.set(true)
+        attemptRef.set(attempt)
+        val release = Thread {
+            while (!attempt.shouldYield) Thread.yield()
+            active.set(false)
+        }.apply { start() }
+
+        assertTrue(plugin.yieldHistoryRecoveryForTherapy(1_000L))
+
+        release.join()
+        assertTrue(attempt.shouldYield)
+    }
+
+    @Test
+    fun `bolus status preflight starts only after background history releases ownership`() {
+        val attempt = YpsoBleManager.HistoryReadAttempt()
+        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        val attemptRef = plugin.javaClass.getDeclaredField("historyRecoveryAttempt").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicReference<YpsoBleManager.HistoryReadAttempt?>
+        active.set(true)
+        attemptRef.set(attempt)
+        whenever(manager.readStatus(any())).thenAnswer {
+            assertFalse(active.get(), "fresh status must not race history operation ownership")
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        val release = Thread {
+            while (!attempt.shouldYield) Thread.yield()
+            active.set(false)
+        }.apply { start() }
+
+        val result = plugin.readTherapyStatus(historyYieldTimeoutMs = 1_000L, statusTimeoutMs = 1_000L)
+
+        release.join()
+        assertEquals(YpsoPumpPlugin.TherapyStatusReadiness.READY, result)
+        verify(manager).readStatus(any())
+    }
+
+    @Test
+    fun `bolus status preflight does not race history when safe yield times out`() {
+        val attempt = YpsoBleManager.HistoryReadAttempt()
+        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        val attemptRef = plugin.javaClass.getDeclaredField("historyRecoveryAttempt").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicReference<YpsoBleManager.HistoryReadAttempt?>
+        active.set(true)
+        attemptRef.set(attempt)
+
+        val result = plugin.readTherapyStatus(historyYieldTimeoutMs = 1L, statusTimeoutMs = 1_000L)
+
+        assertEquals(YpsoPumpPlugin.TherapyStatusReadiness.HISTORY_BUSY, result)
+        assertTrue(attempt.shouldYield)
+        verify(manager, never()).readStatus(any())
+        active.set(false)
+    }
+
+    @Test
     fun `foreground app requests status immediately and retains idle connection`() {
         whenever(provisioning.isConfigured()).thenReturn(true)
         whenever(provisioning.retryAllowed(any())).thenReturn(true)

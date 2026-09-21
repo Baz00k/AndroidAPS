@@ -390,8 +390,11 @@ class YpsoPumpPlugin @Inject constructor(
                 constrainedMaximum,
             )
         }.getOrElse { return fail(R.string.ypsopump_bolus_invalid, it.message ?: "invalid request") }
-        if (!readStatusBlocking(stopWhen = { bolusController.cancellationRequested })) {
-            return fail(R.string.ypsopump_bolus_failed, if (bolusController.cancellationRequested) "bolus cancelled before dispatch" else "fresh pump status is unavailable")
+        when (readTherapyStatus(stopWhen = { bolusController.cancellationRequested })) {
+            TherapyStatusReadiness.READY              -> Unit
+            TherapyStatusReadiness.CANCELLED          -> return fail(R.string.ypsopump_bolus_failed, "bolus cancelled before dispatch")
+            TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
+            TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "fresh pump status is unavailable")
         }
         if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
         val reboot = bleManager.session?.snapshot()?.reboot
@@ -510,7 +513,12 @@ class YpsoPumpPlugin @Inject constructor(
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         if (!bolusController.beginDelivery()) return fail(R.string.ypsopump_bolus_failed, "another bolus is active")
         try {
-            if (!readStatusBlocking()) return fail(R.string.ypsopump_bolus_failed, "fresh pump status is unavailable")
+            when (readTherapyStatus()) {
+                TherapyStatusReadiness.READY              -> Unit
+                TherapyStatusReadiness.HISTORY_BUSY       -> return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
+                TherapyStatusReadiness.CANCELLED,
+                TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(R.string.ypsopump_bolus_failed, "fresh pump status is unavailable")
+            }
             if (pumpState.isSuspended || reservoirEmpty()) return fail(R.string.ypsopump_bolus_failed, "pump is stopped or reservoir is empty")
             val reboot = bleManager.session?.snapshot()?.reboot
                 ?: return fail(R.string.ypsopump_bolus_failed, "pump reboot epoch is unavailable")
@@ -650,6 +658,25 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
+    internal enum class TherapyStatusReadiness { READY, CANCELLED, HISTORY_BUSY, STATUS_UNAVAILABLE }
+
+    /**
+     * A background history scan owns the same logical BLE operation lane as status reads. A bolus
+     * command therefore has to request a selector-safe yield and wait for ownership to be released
+     * before starting its mandatory fresh status read. Otherwise [YpsoBleManager.readStatus] rejects
+     * immediately even though the previously displayed pump status is valid.
+     */
+    internal fun readTherapyStatus(
+        historyYieldTimeoutMs: Long = HISTORY_YIELD_GRACE_MS,
+        statusTimeoutMs: Long = 30_000L,
+        stopWhen: () -> Boolean = { false },
+    ): TherapyStatusReadiness {
+        if (!yieldHistoryRecoveryForTherapy(historyYieldTimeoutMs)) return TherapyStatusReadiness.HISTORY_BUSY
+        if (stopWhen()) return TherapyStatusReadiness.CANCELLED
+        if (readStatusBlocking(statusTimeoutMs, stopWhen)) return TherapyStatusReadiness.READY
+        return if (stopWhen()) TherapyStatusReadiness.CANCELLED else TherapyStatusReadiness.STATUS_UNAVAILABLE
+    }
+
     private fun readProfileBlocking(
         timeoutMs: Long = 120_000,
         activeOnly: Boolean = false,
@@ -697,15 +724,27 @@ class YpsoPumpPlugin @Inject constructor(
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         var yielded = false
         while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            if (stopWhen()) { yielded = true; break }
+            if (stopWhen() && !yielded) {
+                yielded = true
+                attempt.requestYield()
+            }
             if (android.os.SystemClock.elapsedRealtime() >= deadline) break
         }
         if (latch.count == 0L) return snapshot
+        if (yielded) {
+            // A selector write that has left the phone must complete semantic read-back before the
+            // therapy command can own the connection. Hard-cancelling here strands its reservation.
+            if (latch.await(HISTORY_YIELD_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
+        }
         if (!attempt.cancel()) {
             latch.await()
             return snapshot
         }
-        if (yielded) return null
+        if (yielded) {
+            aapsLogger.error(LTag.PUMP, "YpsoPump history yield did not reach a safe boundary")
+            bleManager.disconnect()
+            return null
+        }
         aapsLogger.error(LTag.PUMP, "YpsoPump history read timed out after ${timeoutMs}ms")
         bleManager.disconnect()
         return null
@@ -799,10 +838,20 @@ class YpsoPumpPlugin @Inject constructor(
 
     private fun historyRecoveryMustYield(): Boolean =
         !historyRecoveryEnabled || bolusController.isBusy ||
-            commandQueue.size() > 0 || commandQueue.bolusInQueue()
+            commandQueue.size() > 0 || commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue()
 
     private fun cancelHistoryRecovery() {
-        historyRecoveryAttempt.get()?.cancel()
+        historyRecoveryAttempt.get()?.requestYield()
+    }
+
+    /** Give an in-flight selector enough time to reconcile at a safe boundary before therapy I/O. */
+    internal fun yieldHistoryRecoveryForTherapy(timeoutMs: Long = HISTORY_YIELD_GRACE_MS): Boolean {
+        cancelHistoryRecovery()
+        val deadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (historyRecoveryActive.get() && System.nanoTime() < deadlineNanos) {
+            Thread.sleep(25L)
+        }
+        return !historyRecoveryActive.get()
     }
 
     private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
@@ -872,26 +921,27 @@ class YpsoPumpPlugin @Inject constructor(
         if (attempt.shape != YpsoBolusShape.IMMEDIATE) {
             when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.newEventsOldestFirst)) {
                 is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
-                    val timestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
+                    val historyTimestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
                         ?.instant?.toEpochMilli() ?: return
-                    val completed = resolution.amountCentiUnits == attempt.requestedCentiUnits && attempt.cancelRequestId == null
-                    val start = if (completed) timestamp - attempt.durationMinutes * 60_000L
-                    else requireNotNull(attempt.dispatchedAt)
-                    val actualDuration = (timestamp - start).coerceAtLeast(1L)
-                    val synced = pumpSync.syncExtendedBolusWithPumpId(
-                        start,
+                    val terminal = YpsoExtendedBolusAccounting.terminalWindow(
+                        attempt,
+                        resolution.amountCentiUnits,
+                        System.currentTimeMillis(),
+                    )
+                    pumpSync.syncExtendedBolusWithPumpId(
+                        terminal.start,
                         resolution.amountCentiUnits / 100.0,
-                        actualDuration,
+                        terminal.duration,
                         false,
                         resolution.event.identity.aapsPumpId,
                         PumpType.YPSOPUMP,
                         serial,
                     )
-                    if (!synced && !extendedAccountingMatches(
+                    if (!extendedAccountingMatches(
                             resolution.event.identity.aapsPumpId,
-                            start,
+                            terminal.start,
                             resolution.amountCentiUnits / 100.0,
-                            actualDuration,
+                            terminal.duration,
                             serial,
                         )) {
                         bolusController.markUnresolved("terminal extended bolus accounting was rejected")
@@ -900,7 +950,7 @@ class YpsoPumpPlugin @Inject constructor(
                     }
                     bolusController.confirmTerminal(
                         resolution.amountCentiUnits,
-                        timestamp,
+                        terminal.end.coerceAtLeast(historyTimestamp),
                         resolution.event.identity.sequence,
                         resolution.event.identity.aapsPumpId,
                         cancelled = resolution.amountCentiUnits < attempt.requestedCentiUnits,
@@ -1019,6 +1069,11 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun cancelExtendedBolus(): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
+        // Therapy cancellation outranks abandonable accounting. Do not overlap bolus status/cancel I/O
+        // with an in-flight selector transaction; it must first reconcile at a selector-safe boundary.
+        if (!yieldHistoryRecoveryForTherapy()) {
+            return fail(R.string.ypsopump_bolus_failed, "background history did not release the pump connection")
+        }
         val attempt = bolusController.currentAttempt()
         if (attempt == null || attempt.shape == YpsoBolusShape.IMMEDIATE || !attempt.awaitsReconciliation) {
             if (pumpSync.expectedPumpState().extendedBolus != null) {
@@ -1253,6 +1308,7 @@ class YpsoPumpPlugin @Inject constructor(
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
+        private const val HISTORY_YIELD_GRACE_MS = 10_000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 

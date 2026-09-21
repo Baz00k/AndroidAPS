@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptJournal
 import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusController
+import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -19,5 +20,17 @@ class YpsoStopHistoryYieldTest {
         controller.requestStop()
         assertTrue(controller.cancellationRequested)
         assertFalse(historyMustYield())
+    }
+
+    @Test
+    fun `history yield waits for a selector safe boundary instead of hard cancelling ownership`() {
+        val attempt = YpsoBleManager.HistoryReadAttempt()
+        var hardCancelled = false
+        attempt.onCancel = { hardCancelled = true }
+
+        assertTrue(attempt.requestYield())
+        assertTrue(attempt.isActive)
+        assertTrue(attempt.shouldYield)
+        assertFalse(hardCancelled)
     }
 }
