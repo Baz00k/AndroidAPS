@@ -848,13 +848,10 @@ class YpsoPumpPlugin @Inject constructor(
         dispatchHistoryRecovery {
             try {
                 val cursor = historyIngestion.currentCursor()
-                // Reconciling a just-finished dose only needs the newest rows. A full-ring scan cannot
-                // complete before the connection is reclaimed, so it never reaches ingestion at all.
-                val maxRows = when {
-                    cursor == null                          -> 1
-                    bolusController.currentAttempt()?.awaitsReconciliation == true -> THERAPY_HISTORY_MAX_ROWS
-                    else                                    -> HISTORY_RECOVERY_MAX_ROWS
-                }
+                // The scan must reach the durable cursor row, because reconciliation can only prove no
+                // events were missed by seeing it. A short scan reports COVERAGE_INCOMPLETE and is
+                // discarded whole, so background recovery always reads the full ring.
+                val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
@@ -1535,13 +1532,6 @@ class YpsoPumpPlugin @Inject constructor(
     companion object {
         internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
-        /**
-         * A terminal bolus row is always at the head of the event ring, so therapy confirmation reads a
-         * handful of rows rather than a full scan. The pump serves roughly one row per 60ms, so a large
-         * scan cannot finish inside a therapy command and previously consumed the whole window.
-         */
-        private const val THERAPY_HISTORY_MAX_ROWS = 8
-        private const val THERAPY_HISTORY_TIMEOUT_MS = 30_000L
         private const val HISTORY_COMPLETION_GRACE_MS = 2_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
