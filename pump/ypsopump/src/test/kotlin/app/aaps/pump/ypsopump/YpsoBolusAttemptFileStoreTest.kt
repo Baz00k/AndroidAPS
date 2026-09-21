@@ -80,17 +80,24 @@ class YpsoBolusAttemptFileStoreTest {
         val current = attempt()
         YpsoBolusAttemptFileStore(file).commit(current)
         file.writeText(
-            file.readText()
-                .replaceFirst("\"version\":5", "\"version\":3")
-                .replace(Regex(",\"sessionKeyId\":\"[0-9a-f]{64}\""), "")
-                .replace(",\"cancelStoppedAt\":null", "")
-                .replace(",\"cancelDispatchedAt\":null", ""),
+            downgradeAttempts(file.readText(), 3, "sessionKeyId", "cancelStoppedAt", "cancelDispatchedAt"),
         )
 
         val loaded = YpsoBolusAttemptFileStore(file).load()
 
         assertEquals(current.copy(sessionKeyId = null), loaded)
         assertEquals(null, YpsoBolusAttemptFileStore(file).recoveryEvidence()?.attempt?.sessionKeyId)
+    }
+
+    @Test
+    fun `version 5 journals written before cancel dispatch tracking still load`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val current = attempt()
+        YpsoBolusAttemptFileStore(file).commit(current)
+        file.writeText(downgradeAttempts(file.readText(), 5, "cancelDispatchedAt"))
+
+        assertEquals(current, YpsoBolusAttemptFileStore(file).load())
     }
 
     @Test
@@ -163,6 +170,18 @@ class YpsoBolusAttemptFileStoreTest {
 
         assertEquals(listOf("legacy", "next"), store.loadAll().map { it.requestId })
         assertEquals(6, JSONObject(file.readText()).getInt("version"))
+    }
+
+    /** Rewrites every stored attempt back to an older schema by version and removed fields. */
+    private fun downgradeAttempts(text: String, version: Int, vararg removed: String): String {
+        val root = JSONObject(text)
+        val attempts = root.getJSONArray("attempts")
+        for (i in 0 until attempts.length()) {
+            val attempt = attempts.getJSONObject(i)
+            attempt.put("version", version)
+            removed.forEach(attempt::remove)
+        }
+        return root.toString()
     }
 
     private fun version2Json() = """

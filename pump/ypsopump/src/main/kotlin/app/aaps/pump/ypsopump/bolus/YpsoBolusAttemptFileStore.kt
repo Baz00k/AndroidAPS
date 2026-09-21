@@ -65,7 +65,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
     }
 
     private fun encode(value: YpsoBolusAttempt): JSONObject = JSONObject()
-        .put("version", 5)
+        .put("version", 6)
         .put("requestId", value.requestId)
         .put("pumpSerial", value.pumpSerial)
         .put("sessionGeneration", value.sessionGeneration)
@@ -106,7 +106,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
 
     private fun decode(json: JSONObject): YpsoBolusAttempt {
         val version = json.getInt("version")
-        require(version in 2..5) { "unsupported bolus journal version" }
+        require(version in 2..6) { "unsupported bolus journal version" }
         require(json.keys().asSequence().toSet() == rootFields(version)) { "unexpected bolus journal fields" }
         val baseline = json.getJSONObject("baseline")
         require(baseline.keys().asSequence().toSet() == BASELINE_FIELDS)
@@ -148,7 +148,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             else if (cancelRequestId != null) YpsoBolusBlock.FAST else null,
             cancelObservedCentiUnits = if (version >= 3) json.intOrNull("cancelObservedCentiUnits") else null,
             cancelStoppedAt = if (version >= 5) json.longOrNull("cancelStoppedAt") else null,
-            cancelDispatchedAt = if (version >= 5) json.longOrNull("cancelDispatchedAt") else null,
+            cancelDispatchedAt = if (version >= 6) json.longOrNull("cancelDispatchedAt") else null,
             detail = json.stringOrNull("detail"),
         )
     }
@@ -182,7 +182,8 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             "cancelBlock", "cancelObservedCentiUnits",
         )
         private val VERSION_4_FIELDS = VERSION_3_FIELDS + "sessionKeyId"
-        private val VERSION_5_FIELDS = VERSION_4_FIELDS + setOf("cancelStoppedAt", "cancelDispatchedAt")
+        private val VERSION_5_FIELDS = VERSION_4_FIELDS + "cancelStoppedAt"
+        private val VERSION_6_FIELDS = VERSION_5_FIELDS + "cancelDispatchedAt"
         private val BASELINE_FIELDS = setOf(
             "fastSequence", "slowSequence", "historyPumpId", "historyFingerprintHigh", "historyFingerprintLow",
             "pumpReboot", "observedAt",
@@ -192,7 +193,8 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             2 -> VERSION_2_FIELDS
             3 -> VERSION_3_FIELDS
             4 -> VERSION_4_FIELDS
-            else -> VERSION_5_FIELDS
+            5 -> VERSION_5_FIELDS
+            else -> VERSION_6_FIELDS
         }
     }
 }
