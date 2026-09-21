@@ -441,6 +441,14 @@ internal class YpsoSerializedWriteTransport(
 
     internal fun hasUnresolvedWrite(): Boolean = synchronized(lock) { active != null }
 
+    /**
+     * Whether a write is still in flight on [gatt] itself. An entry left behind by a connection that
+     * has since been replaced cannot be answered by the pump any more, so it must not block therapy on
+     * the current link; durable uncertainty is tracked in [PumpSession], not here.
+     */
+    internal fun hasUnresolvedWriteOn(gatt: Any?): Boolean =
+        synchronized(lock) { active?.request?.owner?.gatt === gatt && gatt != null }
+
     internal fun ownsGatt(gatt: Any): Boolean =
         synchronized(lock) {
             active?.request?.owner?.gatt === gatt

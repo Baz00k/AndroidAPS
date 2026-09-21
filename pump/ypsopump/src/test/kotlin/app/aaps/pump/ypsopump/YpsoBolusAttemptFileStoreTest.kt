@@ -80,7 +80,7 @@ class YpsoBolusAttemptFileStoreTest {
         val current = attempt()
         YpsoBolusAttemptFileStore(file).commit(current)
         file.writeText(
-            downgradeAttempts(file.readText(), 3, "sessionKeyId", "cancelStoppedAt", "cancelDispatchedAt"),
+            downgradeAttempts(file.readText(), 3, "sessionKeyId", "cancelStoppedAt", "cancelDispatchedAt", "blockTerminalAt"),
         )
 
         val loaded = YpsoBolusAttemptFileStore(file).load()
@@ -90,12 +90,12 @@ class YpsoBolusAttemptFileStoreTest {
     }
 
     @Test
-    fun `version 5 journals written before cancel dispatch tracking still load`() {
+    fun `version 6 journals written before terminal notification tracking still load`() {
         val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
         val file = directory.resolve("attempt.json")
         val current = attempt()
         YpsoBolusAttemptFileStore(file).commit(current)
-        file.writeText(downgradeAttempts(file.readText(), 5, "cancelDispatchedAt"))
+        file.writeText(downgradeAttempts(file.readText(), 6, "blockTerminalAt"))
 
         assertEquals(current, YpsoBolusAttemptFileStore(file).load())
     }
@@ -169,7 +169,7 @@ class YpsoBolusAttemptFileStoreTest {
         store.commit(attempt().copy(requestId = "next", createdAt = 3_000))
 
         assertEquals(listOf("legacy", "next"), store.loadAll().map { it.requestId })
-        assertEquals(6, JSONObject(file.readText()).getInt("version"))
+        assertEquals(7, JSONObject(file.readText()).getInt("version"))
     }
 
     /** Rewrites every stored attempt back to an older schema by version and removed fields. */

@@ -46,7 +46,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         val matching = prior.indexOfFirst { it.requestId == attempt.requestId }
         val attempts = if (matching >= 0) prior.toMutableList().also { it[matching] = attempt } else prior + attempt
         val bytes = JSONObject()
-            .put("version", 6)
+            .put("version", 7)
             .put("attempts", JSONArray().also { array -> attempts.forEach { array.put(encode(it)) } })
             .toString()
             .toByteArray(Charsets.UTF_8)
@@ -65,7 +65,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
     }
 
     private fun encode(value: YpsoBolusAttempt): JSONObject = JSONObject()
-        .put("version", 6)
+        .put("version", 7)
         .put("requestId", value.requestId)
         .put("pumpSerial", value.pumpSerial)
         .put("sessionGeneration", value.sessionGeneration)
@@ -91,6 +91,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         .putNullable("cancelObservedCentiUnits", value.cancelObservedCentiUnits)
         .putNullable("cancelStoppedAt", value.cancelStoppedAt)
         .putNullable("cancelDispatchedAt", value.cancelDispatchedAt)
+        .putNullable("blockTerminalAt", value.blockTerminalAt)
         .putNullable("detail", value.detail)
         .put(
             "baseline",
@@ -106,7 +107,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
 
     private fun decode(json: JSONObject): YpsoBolusAttempt {
         val version = json.getInt("version")
-        require(version in 2..6) { "unsupported bolus journal version" }
+        require(version in 2..7) { "unsupported bolus journal version" }
         require(json.keys().asSequence().toSet() == rootFields(version)) { "unexpected bolus journal fields" }
         val baseline = json.getJSONObject("baseline")
         require(baseline.keys().asSequence().toSet() == BASELINE_FIELDS)
@@ -149,12 +150,13 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             cancelObservedCentiUnits = if (version >= 3) json.intOrNull("cancelObservedCentiUnits") else null,
             cancelStoppedAt = if (version >= 5) json.longOrNull("cancelStoppedAt") else null,
             cancelDispatchedAt = if (version >= 6) json.longOrNull("cancelDispatchedAt") else null,
+            blockTerminalAt = if (version >= 7) json.longOrNull("blockTerminalAt") else null,
             detail = json.stringOrNull("detail"),
         )
     }
 
     private fun decodeAll(json: JSONObject): List<YpsoBolusAttempt> {
-        if (json.optInt("version", -1) !in 5..6 || !json.has("attempts")) return listOf(decode(json))
+        if (json.optInt("version", -1) !in 5..7 || !json.has("attempts")) return listOf(decode(json))
         require(json.keys().asSequence().toSet() == setOf("version", "attempts")) { "unexpected bolus journal fields" }
         val attempts = json.getJSONArray("attempts")
         require(attempts.length() > 0) { "bolus journal is empty" }
@@ -184,6 +186,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         private val VERSION_4_FIELDS = VERSION_3_FIELDS + "sessionKeyId"
         private val VERSION_5_FIELDS = VERSION_4_FIELDS + "cancelStoppedAt"
         private val VERSION_6_FIELDS = VERSION_5_FIELDS + "cancelDispatchedAt"
+        private val VERSION_7_FIELDS = VERSION_6_FIELDS + "blockTerminalAt"
         private val BASELINE_FIELDS = setOf(
             "fastSequence", "slowSequence", "historyPumpId", "historyFingerprintHigh", "historyFingerprintLow",
             "pumpReboot", "observedAt",
@@ -194,7 +197,8 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             3 -> VERSION_3_FIELDS
             4 -> VERSION_4_FIELDS
             5 -> VERSION_5_FIELDS
-            else -> VERSION_6_FIELDS
+            6 -> VERSION_6_FIELDS
+            else -> VERSION_7_FIELDS
         }
     }
 }

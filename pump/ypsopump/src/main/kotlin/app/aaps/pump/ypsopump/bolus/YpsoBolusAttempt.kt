@@ -72,6 +72,8 @@ data class YpsoBolusAttempt(
     val cancelStoppedAt: Long? = null,
     /** Time the cancel frames were dispatched; upper bound on delivery when the pump never proves it. */
     val cancelDispatchedAt: Long? = null,
+    /** Time the pump announced on CONTROL_NOTIFY that this command's block stopped delivering. */
+    val blockTerminalAt: Long? = null,
     val detail: String? = null,
     /** SHA-256 identity of the protected pump key; required for journal-loss ownership recovery. */
     val sessionKeyId: String? = null,
@@ -350,6 +352,13 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             require(it.outcome == YpsoBolusOutcome.CANCEL_PENDING && it.cancelBlock != null)
             require(deliveredCentiUnits in 0..it.requestedCentiUnits)
             it.copy(cancelObservedCentiUnits = maxOf(it.cancelObservedCentiUnits ?: 0, deliveredCentiUnits))
+        }
+
+    /** Persists the pump's own terminal announcement for this command's proven block. */
+    fun observeBlockTerminal(requestId: String, observedAt: Long): YpsoBolusAttempt =
+        update(requestId) {
+            require(it.awaitsReconciliation) { "attempt is no longer awaiting reconciliation" }
+            it.copy(blockTerminalAt = it.blockTerminalAt ?: observedAt)
         }
 
     /** Persists authoritative post-cancel pump status before PumpSync correction is attempted. */

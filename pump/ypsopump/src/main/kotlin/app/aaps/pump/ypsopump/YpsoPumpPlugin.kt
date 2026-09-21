@@ -467,7 +467,8 @@ class YpsoPumpPlugin @Inject constructor(
                 if (pumpHistoryId == null || !historyIngestion.isAccounted(pumpHistoryId)) {
                     val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                     if (remaining > 0) readHistoryBlocking(
-                        timeoutMs = minOf(20_000L, remaining),
+                        timeoutMs = minOf(THERAPY_HISTORY_TIMEOUT_MS, remaining),
+                        maxRows = THERAPY_HISTORY_MAX_ROWS,
                         stopWhen = bolusController::consumeHistoryYield,
                     )?.let(::ingestHistory)
                     Thread.sleep(250L)
@@ -494,7 +495,8 @@ class YpsoPumpPlugin @Inject constructor(
             if (status?.bolusStatusCode == BolusCommand.STATUS_IDLE) {
                 val remaining = deadline - android.os.SystemClock.elapsedRealtime()
                 if (remaining > 0) readHistoryBlocking(
-                    timeoutMs = minOf(20_000L, remaining),
+                    timeoutMs = minOf(THERAPY_HISTORY_TIMEOUT_MS, remaining),
+                    maxRows = THERAPY_HISTORY_MAX_ROWS,
                     stopWhen = bolusController::consumeHistoryYield,
                 )?.let(::ingestHistory)
             }
@@ -1112,6 +1114,10 @@ class YpsoPumpPlugin @Inject constructor(
                         stoppedAt,
                     )
                 }
+                // The pump announced that this exact slow sequence stopped. That is terminal proof the
+                // delivery ended; only the delivered amount is still outstanding, so resolve now and let
+                // background history replace the elapsed estimate with the exact figure.
+                current.blockTerminalAt?.let { return finishUnprovenExtendedCancellation(current) }
                 if (!bleManager.isConnected) {
                     aapsLogger.debug(LTag.PUMP, "YpsoPump reconnecting to confirm extended bolus cancellation")
                     // Release the stale GATT client first; reconnecting without closing it registers a
@@ -1156,10 +1162,13 @@ class YpsoPumpPlugin @Inject constructor(
             pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
                 .comment(rh.gs(R.string.ypsopump_bolus_uncertain, detail))
         }
-        val stoppedAt = attempt?.cancelDispatchedAt
-            ?: return uncertain("extended bolus cancellation was not confirmed by pump status or history")
-        val sequence = attempt.pumpSlowSequence
-            ?: return uncertain("extended bolus cancellation was not confirmed by pump status or history")
+        val unconfirmed = "extended bolus cancellation was not confirmed by pump status or history"
+        if (attempt == null) return uncertain(unconfirmed)
+        // A pump-announced terminal transition proves delivery stopped, so the stop instant is known
+        // exactly. Without it the cancel dispatch is the best available upper bound.
+        val announced = attempt.blockTerminalAt
+        val stoppedAt = announced ?: attempt.cancelDispatchedAt ?: return uncertain(unconfirmed)
+        val sequence = attempt.pumpSlowSequence ?: return uncertain(unconfirmed)
         val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(attempt, stoppedAt)
         val centiUnits = YpsoExtendedBolusAccounting.elapsedCentiUnits(attempt, window)
         val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence)
@@ -1174,6 +1183,17 @@ class YpsoPumpPlugin @Inject constructor(
         )
         if (!extendedAccountingMatches(pumpId, window.start, centiUnits / 100.0, window.duration, serialNumber())) {
             return uncertain("extended bolus cancellation was not confirmed and its accounting was rejected")
+        }
+        if (announced != null) {
+            // The pump confirmed this delivery ended, so cancellation succeeded. The recorded amount is
+            // the elapsed schedule until background history supplies the exact delivered figure.
+            aapsLogger.info(
+                LTag.PUMP,
+                "YpsoPump extended bolus cancelled; recorded ${centiUnits / 100.0} U over ${window.duration / 60_000} min pending history",
+            )
+            bolusController.confirmTerminal(centiUnits, window.end, sequence, pumpId, cancelled = true)
+            return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
+                .comment(rh.gs(R.string.ypsopump_bolus_completed, centiUnits / 100.0))
         }
         aapsLogger.warn(
             LTag.PUMP,
@@ -1224,6 +1244,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun onStart() {
         super.onStart()
+        bleManager.onBolusNotification = { bolusController.observeBolusNotification(it) }
         historyRecoveryEnabled = true
         publishedUnresolvedBolusWarning = null
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN))
@@ -1416,6 +1437,13 @@ class YpsoPumpPlugin @Inject constructor(
     companion object {
         internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
+        /**
+         * A terminal bolus row is always at the head of the event ring, so therapy confirmation reads a
+         * handful of rows rather than a full scan. The pump serves roughly one row per 60ms, so a large
+         * scan cannot finish inside a therapy command and previously consumed the whole window.
+         */
+        private const val THERAPY_HISTORY_MAX_ROWS = 8
+        private const val THERAPY_HISTORY_TIMEOUT_MS = 30_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HISTORY_YIELD_GRACE_MS = 10_000L

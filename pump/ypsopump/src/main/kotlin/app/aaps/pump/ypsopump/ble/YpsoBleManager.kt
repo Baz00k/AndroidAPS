@@ -14,6 +14,7 @@ import android.os.Build
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.YpsoPumpConst
+import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
@@ -65,6 +66,10 @@ class YpsoBleManager @Inject constructor(
 
     @Volatile private var bluetoothGatt: BluetoothGatt? = null
     val isConnected: Boolean get() = pumpState.connectionState == ConnectionState.CONNECTED
+
+    /** Receives every decoded bolus state change the pump pushes on CONTROL_NOTIFY. */
+    @Volatile
+    var onBolusNotification: ((YpsoBolusNotification) -> Unit)? = null
     /**
      * A verified session with an authenticated read floor can acquire selectors. An unknown write
      * floor is normal: the first write reconciles it from zero through the pump-confirmed search.
@@ -90,9 +95,11 @@ class YpsoBleManager @Inject constructor(
             record.read == null -> "authenticated read counter is unavailable"
             record.reservation?.phase != null && record.reservation.phase != PumpSession.Phase.VERIFIED ->
                 "unresolved write reservation ${record.reservation.operationId ?: record.reservation.id} is ${record.reservation.phase}"
-            profileWriteTransportInstance?.hasUnresolvedWrite() == true -> "profile selector transport has an unresolved write"
-            historyWriteTransportInstance?.hasUnresolvedWrite() == true -> "history selector transport has an unresolved write"
-            bolusWriteTransportInstance?.hasUnresolvedWrite() == true -> "bolus transport has an unresolved write"
+            // Only a write still in flight on this very connection can conflict. A record stranded by a
+            // replaced connection is unanswerable and must never hard-block therapy.
+            profileWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "another pump setting is still being written"
+            historyWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "pump history is still being read"
+            bolusWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "a previous bolus command is still being sent"
             else -> null
         }
     }
@@ -1907,10 +1914,20 @@ class YpsoBleManager @Inject constructor(
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
-            synchronized(opLock) {
+            val notification = synchronized(opLock) {
                 if (!ownsGattLocked(g)) return
                 aapsLogger.debug(LTag.PUMP, "YpsoPump notify ${ch.uuid}: ${value.joinToString("") { "%02x".format(it) }}")
-            }
+                if (ch.uuid != YpsoWritePolicy.CONTROL_NOTIFY_UUID) null
+                else YpsoBolusNotification.decode(value)
+            } ?: return
+            // Dispatch outside the transport lock: observers persist durable bolus state.
+            aapsLogger.debug(
+                LTag.PUMP,
+                "YpsoPump bolus notification fast=${notification.fastStatusCode}/${notification.fastSequence} " +
+                    "slow=${notification.slowStatusCode}/${notification.slowSequence}",
+            )
+            runCatching { onBolusNotification?.invoke(notification) }
+                .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus notification observer failed: ${it.message}") }
         }
 
         override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) {

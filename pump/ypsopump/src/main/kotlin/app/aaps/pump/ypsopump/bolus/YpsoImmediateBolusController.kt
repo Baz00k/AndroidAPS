@@ -4,6 +4,7 @@ import app.aaps.core.data.model.BS
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoWriteAccounting
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
+import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -77,6 +78,20 @@ internal class YpsoImmediateBolusController(
     fun markUnresolved(detail: String): YpsoBolusAttempt? {
         val attempt = journal.current() ?: return null
         return if (attempt.awaitsReconciliation) journal.unresolved(attempt.requestId, detail) else attempt
+    }
+
+    /**
+     * The pump announces a terminal transition on CONTROL_NOTIFY about a second after delivery stops,
+     * naming the block and its sequence. That is the earliest and most reliable proof that this exact
+     * command ended; the delivered amount still comes from history.
+     */
+    fun observeBolusNotification(notification: YpsoBolusNotification, observedAt: Long = now()): YpsoBolusAttempt? {
+        val attempt = journal.current() ?: return null
+        if (!attempt.awaitsReconciliation) return null
+        val block = attempt.provenCancelBlock ?: return null
+        val sequence = attempt.provenSequence(block) ?: return null
+        if (!notification.isTerminalFor(block, sequence)) return null
+        return journal.observeBlockTerminal(attempt.requestId, observedAt)
     }
 
     fun observeCancelledStatus(status: BolusCommand, observedAt: Long = now()): YpsoBolusAttempt? {
