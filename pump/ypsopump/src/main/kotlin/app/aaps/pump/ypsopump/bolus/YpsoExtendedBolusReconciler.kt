@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump.bolus
 
+import app.aaps.pump.ypsopump.history.YpsoBolusPumpIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryEvent
 import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 
@@ -21,7 +22,8 @@ object YpsoExtendedBolusReconciler {
             YpsoBolusShape.COMBINED -> YpsoHistoryKind.COMBINED_BOLUS_COMPLETED
             YpsoBolusShape.IMMEDIATE -> error("unreachable")
         }
-        val expectedPumpId = historyPumpId(attempt.baseline.historyPumpId, sequence)
+        val expectedPumpId = YpsoBolusPumpIdentity.of(attempt.baseline.historyPumpId, sequence)
+            ?: return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY)
         val sameIdentityTerminals = newerEvents.filter {
             it.identity.aapsPumpId == expectedPumpId && it.semantics.kind in setOf(
                 YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
@@ -53,11 +55,5 @@ object YpsoExtendedBolusReconciler {
         }
         if (!shapeMatches) return YpsoExtendedBolusReconciliation.Unresolved(YpsoExtendedBolusReconciliation.Reason.HISTORY_SHAPE_MISMATCH)
         return YpsoExtendedBolusReconciliation.AttemptCompleted(event, amount)
-    }
-
-    private fun historyPumpId(baselinePumpId: Long, sequence: Long): Long {
-        var generation = baselinePumpId ushr 32
-        if (sequence < (baselinePumpId and 0xffffffffL)) generation++
-        return (generation shl 32) or sequence
     }
 }

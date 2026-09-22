@@ -650,4 +650,56 @@ class YpsoPumpPluginTest {
         verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }
 
+    @Test
+    fun `a dispatched but unproven cancellation never shortens extended accounting`() {
+        // The cancel frames left the phone, but the pump never announced that delivery stopped, so
+        // insulin may still be running. Reducing the record here would hide it from IOB.
+        val attempt = YpsoBolusAttemptFixtures.extended(baselinePumpId = 100L, slowSequence = 101L).copy(
+            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.SLOW,
+            cancelDispatchedAt = 200_000L,
+        )
+
+        val result = finishUnprovenCancellation(attempt)
+
+        assertFalse(result.success)
+        verify(sync, never()).correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+        verify(sync, never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `a pump announced stop closes extended accounting at the proven instant`() {
+        val attempt = YpsoBolusAttemptFixtures.extended(baselinePumpId = 100L, slowSequence = 101L).copy(
+            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.CANCEL_PENDING,
+            cancelRequestId = "cancel",
+            cancelCounter = 2,
+            cancelBlock = app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.SLOW,
+            cancelDispatchedAt = 200_000L,
+            // dispatchedAt is 1_200, so three minutes of the fifteen-minute schedule elapsed.
+            blockTerminalAt = 181_200L,
+        )
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), any())).thenAnswer {
+            app.aaps.core.data.model.EB(
+                timestamp = 1_200L, amount = 0.1, duration = 180_000L,
+                ids = app.aaps.core.data.model.IDs(
+                    pumpId = it.getArgument(0), pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP,
+                    pumpSerial = plugin.serialNumber(),
+                ),
+            )
+        }
+
+        val result = finishUnprovenCancellation(attempt)
+
+        assertTrue(result.success)
+        verify(sync).correctExtendedBolusWithPumpId(eq(1_200L), eq(0.1), eq(180_000L), any(), any(), any(), any())
+    }
+
+    private fun finishUnprovenCancellation(attempt: app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt) =
+        YpsoPumpPlugin::class.java
+            .getDeclaredMethod("finishUnprovenExtendedCancellation", app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java)
+            .apply { isAccessible = true }
+            .invoke(plugin, attempt) as app.aaps.core.interfaces.pump.PumpEnactResult
+
 }

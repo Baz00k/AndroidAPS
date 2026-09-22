@@ -1,6 +1,8 @@
 package app.aaps.implementation.pump
 
 import app.aaps.core.data.model.BS
+import app.aaps.core.data.model.EB
+import app.aaps.core.data.model.IDs
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -15,10 +17,13 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.shared.tests.TestBase
 import io.reactivex.rxjava3.core.Single
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -124,4 +129,64 @@ class PumpSyncImplementationTest : TestBase() {
         assertEquals(PumpSync.BolusSyncResult.REJECTED, result)
         verify(persistenceLayer, never()).syncPumpBolus(any(), any())
     }
+
+    @Test
+    fun `ordinary extended sync rejects a dose older than pump activation`() {
+        assertFalse(
+            pumpSync.syncExtendedBolusWithPumpId(1_000L, 0.5, 900_000L, false, 101L, PumpType.YPSOPUMP, "10000001")
+        )
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    @Test
+    fun `correction keeps the original start of a dose that registered the pump`() {
+        // Registration stores "now", which is later than the dose's own start, so the plain sync gate
+        // would reject every correction and leave the programmed amount standing.
+        whenever(persistenceLayer.getExtendedBolusByPumpId(eq(101L), any(), any())).thenReturn(existingExtendedBolus())
+        whenever(persistenceLayer.syncPumpExtendedBolus(any()))
+            .thenReturn(Single.just(PersistenceLayer.TransactionResult<EB>().apply { updated.add(existingExtendedBolus()) }))
+
+        assertTrue(
+            pumpSync.correctExtendedBolusWithPumpId(1_000L, 0.08, 120_000L, false, 101L, PumpType.YPSOPUMP, "10000001")
+        )
+        verify(persistenceLayer).syncPumpExtendedBolus(any())
+    }
+
+    @Test
+    fun `correction never creates a record the driver has not already synchronized`() {
+        whenever(persistenceLayer.getExtendedBolusByPumpId(eq(101L), any(), any())).thenReturn(null)
+
+        assertFalse(
+            pumpSync.correctExtendedBolusWithPumpId(1_000L, 0.08, 120_000L, false, 101L, PumpType.YPSOPUMP, "10000001")
+        )
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    @Test
+    fun `correction rejects a pump that is not the active one`() {
+        whenever(activePump.serialNumber()).thenReturn("20000002")
+
+        assertFalse(
+            pumpSync.correctExtendedBolusWithPumpId(1_000L, 0.08, 120_000L, false, 101L, PumpType.YPSOPUMP, "10000001")
+        )
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    @Test
+    fun `correction rejects a pump identity that is not the registered one`() {
+        whenever(preferences.get(StringNonKey.ActivePumpSerialNumber)).thenReturn("30000003")
+
+        assertFalse(
+            pumpSync.correctExtendedBolusWithPumpId(1_000L, 0.08, 120_000L, false, 101L, PumpType.YPSOPUMP, "10000001")
+        )
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    private fun existingExtendedBolus() = EB(
+        timestamp = 1_000L,
+        amount = 0.5,
+        duration = 900_000L,
+        isEmulatingTempBasal = false,
+        ids = IDs(pumpId = 101L, pumpType = PumpType.YPSOPUMP, pumpSerial = "10000001"),
+    )
 }

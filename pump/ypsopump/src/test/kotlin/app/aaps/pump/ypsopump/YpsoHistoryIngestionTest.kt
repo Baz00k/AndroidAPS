@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.core.data.model.BS
 import app.aaps.core.interfaces.pump.PumpSync
+import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
@@ -31,7 +32,7 @@ class YpsoHistoryIngestionTest {
         val sync: PumpSync = mock()
         var saved = app.aaps.core.data.model.EB(timestamp = 1_000L, amount = 0.5, duration = 20_000L)
         whenever(sync.getExtendedBolusWithPumpId(eq(100L), any(), eq("10000001"))).thenAnswer { saved }
-        whenever(sync.syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+        whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
             saved = saved.copy(amount = it.getArgument(1), duration = it.getArgument(2))
             true
         }
@@ -100,12 +101,12 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val ingestion = YpsoHistoryIngestion(store, sync)
 
-        assertEquals("AAPS is still syncing with the pump. Please try again shortly.", ingestion.bolusReadiness("10000001", 21))
+        assertEquals(YpsoBolusMessage.SYNC_IN_PROGRESS, ingestion.bolusReadiness("10000001", 21))
         store.value = YpsoHistoryState(
             cursor = YpsoHistoryCursor(YpsoEventIdentity("10000001", 0, 100), row(100, 2, 80).fingerprint(), 21),
         )
         assertNull(ingestion.bolusReadiness("10000001", 21))
-        assertEquals("The pump was restarted. AAPS needs to sync before the next bolus.", ingestion.bolusReadiness("10000001", 22))
+        assertEquals(YpsoBolusMessage.PUMP_RESTARTED, ingestion.bolusReadiness("10000001", 22))
         verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
     }
 
@@ -199,18 +200,51 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
-    fun `square and combination terminal rows stay unaccounted until timing semantics exist`() {
+    fun `square bolus started on the pump is accounted over its elapsed window`() {
         val store = Store()
         val sync: PumpSync = mock()
+        var saved: app.aaps.core.data.model.EB? = null
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenAnswer { saved }
+        whenever(sync.syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            saved = app.aaps.core.data.model.EB(
+                timestamp = it.getArgument(0), amount = it.getArgument(1), duration = it.getArgument(2),
+            )
+            true
+        }
         val ingestion = YpsoHistoryIngestion(store, sync)
         ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(102, 3, 8), row(101, 18, 40), row(100, 2, 80))))
+        // Type 3 carries the delivered amount and the elapsed whole minutes of a pump-started square.
+        val terminal = row(102, 3, 8).copy(value2 = 3)
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+            snapshot(listOf(terminal, row(101, 18, 40), row(100, 2, 80))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(102, store.value.cursor?.identity?.sequence)
-        assertNull(store.value.pendingBolus)
+        assertEquals(0.08, saved?.amount)
+        assertEquals(180_000L, saved?.duration)
+        // A combination row still carries an immediate part that cannot be separated here.
+        verify(sync, org.mockito.kotlin.times(1))
+            .syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
         verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `an already recorded extended bolus is corrected rather than imported again`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val existing = app.aaps.core.data.model.EB(timestamp = 5_000L, amount = 0.5, duration = 900_000L)
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(existing)
+        whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenReturn(true)
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+            snapshot(listOf(row(102, 3, 50).copy(value2 = 15), row(100, 2, 80))))
+
+        verify(sync, org.mockito.kotlin.never())
+            .syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+        verify(sync).correctExtendedBolusWithPumpId(eq(5_000L), eq(0.5), eq(900_000L), any(), any(), any(), eq("10000001"))
     }
 
     @Test

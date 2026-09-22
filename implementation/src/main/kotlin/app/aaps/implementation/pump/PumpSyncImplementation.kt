@@ -489,6 +489,54 @@ class PumpSyncImplementation @Inject constructor(
     override fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB? =
         persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial)
 
+    override fun correctExtendedBolusWithPumpId(
+        timestamp: Long,
+        amount: Double,
+        duration: Long,
+        isEmulatingTB: Boolean,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): Boolean {
+        if (!confirmActivePumpIdentity(pumpType, pumpSerial)) return false
+        // Only an already recorded dose may be corrected; this must never import unseen history.
+        persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial) ?: return false
+        val extendedBolus = EB(
+            timestamp = timestamp,
+            amount = amount,
+            duration = duration,
+            isEmulatingTempBasal = isEmulatingTB,
+            ids = IDs(
+                pumpId = pumpId,
+                pumpType = pumpType,
+                pumpSerial = pumpSerial
+            )
+        )
+        return persistenceLayer.syncPumpExtendedBolus(extendedBolus)
+            .map { result -> result.inserted.isNotEmpty() || result.updated.isNotEmpty() }
+            .blockingGet()
+    }
+
+    /**
+     * Identity half of [confirmActivePump] without its activation-timestamp bound, for corrections to
+     * records this driver already owns. It never registers a new pump.
+     */
+    private fun confirmActivePumpIdentity(type: PumpType, serialNumber: String): Boolean {
+        val activePump = activePlugin.activePump
+        if (activePump is VirtualPump) return true
+        if (activePump.model() != type || activePump.serialNumber() != serialNumber) {
+            aapsLogger.error(LTag.PUMP, "Ignoring correction for inactive pump ${type.description} $serialNumber")
+            return false
+        }
+        val storedType = preferences.get(StringNonKey.ActivePumpType)
+        val storedSerial = preferences.get(StringNonKey.ActivePumpSerialNumber)
+        if (storedType.isNotEmpty() && (type.description != storedType || serialNumber != storedSerial)) {
+            aapsLogger.error(LTag.PUMP, "Ignoring correction for unregistered pump ${type.description} $serialNumber")
+            return false
+        }
+        return true
+    }
+
     override fun syncStopExtendedBolusWithPumpId(timestamp: Long, endPumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean {
         if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return false
         return persistenceLayer.syncPumpStopExtendedBolusWithPumpId(timestamp, endPumpId, pumpType, pumpSerial)

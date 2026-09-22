@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump.bolus
 
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
+import app.aaps.pump.ypsopump.history.YpsoBolusPumpIdentity
 
 /** Durable command state. Active or still-dispatch-uncertain states inhibit another dose. */
 enum class YpsoBolusOutcome {
@@ -128,10 +129,7 @@ data class YpsoBolusAttempt(
         get() {
             pumpHistoryId?.let { return it }
             val sequence = (if (shape == YpsoBolusShape.IMMEDIATE) pumpFastSequence else pumpSlowSequence) ?: return null
-            var generation = baseline.historyPumpId ushr 32
-            if (sequence < (baseline.historyPumpId and 0xffffffffL)) generation++
-            if (generation > Int.MAX_VALUE) return null
-            return (generation shl 32) or sequence
+            return YpsoBolusPumpIdentity.of(baseline.historyPumpId, sequence)
         }
 
     /** Programmed amount of the block that carries the requested delivery. */
@@ -444,9 +442,6 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
         return next
     }
 
-    private fun isStrictlyNewerUnsigned(candidate: Long, baseline: Long): Boolean {
-        require(candidate in 0..0xffffffffL && baseline in 0..0xffffffffL)
-        val delta = (candidate - baseline + 0x1_0000_0000L) % 0x1_0000_0000L
-        return delta in 1 until 0x8000_0000L
-    }
+    private fun isStrictlyNewerUnsigned(candidate: Long, baseline: Long): Boolean =
+        YpsoBolusPumpIdentity.isStrictlyNewer(candidate, baseline)
 }

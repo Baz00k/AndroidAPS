@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump.history
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.pump.PumpSync
+import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
 import java.time.ZoneId
 
 sealed interface YpsoHistoryIngestionResult {
@@ -23,11 +24,11 @@ class YpsoHistoryIngestion(
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
     /** Cheap local gate for a new dose. Never performs pump I/O. */
-    fun bolusReadiness(pumpSerial: String, reboot: Long): String? {
-        if (!retryPending(pumpSerial)) return "AAPS is still saving a previous dose. Please try again shortly."
-        val cursor = store.load().cursor ?: return "AAPS is still syncing with the pump. Please try again shortly."
+    fun bolusReadiness(pumpSerial: String, reboot: Long): YpsoBolusMessage? {
+        if (!retryPending(pumpSerial)) return YpsoBolusMessage.SAVING_PREVIOUS_DOSE
+        val cursor = store.load().cursor ?: return YpsoBolusMessage.SYNC_IN_PROGRESS
         if (cursor.identity.pumpSerial != pumpSerial || cursor.pumpReboot != reboot) {
-            return "The pump was restarted. AAPS needs to sync before the next bolus."
+            return YpsoBolusMessage.PUMP_RESTARTED
         }
         return null
     }
@@ -122,16 +123,32 @@ class YpsoHistoryIngestion(
                             // Type 3 reports elapsed minutes, including zero for an initial pulse.
                             val id = event.identity.aapsPumpId
                             val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
+                            val amount = requireNotNull(event.semantics.amountUnits)
                             if (existing != null && existing.isValid) {
-                                val amount = requireNotNull(event.semantics.amountUnits)
                                 val duration = if (event.entry.eventType == 3)
                                     app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting.squareHistoryDuration(event.entry.value2, existing.duration)
                                 else existing.duration
-                                pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, amount, duration,
+                                pumpSync.correctExtendedBolusWithPumpId(existing.timestamp, amount, duration,
                                     existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, pumpSerial)
                                 val saved = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
                                 if (saved == null || saved.amount != amount || saved.duration != duration) {
                                     return YpsoHistoryIngestionResult.Blocked("PumpSync rejected extended bolus correction")
+                                }
+                            } else if (existing == null && event.entry.eventType == 3 && amount > 0.0) {
+                                // A square bolus started on the pump itself. Its insulin is real and
+                                // must reach IOB. Type 3 keeps the start timestamp of the running row
+                                // it replaced in place, and value2 is the elapsed whole minutes, so
+                                // the delivery window is evidence-backed rather than assumed.
+                                // Combination rows stay out of scope: their immediate part is not
+                                // separable here without risking double accounting.
+                                val resolved = YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved
+                                    ?: return YpsoHistoryIngestionResult.Blocked("extended bolus timestamp is ambiguous")
+                                val start = resolved.instant.toEpochMilli()
+                                val duration = (event.entry.value2 * 60_000L).coerceAtLeast(1L)
+                                pumpSync.syncExtendedBolusWithPumpId(start, amount, duration, false, id, PumpType.YPSOPUMP, pumpSerial)
+                                val saved = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
+                                if (saved == null || saved.amount != amount || saved.duration != duration) {
+                                    return YpsoHistoryIngestionResult.Blocked("PumpSync rejected pump-started extended bolus")
                                 }
                             }
                         }

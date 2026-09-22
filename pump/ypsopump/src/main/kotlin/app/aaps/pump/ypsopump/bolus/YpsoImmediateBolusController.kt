@@ -8,6 +8,7 @@ import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.history.YpsoBolusPumpIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -27,8 +28,8 @@ internal class YpsoImmediateBolusController(
 
     sealed interface DeliveryResult {
         data class Started(val attempt: YpsoBolusAttempt, val observedDeliveredUnits: Double) : DeliveryResult
-        data class NotSent(val detail: String) : DeliveryResult
-        data class Uncertain(val detail: String) : DeliveryResult
+        data class NotSent(val reason: YpsoBolusMessage) : DeliveryResult
+        data class Uncertain(val reason: YpsoBolusMessage) : DeliveryResult
     }
 
     private val delivering = AtomicBoolean(false)
@@ -137,32 +138,32 @@ internal class YpsoImmediateBolusController(
         check(delivering.get()) { "delivery lifecycle was not acquired" }
         run {
             val session = bleManager.session?.snapshot()
-                ?: return DeliveryResult.NotSent("The pump is not set up yet.")
+                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_SET_UP)
             // Use the durable cursor maintained by ordinary history synchronization. A bolus must not
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
-            val cursor = historyCursor() ?: return DeliveryResult.NotSent("AAPS is still syncing with the pump. Please try again shortly.")
-            if (stopRequested.get()) return DeliveryResult.NotSent("Bolus cancelled before it started.")
+            val cursor = historyCursor() ?: return DeliveryResult.NotSent(YpsoBolusMessage.SYNC_IN_PROGRESS)
+            if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
             val baselineConnection = bleManager.currentBolusConnectionKey()
-                ?: return DeliveryResult.NotSent("Not connected to the pump. Check that it is in range.")
-            val baselineStatus = readBolusStatus() ?: return DeliveryResult.NotSent("Could not read the pump. Check that it is in range.")
+                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
+            val baselineStatus = readBolusStatus() ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
             if (bleManager.currentBolusConnectionKey() != baselineConnection) {
-                return DeliveryResult.NotSent("The pump connection dropped. No insulin was given.")
+                return DeliveryResult.NotSent(YpsoBolusMessage.CONNECTION_DROPPED_NO_INSULIN)
             }
             // The pump itself is the only authority on whether it is busy. An unreachable pump cannot be
             // dosed anyway, so this read is both the readiness check and the liveness check.
             if (baselineStatus.bolusStatusCode != BolusCommand.STATUS_IDLE) {
-                return DeliveryResult.NotSent("The pump is already giving a bolus.")
+                return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_ALREADY_BOLUSING)
             }
             if (baselineStatus.extendedStatusCode != BolusCommand.STATUS_IDLE) {
-                return DeliveryResult.NotSent("The pump is already giving an extended bolus.")
+                return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_ALREADY_EXTENDED_BOLUSING)
             }
             val serial = serialNumber()
             val generation = bleManager.session?.activeRecord()?.generation
-                ?: return DeliveryResult.NotSent("Not connected to the pump. Check that it is in range.")
-            val reboot = session.reboot ?: return DeliveryResult.NotSent("Could not read the pump. Check that it is in range.")
+                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
+            val reboot = session.reboot ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
             if (cursor.identity.pumpSerial != serial || cursor.pumpReboot != reboot.toLong()) {
-                return DeliveryResult.NotSent("The pump was restarted. AAPS needs to sync before the next bolus.")
+                return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_RESTARTED)
             }
             val requestId = "bolus-${UUID.randomUUID()}"
             val payloadHash = YpsoWriteAccounting.sha256(YpsoCrc.appendCrc(request.payload()))
@@ -189,7 +190,7 @@ internal class YpsoImmediateBolusController(
                 immediateCentiUnits = request.immediateCentiUnits,
             )
             journal.prepare(attempt, now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS)
-            if (stopRequested.get()) return DeliveryResult.NotSent("Bolus cancelled before it started.")
+            if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
 
             val outcome = runCatching { awaitWrite { callback ->
                 bleManager.startBolus(
@@ -197,40 +198,40 @@ internal class YpsoImmediateBolusController(
                     request,
                     baselineConnection,
                     beforeDispatch = { reservation ->
-                        check(!stopRequested.get()) { "Bolus cancelled before it started." }
+                        check(!stopRequested.get()) { "bolus was cancelled before dispatch" }
                         journal.beforeDispatch(requestId, reservation.counter, now())
                     },
                     onOutcome = callback,
                 )
             } }.getOrElse {
-                return DeliveryResult.Uncertain(it.message ?: "The pump did not respond. Check the pump before giving more insulin.")
+                return DeliveryResult.Uncertain(YpsoBolusMessage.PUMP_DID_NOT_RESPOND)
             }
             when (val value = outcome.first) {
                 is YpsoWriteOutcome.NotSent -> {
                     journal.provenNotApplied(requestId, rejected = false, detail = value.failure.detail)
-                    return DeliveryResult.NotSent(value.failure.detail)
+                    return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_DID_NOT_RESPOND)
                 }
                 is YpsoWriteOutcome.ProvenRejected -> {
                     journal.provenNotApplied(requestId, rejected = true, detail = value.failure.detail)
-                    return DeliveryResult.NotSent(value.failure.detail)
+                    return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_DID_NOT_RESPOND)
                 }
                 is YpsoWriteOutcome.PossiblyApplied -> Unit
                 is YpsoWriteOutcome.AcceptedUnverified -> journal.transportAccepted(requestId)
                 is YpsoWriteOutcome.Verified -> Unit
             }
-            val owner = outcome.second ?: return DeliveryResult.Uncertain("The pump connection dropped while sending. Check the pump before giving more insulin.")
+            val owner = outcome.second ?: return DeliveryResult.Uncertain(YpsoBolusMessage.CONNECTION_DROPPED_WHILE_SENDING)
             if (bleManager.connectionKey(owner) != baselineConnection) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "The pump connection dropped while sending. Check the pump before giving more insulin.")
-                journal.unresolved(requestId, "The pump connection dropped while sending. Check the pump before giving more insulin.")
-                return DeliveryResult.Uncertain("The pump connection dropped while sending. Check the pump before giving more insulin.")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "connection changed between dispatch and identity proof")
+                journal.unresolved(requestId, "connection changed between dispatch and identity proof")
+                return DeliveryResult.Uncertain(YpsoBolusMessage.CONNECTION_DROPPED_WHILE_SENDING)
             }
             commandOwner.set(owner)
 
             val proof = pollIdentity(attempt, request, owner)
             if (proof == null) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "The bolus may have been given. Check the pump before giving more insulin.")
-                journal.unresolved(requestId, "The bolus may have been given. Check the pump before giving more insulin.")
-                return DeliveryResult.Uncertain("The bolus may have been given. Check the pump before giving more insulin.")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "no bolus status proved this command's block identity")
+                journal.unresolved(requestId, "no bolus status proved this command's block identity")
+                return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
             val programmed = runCatching {
                 when (request.shape) {
@@ -240,9 +241,9 @@ internal class YpsoImmediateBolusController(
                         journal.observeSlowDelivering(requestId, proof.extendedSequence, cents(proof.extendedTotalUnits))
                 }
             }.getOrElse {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
-                journal.unresolved(requestId, it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
-                return DeliveryResult.Uncertain(it.message ?: "The bolus may have been given. Check the pump before giving more insulin.")
+                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "delivery identity could not be journalled")
+                journal.unresolved(requestId, it.message ?: "delivery identity could not be journalled")
+                return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
             when (request.shape) {
                 YpsoBolusShape.IMMEDIATE -> applyPendingTerminal(requestId, YpsoBolusBlock.FAST, proof.fastSequence)
@@ -254,8 +255,8 @@ internal class YpsoImmediateBolusController(
                 YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> "slow block ${proof.extendedSequence}"
             }
             if (!bleManager.verifyBolusAccepted(owner, requestId, payloadHash, "$proofDetail programmed ${request.centiUnits} centi-units")) {
-                journal.unresolved(requestId, "The bolus may have been given. Check the pump before giving more insulin.")
-                return DeliveryResult.Uncertain("The bolus may have been given. Check the pump before giving more insulin.")
+                journal.unresolved(requestId, "bolus acceptance could not be reconciled with write accounting")
+                return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
             if (stopRequested.get()) cancelProven(programmed, proof, bleManager.connectionKey(owner))
             val observedDelivered = when (request.shape) {
@@ -350,21 +351,13 @@ internal class YpsoImmediateBolusController(
         request: YpsoValidatedBolusRequest,
         owner: YpsoBleManager.BolusCommandOwner,
     ): BolusCommand? {
+        var firstObserved: Long? = null
         repeat(8) {
-            val status = readBolusStatus(owner)
-            val proven = status != null && when (request.shape) {
-                YpsoBolusShape.IMMEDIATE ->
-                    status.fastSequence != attempt.baseline.fastSequence &&
-                        cents(status.totalProgrammedUnits) == attempt.requestedCentiUnits &&
-                        status.extendedStatusCode == BolusCommand.STATUS_IDLE
-                YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED ->
-                    status.extendedSequence != attempt.baseline.slowSequence &&
-                        cents(status.extendedTotalUnits) == attempt.requestedCentiUnits &&
-                        status.extendedMinutesTotal == attempt.durationMinutes &&
-                        status.comboImmediateTotalUnits.let(::cents) == attempt.immediateCentiUnits &&
-                        status.bolusStatusCode == BolusCommand.STATUS_IDLE
+            when (val step = YpsoBolusIdentityPoll.evaluate(attempt, request, readBolusStatus(owner), firstObserved)) {
+                is YpsoBolusIdentityPoll.Step.Proven    -> return step.status
+                is YpsoBolusIdentityPoll.Step.Abandon   -> return null
+                is YpsoBolusIdentityPoll.Step.KeepGoing -> firstObserved = step.firstObservedSequence
             }
-            if (proven) return status
             Thread.sleep(150L)
         }
         return null
@@ -393,7 +386,7 @@ internal class YpsoImmediateBolusController(
             value.set(outcome to owner)
             latch.countDown()
         }
-        if (!latch.await(45, TimeUnit.SECONDS)) error("The pump did not respond. Check the pump before giving more insulin.")
+        if (!latch.await(45, TimeUnit.SECONDS)) error("bolus write callback did not arrive within 45 seconds")
         return requireNotNull(value.get())
     }
 

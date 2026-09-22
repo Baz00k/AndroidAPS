@@ -32,6 +32,13 @@ that proven identity, terminal history reconciliation, and PumpSync ingestion. E
 0.1-U dose steps and 15-minute duration steps from 15 minutes through 12 hours. Temporary basal,
 combination-bolus UI and profile writes remain unsupported.
 
+A square bolus started on the pump itself is imported from its terminal history row, using the
+row's own start timestamp and its elapsed whole minutes. Combination boluses started on the pump
+are not imported: their immediate part cannot be separated without risking double accounting.
+A cancellation that AAPS dispatched but the pump never confirmed does not shorten the recorded
+dose, because the delivery may still be running; the programmed record stands until pump evidence
+replaces it.
+
 Profile programming and activation are manual. In **YpsoPump Preferences → Basal configuration**,
 use **Read pump basal profiles** during setup and
 after editing the pump's schedules. This explicitly reads active-before → all A/B rows → active-after
@@ -163,7 +170,8 @@ another verification attempt is allowed.
 - A second controller cannot be reliably excluded by Android inspection alone. Exclusive ownership also
   requires the operator to quiesce and physically control the other phone.
 - Therapy capability is governed by the `YpsoPumpConst.READ_ONLY_MODE` source gate; released
-  artifacts keep it enabled until the therapy path is independently qualified.
+  artifacts keep it enabled until the therapy path is independently qualified. The plugin
+  description follows that gate, so the advertised capability always matches the built mode.
 
 Implementation details are in [status lifecycle](docs/status-lifecycle.md), [session ownership](docs/session-ownership.md)
 and [status protocol](docs/status-protocol.md). The qualified read-only event schema, pump-local time

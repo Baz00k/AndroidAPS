@@ -543,6 +543,26 @@ interface PumpSync {
     fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): app.aaps.core.data.model.EB?
 
     /**
+     * Correct an extended bolus this driver already recorded, keeping its original start timestamp.
+     *
+     * A delivery that registers the pump on its first synchronization stores the registration moment
+     * as the activation timestamp, which is later than the dose's own start. [syncExtendedBolusWithPumpId]
+     * would then reject every correction to that dose and leave the programmed amount standing.
+     *
+     * Implementations must still require the currently active pump and the registered identity to match
+     * [pumpType] and [pumpSerial], and must only update an existing record; this never imports history.
+     */
+    fun correctExtendedBolusWithPumpId(
+        timestamp: Long,
+        amount: Double,
+        duration: Long,
+        isEmulatingTB: Boolean,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): Boolean
+
+    /**
      * Synchronization of extended bolus end event
      * (for pumps having separate event for end of EB or not having history)
      * (not useful for pump modifying duration in history log)
