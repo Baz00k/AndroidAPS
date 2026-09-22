@@ -1343,6 +1343,7 @@ class YpsoBleManager @Inject constructor(
         val rows = mutableListOf<YpsoHistoryEntry>()
         val cached = partialScan?.takeIf { it.generation == token.generation && it.reboot == reboot.toLong() }
         var overlapPending = cached != null
+        var cursorMismatchReported = false
         /** Selector index proven by same-link read-back within this scan; null until first proven. */
         var verifiedSelectorIndex: Int? = null
 
@@ -1512,6 +1513,20 @@ class YpsoBleManager @Inject constructor(
             }
         }
         fun checkpoint() {
+            if (!cursorMismatchReported && cursor != null) {
+                rows.firstOrNull { it.sequence == cursor.identity.sequence && it.fingerprint() != cursor.fingerprint }?.let { row ->
+                    cursorMismatchReported = true
+                    val expected = cursor.fingerprint
+                    aapsLogger.warn(
+                        LTag.PUMP,
+                        "YpsoPump history cursor mismatch: sequence=${row.sequence}, index=${row.index}, " +
+                            "cursorReboot=${cursor.pumpReboot}, currentReboot=$reboot, " +
+                            "storedTime=${expected.high ushr 24}, storedType=${(expected.high ushr 16) and 0xff}, " +
+                            "storedValues=${expected.high and 0xffff}/${(expected.low ushr 48) and 0xffff}/${(expected.low ushr 32) and 0xffff}, " +
+                            "pumpTime=${row.factorySeconds}, pumpType=${row.eventType}, pumpValues=${row.value1}/${row.value2}/${row.value3}",
+                    )
+                }
+            }
             if (attempt.isActive && !overlapPending) {
                 retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
             }
