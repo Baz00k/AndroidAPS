@@ -380,7 +380,7 @@ Observed status and history semantics:
 | command | status while delivering | terminal history |
 |---|---|---|
 | standard | fast status 1, fast total = requested, fast sequence assigned, fast injected reported | type 2 amount = delivered amount |
-| square | slow status 1, slow total = requested whole amount, slow sequence assigned, fast block idle | type 3 amount = delivered amount, value2 = programmed duration |
+| square | slow status 1, slow total = requested whole amount, slow sequence assigned, fast block idle | type 3 amount = delivered amount, value2 = elapsed minutes |
 | combination | slow status 1 or 3, slow total = whole combination total, slow injected includes the immediate part; combo sub-block at offsets 26/30 = immediate injected/total (0.07/0.4 observed); fast block idle | type 18 value1 = delivered total (100 for a completed 1.0 U run), value2 = immediate part (40), value3 = duration (15) |
 
 Terminal status clears sequence and amount fields to zero; a history row is the delivered-amount

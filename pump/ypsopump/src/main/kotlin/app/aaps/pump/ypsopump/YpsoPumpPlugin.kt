@@ -1045,7 +1045,9 @@ class YpsoPumpPlugin @Inject constructor(
                 if (attempt.cancelStoppedAt == null && attempt.blockTerminalAt == null) continue
                 val delivered = Math.round(existing.amount * 100).toInt()
                 val window = YpsoExtendedBolusAccounting.terminalWindow(attempt, delivered, System.currentTimeMillis())
-                if (existing.duration == window.duration) continue
+                // A terminal history row may already have supplied a shorter elapsed window.
+                // The observed stop is an upper bound, not permission to extend that delivery again.
+                if (existing.duration <= window.duration) continue
                 pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, existing.amount, window.duration,
                     existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, serial)
             }
@@ -1107,11 +1109,15 @@ class YpsoPumpPlugin @Inject constructor(
                 is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
                     val historyTimestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
                         ?.instant?.toEpochMilli() ?: return
-                    val terminal = YpsoExtendedBolusAccounting.terminalWindow(
+                    val observedWindow = YpsoExtendedBolusAccounting.terminalWindow(
                         attempt,
                         resolution.amountCentiUnits,
                         System.currentTimeMillis(),
                     )
+                    val terminal = if (resolution.event.entry.eventType == 3)
+                        observedWindow.copy(duration = YpsoExtendedBolusAccounting.squareHistoryDuration(
+                            resolution.event.entry.value2, observedWindow.duration))
+                    else observedWindow
                     pumpSync.syncExtendedBolusWithPumpId(
                         terminal.start,
                         resolution.amountCentiUnits / 100.0,

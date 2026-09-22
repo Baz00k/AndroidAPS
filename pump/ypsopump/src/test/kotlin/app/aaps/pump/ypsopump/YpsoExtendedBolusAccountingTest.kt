@@ -20,6 +20,15 @@ import org.junit.jupiter.api.Test
 
 class YpsoExtendedBolusAccountingTest {
 
+    @Test
+    fun `paired square cancellations use elapsed history without deriving time from amount`() {
+        assertEquals(7852L, YpsoExtendedBolusAccounting.squareHistoryDuration(0, 7852L))
+        assertEquals(108265L, YpsoExtendedBolusAccounting.squareHistoryDuration(2, 108265L))
+        assertEquals(1L, YpsoExtendedBolusAccounting.squareHistoryDuration(0, 900000L))
+        assertEquals(120000L, YpsoExtendedBolusAccounting.squareHistoryDuration(2, 900000L))
+        assertEquals(900000L, YpsoExtendedBolusAccounting.squareHistoryDuration(15, 900000L))
+    }
+
     private val expected = EB(
         timestamp = 1_000L,
         duration = 900_000L,

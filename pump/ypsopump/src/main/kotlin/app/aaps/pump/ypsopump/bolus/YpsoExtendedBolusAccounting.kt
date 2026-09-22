@@ -7,6 +7,19 @@ import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 /** Verifies the persisted record for one physical extended bolus by stable pump identity. */
 object YpsoExtendedBolusAccounting {
 
+    /** Type-3 terminal history reports elapsed minutes, not the original programmed duration.
+     * Zero with a nonzero amount is an initial pulse. Keep a known sub-minute window; otherwise
+     * represent that pulse at the start using the minimum positive EB duration (not a second bolus).
+     * Positive minute values remain quantized pump evidence, not exact pulse timestamps.
+     */
+    fun squareHistoryDuration(elapsedMinutes: Int, recordedDuration: Long): Long {
+        require(elapsedMinutes >= 0 && recordedDuration > 0)
+        if (elapsedMinutes == 0) return if (recordedDuration < 60_000L) recordedDuration else 1L
+        val historyDuration = elapsedMinutes * 60_000L
+        // Keep the finer observed stop window when it agrees within the pump's minute resolution.
+        return if (kotlin.math.abs(recordedDuration - historyDuration) < 60_000L) recordedDuration else historyDuration
+    }
+
     data class TerminalWindow(val start: Long, val duration: Long) {
         val end: Long get() = start + duration
     }

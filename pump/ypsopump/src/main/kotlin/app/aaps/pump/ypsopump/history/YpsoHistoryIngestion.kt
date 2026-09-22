@@ -119,16 +119,18 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
                         YpsoHistoryKind.COMBINED_BOLUS_COMPLETED -> {
                             // Correct an existing extended record under its proven pump identity.
-                            // The terminal row's duration can be zero after cancellation; retain the
-                            // recorded delivery window rather than treating zero as a new schedule.
+                            // Type 3 reports elapsed minutes, including zero for an initial pulse.
                             val id = event.identity.aapsPumpId
                             val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
                             if (existing != null && existing.isValid) {
                                 val amount = requireNotNull(event.semantics.amountUnits)
-                                pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, amount, existing.duration,
+                                val duration = if (event.entry.eventType == 3)
+                                    app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting.squareHistoryDuration(event.entry.value2, existing.duration)
+                                else existing.duration
+                                pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, amount, duration,
                                     existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, pumpSerial)
                                 val saved = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
-                                if (saved == null || saved.amount != amount) {
+                                if (saved == null || saved.amount != amount || saved.duration != duration) {
                                     return YpsoHistoryIngestionResult.Blocked("PumpSync rejected extended bolus correction")
                                 }
                             }

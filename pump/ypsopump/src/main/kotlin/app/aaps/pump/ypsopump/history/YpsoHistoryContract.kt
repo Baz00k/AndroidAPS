@@ -75,7 +75,7 @@ data class YpsoHistorySemantics(
     val kind: YpsoHistoryKind,
     val amountUnits: Double? = null,
     val percent: Int? = null,
-    /** Delayed/square bolus programmed duration (type 3); never a TBR request or elapsed value. */
+    /** Delayed/square terminal elapsed minutes (type 3), quantized by the pump; zero can include insulin. */
     val durationMinutes: Int? = null,
     /** Requested TBR minutes from the active type-9 row. */
     val requestedDurationMinutes: Int? = null,
@@ -102,8 +102,7 @@ object YpsoHistoryClassifier {
                 YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
                 amountUnits = entry.value1 / 100.0,
             )
-            // Paired: a cancelled 0.5-U/15-min square bolus reported the delivered amount 8
-            // centi-units while the programmed total remained 50.
+            // Paired: 0.5-U/15-min cancellations reported 8 centi-units with elapsed 0 and 2 minutes.
             3 -> YpsoHistorySemantics(
                 YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
                 amountUnits = entry.value1 / 100.0,
