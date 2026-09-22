@@ -535,8 +535,6 @@ class YpsoBleManager @Inject constructor(
             profileReadActive.set(false)
             historyReadActive.set(false)
             bolusWriteActive.set(false)
-            // Retained rows belong to the connection that read them; a new link must re-verify the ring.
-            partialScan = null
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
@@ -1294,8 +1292,12 @@ class YpsoBleManager @Inject constructor(
      * writes are strict-next journaled and accepted only after same-link selector identity read-back.
      */
     /**
-     * Rows already read by a scan that yielded before completing. Only reusable while the ring is
+     * Rows already read by a scan that stopped before completing. Only reusable while the ring is
      * provably identical, so a partial scan can be continued instead of restarted from the head.
+     *
+     * Deliberately survives disconnection. The link drops constantly during normal operation, and the
+     * reuse check re-proves the ring from the pump on every resume, so connection identity adds no
+     * safety here: it only guaranteed the scan could never accumulate enough rows to reach the cursor.
      */
     private class PartialScan(
         val reboot: Long,

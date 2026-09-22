@@ -83,6 +83,21 @@ class YpsoPartialHistoryScanTest {
     }
 
     @Test
+    fun `a reconnect alone does not invalidate the prefix`() {
+        val cached = prefix(500, 499, 498)
+
+        // The link drops constantly during normal operation. Reuse is proven from the ring itself, so
+        // a new connection reading the same reboot, count and head must still resume: clearing on
+        // disconnect stopped the scan from ever accumulating enough rows to reach the cursor.
+        val resumed = YpsoBleManager.resumableRows(
+            cachedReboot = 21, cachedCount = 900, cachedHead = cached.first(), cachedRows = cached,
+            reboot = 21, count = 900, head = row(500, 0),
+        )
+
+        assertEquals(3, resumed?.size)
+    }
+
+    @Test
     fun `a prefix with non contiguous indices is rejected`() {
         val gapped = listOf(row(500, 0), row(499, 1), row(497, 3))
 
