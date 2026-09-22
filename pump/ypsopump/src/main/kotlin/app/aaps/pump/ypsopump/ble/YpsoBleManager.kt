@@ -1346,9 +1346,13 @@ class YpsoBleManager @Inject constructor(
         val gatt = captured.first
         val token = captured.second
         val connectionId = captured.third
+        // Abandoning the scan on a deadline is not evidence that its rows are wrong, so the prefix is
+        // kept. Without this the scan restarts at the head every time and can never converge.
+        var retainOnAbandon: () -> Unit = {}
         attempt.onCancel = {
             historyReadActive.set(false)
             if (gatt != null) cancelCurrentOperation(gatt)
+            retainOnAbandon()
             runCatching { onResult(null) }
         }
         if (!isConnected || gatt == null || token == null || !hasCompatibleStatusProtocol()) {
@@ -1371,6 +1375,9 @@ class YpsoBleManager @Inject constructor(
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
+        retainOnAbandon = { retainPartialScan(reboot.toLong(), countBefore, headBefore, rows) }
+        /** Selector index proven by same-link read-back within this scan; null until first proven. */
+        var verifiedSelectorIndex: Int? = null
 
         fun owned(): Boolean = synchronized(opLock) {
             bluetoothGatt === gatt && sessionToken == token && session?.snapshot()?.reboot == reboot
@@ -1394,6 +1401,7 @@ class YpsoBleManager @Inject constructor(
             aapsLogger.error(LTag.PUMP, "YpsoPump stable history failed: $detail")
             // A failed scan proves nothing about the rows it collected, so no prefix may survive it.
             partialScan = null
+            verifiedSelectorIndex = null
             finish(null)
         }
         fun readEncrypted(uuid: UUID, done: (ByteArray) -> Unit) {
@@ -1435,7 +1443,11 @@ class YpsoBleManager @Inject constructor(
                 readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { selectedBody ->
                     val selected = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(selectedBody)
                         ?: return@readEncrypted failHistory("selector identity is not exact GLB")
-                    if (selected != index) return@readEncrypted failHistory("selector identity mismatch: requested $index, read $selected")
+                    if (selected != index) {
+                        verifiedSelectorIndex = null
+                        return@readEncrypted failHistory("selector identity mismatch: requested $index, read $selected")
+                    }
+                    verifiedSelectorIndex = selected
                     val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
                         "${owner.token.generation}|$reboot|$connectionId|$index|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
                     )
@@ -1467,15 +1479,28 @@ class YpsoBleManager @Inject constructor(
             }
         }
         fun select(index: Int, done: (YpsoHistoryEntry) -> Unit) {
+            // The selector position is already known once this scan has verified it by read-back, so a
+            // sequential walk does not re-read it before every row. That pre-read was a quarter of the
+            // GATT traffic and made long scans impossible to finish.
+            val known = verifiedSelectorIndex
+            if (known != null) {
+                if (known == index) {
+                    // Already selected is read-only evidence. Never dispatch a no-op selector and
+                    // mistake unchanged read-back for proof that its write counter was consumed.
+                    readSelected(index, done)
+                } else {
+                    dispatchChangedSelection(index, known, done)
+                }
+                return
+            }
             readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { beforeBody ->
                 val before = app.aaps.pump.ypsopump.comm.YpsoGlb.decodeExact(beforeBody)
                     ?: return@readEncrypted failHistory("pre-selector identity is not exact GLB")
+                verifiedSelectorIndex = before
                 if (before != index) {
                     dispatchChangedSelection(index, before, done)
                     return@readEncrypted
                 }
-                // Already selected is read-only evidence. Never dispatch a no-op selector and mistake
-                // unchanged read-back for proof that its write counter was consumed.
                 readSelected(index, done)
             }
         }
