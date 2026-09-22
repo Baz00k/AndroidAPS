@@ -1370,7 +1370,11 @@ class YpsoBleManager @Inject constructor(
                 LTag.PUMP,
                 "YpsoPump history scan yielded: freshRows=${rows.size}, retainedRows=${partialScan?.rows?.size ?: 0}, " +
                     "count=$countBefore, headSeq=${headBefore?.sequence}, oldestScannedSeq=${rows.lastOrNull()?.sequence}, " +
-                    "cursorSeq=${cursor?.identity?.sequence}, seekingOverlap=$overlapPending",
+                    "cursorSeq=${cursor?.identity?.sequence}, seekingOverlap=$overlapPending, " +
+                    "cursorSequenceAt=${rows.indexOfFirst { it.sequence == cursor?.identity?.sequence }}, " +
+                    "cursorExactAt=${rows.indexOfFirst { it.sequence == cursor?.identity?.sequence && it.fingerprint() == cursor?.fingerprint }}, " +
+                    "trackedTbrSeq=${cursor?.activeTbr?.identity?.sequence}, " +
+                    "trackedTbrExactAt=${rows.indexOfFirst { it.sequence == cursor?.activeTbr?.identity?.sequence && it.fingerprint() == cursor?.activeTbr?.fingerprint }}",
             )
             finish(null)
             return true
