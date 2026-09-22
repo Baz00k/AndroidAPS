@@ -1458,7 +1458,17 @@ class YpsoBleManager @Inject constructor(
             readEncrypted(CHAR_EVENT_VALUE) { body ->
                 val entry = YpsoHistoryEntry.decodeWire(body)
                     ?: return@readEncrypted failHistory("event $index failed strict decoding")
-                if (entry.index != index) return@readEncrypted failHistory("event row embedded index mismatch")
+                if (entry.index != index) {
+                    aapsLogger.warn(LTag.PUMP, "YpsoPump history selected index $index returned row ${entry.index}; refreshing selector")
+                    if (countBefore < 2) return@readEncrypted failHistory("stale selected row with no alternate history index")
+                    // A read-only selector match does not guarantee the event-value buffer was
+                    // refreshed. Force two changed-value writes, each with semantic read-back.
+                    val alternate = if (index == 0) 1 else 0
+                    dispatchChangedSelection(alternate, index) {
+                        dispatchChangedSelection(index, alternate, done)
+                    }
+                    return@readEncrypted
+                }
                 done(entry)
             }
         }

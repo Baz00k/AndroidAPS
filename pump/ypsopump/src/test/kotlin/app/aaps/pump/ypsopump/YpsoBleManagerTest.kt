@@ -332,6 +332,7 @@ class YpsoBleManagerTest {
             YpsoHistoryEntry(1000 + sequence, 2, 100, 0, 0, sequence, index)
         }
         var selected = 9
+        var staleValueIndex: Int? = null
         var rowReads = 0
         var beforeRow: () -> Unit = {}
         private var counter = 0L
@@ -375,6 +376,7 @@ class YpsoBleManagerTest {
             whenever(sessionCrypto.encrypt(any(), any(), any(), any())).thenAnswer {
                 val plaintext = it.getArgument<ByteArray>(0)
                 selected = requireNotNull(YpsoGlb.decodeExact(plaintext))
+                staleValueIndex = null
                 crypto.encrypt(plaintext, it.getArgument(1), it.getArgument(2), it.getArgument(3))
             }
             whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
@@ -391,12 +393,13 @@ class YpsoBleManagerTest {
                         value -> {
                             rowReads++
                             beforeRow()
-                            val row = rows[selected]
+                            val valueIndex = staleValueIndex ?: selected
+                            val row = rows[valueIndex]
                             YpsoCrc.appendCrc(java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
                                 .order(java.nio.ByteOrder.LITTLE_ENDIAN)
                                 .putInt(row.factorySeconds.toInt()).put(row.eventType.toByte()).putShort(row.value1.toShort())
                                 .putShort(row.value2.toShort()).putShort(row.value3.toShort())
-                                .putInt(row.sequence.toInt()).putShort(selected.toShort()).array())
+                                .putInt(row.sequence.toInt()).putShort(valueIndex.toShort()).array())
                         }
                         else -> error("Unexpected read ${ch.uuid}")
                     }
@@ -516,6 +519,17 @@ class YpsoBleManagerTest {
         pump.drain()
         assertEquals(listOf(head), results.single()!!.rowsNewestFirst)
         assertEquals(2, pump.rowReads)
+    }
+
+    @Test
+    fun `already selected head with stale event value recovers by changed selector writes`() {
+        val pump = HistoryPump()
+        pump.selected = 0
+        pump.staleValueIndex = 1
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+        manager.readStableHistory(null, 1, results::add)
+        pump.drain()
+        assertEquals(listOf(pump.rows.first()), results.single()?.rowsNewestFirst)
     }
 
     @Test
