@@ -25,6 +25,45 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 class YpsoHistoryIngestionTest {
+    @Test
+    fun `cancelled square row updates existing extended amount and retains short delivery window`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        var saved = app.aaps.core.data.model.EB(timestamp = 1_000L, amount = 0.5, duration = 20_000L)
+        whenever(sync.getExtendedBolusWithPumpId(eq(100L), any(), eq("10000001"))).thenAnswer { saved }
+        whenever(sync.syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            saved = saved.copy(amount = it.getArgument(1), duration = it.getArgument(2))
+            true
+        }
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        val running = row(100, 1, 50).copy(value2 = 15)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(running)))
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+            snapshot(listOf(running.copy(eventType = 3, value1 = 8, value2 = 0))))
+        assertTrue(result is YpsoHistoryIngestionResult.Applied)
+        assertEquals(0.08, saved.amount)
+        assertEquals(20_000L, saved.duration)
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+    }
+    @Test
+    fun `cancelled immediate cursor corrects provisional amount including zero without replay duplicates`() {
+        for (amount in listOf(54, 0)) {
+            val store = Store()
+            val sync: PumpSync = mock()
+            whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+                .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
+            val bindings = mutableListOf<Pair<Long, Double>>()
+            val ingestion = YpsoHistoryIngestion(store, sync) { _, id, _, delivered, _ -> bindings += id to delivered }
+            val running = row(100, 19, 200)
+            ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(running)))
+            val terminal = running.copy(eventType = 2, value1 = amount)
+            repeat(2) {
+                assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(terminal))) is YpsoHistoryIngestionResult.Applied)
+            }
+            assertEquals(listOf(100L to amount / 100.0), bindings)
+            verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(amount / 100.0), any(), eq(100L), any(), eq("10000001"))
+        }
+    }
     private class Store(var value: YpsoHistoryState = YpsoHistoryState()) : YpsoHistoryStateStore {
         override fun load() = value
         override fun commit(value: YpsoHistoryState) { this.value = value }

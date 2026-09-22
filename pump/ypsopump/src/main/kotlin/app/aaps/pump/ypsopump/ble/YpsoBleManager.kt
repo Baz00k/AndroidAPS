@@ -1532,7 +1532,7 @@ class YpsoBleManager @Inject constructor(
             }
         }
         fun hasRequiredRows(): Boolean = cursor != null &&
-            rows.any { it.sequence == cursor.identity.sequence && it.fingerprint() == cursor.fingerprint } &&
+            rows.any { it.matchesCursor(cursor, reboot.toLong()) } &&
             (cursor.activeTbr == null || rows.any {
                 it.sequence == cursor.activeTbr.identity.sequence && it.fingerprint() == cursor.activeTbr.fingerprint
             })

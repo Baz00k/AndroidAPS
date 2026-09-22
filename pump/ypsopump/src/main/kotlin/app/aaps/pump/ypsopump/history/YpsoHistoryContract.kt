@@ -320,7 +320,7 @@ object YpsoHistoryReconciler {
         }
 
         val cursorIndex = snapshot.rowsNewestFirst.indexOfFirst {
-            it.sequence == cursor.identity.sequence && it.fingerprint() == cursor.fingerprint
+            it.matchesCursor(cursor, snapshot.pumpRebootAfter)
         }
         if (cursorIndex < 0) {
             return YpsoHistoryReconciliation.Gap(
@@ -336,6 +336,10 @@ object YpsoHistoryReconciler {
         var priorSequence = cursor.identity.sequence
         val newEvents = mutableListOf<YpsoHistoryEvent>()
         val stateUpdates = mutableListOf<YpsoHistoryEvent>()
+        val cursorRow = snapshot.rowsNewestFirst[cursorIndex]
+        if (cursorRow.fingerprint() != cursor.fingerprint) {
+            stateUpdates += YpsoHistoryEvent(cursor.identity, cursorRow)
+        }
         var activeTbr = cursor.activeTbr
         activeTbr?.let { tracked ->
             val current = snapshot.rowsNewestFirst.firstOrNull {
@@ -415,12 +419,16 @@ object YpsoHistoryReconciler {
             priorSequence = entry.sequence
         }
         val latest = newEvents.lastOrNull()
+        // Keep a running bolus inside the next scan window. Otherwise a newer system event moves
+        // the cursor past it and its eventual in-place terminal amount is never read again.
+        val runningAnchor = (listOf(YpsoHistoryEvent(cursor.identity, cursorRow)) + newEvents)
+            .firstOrNull { it.entry.eventType in setOf(1, 17, 19) }
         // Finding the exact durable cursor in a stable snapshot proves continuity across a reboot.
         // A lower subsequent sequence is assigned the next generation above, while a scan that cannot
         // find the cursor remains a gap and cannot silently re-anchor or lose insulin.
-        val nextCursor = latest?.let {
+        val nextCursor = (runningAnchor ?: latest)?.let {
             YpsoHistoryCursor(it.identity, it.entry.fingerprint(), snapshot.pumpRebootAfter, activeTbr)
-        } ?: cursor.copy(pumpReboot = snapshot.pumpRebootAfter, activeTbr = activeTbr)
+        } ?: cursor.copy(fingerprint = cursorRow.fingerprint(), pumpReboot = snapshot.pumpRebootAfter, activeTbr = activeTbr)
         return YpsoHistoryReconciliation.Stable(cursor, nextCursor, newEvents, stateUpdates)
     }
 

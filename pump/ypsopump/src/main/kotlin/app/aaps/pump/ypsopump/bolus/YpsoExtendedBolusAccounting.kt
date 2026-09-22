@@ -52,7 +52,8 @@ object YpsoExtendedBolusAccounting {
         val start = requireNotNull(attempt.dispatchedAt)
         val plannedDuration = attempt.durationMinutes * 60_000L
         val completed = deliveredCentiUnits == attempt.requestedCentiUnits
-        val duration = if (completed) plannedDuration else (observedAt - start).coerceIn(1L, plannedDuration)
+        val stoppedAt = attempt.cancelStoppedAt ?: attempt.blockTerminalAt ?: observedAt
+        val duration = if (completed) plannedDuration else (stoppedAt - start).coerceIn(1L, plannedDuration)
         return TerminalWindow(start, duration)
     }
 

@@ -56,6 +56,14 @@ class YpsoExtendedBolusAccountingTest {
     }
 
     @Test
+    fun `late history correction retains observed early terminal time`() {
+        val stopped = attempt().copy(blockTerminalAt = 21_200L)
+        val window = YpsoExtendedBolusAccounting.terminalWindow(stopped, 8, observedAt = 86_400_000L)
+        assertEquals(20_000L, window.duration)
+        assertEquals(21_200L, window.end)
+    }
+
+    @Test
     fun `full completion keeps programmed duration`() {
         val window = YpsoExtendedBolusAccounting.terminalWindow(attempt(), 100, observedAt = 21_200L)
 

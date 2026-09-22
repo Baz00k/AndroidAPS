@@ -1055,7 +1055,7 @@ class YpsoPumpPlugin @Inject constructor(
         )
         val stable = YpsoHistoryReconciler.reconcile(cursor, snapshot) as? YpsoHistoryReconciliation.Stable ?: return
         if (attempt.shape != YpsoBolusShape.IMMEDIATE) {
-            when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.newEventsOldestFirst)) {
+            when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.stateUpdates + stable.newEventsOldestFirst)) {
                 is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
                     val historyTimestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
                         ?.instant?.toEpochMilli() ?: return
@@ -1109,7 +1109,7 @@ class YpsoPumpPlugin @Inject constructor(
                 Math.round(it.deliveredUnits * 100.0).toInt(),
             )
         }
-        when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.newEventsOldestFirst)) {
+        when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.stateUpdates + stable.newEventsOldestFirst)) {
             is YpsoImmediateBolusReconciliation.AttemptCompleted -> {
                 val timestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
                     ?.instant?.toEpochMilli() ?: return

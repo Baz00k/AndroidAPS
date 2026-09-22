@@ -92,7 +92,7 @@ class YpsoHistoryIngestion(
                 )
             }
             is YpsoHistoryReconciliation.Stable -> {
-                for (event in reconciliation.newEventsOldestFirst) {
+                for (event in reconciliation.stateUpdates + reconciliation.newEventsOldestFirst) {
                     when (event.semantics.kind) {
                         // Only immediate-bolus terminal rows are ingested as an instantaneous normal
                         // bolus. Square/combination terminal rows carry the pump-confirmed delivered
@@ -105,7 +105,6 @@ class YpsoHistoryIngestion(
                                 ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
                             val amount = requireNotNull(event.semantics.amountUnits)
                             val amountCentiUnits = Math.round(amount * 100).toInt()
-                            if (amountCentiUnits == 0) continue
                             val pending = YpsoPendingBolusSync(
                                 pumpSerial,
                                 event.identity.aapsPumpId,
@@ -116,6 +115,23 @@ class YpsoHistoryIngestion(
                             )
                             store.commit(store.load().copy(pendingBolus = pending))
                             if (!retryPending(pumpSerial)) return YpsoHistoryIngestionResult.Blocked("PumpSync rejected bolus")
+                        }
+                        YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
+                        YpsoHistoryKind.COMBINED_BOLUS_COMPLETED -> {
+                            // Correct an existing extended record under its proven pump identity.
+                            // The terminal row's duration can be zero after cancellation; retain the
+                            // recorded delivery window rather than treating zero as a new schedule.
+                            val id = event.identity.aapsPumpId
+                            val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
+                            if (existing != null && existing.isValid) {
+                                val amount = requireNotNull(event.semantics.amountUnits)
+                                pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, amount, existing.duration,
+                                    existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, pumpSerial)
+                                val saved = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
+                                if (saved == null || saved.amount != amount) {
+                                    return YpsoHistoryIngestionResult.Blocked("PumpSync rejected extended bolus correction")
+                                }
+                            }
                         }
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
