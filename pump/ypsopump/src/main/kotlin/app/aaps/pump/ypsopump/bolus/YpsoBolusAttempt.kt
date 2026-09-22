@@ -123,6 +123,17 @@ data class YpsoBolusAttempt(
     val confirmedUnits: Double? get() = confirmedCentiUnits?.div(100.0)
     val requestedExtendedCentiUnits: Int get() = requestedCentiUnits - immediateCentiUnits
 
+    /** Stable accounting identity is available from proven status before terminal history arrives. */
+    val accountingPumpId: Long?
+        get() {
+            pumpHistoryId?.let { return it }
+            val sequence = (if (shape == YpsoBolusShape.IMMEDIATE) pumpFastSequence else pumpSlowSequence) ?: return null
+            var generation = baseline.historyPumpId ushr 32
+            if (sequence < (baseline.historyPumpId and 0xffffffffL)) generation++
+            if (generation > Int.MAX_VALUE) return null
+            return (generation shl 32) or sequence
+        }
+
     /** Programmed amount of the block that carries the requested delivery. */
     fun programmedCentiUnits(block: YpsoBolusBlock): Int? =
         when (block) {

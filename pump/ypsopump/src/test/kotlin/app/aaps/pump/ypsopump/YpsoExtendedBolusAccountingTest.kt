@@ -21,6 +21,16 @@ import org.junit.jupiter.api.Test
 class YpsoExtendedBolusAccountingTest {
 
     @Test
+    fun `unreconciled journal retains accounting identity from proven delivery sequence`() {
+        assertEquals(null, attempt().pumpHistoryId)
+        assertEquals(101L, attempt().accountingPumpId)
+        val immediate = attempt().copy(shape = YpsoBolusShape.IMMEDIATE, durationMinutes = 0,
+            pumpSlowSequence = null, pumpFastSequence = 101)
+        assertEquals(101L, immediate.accountingPumpId)
+        assertEquals(null, immediate.copy(pumpFastSequence = null).accountingPumpId)
+    }
+
+    @Test
     fun `paired square cancellations use elapsed history without deriving time from amount`() {
         assertEquals(7852L, YpsoExtendedBolusAccounting.squareHistoryDuration(0, 7852L))
         assertEquals(108265L, YpsoExtendedBolusAccounting.squareHistoryDuration(2, 108265L))

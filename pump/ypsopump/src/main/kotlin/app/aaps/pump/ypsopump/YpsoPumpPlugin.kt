@@ -474,7 +474,7 @@ class YpsoPumpPlugin @Inject constructor(
         type: BS.Type,
     ) {
         val candidates = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
-            .loadAll().filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial && it.pumpHistoryId == pumpId }
+            .loadAll().filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial && it.accountingPumpId == pumpId }
         check(candidates.size <= 1) { "multiple bolus attempts claim the same pump history identity" }
         val attempt = candidates.singleOrNull() ?: return
         if (::persistenceLayer.isInitialized) {
@@ -1021,14 +1021,14 @@ class YpsoPumpPlugin @Inject constructor(
     private fun repairJournalledAccounting(serial: String) {
         if (!::persistenceLayer.isInitialized) return
         val attempts = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
-            .loadAll().filter { it.pumpSerial == serial && it.pumpHistoryId != null && it.dispatchedAt != null }
+            .loadAll().filter { it.pumpSerial == serial && it.accountingPumpId != null && it.dispatchedAt != null }
         if (attempts.isEmpty()) return
         val from = attempts.minOf { it.dispatchedAt!! }.coerceAtLeast(1L) - 60_000L
         val records = persistenceLayer.getBolusesFromTime(from, true).blockingGet()
             .filter { it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
         for (attempt in attempts) {
-            val id = attempt.pumpHistoryId!!
-            check(attempts.count { it.pumpHistoryId == id } == 1) { "ambiguous journalled pump bolus identity" }
+            val id = attempt.accountingPumpId!!
+            check(attempts.count { it.accountingPumpId == id } == 1) { "ambiguous journalled pump bolus identity" }
             if (attempt.shape == YpsoBolusShape.IMMEDIATE) {
                 val temporaryId = provisionalTemporaryId(attempt)
                 val provisional = records.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
