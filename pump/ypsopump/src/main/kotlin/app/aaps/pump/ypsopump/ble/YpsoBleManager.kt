@@ -145,27 +145,6 @@ class YpsoBleManager @Inject constructor(
     @Volatile private var controlNotificationsEnabled = false
 
     companion object {
-        /**
-         * Whether rows kept from an interrupted scan may be reused. Continuity can only be claimed
-         * across an identical ring, so the reboot epoch, the event count and the head row must all
-         * still match, and the rows must still be the contiguous prefix the scan walks.
-         */
-        internal fun resumableRows(
-            cachedReboot: Long,
-            cachedCount: Int,
-            cachedHead: YpsoHistoryEntry,
-            cachedRows: List<YpsoHistoryEntry>,
-            reboot: Long,
-            count: Int,
-            head: YpsoHistoryEntry,
-        ): List<YpsoHistoryEntry>? {
-            if (cachedReboot != reboot || cachedCount != count) return null
-            if (cachedHead.sequence != head.sequence || cachedHead.fingerprint() != head.fingerprint()) return null
-            if (cachedRows.firstOrNull()?.sequence != head.sequence) return null
-            if (cachedRows.withIndex().any { (position, row) -> row.index != position }) return null
-            return cachedRows
-        }
-
         private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
         private const val EXPECTED_PROFILE_SELECTOR_FRAME_COUNT = 4
         private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
@@ -1288,20 +1267,13 @@ class YpsoBleManager @Inject constructor(
     }
 
     /**
-     * Produce a stable event-history snapshot by explicitly selecting every logical row. Selector
-     * writes are strict-next journaled and accepted only after same-link selector identity read-back.
-     */
-    /**
-     * Rows already read by a scan that stopped before completing. Only reusable while the ring is
-     * provably identical, so a partial scan can be continued instead of restarted from the head.
-     *
-     * Deliberately survives disconnection. The link drops constantly during normal operation, and the
-     * reuse check re-proves the ring from the pump on every resume, so connection identity adds no
-     * safety here: it only guaranteed the scan could never accumulate enough rows to reach the cursor.
+     * Immutable checkpoint scoped to a provisioned pump and reboot epoch. A later scan reads the new
+     * head through the old head, verifies the shifted tail, and refreshes mutable rows before use.
+     * Reconnects and local deadlines do not change event identity.
      */
     private class PartialScan(
+        val generation: String,
         val reboot: Long,
-        val count: Int,
         val head: YpsoHistoryEntry,
         val rows: List<YpsoHistoryEntry>,
     )
@@ -1309,23 +1281,17 @@ class YpsoBleManager @Inject constructor(
     @Volatile
     private var partialScan: PartialScan? = null
 
-    private fun retainPartialScan(reboot: Long, count: Int, head: YpsoHistoryEntry?, rows: List<YpsoHistoryEntry>) {
+    private fun retainPartialScan(generation: String, reboot: Long, count: Int, head: YpsoHistoryEntry?, rows: List<YpsoHistoryEntry>) {
         if (head == null || count <= 0 || rows.size < 2) {
             partialScan = null
             return
         }
-        partialScan = PartialScan(reboot, count, head, rows.toList())
-    }
-
-    /**
-     * Returns previously scanned rows when the ring has not moved. Any change to the reboot epoch,
-     * the event count, or the head row invalidates them: continuity can only be claimed across a
-     * snapshot that is still identical, so a moved ring restarts the scan.
-     */
-    private fun resumePartialScan(reboot: Long, count: Int, head: YpsoHistoryEntry): List<YpsoHistoryEntry>? {
-        val cached = partialScan ?: return null
-        partialScan = null
-        return resumableRows(cached.reboot, cached.count, cached.head, cached.rows, reboot, count, head)
+        if (rows.withIndex().any { (index, row) -> row.index != index } ||
+            rows.zipWithNext().any { (newer, older) ->
+                ((newer.sequence - older.sequence) and 0xffffffffL) !in 1..0x7fffffffL
+            }
+        ) return
+        partialScan = PartialScan(generation, reboot, head, rows.toList())
     }
 
     internal fun clearPartialHistoryScan() {
@@ -1348,13 +1314,11 @@ class YpsoBleManager @Inject constructor(
         val gatt = captured.first
         val token = captured.second
         val connectionId = captured.third
-        // Abandoning the scan on a deadline is not evidence that its rows are wrong, so the prefix is
-        // kept. Without this the scan restarts at the head every time and can never converge.
-        var retainOnAbandon: () -> Unit = {}
+        // Prefixes are published by the row callback, never copied concurrently by the cancelling
+        // thread. A late callback from this attempt must not erase a successor's checkpoint.
         attempt.onCancel = {
-            historyReadActive.set(false)
             if (gatt != null) cancelCurrentOperation(gatt)
-            retainOnAbandon()
+            historyReadActive.set(false)
             runCatching { onResult(null) }
         }
         if (!isConnected || gatt == null || token == null || !hasCompatibleStatusProtocol()) {
@@ -1377,7 +1341,8 @@ class YpsoBleManager @Inject constructor(
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
-        retainOnAbandon = { retainPartialScan(reboot.toLong(), countBefore, headBefore, rows) }
+        val cached = partialScan?.takeIf { it.generation == token.generation && it.reboot == reboot.toLong() }
+        var overlapPending = cached != null
         /** Selector index proven by same-link read-back within this scan; null until first proven. */
         var verifiedSelectorIndex: Int? = null
 
@@ -1386,23 +1351,35 @@ class YpsoBleManager @Inject constructor(
         }
         fun finish(value: YpsoHistorySnapshot?) {
             if (!attempt.tryComplete()) return
-            // A completed scan supersedes any retained prefix; only yieldAtSafeBoundary retains one.
-            if (value != null) partialScan = null
+            // Only a stable completed scan supersedes its checkpoint. Movement at the final anchor
+            // check must leave progress available for the next overlap scan.
+            if (value != null && value.countBefore == value.countAfter &&
+                value.headBefore?.sequence == value.headAfter?.sequence &&
+                value.headBefore?.fingerprint() == value.headAfter?.fingerprint()
+            ) partialScan = null
             historyReadActive.set(false)
             onResult(value)
         }
         fun yieldAtSafeBoundary(): Boolean {
+            if (!attempt.isActive) return true
             if (!attempt.shouldYield) return false
             // Keep what was already read. Routine status polling interrupts long scans every few
             // minutes, and restarting at the head each time means the scan can never reach the cursor.
-            retainPartialScan(reboot.toLong(), countBefore, headBefore, rows)
+            if (!overlapPending) retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
+            aapsLogger.debug(
+                LTag.PUMP,
+                "YpsoPump history scan yielded: freshRows=${rows.size}, retainedRows=${partialScan?.rows?.size ?: 0}, " +
+                    "count=$countBefore, headSeq=${headBefore?.sequence}, oldestScannedSeq=${rows.lastOrNull()?.sequence}, " +
+                    "cursorSeq=${cursor?.identity?.sequence}, seekingOverlap=$overlapPending",
+            )
             finish(null)
             return true
         }
         fun failHistory(detail: String) {
+            if (!attempt.isActive) return
             aapsLogger.error(LTag.PUMP, "YpsoPump stable history failed: $detail")
-            // A failed scan proves nothing about the rows it collected, so no prefix may survive it.
-            partialScan = null
+            // A failed operation does not invalidate earlier decoded rows. Reuse still requires
+            // independent overlap and boundary reads on the next attempt.
             verifiedSelectorIndex = null
             finish(null)
         }
@@ -1530,13 +1507,80 @@ class YpsoBleManager @Inject constructor(
                 }
             }
         }
+        fun checkpoint() {
+            if (attempt.isActive && !overlapPending) {
+                retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
+            }
+        }
+        fun hasRequiredRows(): Boolean = cursor != null &&
+            rows.any { it.sequence == cursor.identity.sequence && it.fingerprint() == cursor.fingerprint } &&
+            (cursor.activeTbr == null || rows.any {
+                it.sequence == cursor.activeTbr.identity.sequence && it.fingerprint() == cursor.activeTbr.fingerprint
+            })
+
+        // Cached running events can have been rewritten even if the ring's head did not change.
+        // Refresh these rows before handing a snapshot to accounting.
+        fun refreshMutableRows(position: Int = 0) {
+            if (yieldAtSafeBoundary()) return
+            val next = (position until rows.size).firstOrNull { rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
+                ?: return finishScan()
+            select(next) { fresh ->
+                if (fresh.sequence != rows[next].sequence || fresh.factorySeconds != rows[next].factorySeconds) {
+                    partialScan = null
+                    failHistory("ring moved while refreshing event $next")
+                } else {
+                    rows[next] = fresh
+                    checkpoint()
+                    refreshMutableRows(next + 1)
+                }
+            }
+        }
         fun readRows(index: Int, limit: Int) {
             if (yieldAtSafeBoundary()) return
-            if (index >= limit) return finishScan()
+            if (index >= limit || hasRequiredRows()) return refreshMutableRows()
             select(index) { row ->
                 rows += row
-                val foundCursor = cursor != null && row.sequence == cursor.identity.sequence && row.fingerprint() == cursor.fingerprint
-                if (foundCursor && cursor.activeTbr == null) finishScan() else readRows(index + 1, limit)
+                checkpoint()
+                readRows(index + 1, limit)
+            }
+        }
+        fun seekOverlap(limit: Int) {
+            if (yieldAtSafeBoundary()) return
+            val old = cached
+            val overlap = rows.last()
+            if (old != null && overlap.sequence == old.head.sequence && overlap.fingerprint() == old.head.fingerprint()) {
+                val shift = overlap.index
+                val available = old.rows.take(minOf(old.rows.size, limit - shift))
+                if (available.size > 1) {
+                    // Re-read the far boundary: count/head alone cannot prove that an old prefix
+                    // still occupies these positions after insertion or ring wrap.
+                    val tail = available.last()
+                    select(shift + available.lastIndex) { freshTail ->
+                        overlapPending = false
+                        if (freshTail.sequence == tail.sequence && freshTail.fingerprint() == tail.fingerprint()) {
+                            rows += available.drop(1).map { it.copy(index = it.index + shift) }
+                            rows[rows.lastIndex] = freshTail
+                            aapsLogger.debug(LTag.PUMP, "YpsoPump history scan resumed with ${rows.size} cached rows (head shifted $shift)")
+                        } else {
+                            aapsLogger.debug(LTag.PUMP, "YpsoPump history cached boundary changed; continuing from ${rows.size} fresh rows")
+                        }
+                        checkpoint()
+                        readRows(rows.size, limit)
+                    }
+                    return
+                }
+            }
+            val passedOldHead = old != null &&
+                ((old.head.sequence - overlap.sequence) and 0xffffffffL) in 1..0x7fffffffL
+            if (old == null || passedOldHead || overlap.sequence == old.head.sequence || rows.size >= limit || hasRequiredRows()) {
+                overlapPending = false
+                checkpoint()
+                readRows(rows.size, limit)
+            } else {
+                select(rows.size) { row ->
+                    rows += row
+                    seekOverlap(limit)
+                }
             }
         }
         enableProfileSetup(gatt) { setup ->
@@ -1552,16 +1596,7 @@ class YpsoBleManager @Inject constructor(
                     headBefore = head
                     val limit = minOf(count, maxRows)
                     rows += head
-                    // Reuse an earlier interrupted scan only when the ring is provably unchanged: same
-                    // reboot epoch, same count, and the same head row still at index 0.
-                    val resumed = resumePartialScan(reboot.toLong(), count, head)
-                    if (resumed != null) {
-                        rows.clear()
-                        rows += resumed
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump history scan resumed with ${resumed.size} cached rows")
-                    }
-                    if (yieldAtSafeBoundary()) return@select
-                    readRows(rows.size, limit)
+                    seekOverlap(limit)
                 }
             }
         }

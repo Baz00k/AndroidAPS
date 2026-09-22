@@ -796,10 +796,15 @@ class YpsoPumpPlugin @Inject constructor(
                 yielded = true
                 attempt.requestYield()
             }
-            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) {
+                // A deadline is also a cooperative stop: let an in-flight selector finish its
+                // read-back instead of stranding a write reservation on an otherwise healthy link.
+                attempt.requestYield()
+                break
+            }
         }
         if (latch.count == 0L) return snapshot
-        if (yielded) {
+        if (attempt.shouldYield) {
             // A selector write that has left the phone must complete semantic read-back before the
             // therapy command can own the connection. Hard-cancelling here strands its reservation.
             if (latch.await(HISTORY_YIELD_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
@@ -815,9 +820,8 @@ class YpsoPumpPlugin @Inject constructor(
             bleManager.disconnect()
             return null
         }
-        // The pump serves history rows steadily at roughly 60ms each, so a large scan can simply outlast
-        // this budget while every read succeeds. Abandoning the scan must not tear down a healthy link;
-        // dropping it here is what starved the status reads that confirm therapy.
+        // A large scan can outlast this budget while individual reads succeed. Its decoded prefix
+        // remains checkpointed for the next attempt.
         aapsLogger.warn(LTag.PUMP, "YpsoPump history read did not finish within ${timeoutMs}ms")
         return null
     }
