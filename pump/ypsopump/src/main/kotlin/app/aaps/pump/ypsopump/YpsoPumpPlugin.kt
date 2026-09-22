@@ -1281,6 +1281,9 @@ class YpsoPumpPlugin @Inject constructor(
     ) {
         if (attempt.shape != YpsoBolusShape.IMMEDIATE || attempt.pumpSerial != serial) return
         if (attempt.dispatchedAt == null) return
+        // The pump cannot deliver more than this command programmed, so a larger row belongs to a
+        // different dose. Merging onto it would erase insulin, which is the fatal direction.
+        if (confirmed.amountCentiUnits > attempt.requestedCentiUnits) return
         val timestamp = (YpsoPumpLocalTime.resolve(confirmed.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
             ?.instant?.toEpochMilli() ?: return
         runCatching {

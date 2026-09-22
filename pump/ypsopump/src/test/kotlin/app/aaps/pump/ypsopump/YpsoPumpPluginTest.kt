@@ -696,6 +696,67 @@ class YpsoPumpPluginTest {
         verify(sync).correctExtendedBolusWithPumpId(eq(1_200L), eq(0.1), eq(180_000L), any(), any(), any(), any())
     }
 
+    @Test
+    fun `a dose that never proved its identity is merged onto its confirmed history row`() {
+        // Delivery happened, but the link dropped before any status proved the block identity, so
+        // the provisional record has no pump id. History is importing the same physical insulin.
+        val attempt = immediateAttempt(requestedCentiUnits = 200)
+
+        bindUnprovenProvisional(attempt, confirmedCentiUnits = 54, sequence = 48_134)
+
+        verify(sync).syncBolusWithTempId(any(), eq(0.54), any(), anyOrNull(), eq(48_134L), any(), any())
+    }
+
+    @Test
+    fun `a larger history row is never merged onto a smaller dose`() {
+        // The pump cannot deliver more than this command programmed, so the row is another dose.
+        // Merging would replace 2.0 U of real insulin with 0.54 U and erase insulin from IOB.
+        val attempt = immediateAttempt(requestedCentiUnits = 50)
+
+        bindUnprovenProvisional(attempt, confirmedCentiUnits = 200, sequence = 48_134)
+
+        verify(sync, never()).syncBolusWithTempId(any(), any(), any(), anyOrNull(), any(), any(), any())
+    }
+
+    private fun immediateAttempt(requestedCentiUnits: Int) = app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt(
+        requestId = "request",
+        pumpSerial = PUMP_SERIAL,
+        sessionGeneration = "generation",
+        treatment = app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL,
+        requestedCentiUnits = requestedCentiUnits,
+        payloadHash = "ab".repeat(32),
+        baseline = app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline(48_000, 20, 48_000, 1, 2, 21, 1_000),
+        createdAt = 1_100,
+        outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.UNRESOLVED,
+        dispatchCounter = 1,
+        dispatchedAt = 1_200,
+    )
+
+    private fun bindUnprovenProvisional(
+        attempt: app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt,
+        confirmedCentiUnits: Int,
+        sequence: Long,
+    ) {
+        val entry = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(1, 2, confirmedCentiUnits, 0, 0, sequence, 0)
+        val event = app.aaps.pump.ypsopump.history.YpsoHistoryEvent(
+            app.aaps.pump.ypsopump.history.YpsoEventIdentity(PUMP_SERIAL, 0, sequence), entry,
+        )
+        val confirmed = app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation
+            .ConfirmedInsulin(event, confirmedCentiUnits)
+        YpsoPumpPlugin::class.java.getDeclaredMethod(
+            "bindUnprovenProvisionalBolus",
+            String::class.java,
+            app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java,
+            app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation.ConfirmedInsulin::class.java,
+            ZoneId::class.java,
+        ).apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL, attempt, confirmed, ZoneId.of("UTC"))
+    }
+
+    private companion object {
+        /** The plugin publishes its serial from pump state, which these unit tests never populate. */
+        const val PUMP_SERIAL = "10000001"
+    }
+
     private fun finishUnprovenCancellation(attempt: app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt) =
         YpsoPumpPlugin::class.java
             .getDeclaredMethod("finishUnprovenExtendedCancellation", app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java)
