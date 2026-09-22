@@ -106,6 +106,8 @@ class YpsoPumpPlugin @Inject constructor(
     aapsLogger, rh, preferences, commandQueue
 ), Pump {
 
+    @Inject lateinit var persistenceLayer: app.aaps.core.interfaces.db.PersistenceLayer
+
     private var publishedAvailabilityPresentation: PumpSetupPresentation? = null
     /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
     private var availabilityNotificationSynchronized = false
@@ -471,9 +473,19 @@ class YpsoPumpPlugin @Inject constructor(
         amount: Double,
         type: BS.Type,
     ) {
-        val attempt = bolusController.currentAttempt() ?: return
-        if (attempt.shape != YpsoBolusShape.IMMEDIATE || attempt.pumpHistoryId != pumpId) return
-        runCatching {
+        val candidates = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
+            .loadAll().filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial && it.pumpHistoryId == pumpId }
+        check(candidates.size <= 1) { "multiple bolus attempts claim the same pump history identity" }
+        val attempt = candidates.singleOrNull() ?: return
+        if (::persistenceLayer.isInitialized) {
+            persistenceLayer.syncPumpBolusWithTempId(
+                BS(timestamp = timestamp, amount = amount, type = type,
+                    ids = app.aaps.core.data.model.IDs(temporaryId = provisionalTemporaryId(attempt),
+                        pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = pumpSerial)), type,
+            ).blockingGet()
+            return
+        }
+        run {
             pumpSync.syncBolusWithTempId(
                 timestamp,
                 amount,
@@ -483,7 +495,7 @@ class YpsoPumpPlugin @Inject constructor(
                 PumpType.YPSOPUMP,
                 pumpSerial,
             )
-        }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump provisional bolus resolution failed: ${it.message}") }
+        }
     }
 
     /** Stable per-attempt identity so the provisional record can be found again after a restart. */
@@ -966,6 +978,7 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity or session evidence unavailable")
             return YpsoHistoryIngestionResult.Blocked("pump identity or session evidence unavailable")
         }
+        repairJournalledAccounting(serial)
         reconcileBolusAttempt(serial, zone, reboot, snapshot)
         publishUnresolvedBolusWarningIfNeeded()
         val attempt = bolusController.currentAttempt()
@@ -1002,6 +1015,41 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }
         return result
+    }
+
+    /** Repairs earlier imports using journalled identities, never matching by dose or proximity. */
+    private fun repairJournalledAccounting(serial: String) {
+        if (!::persistenceLayer.isInitialized) return
+        val attempts = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
+            .loadAll().filter { it.pumpSerial == serial && it.pumpHistoryId != null && it.dispatchedAt != null }
+        if (attempts.isEmpty()) return
+        val from = attempts.minOf { it.dispatchedAt!! }.coerceAtLeast(1L) - 60_000L
+        val records = persistenceLayer.getBolusesFromTime(from, true).blockingGet()
+            .filter { it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
+        for (attempt in attempts) {
+            val id = attempt.pumpHistoryId!!
+            check(attempts.count { it.pumpHistoryId == id } == 1) { "ambiguous journalled pump bolus identity" }
+            if (attempt.shape == YpsoBolusShape.IMMEDIATE) {
+                val temporaryId = provisionalTemporaryId(attempt)
+                val provisional = records.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
+                val imported = records.singleOrNull { it.ids.pumpId == id } ?: continue
+                if (provisional.id == imported.id) continue
+                // The imported amount is already pump-confirmed. This transaction atomically merges
+                // both records even if their timestamps predate the current driver activation.
+                persistenceLayer.syncPumpBolusWithTempId(
+                    imported.copy(ids = imported.ids.copy(temporaryId = temporaryId)), provisional.type,
+                ).blockingGet()
+                aapsLogger.info(LTag.PUMP, "YpsoPump merged journalled provisional bolus with pump event $id")
+            } else {
+                val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, serial) ?: continue
+                if (attempt.cancelStoppedAt == null && attempt.blockTerminalAt == null) continue
+                val delivered = Math.round(existing.amount * 100).toInt()
+                val window = YpsoExtendedBolusAccounting.terminalWindow(attempt, delivered, System.currentTimeMillis())
+                if (existing.duration == window.duration) continue
+                pumpSync.syncExtendedBolusWithPumpId(existing.timestamp, existing.amount, window.duration,
+                    existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, serial)
+            }
+        }
     }
 
     /**

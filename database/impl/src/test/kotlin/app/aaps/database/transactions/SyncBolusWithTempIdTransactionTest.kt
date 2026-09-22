@@ -45,6 +45,37 @@ class SyncBolusWithTempIdTransactionTest {
     }
 
     @Test
+    fun `late binding merges an already imported pump row without double counting`() {
+        val provisional = createBolus(500L, null, 2.0, 1000L).also { it.id = 1 }
+        val imported = createBolus(900L, 100L, 0.54, 1000L).also { it.id = 2; it.interfaceIDs.temporaryId = null }
+        whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(provisional)
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+        val transaction = SyncBolusWithTempIdTransaction(createBolus(500L, 100L, 0.54, 1000L), null)
+        transaction.database = database
+        transaction.run()
+        assertThat(listOf(provisional, imported).filter { it.isValid }.sumOf { it.amount }).isEqualTo(0.54)
+        assertThat(imported.interfaceIDs.temporaryId).isEqualTo(500L)
+        assertThat(provisional.isValid).isFalse()
+        whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+        transaction.run()
+        assertThat(listOf(provisional, imported).filter { it.isValid }.sumOf { it.amount }).isEqualTo(0.54)
+    }
+
+    @Test
+    fun `conflicting temporary identity does not invalidate either record`() {
+        val provisional = createBolus(500L, null, 2.0, 1000L).also { it.id = 1 }
+        val imported = createBolus(600L, 100L, 0.54, 1000L).also { it.id = 2 }
+        whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(provisional)
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+        val transaction = SyncBolusWithTempIdTransaction(createBolus(500L, 100L, 0.54, 1000L), null)
+        transaction.database = database
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException::class.java) { transaction.run() }
+        verify(bolusDao, never()).updateExistingEntry(any())
+        assertThat(provisional.isValid).isTrue()
+        assertThat(imported.isValid).isTrue()
+    }
+
+    @Test
     fun `does not update when not found by temp id`() {
         val bolus = createBolus(tempId = 500L, pumpId = 100L, amount = 7.0, timestamp = 2000L)
 
