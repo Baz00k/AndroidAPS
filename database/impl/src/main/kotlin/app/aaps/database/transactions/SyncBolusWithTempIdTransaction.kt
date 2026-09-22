@@ -27,6 +27,8 @@ class SyncBolusWithTempIdTransaction(
                 imported.timestamp = bolus.timestamp
                 imported.amount = bolus.amount
                 imported.type = newType ?: current.type
+                // Removal of either representation must survive merging their proven identities.
+                imported.isValid = imported.isValid && current.isValid
                 current.isValid = false
                 current.interfaceIDs.temporaryId = null
                 database.bolusDao.updateExistingEntry(current)
