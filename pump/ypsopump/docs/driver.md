@@ -2,7 +2,7 @@
 
 ## Capabilities
 
-`YpsoPumpConst.READ_ONLY_MODE` is the build-time gate for pump-changing therapy writes. The only therapy writes currently implemented are immediate and square extended bolus delivery and cancellation; read-only mode disables them. Authentication and selectors required to read pump data remain available. When therapy writes are enabled, the driver validates exact 0.1 U steps (0.1–30 U, subject to AAPS constraints); extended delivery requires 15-minute steps from 15 minutes to 12 hours. Stop/cancel applies only to an identified AAPS-started bolus. The plugin does not currently enact TBRs, program basal profiles, offer combination-bolus UI or load TDDs.
+`YpsoPumpConst.READ_ONLY_MODE` is the build-time gate for pump-changing therapy writes: immediate and square extended bolus delivery and cancellation, and temporary basal start and stop. Read-only mode disables them. Authentication and selectors required to read pump data remain available. When therapy writes are enabled, the driver validates exact 0.1 U steps (0.1–30 U, subject to AAPS constraints); extended delivery requires 15-minute steps from 15 minutes to 12 hours. Stop/cancel applies only to an identified AAPS-started bolus. TBRs run 0–500% for 15 minutes to 24 hours. The plugin does not program basal profiles, offer combination-bolus UI or load TDDs.
 
 ## Status and availability
 
@@ -15,6 +15,20 @@ The protected session records distinct causes for missing setup, bond/permission
 Pump basal programming and A/B activation remain manual. In **YpsoPump Preferences → Basal configuration**, use **Read pump basal profiles** after setup or editing schedules on the pump. This explicitly reads the active program, all 24 hourly settings for A and B, the active program again and pump clock on one connection. An incomplete or inconsistent read does not replace the last complete configuration. The stored schedules survive disconnects and restarts for that pump-session generation; they do not expire with status samples.
 
 Use **Check active pump profile** after switching A/B on the pump. It checks the active selector against the stored schedules without rereading all hours. The driver compares the complete effective AAPS basal schedule with the last observed active pump schedule and reports *not read*, *matches* or *mismatch*. A mismatch displays an urgent notification and pump-tab banner. `setNewBasalProfile()` never writes the pump: it returns success without enacting only when the retained configuration matches. Routine status polls do not read profile settings. Unreported manual edits or a switch away and back between reads may leave the stored comparison outdated; a timezone change requires another full read. This retained comparison is not current pump-side proof of schedule continuity, even when therapy writes are enabled by the build-time gate.
+
+## Temporary basal
+
+The pump runs percent TBRs only. A percent request is sent as given (capped at 500%); an absolute request is converted once to a percent of the AAPS profile rate at enactment, rounded to 1%. AAPS records percent TBRs against the profile rate at each instant, and a profile is accepted only when it matches the pump's schedule, so the record follows what the pump delivers across later rate changes. A 100% request is a cancellation.
+
+Every request starts with a fresh status read. A running TBR cannot be replaced on the pump, so a change is a stop followed by a start. Each command is journalled before it can leave the phone and is resolved only by pump status read on the same link. AAPS records a stop at the pump acknowledgement and the new start at its own acknowledgement, so the short scheduled-rate gap between them is recorded. When an acknowledgement is lost, the dispatch time is used if status still proves the effect. A request reports success only when the pump is proven to run exactly what was asked, because AAPS delivers a paired SMB on success. Any other outcome is reported as a failure, and nothing is retried automatically.
+
+A command whose effect status could not prove stays open in the journal, with an urgent notification, until a later status read resolves it. A start that status proves later is recorded from its dispatch time. The notification is derived from the journal, so it survives restarts. Cancellation stops any running TBR, including one set on the pump.
+
+Each routine status read also reconciles AAPS records with the pump. If the pump is idle while AAPS shows a TBR, or is running while AAPS shows a pump stop, the record is shortened by duration only. The end is chosen so IOB errs high: a low TBR or a stop ends when it was last seen matching, and a high TBR ends at the contradicting observation. Pump history later sets the pump's own time.
+
+Pump history is the accounting authority for end times. The TBR row of an AAPS start is matched by percent, duration and a start between the command's dispatch and its latest possible effect, allowing 90 seconds of pump clock drift (profile reads reject more than 30 seconds). A matched row updates the AAPS record instead of adding a second one. A row that overlaps an unmatched AAPS start with the same percent blocks history rather than being counted twice. TBRs set on the pump are imported at pump time and shortened to the elapsed minutes when they end. A pump Stop records a zero-basal window from the Stop row until the Resume row. A record removed in AAPS is not recreated.
+
+A TBR row falling in the repeated hour of a daylight-saving fall-back cannot be placed in time and blocks history ingestion, as bolus rows do.
 
 ## Bolus delivery and history
 

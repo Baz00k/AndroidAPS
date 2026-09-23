@@ -35,6 +35,7 @@ val sharedDriverSources =
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoWriteAccounting.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBolusWriteCoordinator.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoTbrWriteCoordinator.kt",
+        "../../src/main/kotlin/app/aaps/pump/ypsopump/tbr/YpsoTbrRequest.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoHistorySelectorCoordinator.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoProfileSelectorCoordinator.kt",
     )
