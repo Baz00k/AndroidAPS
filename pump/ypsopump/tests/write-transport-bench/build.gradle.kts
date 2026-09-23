@@ -22,6 +22,7 @@ val sharedDriverSources =
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/commands/StatusCommand.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoHistoryEntry.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoHistoryContract.kt",
+        "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoBolusPumpIdentity.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoPumpLocalTime.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/bolus/YpsoBolusAttempt.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/bolus/YpsoBolusAttemptFileStore.kt",
