@@ -2079,18 +2079,19 @@ class YpsoBleManager @Inject constructor(
     }
 
     /** Status proved the effect of the TBR command; its counter is accepted by the pump. */
+    /** Status proved the effect of the TBR command. False leaves the write for [recordTbrUnresolved]. */
     internal fun verifyTbrAccepted(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
         runCatching { tbrWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
-            .also { releaseTbrWrite() }
+            .also { if (it) releaseTbrWrite() }
 
-    /** A measured rejection code with an unchanged status: the command had no effect. */
+    /** A measured rejection code with an unchanged status. False leaves the write for [recordTbrUnresolved]. */
     internal fun verifyTbrRejected(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
         runCatching { tbrWriteCoordinator.reconcileRejected(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
-            .also { releaseTbrWrite() }
+            .also { if (it) releaseTbrWrite() }
 
     /**
-     * No evidence resolves the command. The session reservation stays durable and blocking until the
-     * next write retires it as an interrupted write; the domain journal owns the therapy decision.
+     * No evidence resolves the command. Its counter is kept as the high-water mark and the reservation
+     * retired, so later therapy can proceed; the TBR journal owns the therapy decision.
      */
     internal fun recordTbrUnresolved(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String) {
         runCatching { tbrWriteCoordinator.recordUnresolved(writeId, owner.owner, evidenceHash, detail) }

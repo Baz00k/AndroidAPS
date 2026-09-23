@@ -4,6 +4,8 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrCommandEvidence
 import app.aaps.pump.ypsopump.tbr.YpsoTbrController
+import app.aaps.pump.ypsopump.tbr.YpsoTbrController.Reason
+import app.aaps.pump.ypsopump.tbr.YpsoTbrController.Result
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
 import app.aaps.pump.ypsopump.tbr.YpsoTbrLink
 import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
@@ -12,6 +14,8 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrRejectReason
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRequest
 import app.aaps.pump.ypsopump.tbr.YpsoTbrWriteResult
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -24,6 +28,10 @@ class YpsoTbrControllerTest {
         var readable = true
         var dropAck = false
         var statusAfterCommand = true
+        /** Answers a start with a proven counter rejection this many times, like transport recovery does. */
+        var counterRetries = 0
+        var sendStart = true
+        var onCommand: (Int) -> Unit = {}
 
         override fun status(): YpsoTbrObservation? = if (readable) observe() else null
 
@@ -35,10 +43,12 @@ class YpsoTbrControllerTest {
             effective: (YpsoTbrObservation) -> Boolean,
             beforeDispatch: (Long) -> Unit,
         ): YpsoTbrCommandEvidence {
+            if (durationMinutes > 0 && !sendStart) return YpsoTbrCommandEvidence(YpsoTbrWriteResult.NotSent("link"), null, null, null)
             val dispatchedAt = clock
-            beforeDispatch(dispatchedAt)
+            repeat(if (durationMinutes > 0) counterRetries + 1 else 1) { beforeDispatch(clock); clock += 100 }
             commands += percent to durationMinutes
-            clock += 500
+            onCommand(durationMinutes)
+            clock += 400
             val result = when {
                 durationMinutes == 0 -> { this.percent = 100; remaining = 0; YpsoTbrWriteResult.Acknowledged }
                 !running -> YpsoTbrWriteResult.Rejected(YpsoTbrRejectReason.PUMP_STOPPED)
@@ -52,20 +62,22 @@ class YpsoTbrControllerTest {
         }
     }
 
+    /** Records keyed by temporary ID, mirroring the idempotent PumpSync temp-ID transactions. */
     private class Records : YpsoTbrRecords {
-        data class Record(val start: Long, val percent: Int, val durationMs: Long, var end: Long? = null)
-        val records = mutableListOf<Record>()
+        data class Record(val start: Long, val percent: Int, var durationMs: Long)
+        val byTempId = linkedMapOf<Long, Record>()
         var saves = true
-        override fun started(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
+        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
             if (!saves) return false
-            records += Record(timestamp, attempt.percent, attempt.durationMinutes * 60_000L)
+            byTempId.getOrPut(attempt.temporaryId) { Record(timestamp, attempt.percent, attempt.durationMinutes * 60_000L) }
             return true
         }
-        override fun stopped(timestamp: Long): Boolean {
-            records.lastOrNull { it.end == null && it.start + it.durationMs > timestamp }?.end = timestamp
+        override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
+            val record = byTempId[attempt.temporaryId] ?: return false
+            record.durationMs = minOf(record.durationMs, end - record.start)
             return true
         }
-        val running get() = records.lastOrNull { it.end == null }
+        fun runningAt(at: Long) = byTempId.values.lastOrNull { it.start <= at && it.start + it.durationMs > at }
     }
 
     private class MemoryStore : YpsoTbrAttemptStore {
@@ -78,64 +90,76 @@ class YpsoTbrControllerTest {
     private val journal = YpsoTbrJournal(store)
     private val records = Records()
 
-    private fun controller(pump: Pump, baseline: Long? = 7L) =
+    private fun controller(pump: YpsoTbrLink, baseline: Long? = 7L) =
         YpsoTbrController(pump, journal, records, { "10054912" }, { baseline }, { clock })
+
+    private val starts get() = store.attempts.filter { it.kind == YpsoTbrAttempt.Kind.START }
+    private val stops get() = store.attempts.filter { it.kind == YpsoTbrAttempt.Kind.STOP }
 
     @Test
     fun `start without a running TBR sends one command and records the acknowledged start`() {
         val pump = Pump()
         val result = controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
 
-        assertEquals(YpsoTbrController.Result.Started(YpsoTbrRequest(150, 30)), result)
+        assertEquals(Result.Started(YpsoTbrRequest(150, 30)), result)
         assertEquals(listOf(150 to 30), pump.commands)
-        assertEquals(1_000_500L, records.running!!.start)
-        assertEquals(YpsoTbrAttempt.State.STARTED, store.attempts.single().state)
-        assertEquals(7L, store.attempts.single().baselinePumpId)
+        assertEquals(1_000_500L, records.runningAt(clock)!!.start)
+        assertTrue(starts.single().accounted)
+        assertEquals(7L, starts.single().baselinePumpId)
     }
 
     @Test
-    fun `replacement stops the running TBR first and records the real gap`() {
-        val pump = Pump(percent = 80, remaining = 20)
-        records.records += Records.Record(0, 80, 30 * 60_000L)
+    fun `replacement stops first, journals the stop and records the real gap`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(80, 30), "NORMAL")
 
-        val result = controller(pump).start(YpsoTbrRequest(120, 15), "NORMAL")
+        val result = controller.start(YpsoTbrRequest(120, 15), "NORMAL")
 
-        assertTrue(result is YpsoTbrController.Result.Started)
-        assertEquals(listOf(100 to 0, 120 to 15), pump.commands)
-        val (old, new) = records.records
-        assertEquals(1_000_500L, old.end)
-        assertEquals(1_001_500L, new.start)
+        assertTrue(result is Result.Started)
+        assertEquals(listOf(80 to 30, 100 to 0, 120 to 15), pump.commands)
+        val (old, new) = records.byTempId.values.toList()
+        assertEquals(stops.single().effectiveAt, old.start + old.durationMs)
+        assertTrue(new.start > old.start + old.durationMs)
+        assertEquals(YpsoTbrAttempt.State.EFFECTIVE, stops.single().state)
     }
 
     @Test
-    fun `a stopped pump rejects before any command`() {
+    fun `a failed start after a confirmed stop never reports success, so no paired SMB follows`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(80, 30), "NORMAL")
+        pump.sendStart = false
+
+        val result = controller.start(YpsoTbrRequest(0, 30), "NORMAL")
+
+        assertEquals(Result.Failed(Reason.COMMAND_NOT_SENT, pumpChanged = true), result)
+        assertNull(records.runningAt(clock))
+    }
+
+    @Test
+    fun `a stopped pump fails before any command`() {
         val pump = Pump(running = false)
         val result = controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
 
-        assertEquals(YpsoTbrController.Result.NotChanged(YpsoTbrController.Reason.PUMP_STOPPED), result)
+        assertEquals(Result.Failed(Reason.PUMP_STOPPED, false), result)
         assertTrue(pump.commands.isEmpty())
         assertTrue(store.attempts.isEmpty())
     }
 
     @Test
-    fun `failed start after a confirmed stop leaves AAPS showing no TBR`() {
-        val pump = object : YpsoTbrLink {
-            val inner = Pump(percent = 80, remaining = 20)
-            override fun status() = inner.status()
-            override fun command(percent: Int, durationMinutes: Int, effective: (YpsoTbrObservation) -> Boolean, beforeDispatch: (Long) -> Unit): YpsoTbrCommandEvidence {
-                val evidence = inner.command(percent, durationMinutes, effective, beforeDispatch)
-                if (durationMinutes == 0) inner.running = false
-                return evidence
-            }
-        }
-        records.records += Records.Record(0, 80, 30 * 60_000L)
+    fun `a start rejected after a confirmed stop leaves AAPS showing no TBR`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(80, 30), "NORMAL")
+        // The pump is stopped by hand between the confirmed stop and the new start (code 135).
+        pump.onCommand = { minutes -> if (minutes == 0) pump.onCommand = { pump.running = false } }
 
-        val result = YpsoTbrController(pump, journal, records, { "10054912" }, { 7L }, { clock })
-            .start(YpsoTbrRequest(120, 15), "NORMAL")
+        val result = controller.start(YpsoTbrRequest(120, 15), "NORMAL")
 
-        assertEquals(YpsoTbrController.Result.Uncertain(YpsoTbrController.Reason.START_REJECTED, previousStopped = true), result)
-        assertEquals(null, records.running)
-        assertEquals(YpsoTbrAttempt.State.NOT_STARTED, store.attempts.single().state)
+        assertEquals(Result.Failed(Reason.START_REJECTED, pumpChanged = true), result)
+        assertNull(records.runningAt(clock))
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, starts.last().state)
     }
 
     @Test
@@ -143,19 +167,29 @@ class YpsoTbrControllerTest {
         val pump = Pump().apply { dropAck = true }
         val result = controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
 
-        assertTrue(result is YpsoTbrController.Result.Started)
-        assertEquals(1_000_000L, records.running!!.start)
+        assertTrue(result is Result.Started)
+        assertEquals(1_000_000L, records.runningAt(clock)!!.start)
     }
 
     @Test
-    fun `unreadable post-start status stays uncertain and records nothing`() {
-        val pump = Pump().apply { statusAfterCommand = false }
+    fun `proven counter rejection retries dispatch once without breaking the journal`() {
+        val pump = Pump().apply { counterRetries = 1 }
         val result = controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
 
-        assertEquals(YpsoTbrController.Result.Uncertain(YpsoTbrController.Reason.START_NOT_CONFIRMED, previousStopped = false), result)
-        assertEquals(null, records.running)
-        assertEquals(YpsoTbrAttempt.State.DISPATCHED, store.attempts.single().state)
-        assertEquals(1, pump.commands.size)
+        assertTrue(result is Result.Started)
+        assertEquals(1_000_000L, starts.single().dispatchedAt)
+    }
+
+    @Test
+    fun `unreadable post-start status fails, records nothing and stays open for later status`() {
+        val pump = Pump().apply { statusAfterCommand = false }
+        val controller = controller(pump)
+        val result = controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+
+        assertEquals(Result.Failed(Reason.START_NOT_CONFIRMED, pumpChanged = true), result)
+        assertTrue(records.byTempId.isEmpty())
+        assertEquals(YpsoTbrAttempt.State.DISPATCHED, starts.single().state)
+        assertTrue(controller.hasUnresolved())
     }
 
     @Test
@@ -166,11 +200,12 @@ class YpsoTbrControllerTest {
         clock += 3 * 60_000L
         pump.remaining = 27
 
-        controller.resolvePending(pump.status()!!)
+        controller.onStatus(pump.status()!!)
 
-        assertEquals(YpsoTbrAttempt.State.STARTED, store.attempts.single().state)
-        assertEquals(1_000_000L, records.running!!.start)
+        assertEquals(YpsoTbrAttempt.State.EFFECTIVE, starts.single().state)
+        assertEquals(1_000_000L, records.runningAt(clock)!!.start)
         assertEquals(1, pump.commands.size)
+        assertFalse(controller.hasUnresolved())
     }
 
     @Test
@@ -180,44 +215,108 @@ class YpsoTbrControllerTest {
         controller.start(YpsoTbrRequest(150, 30), "NORMAL")
         pump.percent = 100
         pump.remaining = 0
+        clock += 1_000
 
-        controller.resolvePending(pump.status()!!)
+        controller.onStatus(pump.status()!!)
 
-        assertEquals(YpsoTbrAttempt.State.NOT_STARTED, store.attempts.single().state)
-        assertEquals(null, records.running)
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, starts.single().state)
+        assertTrue(records.byTempId.isEmpty())
     }
 
     @Test
-    fun `cancel without a running TBR sends nothing but clears any AAPS record`() {
+    fun `an unsaved start is retried by later status until its record exists`() {
         val pump = Pump()
-        records.records += Records.Record(0, 80, 30 * 60_000L)
+        records.saves = false
+        val controller = controller(pump)
 
-        val result = controller(pump).cancel()
+        assertEquals(Result.Failed(Reason.NOT_SAVED, pumpChanged = true), controller.start(YpsoTbrRequest(150, 30), "NORMAL"))
+        assertTrue(controller.hasUnresolved())
 
-        assertEquals(YpsoTbrController.Result.Stopped(enacted = false), result)
+        records.saves = true
+        clock += 1_000
+        controller.onStatus(pump.status()!!)
+
+        assertEquals(1_000_500L, records.runningAt(clock)!!.start)
+        assertTrue(starts.single().accounted)
+        assertFalse(controller.hasUnresolved())
+    }
+
+    @Test
+    fun `cancel with an idle pump sends nothing and never cuts records locally`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        records.byTempId[1L] = Records.Record(0, 80, 60 * 60_000L)
+
+        val result = controller.cancel()
+
+        assertEquals(Result.Stopped(enacted = false), result)
         assertTrue(pump.commands.isEmpty())
-        assertEquals(null, records.running)
+        assertEquals(60 * 60_000L, records.byTempId[1L]!!.durationMs)
     }
 
     @Test
-    fun `cancel stops any running TBR including one set on the pump`() {
+    fun `cancel in Stop mode leaves the pump suspend record to history`() {
+        val pump = Pump(running = false)
+        val result = controller(pump).cancel()
+
+        assertEquals(Result.Stopped(enacted = false), result)
+        assertTrue(pump.commands.isEmpty())
+    }
+
+    @Test
+    fun `cancel stops a TBR set on the pump without touching any AAPS record`() {
         val pump = Pump(percent = 110, remaining = 40)
+        records.byTempId[1L] = Records.Record(0, 110, 60 * 60_000L)
 
         val result = controller(pump).cancel()
 
-        assertEquals(YpsoTbrController.Result.Stopped(enacted = true), result)
+        assertEquals(Result.Stopped(enacted = true), result)
         assertEquals(listOf(100 to 0), pump.commands)
+        assertEquals(60 * 60_000L, records.byTempId[1L]!!.durationMs)
     }
 
     @Test
-    fun `unconfirmed stop keeps the AAPS record and reports uncertainty`() {
-        val pump = Pump(percent = 110, remaining = 40).apply { statusAfterCommand = false }
-        records.records += Records.Record(0, 110, 60 * 60_000L)
+    fun `an unconfirmed stop is journalled, keeps the AAPS record and reports failure`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(110, 60), "NORMAL")
+        pump.statusAfterCommand = false
 
-        val result = controller(pump).cancel()
+        val result = controller.cancel()
 
-        assertEquals(YpsoTbrController.Result.Uncertain(YpsoTbrController.Reason.STOP_NOT_CONFIRMED, previousStopped = false), result)
-        assertEquals(null, records.running!!.end)
+        assertEquals(Result.Failed(Reason.STOP_NOT_CONFIRMED, pumpChanged = true), result)
+        assertEquals(60 * 60_000L, records.byTempId.values.single().durationMs)
+        assertEquals(YpsoTbrAttempt.State.DISPATCHED, stops.single().state)
+        assertTrue(controller.hasUnresolved())
+    }
+
+    @Test
+    fun `status never resolves a stop because history carries its end time`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(110, 60), "NORMAL")
+        pump.statusAfterCommand = false
+        controller.cancel()
+        clock += 1_000
+
+        controller.onStatus(pump.status()!!)
+
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, stops.single().state)
+        assertEquals(60 * 60_000L, records.byTempId.values.single().durationMs)
+        assertFalse(controller.hasUnresolved())
+    }
+
+    @Test
+    fun `routine status never resolves the command currently in flight`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        var observed: Result? = null
+        pump.onCommand = { controller.onStatus(YpsoTbrObservation(true, 100, 0, clock - 10_000)) }
+
+        observed = controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+
+        assertTrue(observed is Result.Started)
+        assertEquals(YpsoTbrAttempt.State.EFFECTIVE, starts.single().state)
     }
 
     @Test
@@ -225,17 +324,8 @@ class YpsoTbrControllerTest {
         val pump = Pump()
         val result = controller(pump, baseline = null).start(YpsoTbrRequest(150, 30), "NORMAL")
 
-        assertEquals(YpsoTbrController.Result.NotChanged(YpsoTbrController.Reason.HISTORY_NOT_READY), result)
+        assertEquals(Result.Failed(Reason.HISTORY_NOT_READY, false), result)
         assertTrue(pump.commands.isEmpty())
-    }
-
-    @Test
-    fun `unsaved start record is reported as uncertain`() {
-        val pump = Pump()
-        records.saves = false
-        val result = controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
-
-        assertEquals(YpsoTbrController.Result.Uncertain(YpsoTbrController.Reason.NOT_SAVED, previousStopped = false), result)
     }
 
     @Test
