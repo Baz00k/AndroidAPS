@@ -15,6 +15,8 @@ sealed interface YpsoHistoryIngestionResult {
 class YpsoHistoryIngestion(
     private val store: YpsoHistoryStateStore,
     private val pumpSync: PumpSync,
+    /** Basal accounting for TBR and pump Stop/Run rows; null disables it. */
+    private val tbrAccounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting? = null,
     /**
      * Resolves a provisional record created for a dispatched dose onto its pump identity. Without this
      * the terminal history row would insert a second record for the same physical bolus, because
@@ -155,7 +157,7 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> Unit
+                        else -> tbrAccounting?.apply(event, pumpSerial, zone)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                     }
                 }
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
