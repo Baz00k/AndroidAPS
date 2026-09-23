@@ -303,7 +303,8 @@ internal class YpsoSerializedWriteTransport(
                     } else {
                         current.successfulCallbacks++
                         if (current.frame + 1 == request.frames.size) {
-                            current.awaitingReconciliation = true
+                            // Every frame is acknowledged; semantic read-back owns the outcome from here.
+                            holdForReconciliationLocked(current)
                             outcome = YpsoWriteOutcome.AcceptedUnverified(request.writeId, request.counter)
                         } else {
                             current.frame++
