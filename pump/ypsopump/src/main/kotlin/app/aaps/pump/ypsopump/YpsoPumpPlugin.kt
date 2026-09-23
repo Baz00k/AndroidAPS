@@ -135,7 +135,9 @@ class YpsoPumpPlugin @Inject constructor(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
-            tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal),
+            tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal) { pumpId, serial ->
+                tbrRecord(serial) { it.ids.pumpId == pumpId }?.let { it.timestamp to it.duration }
+            },
         )
     }
     private val tbrController by lazy {
@@ -147,26 +149,51 @@ class YpsoPumpPlugin @Inject constructor(
             historyBaseline = { historyIngestion.currentCursor()?.identity?.aapsPumpId },
         )
     }
+
+    /** A valid YpsoPump TBR record from the last two days matching [predicate]; read-back for accounting. */
+    private fun tbrRecord(serial: String, predicate: (app.aaps.core.data.model.TB) -> Boolean): app.aaps.core.data.model.TB? {
+        if (!::persistenceLayer.isInitialized) return null
+        val from = System.currentTimeMillis() - TBR_READBACK_WINDOW_MS
+        return persistenceLayer.getTemporaryBasalsStartingFromTime(from, false).blockingGet()
+            .singleOrNull { it.isValid && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial && predicate(it) }
+    }
+
+    /**
+     * An AAPS start is a percent record under its temporary ID (or its bound pump ID). Ends are applied
+     * as a shorter duration, never as an end-event identity, so pump history can still correct them.
+     */
     private val tbrRecords = object : YpsoTbrRecords {
-        override fun started(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
-            pumpSync.addTemporaryBasalWithTempId(
-                timestamp, attempt.percent.toDouble(), attempt.durationMinutes * 60_000L, false,
-                attempt.temporaryId, PumpSync.TemporaryBasalType.valueOf(attempt.type), PumpType.YPSOPUMP, attempt.pumpSerial,
-            )
-            val running = pumpSync.expectedPumpState().temporaryBasal
-            return running != null && running.timestamp == timestamp && !running.isAbsolute &&
-                running.rate == attempt.percent.toDouble() && running.pumpSerial == attempt.pumpSerial
+        private fun find(attempt: YpsoTbrAttempt) = tbrRecord(attempt.pumpSerial) {
+            it.ids.temporaryId == attempt.temporaryId || attempt.pumpId != null && it.ids.pumpId == attempt.pumpId
         }
 
-        override fun stopped(timestamp: Long): Boolean {
-            val running = pumpSync.expectedPumpState().temporaryBasal ?: return true
-            if (running.timestamp >= timestamp) {
-                // A record that starts at or after the proven stop never ran on the pump.
-                return pumpSync.invalidateTemporaryBasal(running.id, app.aaps.core.data.ue.Sources.Pump, timestamp) ||
-                    pumpSync.expectedPumpState().temporaryBasal == null
+        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
+            val duration = attempt.durationMinutes * 60_000L
+            if (find(attempt) == null) {
+                pumpSync.addTemporaryBasalWithTempId(
+                    timestamp, attempt.percent.toDouble(), duration, false,
+                    attempt.temporaryId, PumpSync.TemporaryBasalType.valueOf(attempt.type), PumpType.YPSOPUMP, attempt.pumpSerial,
+                )
             }
-            pumpSync.syncStopTemporaryBasalWithPumpId(timestamp, timestamp, PumpType.YPSOPUMP, serialNumber(), ignorePumpIds = true)
-            return pumpSync.expectedPumpState().temporaryBasal == null
+            val saved = find(attempt) ?: return false
+            return saved.timestamp == timestamp && !saved.isAbsolute && saved.rate == attempt.percent.toDouble()
+        }
+
+        override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
+            val saved = find(attempt) ?: return false
+            val duration = (end - saved.timestamp).coerceAtLeast(1L)
+            if (saved.duration <= duration) return true
+            if (saved.ids.pumpId != null) {
+                pumpSync.syncTemporaryBasalWithPumpId(
+                    saved.timestamp, saved.rate, duration, false, PumpSync.TemporaryBasalType.valueOf(attempt.type),
+                    checkNotNull(saved.ids.pumpId), PumpType.YPSOPUMP, attempt.pumpSerial,
+                )
+            } else {
+                pumpSync.syncTemporaryBasalWithTempId(
+                    saved.timestamp, saved.rate, duration, false, attempt.temporaryId, null, null, PumpType.YPSOPUMP, attempt.pumpSerial,
+                )
+            }
+            return (find(attempt)?.duration ?: Long.MAX_VALUE) <= duration
         }
     }
     private val bolusController by lazy {
@@ -772,11 +799,12 @@ class YpsoPumpPlugin @Inject constructor(
     /** Everything that must happen after a status read lands. */
     private fun onStatusRead() {
         checkReservoir()
-        if (!YpsoPumpConst.READ_ONLY_MODE && !tbrController.isBusy) {
+        if (!YpsoPumpConst.READ_ONLY_MODE) {
             bleManager.observedTbr(System.currentTimeMillis())?.let { observation ->
-                runCatching { tbrController.resolvePending(observation) }
+                runCatching { tbrController.onStatus(observation) }
                     .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR resolution failed: ${it.message}") }
             }
+            publishTbrWarningIfNeeded()
         }
     }
 
@@ -1436,52 +1464,58 @@ class YpsoPumpPlugin @Inject constructor(
     private fun enactTbr(request: YpsoTbrRequest, type: PumpSync.TemporaryBasalType): PumpEnactResult =
         tbrResult(tbrController.start(request, type.name), cancel = false)
 
+    /**
+     * The loop delivers a paired SMB whenever `success || enacted`, so both stay false unless the pump
+     * is proven to run exactly what was asked. A pump change that did not fulfil the request is
+     * reported only through the persistent warning and the record of what was proven.
+     */
     private fun tbrResult(result: YpsoTbrController.Result, cancel: Boolean): PumpEnactResult {
         scheduleHistoryRecovery("temporary basal")
-        publishUncertainTbrWarning(result)
+        publishTbrWarningIfNeeded()
         return when (result) {
             is YpsoTbrController.Result.Started -> pumpEnactResultProvider.get().success(true).enacted(true)
                 .isPercent(true).percent(result.request.percent).duration(result.request.durationMinutes)
                 .comment(rh.gs(R.string.ypsopump_tbr_started, result.request.percent, result.request.durationMinutes))
-            is YpsoTbrController.Result.Stopped -> pumpEnactResultProvider.get().success(true).enacted(result.enacted)
-                .isTempCancel(true).comment(rh.gs(R.string.ypsopump_tbr_cancelled))
-            is YpsoTbrController.Result.NotChanged -> fail(R.string.ypsopump_tbr_failed, tbrMessage(result.reason))
-                .isTempCancel(cancel)
-            // The pump changed or may have changed. enacted=true tells AAPS to re-read state rather than
-            // assume nothing happened; the uncertainty warning stays until a status read resolves it.
-            is YpsoTbrController.Result.Uncertain -> pumpEnactResultProvider.get().success(false).enacted(true)
-                .isTempCancel(cancel || result.previousStopped)
-                .comment(rh.gs(R.string.ypsopump_tbr_uncertain, tbrMessage(result.reason)))
+            is YpsoTbrController.Result.Stopped ->
+                if (cancel) pumpEnactResultProvider.get().success(true).enacted(result.enacted)
+                    .isTempCancel(true).comment(rh.gs(R.string.ypsopump_tbr_cancelled))
+                else fail(R.string.ypsopump_tbr_failed, tbrMessage(YpsoTbrController.Reason.START_NOT_CONFIRMED))
+            is YpsoTbrController.Result.Failed -> fail(
+                if (result.pumpChanged) R.string.ypsopump_tbr_uncertain else R.string.ypsopump_tbr_failed,
+                tbrMessage(result.reason),
+            ).isTempCancel(cancel)
         }
     }
 
     private fun tbrMessage(reason: YpsoTbrController.Reason): String = rh.gs(
         when (reason) {
+            YpsoTbrController.Reason.BUSY,
+            YpsoTbrController.Reason.COMMAND_NOT_SENT    -> R.string.ypsopump_tbr_not_sent
             YpsoTbrController.Reason.PUMP_UNREADABLE     -> R.string.ypsopump_bolus_pump_unreadable
             YpsoTbrController.Reason.PUMP_STOPPED        -> R.string.ypsopump_tbr_pump_stopped
             YpsoTbrController.Reason.NOT_SET_UP          -> R.string.ypsopump_bolus_pump_not_set_up
             YpsoTbrController.Reason.HISTORY_NOT_READY   -> R.string.ypsopump_bolus_sync_in_progress
-            YpsoTbrController.Reason.COMMAND_NOT_SENT    -> R.string.ypsopump_tbr_not_sent
             YpsoTbrController.Reason.STOP_NOT_CONFIRMED  -> R.string.ypsopump_tbr_stop_unconfirmed
             YpsoTbrController.Reason.START_REJECTED      -> R.string.ypsopump_tbr_start_rejected
-            YpsoTbrController.Reason.START_NOT_CONFIRMED -> R.string.ypsopump_tbr_start_unconfirmed
-            YpsoTbrController.Reason.NOT_SAVED           -> R.string.ypsopump_tbr_not_saved
+            YpsoTbrController.Reason.START_NOT_CONFIRMED,
             YpsoTbrController.Reason.INTERNAL_ERROR      -> R.string.ypsopump_tbr_start_unconfirmed
+            YpsoTbrController.Reason.NOT_SAVED           -> R.string.ypsopump_tbr_not_saved
         }
     )
 
+    /** Derived from durable journal state, so it survives restarts and clears only on pump evidence. */
     @Synchronized
-    private fun publishUncertainTbrWarning(result: YpsoTbrController.Result) {
-        val uncertain = result is YpsoTbrController.Result.Uncertain
-        if (uncertain == publishedUncertainTbr) return
-        publishedUncertainTbr = uncertain
+    private fun publishTbrWarningIfNeeded() {
+        val unresolved = runCatching { tbrController.hasUnresolved() }.getOrDefault(true)
+        if (unresolved == publishedUncertainTbr) return
+        publishedUncertainTbr = unresolved
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
-        if (uncertain) uiInteraction.addNotification(
+        if (unresolved) uiInteraction.addNotification(
             Notification.YPSOPUMP_TBR_UNCERTAIN, rh.gs(R.string.ypsopump_tbr_uncertain_notification), Notification.URGENT,
         )
     }
 
-    private var publishedUncertainTbr = false
+    @Volatile private var publishedUncertainTbr = false
 
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult {
         val constrainedMaximum = constraintsChecker.getMaxExtendedBolusAllowed().value()
@@ -1678,6 +1712,9 @@ class YpsoPumpPlugin @Inject constructor(
         provisioning.refreshState()
         publishAvailabilityNotification()
         publishUnresolvedBolusWarningIfNeeded()
+        publishedUncertainTbr = false
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
+        if (!YpsoPumpConst.READ_ONLY_MODE) publishTbrWarningIfNeeded()
         appLifecycle.addVisibilityListener(visibilityListener)
         onAppVisibilityChanged(appLifecycle.uiVisible)
     }
@@ -1862,6 +1899,7 @@ class YpsoPumpPlugin @Inject constructor(
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HISTORY_YIELD_GRACE_MS = 10_000L
+        private const val TBR_READBACK_WINDOW_MS = 2 * 24 * 60 * 60 * 1000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 

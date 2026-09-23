@@ -6,42 +6,53 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * One AAPS-initiated TBR start. A started attempt owns a PumpSync record under [temporaryId] until
- * history ingestion binds it to the pump's own TBR row ([pumpId]).
+ * One START_STOP_TBR command sent by AAPS. The attempt is journalled before the command can leave the
+ * phone and is resolved only by pump evidence: same-link status, a later status read, or history.
  */
 data class YpsoTbrAttempt(
     val id: String,
+    val kind: Kind,
     val pumpSerial: String,
+    /** Requested percent; [YpsoTbrRequest.STOP_PERCENT] for a stop. */
     val percent: Int,
+    /** Requested minutes; 0 for a stop. */
     val durationMinutes: Int,
-    /** [app.aaps.core.interfaces.pump.PumpSync.TemporaryBasalType] name. */
+    /** [app.aaps.core.interfaces.pump.PumpSync.TemporaryBasalType] name of a start. */
     val type: String,
+    /** PumpSync temporary ID of a start's record until history binds it to [pumpId]. */
     val temporaryId: Long,
-    /** History cursor identity when the start was prepared; the pump row must be newer. */
+    /** History cursor identity when the start was prepared; its pump row is newer. */
     val baselinePumpId: Long?,
     val createdAt: Long,
     val state: State = State.PREPARED,
     val dispatchedAt: Long? = null,
-    /** Timestamp of the AAPS record: pump acknowledgement, or dispatch when the ACK was lost. */
-    val startedAt: Long? = null,
-    /** Set when AAPS itself stopped this TBR and cut its record. */
+    /** When the command took effect: pump acknowledgement, or dispatch when the ACK was lost. */
+    val effectiveAt: Long? = null,
+    /** A start's record was saved and read back. A stop has no record of its own. */
+    val accounted: Boolean = false,
+    /** Set on a start when a later confirmed AAPS stop ended it. */
     val stoppedAt: Long? = null,
     val pumpId: Long? = null,
     val detail: String? = null,
 ) {
+    enum class Kind { START, STOP }
+
     enum class State {
         /** Journalled; the command has not left the phone. */
         PREPARED,
-        /** The command may have reached the pump; no status has been read since. */
+        /** The command may have reached the pump; no status has proven its effect yet. */
         DISPATCHED,
-        /** Status proved the pump runs this TBR, and AAPS recorded it. */
-        STARTED,
-        /** Status proved the pump does not run this TBR; AAPS recorded nothing for it. */
-        NOT_STARTED,
+        /** Status proved the command's effect. */
+        EFFECTIVE,
+        /** Status proved the command had no effect. */
+        NO_EFFECT,
     }
 
     val awaitsStatus: Boolean get() = state == State.PREPARED || state == State.DISPATCHED
-    val awaitsBinding: Boolean get() = state == State.STARTED && pumpId == null
+    val awaitsAccounting: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && !accounted
+    val awaitsBinding: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && pumpId == null
+    /** Anything that keeps AAPS from knowing it represents the pump truthfully. */
+    val unresolved: Boolean get() = awaitsStatus || awaitsAccounting
 }
 
 interface YpsoTbrAttemptStore {
@@ -59,32 +70,50 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
     @Synchronized fun prepare(attempt: YpsoTbrAttempt) {
         require(attempt.state == YpsoTbrAttempt.State.PREPARED)
         val attempts = store.loadAll()
-        require(attempts.none { it.id == attempt.id || it.temporaryId == attempt.temporaryId }) { "duplicate TBR attempt identity" }
+        require(attempts.none { it.id == attempt.id || it.kind == YpsoTbrAttempt.Kind.START && it.temporaryId == attempt.temporaryId }) {
+            "duplicate TBR attempt identity"
+        }
         store.commitAll(retained(attempts + attempt))
     }
 
+    /**
+     * The command may leave the phone now. A proven counter rejection (139) makes the transport send
+     * the same command again under a higher counter; that repeats this call and keeps the first time.
+     */
     @Synchronized fun dispatched(id: String, at: Long) = update(id) {
-        check(it.state == YpsoTbrAttempt.State.PREPARED) { "TBR attempt is not awaiting dispatch" }
-        it.copy(state = YpsoTbrAttempt.State.DISPATCHED, dispatchedAt = at)
+        check(it.awaitsStatus) { "TBR attempt outcome is already known" }
+        if (it.state == YpsoTbrAttempt.State.DISPATCHED) it else it.copy(state = YpsoTbrAttempt.State.DISPATCHED, dispatchedAt = at)
     }
 
-    @Synchronized fun started(id: String, at: Long) = update(id) {
+    @Synchronized fun effective(id: String, at: Long) = update(id) {
         check(it.awaitsStatus) { "TBR attempt outcome is already known" }
-        it.copy(state = YpsoTbrAttempt.State.STARTED, startedAt = at, detail = null)
+        it.copy(state = YpsoTbrAttempt.State.EFFECTIVE, effectiveAt = at, detail = null)
     }
 
-    @Synchronized fun notStarted(id: String, detail: String) = update(id) {
+    @Synchronized fun noEffect(id: String, detail: String) = update(id) {
         check(it.awaitsStatus) { "TBR attempt outcome is already known" }
-        it.copy(state = YpsoTbrAttempt.State.NOT_STARTED, detail = detail)
+        it.copy(state = YpsoTbrAttempt.State.NO_EFFECT, detail = detail)
+    }
+
+    @Synchronized fun accounted(id: String) = update(id) {
+        check(it.awaitsAccounting) { "TBR attempt is not awaiting accounting" }
+        it.copy(accounted = true, detail = null)
     }
 
     @Synchronized fun detail(id: String, detail: String) = update(id) { it.copy(detail = detail) }
 
-    /** AAPS cut the record of the running started attempt, if any, at [at]. */
-    @Synchronized fun stopped(at: Long) {
+    /** A confirmed stop at [at] ended every AAPS-started TBR still shown as running before it. */
+    @Synchronized fun startsEndedBy(at: Long): List<YpsoTbrAttempt> {
         val attempts = store.loadAll()
-        val running = attempts.lastOrNull { it.state == YpsoTbrAttempt.State.STARTED && it.stoppedAt == null } ?: return
-        store.commitAll(attempts.map { if (it.id == running.id) it.copy(stoppedAt = at) else it })
+        val ended = attempts.filter {
+            it.kind == YpsoTbrAttempt.Kind.START && it.state == YpsoTbrAttempt.State.EFFECTIVE && it.stoppedAt == null &&
+                checkNotNull(it.effectiveAt) < at && checkNotNull(it.effectiveAt) + it.durationMinutes * MINUTE > at
+        }
+        if (ended.isEmpty()) return emptyList()
+        val ids = ended.map(YpsoTbrAttempt::id).toSet()
+        val next = attempts.map { if (it.id in ids) it.copy(stoppedAt = at) else it }
+        store.commitAll(next)
+        return next.filter { it.id in ids }
     }
 
     @Synchronized fun bound(id: String, pumpId: Long) = update(id) {
@@ -98,18 +127,18 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
         val attempts = store.loadAll()
         val current = attempts.firstOrNull { it.id == id } ?: error("unknown TBR attempt")
         val next = change(current)
-        store.commitAll(attempts.map { if (it.id == id) next else it })
+        if (next != current) store.commitAll(attempts.map { if (it.id == id) next else it })
         return next
     }
 
     /** Keeps every attempt that can still change AAPS records, plus a short diagnostic tail. */
     private fun retained(attempts: List<YpsoTbrAttempt>): List<YpsoTbrAttempt> {
-        val open = attempts.filter { it.awaitsStatus || it.awaitsBinding || it.pumpId != null && it.stoppedAt == null }
-        val recent = attempts.takeLast(RETAINED_ATTEMPTS)
-        return attempts.filter { it in open || it in recent }.takeLast(MAX_ATTEMPTS)
+        val recent = attempts.takeLast(RETAINED_ATTEMPTS).toSet()
+        return attempts.filter { it.unresolved || it.awaitsBinding || it in recent }.takeLast(MAX_ATTEMPTS)
     }
 
     companion object {
+        private const val MINUTE = 60_000L
         private const val RETAINED_ATTEMPTS = 10
         private const val MAX_ATTEMPTS = 64
     }
@@ -146,6 +175,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
 
     private fun encode(value: YpsoTbrAttempt): JSONObject = JSONObject()
         .put("id", value.id)
+        .put("kind", value.kind.name)
         .put("pumpSerial", value.pumpSerial)
         .put("percent", value.percent)
         .put("durationMinutes", value.durationMinutes)
@@ -155,7 +185,8 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         .put("createdAt", value.createdAt)
         .put("state", value.state.name)
         .putNullable("dispatchedAt", value.dispatchedAt)
-        .putNullable("startedAt", value.startedAt)
+        .putNullable("effectiveAt", value.effectiveAt)
+        .put("accounted", value.accounted)
         .putNullable("stoppedAt", value.stoppedAt)
         .putNullable("pumpId", value.pumpId)
         .putNullable("detail", value.detail)
@@ -164,6 +195,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         require(json.keys().asSequence().toSet() == FIELDS) { "unexpected TBR journal fields" }
         return YpsoTbrAttempt(
             id = json.getString("id"),
+            kind = YpsoTbrAttempt.Kind.valueOf(json.getString("kind")),
             pumpSerial = json.getString("pumpSerial"),
             percent = json.getInt("percent"),
             durationMinutes = json.getInt("durationMinutes"),
@@ -173,7 +205,8 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
             createdAt = json.getLong("createdAt"),
             state = YpsoTbrAttempt.State.valueOf(json.getString("state")),
             dispatchedAt = json.longOrNull("dispatchedAt"),
-            startedAt = json.longOrNull("startedAt"),
+            effectiveAt = json.longOrNull("effectiveAt"),
+            accounted = json.getBoolean("accounted"),
             stoppedAt = json.longOrNull("stoppedAt"),
             pumpId = json.longOrNull("pumpId"),
             detail = if (json.isNull("detail")) null else json.getString("detail"),
@@ -184,10 +217,10 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
     private fun JSONObject.longOrNull(name: String): Long? = if (isNull(name)) null else getLong(name)
 
     companion object {
-        private const val VERSION = 1
+        private const val VERSION = 2
         private val FIELDS = setOf(
-            "id", "pumpSerial", "percent", "durationMinutes", "type", "temporaryId", "baselinePumpId", "createdAt",
-            "state", "dispatchedAt", "startedAt", "stoppedAt", "pumpId", "detail",
+            "id", "kind", "pumpSerial", "percent", "durationMinutes", "type", "temporaryId", "baselinePumpId", "createdAt",
+            "state", "dispatchedAt", "effectiveAt", "accounted", "stoppedAt", "pumpId", "detail",
         )
     }
 }
