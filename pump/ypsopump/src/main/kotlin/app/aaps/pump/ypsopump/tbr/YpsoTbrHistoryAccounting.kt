@@ -25,6 +25,9 @@ interface YpsoTbrRecordLookup {
 
     /** The newest pump-imported PUMP_SUSPEND record starting within a day before [at]. */
     fun latestSuspendBefore(pumpSerial: String, at: Long): Suspend?
+
+    /** Whether any YpsoPump TBR record other than [exceptPumpId] starts after [from] and before [to]. */
+    fun anyStartedBetween(pumpSerial: String, from: Long, to: Long, exceptPumpId: Long): Boolean
 }
 
 /**
@@ -45,25 +48,27 @@ class YpsoTbrHistoryAccounting(
         val tbr = kind in TBR_KINDS
         val mode = kind == YpsoHistoryKind.PUMP_MODE_CHANGED
         if (!tbr && !mode) return null
-        val start = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-            ?.instant?.toEpochMilli() ?: return "TBR or pump-mode timestamp is ambiguous"
         val pumpId = event.identity.aapsPumpId
-        if (mode) return pumpMode(event.semantics.modeChange, start, pumpId, pumpSerial)
         val percent = event.entry.value1
         // Type 9 carries requested minutes; type 10 carries elapsed whole minutes, equal to the request
         // after natural expiry. Floored minutes keep a cancelled TBR within the minute the pump reports.
-        val running = kind == YpsoHistoryKind.TEMP_BASAL_STARTED
         val minutes = event.entry.value2
-        val attempt = journal.boundTo(pumpId) ?: bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial)
+        // An AAPS start identified by row identity is timed by AAPS, so it needs no pump wall-clock time.
+        val known = if (tbr) journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId) else null
+        if (known != null) return syncAttempt(known, pumpId, minutes * MINUTE)
+        val start = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
+            ?.instant?.toEpochMilli() ?: return "TBR or pump-mode timestamp is ambiguous"
+        if (mode) return pumpMode(event.semantics.modeChange, start, pumpId, pumpSerial)
+        val running = kind == YpsoHistoryKind.TEMP_BASAL_STARTED
+        val attempt = bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial)
         if (attempt != null) return syncAttempt(attempt, pumpId, minutes * MINUTE)
-        // An AAPS start with this percent that no row has claimed overlaps this row: importing it as a
-        // separate record would count the same TBR twice, so wait for evidence instead of guessing.
+        // A start whose outcome status has not proven yet may be this very row: importing the row
+        // now would record the same TBR twice once status resolves the start. Wait for status.
         journal.all().firstOrNull {
-            it.awaitsBinding && it.pumpSerial == pumpSerial && it.percent == percent &&
-                (it.baselinePumpId == null || it.baselinePumpId < pumpId) &&
-                checkNotNull(it.effectiveAt) < start + minutes.coerceAtLeast(1) * MINUTE &&
-                start < checkNotNull(it.effectiveAt) + it.durationMinutes * MINUTE
-        }?.let { return "TBR row $pumpId overlaps unmatched AAPS start ${it.id}; pump clock may be off" }
+            it.kind == YpsoTbrAttempt.Kind.START && it.awaitsStatus && it.dispatchedAt != null &&
+                it.pumpSerial == pumpSerial && it.percent == percent &&
+                (it.baselinePumpId == null || it.baselinePumpId < pumpId)
+        }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which status has not resolved yet" }
         val duration = (minutes * MINUTE).coerceAtLeast(1L)
         return sync(pumpId, pumpSerial, start, duration) {
             pumpSync.syncTemporaryBasalWithPumpId(
@@ -73,15 +78,16 @@ class YpsoTbrHistoryAccounting(
     }
 
     /**
-     * The AAPS start that this row is. The pump was proven idle right before each start was sent, so
-     * its row began inside [dispatch, latest effect], widened only by pump/phone clock skew. Rows older
-     * than the attempt's history baseline are never its own. Rows arrive oldest first and each start
-     * followed a proven-idle pump, so of several windows the earliest-dispatched attempt is this row's.
+     * Fallback for a start whose own row could not be read on the command link. The pump was proven
+     * idle right before each start was sent, so its row began inside [dispatch, latest effect],
+     * widened by pump/phone clock skew. Rows older than the attempt's history baseline are never its
+     * own. Rows arrive oldest first, so of several windows the earliest-dispatched attempt is this
+     * row's. A start that fits no row keeps its own record, which status reconciles against the pump.
      */
     private fun bindCandidate(pumpId: Long, percent: Int, requestedMinutes: Int?, pumpStart: Long, serial: String): YpsoTbrAttempt? =
         journal.all()
             .filter {
-                it.awaitsBinding && it.pumpSerial == serial && it.percent == percent &&
+                it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial && it.percent == percent &&
                     (requestedMinutes == null || it.durationMinutes == requestedMinutes) &&
                     (it.baselinePumpId == null || it.baselinePumpId < pumpId) &&
                     pumpStart >= checkNotNull(it.dispatchedAt) - CLOCK_SKEW &&
@@ -142,7 +148,8 @@ class YpsoTbrHistoryAccounting(
         // The resume row gives the exact end of the latest recorded stop, even one already cut short
         // by a status observation. A duration update keeps that record correctable.
         YpsoPumpModeChange.RESUMED -> {
-            lookup.latestSuspendBefore(serial, at)?.let { stop ->
+            // Only the stop directly before this resume: one followed by any other record already ended.
+            lookup.latestSuspendBefore(serial, at)?.takeIf { !lookup.anyStartedBetween(serial, it.start, at, it.pumpId) }?.let { stop ->
                 val duration = (at - stop.start).coerceAtLeast(1L)
                 if (stop.valid && stop.duration != duration) {
                     pumpSync.syncTemporaryBasalWithPumpId(

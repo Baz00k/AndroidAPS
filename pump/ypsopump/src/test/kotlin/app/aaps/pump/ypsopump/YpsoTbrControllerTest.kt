@@ -7,6 +7,7 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrController
 import app.aaps.pump.ypsopump.tbr.YpsoTbrController.Reason
 import app.aaps.pump.ypsopump.tbr.YpsoTbrController.Result
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
+import app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow
 import app.aaps.pump.ypsopump.tbr.YpsoTbrLink
 import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
@@ -35,6 +36,12 @@ class YpsoTbrControllerTest {
 
         override fun status(): YpsoTbrObservation? = if (readable) observe() else null
 
+        /** The pump appends a running TBR row whenever a start takes effect. */
+        var nextRowId = 48_300L
+        var head: YpsoTbrHeadRow? = null
+        var headReadable = true
+        override fun headRow(): YpsoTbrHeadRow? = head.takeIf { headReadable }
+
         private fun observe() = YpsoTbrObservation(running, percent, remaining, clock)
 
         override fun command(
@@ -53,7 +60,11 @@ class YpsoTbrControllerTest {
                 durationMinutes == 0 -> { this.percent = 100; remaining = 0; YpsoTbrWriteResult.Acknowledged }
                 !running -> YpsoTbrWriteResult.Rejected(YpsoTbrRejectReason.PUMP_STOPPED)
                 this.percent != 100 -> YpsoTbrWriteResult.Rejected(YpsoTbrRejectReason.TBR_ALREADY_ACTIVE)
-                else -> { this.percent = percent; remaining = durationMinutes; YpsoTbrWriteResult.Acknowledged }
+                else -> {
+                    this.percent = percent; remaining = durationMinutes
+                    head = YpsoTbrHeadRow(nextRowId++, 9, percent, durationMinutes)
+                    YpsoTbrWriteResult.Acknowledged
+                }
             }
             val reported = if (dropAck) YpsoTbrWriteResult.Uncertain("lost ACK") else result
             val ackAt = if (reported == YpsoTbrWriteResult.Acknowledged) clock else null
@@ -337,6 +348,43 @@ class YpsoTbrControllerTest {
         controller.onStatus(pump.status()!!)
 
         assertEquals(1, records.reconciled.size)
+    }
+
+    @Test
+    fun `a proven start is identified by its own history row on the command link`() {
+        val pump = Pump()
+        controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
+
+        assertEquals(48_300L, starts.single().rowPumpId)
+    }
+
+    @Test
+    fun `a newest row that is not this start is never taken as its identity`() {
+        val pump = Pump()
+        pump.onCommand = { pump.onCommand = {}; Unit }
+        val controller = controller(pump)
+        pump.headReadable = false
+        controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+        pump.head = YpsoTbrHeadRow(48_400L, 2, 150, 0)
+        pump.headReadable = true
+        clock += 60_000
+
+        controller.onStatus(pump.status()!!.copy(remainingMinutes = 29))
+
+        assertNull(starts.single().rowPumpId)
+    }
+
+    @Test
+    fun `status identifies a start later while the pump still runs it`() {
+        val pump = Pump().apply { headReadable = false }
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+        pump.headReadable = true
+        clock += 60_000
+
+        controller.onStatus(pump.status()!!.copy(remainingMinutes = 29))
+
+        assertEquals(48_300L, starts.single().rowPumpId)
     }
 
     @Test

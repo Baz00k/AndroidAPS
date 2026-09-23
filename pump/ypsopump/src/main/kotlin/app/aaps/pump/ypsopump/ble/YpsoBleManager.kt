@@ -1341,12 +1341,23 @@ class YpsoBleManager @Inject constructor(
         partialScan = null
     }
 
+    /**
+     * [headOnly] reads just the newest row, bracketed by count and head re-reads, without using or
+     * replacing the checkpoint a long background scan resumes from.
+     */
     fun readStableHistory(
         cursor: YpsoHistoryCursor?,
         maxRows: Int = 128,
         onResult: (YpsoHistorySnapshot?) -> Unit,
+    ): HistoryReadAttempt = readStableHistory(cursor, maxRows, headOnly = false, onResult)
+
+    fun readStableHistory(
+        cursor: YpsoHistoryCursor?,
+        maxRows: Int,
+        headOnly: Boolean,
+        onResult: (YpsoHistorySnapshot?) -> Unit,
     ): HistoryReadAttempt {
-        require(maxRows > 0)
+        require(maxRows > 0 && (!headOnly || maxRows == 1))
         val attempt = HistoryReadAttempt()
         if (!acquirePumpOperation(historyReadActive)) {
             attempt.tryComplete()
@@ -1384,7 +1395,7 @@ class YpsoBleManager @Inject constructor(
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
-        val cached = partialScan?.takeIf { it.generation == token.generation && it.reboot == reboot.toLong() }
+        val cached = partialScan?.takeIf { !headOnly && it.generation == token.generation && it.reboot == reboot.toLong() }
         var overlapPending = cached != null
         var cursorMismatchReported = false
         /** Selector index proven by same-link read-back within this scan; null until first proven. */
@@ -1397,7 +1408,7 @@ class YpsoBleManager @Inject constructor(
             if (!attempt.tryComplete()) return
             // Only a stable completed scan supersedes its checkpoint. Movement at the final anchor
             // check must leave progress available for the next overlap scan.
-            if (value != null && value.countBefore == value.countAfter &&
+            if (!headOnly && value != null && value.countBefore == value.countAfter &&
                 value.headBefore?.sequence == value.headAfter?.sequence &&
                 value.headBefore?.fingerprint() == value.headAfter?.fingerprint()
             ) partialScan = null
@@ -1409,7 +1420,7 @@ class YpsoBleManager @Inject constructor(
             if (!attempt.shouldYield) return false
             // Keep what was already read. Routine status polling interrupts long scans every few
             // minutes, and restarting at the head each time means the scan can never reach the cursor.
-            if (!overlapPending) retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
+            if (!overlapPending && !headOnly) retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
             aapsLogger.debug(
                 LTag.PUMP,
                 "YpsoPump history scan yielded: freshRows=${rows.size}, retainedRows=${partialScan?.rows?.size ?: 0}, " +
@@ -1580,7 +1591,7 @@ class YpsoBleManager @Inject constructor(
                     )
                 }
             }
-            if (attempt.isActive && !overlapPending) {
+            if (attempt.isActive && !overlapPending && !headOnly) {
                 retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
             }
         }
