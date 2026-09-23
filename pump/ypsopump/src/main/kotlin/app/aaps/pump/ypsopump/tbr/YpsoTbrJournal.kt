@@ -34,6 +34,9 @@ data class YpsoTbrAttempt(
     val accounted: Boolean = false,
     /** Set on a start when a later confirmed AAPS stop ended it. */
     val stoppedAt: Long? = null,
+    /** Pump ID of this start's own history row, read on the same link right after status proved it. */
+    val rowPumpId: Long? = null,
+    /** Pump ID the AAPS record is bound to, once history has applied the row. */
     val pumpId: Long? = null,
     val detail: String? = null,
 ) {
@@ -134,6 +137,15 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
         it.copy(accounted = true, detail = detail)
     }
 
+    /** The start's own history row was identified on the command link. */
+    @Synchronized fun identified(id: String, rowPumpId: Long) = update(id) {
+        check(it.awaitsBinding && it.rowPumpId == null) { "TBR attempt is not awaiting identification" }
+        it.copy(rowPumpId = rowPumpId)
+    }
+
+    @Synchronized fun identifiedAs(rowPumpId: Long): YpsoTbrAttempt? =
+        store.loadAll().firstOrNull { it.awaitsBinding && it.rowPumpId == rowPumpId }
+
     @Synchronized fun bound(id: String, pumpId: Long) = update(id) {
         check(it.awaitsBinding) { "TBR attempt is not awaiting a pump identity" }
         it.copy(pumpId = pumpId)
@@ -169,9 +181,9 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         if (!file.exists()) return emptyList()
         val root = JSONObject(file.readText())
         val version = root.getInt("version")
-        if (version != VERSION) return retireEarlierVersion(root, version)
+        if (version !in MIGRATABLE..VERSION) return retireEarlierVersion(root, version)
         val array = root.getJSONArray("attempts")
-        return (0 until array.length()).map { decode(array.getJSONObject(it)) }
+        return (0 until array.length()).map { decode(array.getJSONObject(it), version) }
     }
 
     /**
@@ -180,12 +192,15 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
      * unreadable, which fails every TBR operation closed.
      */
     private fun retireEarlierVersion(root: JSONObject, version: Int): List<YpsoTbrAttempt> {
-        require(version in 1 until VERSION) { "unsupported TBR journal version" }
+        require(version in 1 until MIGRATABLE) { "unsupported TBR journal version" }
         val array = root.getJSONArray("attempts")
         val settled = (0 until array.length()).all {
             val attempt = array.getJSONObject(it)
-            attempt.getString("state") == "NOT_STARTED" ||
-                attempt.getString("state") in setOf("STARTED", "EFFECTIVE") && !attempt.isNull("pumpId")
+            val state = attempt.getString("state")
+            val stop = attempt.optString("kind") == "STOP"
+            state in setOf("NOT_STARTED", "NO_EFFECT") ||
+                stop && state == "EFFECTIVE" ||
+                state in setOf("STARTED", "EFFECTIVE") && !attempt.isNull("pumpId") && attempt.optBoolean("accounted", true)
         }
         require(settled) { "TBR journal version $version holds unresolved attempts" }
         check(file.renameTo(File(file.parentFile, "${file.name}.v$version"))) { "cannot archive TBR journal version $version" }
@@ -226,11 +241,14 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         .putNullable("effectiveBy", value.effectiveBy)
         .put("accounted", value.accounted)
         .putNullable("stoppedAt", value.stoppedAt)
+        .putNullable("rowPumpId", value.rowPumpId)
         .putNullable("pumpId", value.pumpId)
         .putNullable("detail", value.detail)
 
-    private fun decode(json: JSONObject): YpsoTbrAttempt {
-        require(json.keys().asSequence().toSet() == FIELDS) { "unexpected TBR journal fields" }
+    private fun decode(json: JSONObject, version: Int): YpsoTbrAttempt {
+        // Version 3 lacks only the row identity, which starts unknown.
+        val expected = if (version == 3) FIELDS - "rowPumpId" else FIELDS
+        require(json.keys().asSequence().toSet() == expected) { "unexpected TBR journal fields" }
         return YpsoTbrAttempt(
             id = json.getString("id"),
             kind = YpsoTbrAttempt.Kind.valueOf(json.getString("kind")),
@@ -247,6 +265,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
             effectiveBy = json.longOrNull("effectiveBy"),
             accounted = json.getBoolean("accounted"),
             stoppedAt = json.longOrNull("stoppedAt"),
+            rowPumpId = if (json.has("rowPumpId")) json.longOrNull("rowPumpId") else null,
             pumpId = json.longOrNull("pumpId"),
             detail = if (json.isNull("detail")) null else json.getString("detail"),
         )
@@ -256,10 +275,12 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
     private fun JSONObject.longOrNull(name: String): Long? = if (isNull(name)) null else getLong(name)
 
     companion object {
-        private const val VERSION = 3
+        private const val VERSION = 4
+        /** Oldest version read in place; older pre-release journals are archived when settled. */
+        private const val MIGRATABLE = 3
         private val FIELDS = setOf(
             "id", "kind", "pumpSerial", "percent", "durationMinutes", "type", "temporaryId", "baselinePumpId", "createdAt",
-            "state", "dispatchedAt", "effectiveAt", "effectiveBy", "accounted", "stoppedAt", "pumpId", "detail",
+            "state", "dispatchedAt", "effectiveAt", "effectiveBy", "accounted", "stoppedAt", "rowPumpId", "pumpId", "detail",
         )
     }
 }

@@ -43,6 +43,8 @@ class YpsoTbrHistoryAccountingTest {
         override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
             saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid) }
         override fun suspendActiveAt(pumpSerial: String, at: Long) = suspendOpen
+        override fun anyStartedBetween(pumpSerial: String, from: Long, to: Long, exceptPumpId: Long) =
+            saved.any { (id, record) -> id != exceptPumpId && record.first > from && record.first < to }
         override fun latestSuspendBefore(pumpSerial: String, at: Long) = saved.entries
             .filter { it.key in suspends && it.value.first <= at }.maxByOrNull { it.value.first }
             ?.let { YpsoTbrRecordLookup.Suspend(it.key, it.value.first, it.value.second, it.key !in invalid) }
@@ -75,7 +77,7 @@ class YpsoTbrHistoryAccountingTest {
         YpsoHistoryEntry(seconds, type, v1, v2, 0, sequence, 0),
     )
 
-    private fun startedAttempt(id: String = "a", percent: Int = 120, minutes: Int = 15, baseline: Long = 48_222L, at: Long = pumpStart + 2_000L, tempId: Long = 99L) =
+    private fun startedAttempt(id: String = "a", percent: Int = 120, minutes: Int = 15, baseline: Long = 48_222L, at: Long = pumpStart + 2_000L, tempId: Long = 99L, row: Long? = null) =
         YpsoTbrAttempt(
             id = id, kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = percent, durationMinutes = minutes,
             type = "NORMAL", temporaryId = tempId, baselinePumpId = baseline, createdAt = at - 1_000L,
@@ -84,6 +86,7 @@ class YpsoTbrHistoryAccountingTest {
             journal.dispatched(id, at - 500L)
             journal.effective(id, at, at)
             journal.accounted(id)
+            row?.let { journal.identified(id, it) }
             provisional[tempId] = at to minutes * 60_000L
         }
 
@@ -184,11 +187,54 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a row overlapping an unmatched AAPS start with the same percent blocks instead of duplicating it`() {
-        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
+    fun `an identified start binds its own row whatever the pump clock says`() {
+        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L, row = 48_224L)
 
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
+        assertNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
+
+        assertEquals(pumpStart + 10 * 60_000L to 120 * 60_000L, saved[48_224L])
+        assertEquals(48_224L, store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `an identified start binds even when its row falls in a DST overlap`() {
+        startedAttempt(row = 48_224L)
+        val warsaw = ZoneId.of("Europe/Warsaw")
+        val overlapSeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 2, 30))
+
+        assertNull(accounting.apply(event(48_224, 9, 120, 15, seconds = overlapSeconds), serial, warsaw))
+        assertEquals(48_224L, store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `a pump row whose AAPS start is not yet resolved by status waits instead of importing`() {
+        YpsoTbrAttempt(
+            id = "p", kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 0, durationMinutes = 30,
+            type = "NORMAL", temporaryId = 7L, baselinePumpId = 48_222L, createdAt = pumpStart,
+        ).also { journal.prepare(it); journal.dispatched("p", pumpStart) }
+
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone))
         assertNull(saved[48_224L])
+    }
+
+    @Test
+    fun `a manual row overlapping an AAPS start it is not is imported on its own`() {
+        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L, row = 48_226L)
+
+        assertNull(accounting.apply(event(48_224, 10, 0, 10), serial, zone))
+        assertEquals(pumpStart to 10 * 60_000L, saved[48_224L])
+        assertNull(store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `resume never extends an earlier stop that other records followed`() {
+        accounting.apply(event(48_215, 14, 3, 0), serial, zone)
+        saved[48_215L] = pumpStart to 600_000L
+        accounting.apply(event(48_216, 9, 110, 15, seconds = pumpStartSeconds + 1_200), serial, zone)
+
+        accounting.apply(event(48_219, 14, 10, 0, seconds = pumpStartSeconds + 18_000), serial, zone)
+
+        assertEquals(pumpStart to 600_000L, saved[48_215L])
     }
 
     @Test

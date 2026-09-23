@@ -145,6 +145,9 @@ class YpsoPumpPlugin @Inject constructor(
                 override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
                     .any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }
 
+                override fun anyStartedBetween(pumpSerial: String, from: Long, to: Long, exceptPumpId: Long) =
+                    tbrRecords(pumpSerial, from).any { it.timestamp > from && it.timestamp < to && it.ids.pumpId != exceptPumpId }
+
                 override fun latestSuspendBefore(pumpSerial: String, at: Long) =
                     tbrRecords(pumpSerial, at - 24 * 60 * 60_000L, includeInvalid = true)
                         .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId != null && it.timestamp <= at }
@@ -155,7 +158,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
     private val tbrController by lazy {
         YpsoTbrController(
-            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
+            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }, readHead = ::readHistoryHead),
             tbrJournal,
             tbrRecords,
             ::serialNumber,
@@ -972,7 +975,10 @@ class YpsoPumpPlugin @Inject constructor(
     ): TherapyStatusReadiness {
         if (!yieldHistoryRecoveryForTherapy(historyYieldTimeoutMs)) return TherapyStatusReadiness.HISTORY_BUSY
         if (stopWhen()) return TherapyStatusReadiness.CANCELLED
-        if (readStatusBlocking(statusTimeoutMs, stopWhen)) return TherapyStatusReadiness.READY
+        if (readStatusBlocking(statusTimeoutMs, stopWhen)) {
+            reconcileTbrWithStatus()
+            return TherapyStatusReadiness.READY
+        }
         return if (stopWhen()) TherapyStatusReadiness.CANCELLED else TherapyStatusReadiness.STATUS_UNAVAILABLE
     }
 
@@ -1007,15 +1013,33 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
+    /**
+     * The newest history row with its PumpSync identity, read right after a TBR start was proven. Its
+     * sequence generation comes from the durable cursor: the row is newer than the cursor, and a
+     * sequence below the cursor's means the 32-bit counter wrapped once.
+     */
+    private fun readHistoryHead(): app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow? {
+        val cursor = historyIngestion.currentCursor() ?: return null
+        val snapshot = readHistoryBlocking(timeoutMs = 20_000, maxRows = 1, headOnly = true) ?: return null
+        if (snapshot.countBefore != snapshot.countAfter || snapshot.headBefore != snapshot.headAfter) return null
+        val head = snapshot.rowsNewestFirst.singleOrNull() ?: return null
+        val cursorSequence = cursor.identity.sequence
+        val generation = cursor.identity.sequenceGeneration + if (head.sequence < cursorSequence) 1 else 0
+        return app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow(
+            (generation.toLong() shl 32) or head.sequence, head.eventType, head.value1, head.value2,
+        )
+    }
+
     private fun readHistoryBlocking(
         timeoutMs: Long = 120_000,
         maxRows: Int = 128,
+        headOnly: Boolean = false,
         stopWhen: () -> Boolean = { false },
         onAttempt: (YpsoBleManager.HistoryReadAttempt) -> Unit = {},
     ): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
-        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows) {
+        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows, headOnly) {
             snapshot = it
             latch.countDown()
         }
