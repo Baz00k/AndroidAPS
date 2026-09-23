@@ -1118,12 +1118,20 @@ class PumpSessionTest {
     }
 
     @Test
-    fun `overflow and unvalidated write recovery fail without reservation`() {
+    fun `unknown floor reconciles from zero while overflow still fails closed`() {
         val store = MemoryStore()
         var owner = initialized(store)
         var token = owner.open(pump, key)
-        assertThrows(SecurityException::class.java) { owner.reserve(token, owner.begin(token)) }
-        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE) })
+        val firstTransaction = owner.begin(token)
+        val first = owner.reserve(token, firstTransaction)
+        assertEquals(1L, first.counter)
+        assertEquals(0L, first.priorWrite)
+        owner.finish(token, firstTransaction)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE, reservation = null)
+            },
+        )
         owner = PumpSession(store)
         token = owner.open(pump, key)
         assertThrows(SecurityException::class.java) { accept(owner, token, Long.MAX_VALUE) }

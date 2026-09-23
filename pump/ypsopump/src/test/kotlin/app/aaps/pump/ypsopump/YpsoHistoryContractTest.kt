@@ -24,6 +24,48 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class YpsoHistoryContractTest {
+    @Test
+    fun `running bolus remains scan anchor when newer events arrive`() {
+        val running = entry(sequence = 100, type = 19, v1 = 200)
+        val newer = entry(sequence = 101, type = 6)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), running.fingerprint(), 21)
+        val first = assertInstanceOf(YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(2, 2, listOf(newer, running), fullCoverage = true)))
+        assertEquals(100L, first.cursor.identity.sequence)
+        val terminal = running.copy(eventType = 2, value1 = 54)
+        val second = assertInstanceOf(YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(first.cursor, snapshot(2, 2, listOf(newer, terminal), fullCoverage = true)))
+        assertEquals(0.54, second.stateUpdates.single().semantics.amountUnits)
+        assertEquals(101L, second.cursor.identity.sequence)
+    }
+
+    @Test
+    fun `bolus state matching rejects changed time reboot and shape`() {
+        val running = entry(sequence = 100, type = 1, v1 = 50, v2 = 15)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), running.fingerprint(), 21)
+        val terminal = running.copy(eventType = 3, value1 = 8, value2 = 0)
+        assertTrue(terminal.matchesCursor(cursor, 21))
+        assertFalse(terminal.matchesCursor(cursor, 22))
+        assertFalse(terminal.copy(factorySeconds = terminal.factorySeconds + 1).matchesCursor(cursor, 21))
+        assertFalse(terminal.copy(eventType = 2).matchesCursor(cursor, 21))
+        assertFalse(terminal.copy(sequence = 101).matchesCursor(cursor, 21))
+    }
+
+    @Test
+    fun `cancelled bolus cursor transitions preserve identity and publish terminal state once`() {
+        for ((runningType, terminalType) in listOf(1 to 3, 19 to 2, 17 to 18)) {
+            val running = YpsoHistoryEntry(843304508, runningType, 50, 15, 0, 48104, 0)
+            val terminal = running.copy(eventType = terminalType, value1 = 8, value2 = 0)
+            val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 48104), running.fingerprint(), 21)
+            val scan = snapshot(1, 1, listOf(terminal), fullCoverage = true)
+            val result = assertInstanceOf(YpsoHistoryReconciliation.Stable::class.java, YpsoHistoryReconciler.reconcile(cursor, scan))
+            assertEquals(cursor.identity, result.stateUpdates.single().identity)
+            assertEquals(0.08, result.stateUpdates.single().semantics.amountUnits)
+            assertEquals(terminal.fingerprint(), result.cursor.fingerprint)
+            val replay = assertInstanceOf(YpsoHistoryReconciliation.Stable::class.java, YpsoHistoryReconciler.reconcile(result.cursor, scan))
+            assertTrue(replay.stateUpdates.isEmpty())
+        }
+    }
 
     @Test
     fun `target event fixtures classify without claiming command origin`() {
@@ -241,7 +283,7 @@ class YpsoHistoryContractTest {
     }
 
     @Test
-    fun `reboot with continuing sequence preserves identity while lower sequence is a deterministic reset gap`() {
+    fun `reboot recovery preserves continuity and assigns a new generation after sequence reset`() {
         val old = entry(sequence = 100)
         val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), old.fingerprint(), 21)
         val continued = assertInstanceOf(
@@ -254,34 +296,41 @@ class YpsoHistoryContractTest {
         assertEquals(22, continued.cursor.pumpReboot)
         assertEquals(0, continued.cursor.identity.sequenceGeneration)
 
+        val ordinaryReset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                cursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), old.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
+        )
+        assertEquals(1, ordinaryReset.cursor.identity.sequenceGeneration)
+        assertEquals(0, ordinaryReset.cursor.identity.sequence)
+
         val high = entry(sequence = 0xffff_ffffL)
         val highCursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, high.sequence), high.fingerprint(), 21)
-        assertEquals(
-            YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT,
-            assertInstanceOf(
-                YpsoHistoryReconciliation.Gap::class.java,
-                YpsoHistoryReconciler.reconcile(
-                    highCursor,
-                    snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
-                ),
-            ).reason,
+        val reset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                highCursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
         )
+        assertEquals(1, reset.cursor.identity.sequenceGeneration)
+        assertEquals(22, reset.cursor.pumpReboot)
 
         val highUnchangedAfterReboot = assertInstanceOf(
             YpsoHistoryReconciliation.Stable::class.java,
             YpsoHistoryReconciler.reconcile(highCursor, snapshot(1, 1, listOf(high), fullCoverage = true, reboot = 22)),
         )
-        assertEquals(21, highUnchangedAfterReboot.cursor.pumpReboot)
-        assertEquals(
-            YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT,
-            assertInstanceOf(
-                YpsoHistoryReconciliation.Gap::class.java,
-                YpsoHistoryReconciler.reconcile(
-                    highUnchangedAfterReboot.cursor,
-                    snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
-                ),
-            ).reason,
+        assertEquals(22, highUnchangedAfterReboot.cursor.pumpReboot)
+        val delayedReset = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(
+                highUnchangedAfterReboot.cursor,
+                snapshot(2, 2, listOf(entry(sequence = 0), high.copy(index = 1)), fullCoverage = true, reboot = 22),
+            ),
         )
+        assertEquals(1, delayedReset.cursor.identity.sequenceGeneration)
     }
 
     @Test
@@ -305,6 +354,21 @@ class YpsoHistoryContractTest {
                 ),
             ).reason,
         )
+    }
+
+    @Test
+    fun `cursor older than the former 128 row window reconciles when recovery covers it`() {
+        val baseline = entry(sequence = 100)
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("serial", 0, 100), baseline.fingerprint(), 21)
+        val rows = (229L downTo 101L).map(::entry) + baseline
+
+        val result = assertInstanceOf(
+            YpsoHistoryReconciliation.Stable::class.java,
+            YpsoHistoryReconciler.reconcile(cursor, snapshot(130, 130, rows, fullCoverage = true)),
+        )
+
+        assertEquals(129, result.newEventsOldestFirst.size)
+        assertEquals(229, result.cursor.identity.sequence)
     }
 
     @Test

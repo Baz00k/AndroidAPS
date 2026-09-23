@@ -166,5 +166,41 @@ class YpsoOwnershipHandoffTest {
         assertEquals(imported.reservation, adopted.reservation)
     }
 
+    @Test
+    fun `handoff older than a durable local write allocation is rejected`() {
+        val imported = qualifiedRecord().copy(write = 4_280)
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline(pump, key, reboot = 21, read = 100)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(serial = serial, verifiedAt = 10, verifiedSerial = serial)
+            },
+        )
+        val local = PumpSession(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            local.adoptOwnershipHandoff(imported, 30, emptyMap(), minimumKnownWriteFloor = 9_035)
+        }
+        assertNull(local.committedRecord()!!.write)
+    }
+
+    @Test
+    fun `same epoch handoff older than the authenticated local read cannot be adopted as exact ownership`() {
+        val imported = qualifiedRecord()
+        val store = MemoryStore()
+        PumpSession(store).provisionReadBaseline(pump, key, reboot = 21, read = 10_000)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(serial = serial, verifiedAt = 10, verifiedSerial = serial)
+            },
+        )
+        val local = PumpSession(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            local.adoptOwnershipHandoff(imported, 30, emptyMap())
+        }
+        assertNull(local.committedRecord()!!.write)
+    }
+
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
 }

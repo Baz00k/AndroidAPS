@@ -30,6 +30,12 @@ internal class YpsoQualificationWriteAccounting(
         intent: PumpSession.WriteIntent,
     ): PumpSession.Reservation = checkNotNull(qualificationReservation)(transaction, intent)
 
+    // Historical probe modes deliberately bind their predecessor. Normal runtime coordinators
+    // use the production preparation hook and recover automatically instead.
+    override fun prepareSession(owner: Owner) = Unit
+
+    override val automaticCounterRecovery: Boolean = false
+
     fun releaseQualificationOwner(gatt: Any) {
         releaseOwner(gatt)
     }

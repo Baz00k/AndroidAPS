@@ -154,6 +154,7 @@ open class Notification {
         // The pump's own basal schedule disagrees with the profile AAPS is dosing against. The pump
         // programs manually, so nothing reconciles this automatically and it must not stay silent.
         const val YPSOPUMP_PROFILE_MISMATCH = 98
+        const val YPSOPUMP_BOLUS_UNCERTAIN = 99
 
         const val USER_MESSAGE = 1000
 

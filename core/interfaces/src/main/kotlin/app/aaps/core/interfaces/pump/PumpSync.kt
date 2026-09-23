@@ -215,6 +215,35 @@ interface PumpSync {
      **/
     fun syncBolusWithPumpId(timestamp: Long, amount: Double, type: BS.Type?, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean
 
+    /** Detailed persistence result for drivers that must distinguish an idempotent duplicate from rejection. */
+    enum class BolusSyncResult { INSERTED, UPDATED, UNCHANGED, REJECTED }
+
+    fun syncBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): BolusSyncResult
+
+    /**
+     * Replay insulin that the pump driver durably recorded as pump-confirmed before asking AAPS to persist it.
+     *
+     * Unlike [syncBolusWithPumpIdDetailed], an event older than the current pump-activation timestamp may be
+     * accepted. Implementations must still require the currently active pump and registered pump identity to
+     * match [pumpType] and [pumpSerial]. This is intended only for retrying a durable driver outbox after a
+     * temporary pump-plugin switch; it must not be used for unconstrained history import.
+     */
+    fun replayConfirmedBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): BolusSyncResult
+
     /**
      * Synchronization of carbs
      *
@@ -509,6 +538,29 @@ interface PumpSync {
      **/
 
     fun syncExtendedBolusWithPumpId(timestamp: Long, amount: Double, duration: Long, isEmulatingTB: Boolean, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean
+
+    /** Read back an extended bolus by the same stable identity used for synchronization. */
+    fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): app.aaps.core.data.model.EB?
+
+    /**
+     * Correct an extended bolus this driver already recorded, keeping its original start timestamp.
+     *
+     * A delivery that registers the pump on its first synchronization stores the registration moment
+     * as the activation timestamp, which is later than the dose's own start. [syncExtendedBolusWithPumpId]
+     * would then reject every correction to that dose and leave the programmed amount standing.
+     *
+     * Implementations must still require the currently active pump and the registered identity to match
+     * [pumpType] and [pumpSerial], and must only update an existing record; this never imports history.
+     */
+    fun correctExtendedBolusWithPumpId(
+        timestamp: Long,
+        amount: Double,
+        duration: Long,
+        isEmulatingTB: Boolean,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): Boolean
 
     /**
      * Synchronization of extended bolus end event

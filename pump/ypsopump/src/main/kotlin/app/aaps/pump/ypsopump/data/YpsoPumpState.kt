@@ -37,6 +37,8 @@ class YpsoPumpState @Inject constructor() {
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     internal var currentInstant: () -> Instant = { Instant.now() }
     internal var currentZone: () -> ZoneId = { ZoneId.systemDefault() }
+    /** Zone used to interpret the pump's local history timestamps; independent of profile reads. */
+    internal val historyZone: ZoneId get() = currentZone()
     @Volatile private var sample: StatusSnapshot? = null
     @Volatile private var verifiedProfile: YpsoProfileReadback.VerifiedReadback? = null
     val statusSnapshot: StatusSnapshot?

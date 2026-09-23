@@ -6,9 +6,8 @@ import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import java.util.UUID
 
 /**
- * Strict-next production accounting for read-only setting selectors. It exposes no recovery or
- * probe mode: an unknown floor or unresolved predecessor blocks the acquisition until reviewed
- * evidence repairs the durable session outside this path.
+ * Monotonic counter accounting for read-only setting selectors. Interrupted acquisitions can be
+ * restarted after transport teardown, using a counter above every previously allocated value.
  */
 internal class YpsoProfileSelectorCoordinator(
     private val session: PumpSession,
@@ -41,11 +40,9 @@ internal class YpsoProfileSelectorCoordinator(
             return false
         }
         val record = session.snapshot()
-        val ready = record?.reboot != null && record.read != null && record.write != null &&
-            record.writeBootstrapState == PumpSession.WriteBootstrapState.ESTABLISHED &&
-            (record.reservation == null || record.reservation.phase == PumpSession.Phase.VERIFIED)
+        val ready = record?.reboot != null && record.read != null
         if (!ready || transport.hasUnresolvedWrite()) {
-            onOutcome(notSent(writeId, characteristic, firmware, YpsoWriteFailure.Layer.SESSION, "durable strict-next write floor is unavailable"))
+            onOutcome(notSent(writeId, characteristic, firmware, YpsoWriteFailure.Layer.SESSION, "durable pump session counters are unavailable"))
             return false
         }
 

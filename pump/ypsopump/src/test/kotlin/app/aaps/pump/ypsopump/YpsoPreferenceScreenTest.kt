@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.pump.PumpSync
+import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
@@ -28,7 +29,9 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
             mock<UiInteraction>(),
             pumpEnactResultProvider,
             mock<YpsoProvisioningService>(),
-            profileFunction
+            profileFunction,
+            mock(),
+            mock<AppLifecycle>()
         )
         val screen = preferenceManager.createPreferenceScreen(context)
 

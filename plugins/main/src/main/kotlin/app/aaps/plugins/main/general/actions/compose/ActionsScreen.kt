@@ -97,14 +97,14 @@ private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionI
     AapsCard(
         modifier = modifier,
         color = if (accent) colors.accentTint else colors.surface,
-        onClick = { onAction(t.id) }
+        onClick = if (t.enabled) ({ onAction(t.id) }) else null,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TintIcon(iconFor(t.id), tint = if (accent) colors.accentOnLight else colors.accent, background = colors.controlFill)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
                 Text(t.label, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
+                    if (!t.enabled) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
                     style = AapsTheme.type.caption,
                     color = if (accent) colors.accentOnLight else colors.textTertiary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis

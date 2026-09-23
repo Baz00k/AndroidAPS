@@ -21,6 +21,10 @@ class ProductionPumpSessionTest {
             saved = state
             check(fault != 2) { "Crash after persistence before return" }
         }
+        override fun replaceUnavailable(state: PumpSession.State) {
+            check(fault == 0) { "Recovery store unavailable" }
+            saved = state
+        }
     }
 
     private fun initialized(store: MemoryStore) = PumpSession(store).apply { provisionReadBaseline(pump, key, 8, 100) }
@@ -170,6 +174,248 @@ class ProductionPumpSessionTest {
     }
 
     @Test
+    fun `explicit journal loss recovery installs only a selector recovery lower bound`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+
+        unavailable.recoverLostJournalLowerBound(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            lowerBound = 9_035,
+            recoveryReboot = 21,
+            evidenceHash = "ab".repeat(32),
+        )
+
+        val recovered = PumpSession(store).committedRecord()!!
+        assertNull(recovered.reboot)
+        assertNull(recovered.read)
+        assertEquals(9_035, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals("ab".repeat(32), recovered.source["journal_loss_recovery_evidence_sha256"])
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        val transaction = restarted.begin(token)
+        restarted.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 21, 1))
+        restarted.finish(token, transaction)
+        restarted.markVerified("10000001", 3)
+        assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in restarted.availability().causes)
+    }
+
+    @Test
+    fun `read only journal recovery authenticates reads and reconciles writes from zero`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+
+        unavailable.recoverLostJournalReadOnly(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            documentHash = "cd".repeat(32),
+        )
+
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        accept(restarted, token, 1, reboot = 21)
+        restarted.markVerified("10000001", 3)
+        val record = restarted.committedRecord()!!
+        assertEquals(21, record.reboot)
+        assertEquals(1, record.read)
+        assertNull(record.write)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, record.writeBootstrapState)
+        assertEquals("cd".repeat(32), record.source["journal_loss_read_only_document_sha256"])
+
+        val transaction = restarted.begin(token)
+        val reservation = restarted.reserve(
+            token,
+            transaction,
+            PumpSession.WriteIntent("reconciled", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)),
+        )
+        assertEquals(1L, reservation.counter)
+        assertEquals(0L, reservation.priorWrite)
+        assertEquals(PumpSession.WriteCandidate.STANDARD, reservation.candidate)
+        restarted.finish(token, transaction)
+    }
+
+    @Test
+    fun `matching identity only record can enter selector lower bound recovery without adopting ownership`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+        unavailable.recoverLostJournalReadOnly(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            documentHash = "cd".repeat(32),
+        )
+        val readable = PumpSession(store)
+        val token = readable.open(pump, key)
+        accept(readable, token, 73051, reboot = 21)
+        readable.markVerified("10000001", 3)
+        readable.quiesce()
+        val imported = readable.committedRecord()!!.copy(
+            generation = "handoff-generation",
+            read = 2_998,
+            write = 4_280,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            lowerBoundRecoveryReboot = null,
+        )
+
+        readable.recoverIdentityOnlyLowerBound(
+            imported,
+            importedAt = 4,
+            source = mapOf("ownership_handoff_sha256" to "ab".repeat(32)),
+        )
+
+        val recovered = readable.committedRecord()!!
+        assertEquals(21, recovered.reboot)
+        assertEquals(73051, recovered.read)
+        assertEquals(4_280, recovered.write)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
+        assertEquals(21, recovered.lowerBoundRecoveryReboot)
+        assertEquals("ab".repeat(32), recovered.source["ownership_handoff_sha256"])
+        assertNull(recovered.reservation)
+        assertTrue(recovered.writeEvidence.isEmpty())
+    }
+
+    @Test
+    fun `identity only lower bound recovery rejects another pump key epoch or exact ownership state`() {
+        fun recovered(): Pair<PumpSession, PumpSession.Record> {
+            val store = MemoryStore()
+            initialized(store)
+            store.fault = 3
+            val unavailable = PumpSession(store)
+            store.fault = 0
+            unavailable.recoverLostJournalReadOnly(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                documentHash = "cd".repeat(32),
+            )
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            accept(owner, token, 100, reboot = 21)
+            owner.markVerified("10000001", 3)
+            owner.quiesce()
+            return owner to owner.committedRecord()!!.copy(
+                generation = "handoff-generation",
+                read = 90,
+                write = 4_280,
+                writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+            )
+        }
+
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(pump = "EC:2A:F0:00:00:02"), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(keyId = "00".repeat(32)), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported.copy(reboot = 22), 4, emptyMap())
+            }
+        }
+        recovered().let { (owner, imported) ->
+            owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
+            assertThrows(IllegalStateException::class.java) {
+                owner.recoverIdentityOnlyLowerBound(imported, 5, emptyMap())
+            }
+        }
+    }
+
+    @Test
+    fun `legacy identity only record without provenance marker can enter selector recovery`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.copy(
+                    reboot = 21,
+                    read = 73_051,
+                    write = null,
+                    serial = "10000001",
+                    verifiedAt = 3,
+                    verifiedSerial = "10000001",
+                    source = emptyMap(),
+                    writeBootstrapState = PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH,
+                )
+            },
+        )
+        val owner = PumpSession(store)
+        val imported = owner.committedRecord()!!.copy(
+            generation = "handoff-generation",
+            read = 2_998,
+            write = 4_280,
+            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+        )
+
+        owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
+
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, owner.committedRecord()!!.writeBootstrapState)
+        assertEquals(4_280, owner.committedRecord()!!.write)
+        assertEquals(73_051, owner.committedRecord()!!.read)
+    }
+
+    @Test
+    fun `healthy journal cannot enter read only disaster recovery`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.recoverLostJournalReadOnly(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                documentHash = "cd".repeat(32),
+            )
+        }
+    }
+
+    @Test
+    fun `healthy journal cannot enter lower bound disaster recovery`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+
+        assertThrows(IllegalStateException::class.java) {
+            owner.recoverLostJournalLowerBound(
+                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+                lowerBound = 9_035,
+                recoveryReboot = 21,
+                evidenceHash = "ab".repeat(32),
+            )
+        }
+    }
+
+    @Test
+    fun `journal recovery rejects an authenticated read from another reboot epoch`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.fault = 3
+        val unavailable = PumpSession(store)
+        store.fault = 0
+        unavailable.recoverLostJournalLowerBound(
+            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
+            lowerBound = 9_035,
+            recoveryReboot = 21,
+            evidenceHash = "ab".repeat(32),
+        )
+        val restarted = PumpSession(store)
+        val token = restarted.open(pump, key)
+        val transaction = restarted.begin(token)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            restarted.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 22, 1))
+        }
+
+        assertNull(restarted.committedRecord()!!.reboot)
+        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, restarted.committedRecord()!!.writeBootstrapState)
+        assertEquals(21, restarted.committedRecord()!!.lowerBoundRecoveryReboot)
+    }
+
+    @Test
     fun `read commit crash suppresses publication and poisons current owner`() {
         for (fault in 1..2) {
             val store = MemoryStore()
@@ -228,17 +474,155 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `overflow and unvalidated write recovery fail without reservation`() {
+    fun `unknown floor reconciles from zero while overflow still fails closed`() {
         val store = MemoryStore()
         var owner = initialized(store)
         var token = owner.open(pump, key)
-        assertThrows(SecurityException::class.java) { owner.reserve(token, owner.begin(token)) }
-        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE) })
+        val firstTransaction = owner.begin(token)
+        val first = owner.reserve(token, firstTransaction)
+        assertEquals(1L, first.counter)
+        assertEquals(0L, first.priorWrite)
+        owner.finish(token, firstTransaction)
+
+        store.saved = store.saved.copy(
+            records = store.saved.records.map {
+                it.established(write = Long.MAX_VALUE).copy(read = Long.MAX_VALUE, reservation = null)
+            },
+        )
         owner = PumpSession(store)
         token = owner.open(pump, key)
         assertThrows(SecurityException::class.java) { accept(owner, token, Long.MAX_VALUE) }
         assertThrows(IllegalStateException::class.java) { owner.reserve(token, owner.begin(token)) }
         assertNull(store.saved.records.single().reservation)
+    }
+
+    @Test
+    fun `interrupted write recovery retains high water and unknown effect across commit crashes`() {
+        for (phase in listOf(PumpSession.Phase.RESERVED, PumpSession.Phase.POSSIBLY_SENT, PumpSession.Phase.ACKED)) {
+            for (fault in 0..2) {
+                val store = MemoryStore()
+                initialized(store)
+                store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+                val owner = PumpSession(store)
+                val token = owner.open(pump, key)
+                val transaction = owner.begin(token)
+                owner.reserve(token, transaction, PumpSession.WriteIntent("interrupted", "characteristic", "THERAPY_COMMAND", "ab".repeat(32)))
+                if (phase != PumpSession.Phase.RESERVED) owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+                if (phase == PumpSession.Phase.ACKED) owner.advance(token, transaction, PumpSession.Phase.ACKED)
+                assertThrows(IllegalStateException::class.java) { owner.recoverInterruptedWrite(token) }
+                owner.finish(token, transaction)
+                store.fault = fault
+                if (fault == 0) owner.recoverInterruptedWrite(token)
+                else assertThrows(SecurityException::class.java) { owner.recoverInterruptedWrite(token) }
+                store.fault = 0
+                val restarted = PumpSession(store)
+                val next = restarted.open(pump, key)
+                restarted.recoverInterruptedWrite(next)
+                val retained = restarted.snapshot()!!
+                assertEquals(4281, retained.write)
+                assertNull(retained.reservation)
+                assertEquals("interrupted", retained.writeEvidence.single().operationId)
+                assertNull(retained.writeEvidence.single().resolution)
+                assertEquals(4282, restarted.reserve(next, restarted.begin(next)).counter)
+            }
+        }
+    }
+
+    @Test
+    fun `confirmed counter errors exponentially increase candidates and acceptance resets recovery`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(4) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(token, transaction, PumpSession.WriteIntent("counter-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        assertEquals(listOf(4281L, 4282L, 4284L, 4288L), candidates)
+        assertEquals(4, owner.snapshot()!!.counterRecoveryExponent)
+        val acceptedTransaction = owner.begin(token)
+        val accepted = owner.reserve(token, acceptedTransaction, PumpSession.WriteIntent("accepted", "characteristic", "SETTINGS_SELECTOR", "ef".repeat(32)))
+        assertEquals(4296L, accepted.counter)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.ACKED)
+        owner.finish(token, acceptedTransaction)
+        owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "01".repeat(32), "semantic read-back accepted")
+        assertEquals(0, owner.snapshot()!!.counterRecoveryExponent)
+    }
+
+    @Test
+    fun `unknown floor starts at zero and establishes ownership on acceptance`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(4) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("unknown-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)),
+            )
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        assertEquals(listOf(1L, 2L, 4L, 8L), candidates)
+        assertEquals(4, owner.snapshot()!!.counterRecoveryExponent)
+        assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, owner.snapshot()!!.writeBootstrapState)
+
+        val acceptedTransaction = owner.begin(token)
+        val accepted = owner.reserve(
+            token,
+            acceptedTransaction,
+            PumpSession.WriteIntent("accepted", "characteristic", "SETTINGS_SELECTOR", "ef".repeat(32)),
+        )
+        assertEquals(16L, accepted.counter)
+        assertEquals(8L, accepted.priorWrite)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, acceptedTransaction, PumpSession.Phase.ACKED)
+        owner.finish(token, acceptedTransaction)
+        owner.resolveWrite(token, accepted.id, PumpSession.WriteResolution.ACCEPTED, "01".repeat(32), "semantic read-back accepted")
+
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, owner.snapshot()!!.writeBootstrapState)
+        assertEquals(16L, owner.snapshot()!!.write)
+        assertEquals(0, owner.snapshot()!!.counterRecoveryExponent)
+    }
+
+    @Test
+    fun `counter rejections persist and keep advancing at the exponent cap`() {
+        val store = MemoryStore()
+        val owner = initialized(store)
+        val token = owner.open(pump, key)
+        val candidates = mutableListOf<Long>()
+        repeat(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT + 2) { attempt ->
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(
+                token,
+                transaction,
+                PumpSession.WriteIntent("capped-$attempt", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)),
+            )
+            candidates += reservation.counter
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.finish(token, transaction)
+            owner.rejectCounterTooLow(token, reservation.id, "cd".repeat(32), "pump APPERR_COUNTER_ERROR 139")
+        }
+        val record = owner.snapshot()!!
+        assertEquals(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT, record.counterRecoveryExponent)
+        assertEquals(candidates.sorted(), candidates)
+        assertEquals(candidates.distinct().size, candidates.size)
+        assertEquals(
+            PumpSession.counterRecoveryIncrement(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT),
+            candidates[21] - candidates[20],
+        )
+        assertEquals(PumpSession.MAX_COUNTER_RECOVERY_EXPONENT + 2, record.writeEvidence.size)
     }
 
     @Test

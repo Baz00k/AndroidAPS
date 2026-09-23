@@ -46,17 +46,17 @@ fun EB.toTemporaryBasal(profile: Profile): TB =
 fun EB.iobCalc(time: Long, profile: Profile, insulinInterface: Insulin): IobTotal {
     if (!isValid) return IobTotal(time)
     val result = IobTotal(time)
-    val realDuration = getPassedDurationToTimeInMinutes(time)
-    if (realDuration > 0) {
+    val deliveredDuration = (min(time, end) - timestamp).coerceAtLeast(0L)
+    if (deliveredDuration > 0) {
         val dia = profile.dia
         val diaAgo = time - dia * 60 * 60 * 1000
-        val aboutFiveMinIntervals = ceil(realDuration / 5.0).toInt()
-        val spacing = realDuration / aboutFiveMinIntervals.toDouble()
+        val aboutFiveMinIntervals = ceil(deliveredDuration / (5 * 60_000.0)).toInt()
+        val spacing = deliveredDuration / aboutFiveMinIntervals.toDouble()
         for (j in 0L until aboutFiveMinIntervals) {
             // find middle of the interval
-            val calcDate = (timestamp + j * spacing * 60 * 1000 + 0.5 * spacing * 60 * 1000).toLong()
+            val calcDate = (timestamp + j * spacing + 0.5 * spacing).toLong()
             if (calcDate > diaAgo && calcDate <= time) {
-                val tempBolusSize: Double = rate * spacing / 60.0
+                val tempBolusSize: Double = rate * spacing / (60 * 60 * 1000.0)
                 val tempBolusPart = BS(
                     timestamp = calcDate,
                     amount = tempBolusSize,
@@ -71,7 +71,6 @@ fun EB.iobCalc(time: Long, profile: Profile, insulinInterface: Insulin): IobTota
     }
     return result
 }
-
 fun EB.iobCalc(
     time: Long,
     profile: Profile,
@@ -83,7 +82,7 @@ fun EB.iobCalc(
 ): IobTotal {
     if (!isValid) return IobTotal(time)
     val result = IobTotal(time)
-    val realDuration = getPassedDurationToTimeInMinutes(time)
+    val deliveredDuration = (min(time, end) - timestamp).coerceAtLeast(0L)
     var sensitivityRatio = lastAutosensResult.ratio
     val normalTarget = Constants.NORMAL_TARGET_MGDL.toDouble()
     if (exerciseMode && isTempTarget && profile.getTargetMgdl() >= normalTarget + 5) {
@@ -92,20 +91,20 @@ fun EB.iobCalc(
         val c = halfBasalExerciseTarget - normalTarget
         sensitivityRatio = c / (c + profile.getTargetMgdl() - normalTarget)
     }
-    if (realDuration > 0) {
+    if (deliveredDuration > 0) {
         var netBasalRate: Double
         val dia = profile.dia
         val diaAgo = time - dia * 60 * 60 * 1000
-        val aboutFiveMinIntervals = ceil(realDuration / 5.0).toInt()
-        val spacing = realDuration / aboutFiveMinIntervals
+        val aboutFiveMinIntervals = ceil(deliveredDuration / (5 * 60_000.0)).toInt()
+        val spacing = deliveredDuration / aboutFiveMinIntervals.toDouble()
         for (j in 0L until aboutFiveMinIntervals) {
             // find middle of the interval
-            val calcDate = (timestamp + j * spacing * 60 * 1000 + 0.5 * spacing * 60 * 1000).toLong()
+            val calcDate = (timestamp + j * spacing + 0.5 * spacing).toLong()
             val basalRate = profile.getBasal(calcDate)
             val basalRateCorrection = basalRate * (sensitivityRatio - 1)
             netBasalRate = rate - basalRateCorrection
             if (calcDate > diaAgo && calcDate <= time) {
-                val tempBolusSize = netBasalRate * spacing / 60.0
+                val tempBolusSize = netBasalRate * spacing / (60 * 60 * 1000.0)
                 val tempBolusPart = BS(
                     timestamp = calcDate,
                     amount = tempBolusSize,
@@ -120,4 +119,3 @@ fun EB.iobCalc(
     }
     return result
 }
-

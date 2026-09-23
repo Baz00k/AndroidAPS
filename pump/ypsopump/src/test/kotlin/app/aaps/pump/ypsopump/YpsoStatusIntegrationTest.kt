@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.content.Context
 import app.aaps.core.interfaces.notifications.Notification
+import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
@@ -77,7 +78,10 @@ class YpsoStatusIntegrationTest {
             val sync: PumpSync = mock()
             val ui: UiInteraction = mock()
             val plugin = YpsoPumpPlugin(AAPSLoggerTest(), rh, preferences, mock(), state, manager, sync, mock(), ui,
-                                        Provider { PumpEnactResultObject(rh) }, provisioning, mock())
+                                        Provider { PumpEnactResultObject(rh) }, provisioning, mock(), mock(), mock<AppLifecycle>())
+            // Status polling schedules bounded background history recovery. Run it inline so the
+            // queue-empty disconnect assertions below cannot race the recovery lease.
+            plugin.dispatchHistoryRecovery = { task -> task() }
             val writes = mutableListOf<Pair<UUID, List<Byte>>>()
             var readSucceeds = true
             fun authenticate() {

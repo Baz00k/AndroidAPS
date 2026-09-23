@@ -72,6 +72,11 @@ class NotificationStore @Inject constructor(
 
     @Synchronized
     fun remove(id: Int): Boolean {
+        // The Android notification outlives this in-memory store across process death and APK
+        // replacement. Always cancel by stable ID, even when this fresh process has no matching
+        // store entry, otherwise a resolved urgent alarm can remain visible (and be re-alerted by
+        // the system) after AAPS has already dismissed its underlying condition.
+        (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(id)
         for (i in store.indices) {
             if (store[i].id == id) {
                 if (store[i].soundId != null) uiInteraction.stopAlarm("Removed " + store[i].text)

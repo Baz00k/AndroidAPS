@@ -6,10 +6,12 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.SharedPreferences
 import app.aaps.pump.ypsopump.YpsoPumpConst
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import java.io.InputStream
+import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
@@ -22,14 +24,16 @@ class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
     private val legacyStore: LegacyStore,
-    private val bondedSerialForMac: (String) -> String? = { null }
+    private val durableBolusRecoveryEvidence: () -> YpsoBolusAttemptFileStore.RecoveryEvidence? = { null },
+    private val bondedSerialForMac: (String) -> String? = { null },
 ) {
 
     @Inject constructor(context: Context, pumpState: YpsoPumpState) : this(
         PumpSession(SessionJournal(context)),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
-        { mac -> bondedPumpSerial(context, mac) }
+        { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },
+        { mac -> bondedPumpSerial(context, mac) },
     )
 
     internal var quiesceConnection: () -> Unit = {}
@@ -223,10 +227,132 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
+    /**
+     * Operator-gated recovery from an undecryptable protected journal. This installs no read floor
+     * and no ordinary write ownership; only selector lower-bound recovery can proceed afterward.
+     */
+    internal fun recoverLostJournalForHistory(
+        stream: InputStream,
+        expectedDocumentSha256: String,
+        expectedBolusEvidenceSha256: String,
+        now: Instant = Instant.now(),
+    ) = synchronized(provisioningLock) {
+        require(expectedDocumentSha256.matches(Regex("[0-9a-f]{64}")))
+        require(expectedBolusEvidenceSha256.matches(Regex("[0-9a-f]{64}")))
+        val documentBytes = boundedRead(stream)
+        try {
+            val documentHash = MessageDigest.getInstance("SHA-256").digest(documentBytes)
+            require(MessageDigest.isEqual(documentHash, expectedDocumentSha256.hexBytes())) { "Session document hash does not match review" }
+            val document = YpsoSessionDocumentParser.parse(documentBytes, now)
+            val recoveryEvidence = durableBolusRecoveryEvidence()
+                ?: throw SecurityException("Durable bolus allocation evidence is missing")
+            val evidence = recoveryEvidence.bytes
+            try {
+                val evidenceHash = MessageDigest.getInstance("SHA-256").digest(evidence)
+                require(MessageDigest.isEqual(evidenceHash, expectedBolusEvidenceSha256.hexBytes())) {
+                    "Bolus allocation evidence hash does not match review"
+                }
+                val attempt = recoveryEvidence.attempt
+                val floor = listOfNotNull(attempt.dispatchCounter, attempt.cancelCounter).maxOrNull()
+                    ?: throw SecurityException("Durable bolus write lower bound is missing")
+                val normalizedSerial = PumpIdentity.normalizeSerial(document.serial)
+                PumpIdentity.validatePair(normalizedSerial, document.mac)
+                require(attempt.pumpSerial == normalizedSerial) { "Bolus allocation evidence belongs to another pump" }
+                val expectedKeyId = PumpSession.fingerprint(document.sharedKey)
+                require(attempt.sessionKeyId == expectedKeyId) {
+                    "Bolus allocation evidence is not bound to the reviewed pump key"
+                }
+                quiesceConnection()
+                owner.recoverLostJournalLowerBound(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        normalizedSerial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source + mapOf("session_document_sha256" to expectedDocumentSha256),
+                    ),
+                    lowerBound = floor,
+                    recoveryReboot = attempt.baseline.pumpReboot,
+                    evidenceHash = expectedBolusEvidenceSha256,
+                )
+                refreshState()
+                publishAvailability()
+            } finally {
+                evidence.fill(0)
+                document.sharedKey.fill(0)
+            }
+        } finally {
+            documentBytes.fill(0)
+        }
+    }
+
+    /**
+     * Hash-gated, identity-only recovery for status/connectivity. It deliberately imports no write
+     * counter; writes reconcile from zero against the pump through the pump-confirmed exponential
+     * search and establish ownership on acceptance.
+     */
+    internal fun recoverLostJournalReadOnly(
+        stream: InputStream,
+        expectedDocumentSha256: String,
+        now: Instant = Instant.now(),
+    ) = synchronized(provisioningLock) {
+        require(expectedDocumentSha256.matches(Regex("[0-9a-f]{64}")))
+        val documentBytes = boundedRead(stream)
+        try {
+            val documentHash = MessageDigest.getInstance("SHA-256").digest(documentBytes)
+            require(MessageDigest.isEqual(documentHash, expectedDocumentSha256.hexBytes())) {
+                "Session document hash does not match review"
+            }
+            val document = YpsoSessionDocumentParser.parse(documentBytes, now)
+            try {
+                val serial = PumpIdentity.normalizeSerial(document.serial)
+                PumpIdentity.validatePair(serial, document.mac)
+                quiesceConnection()
+                owner.recoverLostJournalReadOnly(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        serial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source,
+                    ),
+                    expectedDocumentSha256,
+                )
+                refreshState()
+                publishAvailability()
+            } finally {
+                document.sharedKey.fill(0)
+            }
+        } finally {
+            documentBytes.fill(0)
+        }
+    }
+
     fun installDocument(document: YpsoSessionDocument, now: Instant = Instant.now()): PumpSession.Installation = synchronized(provisioningLock) {
         try {
             val serial = PumpIdentity.normalizeSerial(document.serial)
             PumpIdentity.validatePair(serial, document.mac)
+            if (owner.committedRecord() == null && owner.loadFailureLocation != null) {
+                val documentHash = document.documentSha256
+                    ?: throw SecurityException("Reviewed session document hash is required for journal recovery")
+                quiesceConnection()
+                owner.recoverLostJournalReadOnly(
+                    PumpSession.Provisioning(
+                        document.mac,
+                        serial,
+                        document.sharedKey,
+                        document.createdAt.toEpochMilli(),
+                        now.toEpochMilli(),
+                        document.source,
+                    ),
+                    documentHash,
+                )
+                refreshState()
+                publishAvailability()
+                return@synchronized PumpSession.Installation.FIRST_PUMP
+            }
             if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
                 val currentHex = owner.activeRecord()?.keyHex
                 if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
@@ -280,16 +406,44 @@ class YpsoProvisioningService internal constructor(
         try {
             quiesceConnection()
             synchronized(this) {
-                owner.adoptOwnershipHandoff(
-                    reviewed.record,
-                    now.toEpochMilli(),
-                    mapOf(
-                        "ownership_handoff_sha256" to reviewed.documentSha256,
-                        "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
-                        "ownership_source_apk_sha256" to reviewed.source.apkSha256,
-                        "ownership_source_journal_sha256" to reviewed.source.journalSha256,
-                    ),
+                val source = mapOf(
+                    "ownership_handoff_sha256" to reviewed.documentSha256,
+                    "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
+                    "ownership_source_apk_sha256" to reviewed.source.apkSha256,
+                    "ownership_source_journal_sha256" to reviewed.source.journalSha256,
                 )
+                val active = owner.committedRecord() ?: throw SecurityException("No installed pump session")
+                if (active.writeBootstrapState == PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH) {
+                    owner.recoverIdentityOnlyLowerBound(reviewed.record, now.toEpochMilli(), source)
+                } else {
+                    owner.adoptOwnershipHandoff(
+                        reviewed.record,
+                        now.toEpochMilli(),
+                        source,
+                        minimumKnownWriteFloor = durableBolusRecoveryEvidence()?.let { evidence ->
+                            try {
+                                val allocated = evidence.attempts.filter {
+                                    it.dispatchCounter != null || it.cancelCounter != null
+                                }
+                                allocated.forEach { attempt ->
+                                    check(attempt.pumpSerial == reviewed.record.serial) {
+                                        "Durable bolus allocation belongs to another pump"
+                                    }
+                                    check(attempt.sessionKeyId == reviewed.record.keyId) {
+                                        "Durable bolus allocation is not bound to the reviewed ownership key"
+                                    }
+                                    check(attempt.baseline.pumpReboot == reviewed.record.reboot) {
+                                        "Durable bolus allocation belongs to another pump epoch"
+                                    }
+                                }
+                                allocated.maxOfOrNull { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }
+                                    ?.takeIf { it >= 0 }
+                            } finally {
+                                evidence.bytes.fill(0)
+                            }
+                        },
+                    )
+                }
                 pumpState.invalidateStatus()
                 pumpState.invalidateProfileEvidence()
                 refreshState()
@@ -327,7 +481,9 @@ class YpsoProvisioningService internal constructor(
         val installation = install()
         val candidate = synchronized(this) {
             val value = connectionSession()
-            check(value?.candidate == true && value.attemptId != null) { "Provisioning did not stage a verification candidate" }
+            check(value != null && (value.candidate.not() || value.attemptId != null)) {
+                "Provisioning did not stage a verification session"
+            }
             verificationAttemptRequested = true
             value
         }
@@ -335,6 +491,10 @@ class YpsoProvisioningService internal constructor(
             if (!enqueue()) throw IllegalStateException("Verification status read was not accepted")
             return installation
         } catch (error: Throwable) {
+            if (!candidate.candidate) {
+                synchronized(this) { verificationAttemptRequested = false }
+                throw error
+            }
             synchronized(this) { mutationEpoch.incrementAndGet() }
             try {
                 quiesceConnection()
@@ -594,6 +754,14 @@ class YpsoProvisioningService internal constructor(
         // builds could carry an unconfigured backoff into the first protected migration.
         if (availability.failures == 0) return true
         return availability.retryAt?.let { now >= it } ?: true
+    }
+
+    /** Each queued-therapy connection cycle may bypass transport backoff; hard rekey remains blocking. */
+    @Synchronized
+    fun requestTherapyConnectionAttempt(): Boolean {
+        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in pumpState.availability.causes) return false
+        verificationAttemptRequested = true
+        return true
     }
 
     @Synchronized

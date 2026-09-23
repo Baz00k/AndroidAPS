@@ -729,6 +729,9 @@ class AppRepository @Inject internal constructor(
     fun findExtendedBolusByNSId(nsId: String): ExtendedBolus? =
         database.extendedBolusDao.findByNSId(nsId)
 
+    fun findExtendedBolusByPumpId(pumpId: Long, pumpType: InterfaceIDs.PumpType, pumpSerial: String): ExtendedBolus? =
+        database.extendedBolusDao.findByPumpIds(pumpId, pumpType, pumpSerial)
+
     /*
        * returns a Pair of the next entity to sync and the ID of the "update".
        * The update id might either be the entry id itself if it is a new entry - or the id

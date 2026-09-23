@@ -14,7 +14,7 @@ internal data class YpsoWriteFailure(
     val frame: Int? = null,
     val detail: String,
 ) {
-    enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, DEADLINE, RECONCILIATION }
+    enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, PUMP_COUNTER, DEADLINE, RECONCILIATION }
 }
 
 /** Transport and reconciliation states. Only [Verified] closes pump-side uncertainty. */
@@ -158,12 +158,25 @@ internal class YpsoSerializedWriteTransport(
 
     fun start(request: Request): Boolean {
         require(request.writeId.isNotBlank() && request.owner.connectionId.isNotBlank() && request.owner.generation.isNotBlank())
-        require(request.category == YpsoRemoteWrite.HISTORY_SELECTOR || request.category == YpsoRemoteWrite.SETTINGS_SELECTOR)
+        require(
+            request.category == YpsoRemoteWrite.HISTORY_SELECTOR ||
+                request.category == YpsoRemoteWrite.SETTINGS_SELECTOR ||
+                request.category == YpsoRemoteWrite.THERAPY_COMMAND,
+        )
         require(request.counter > 0 && request.frames.isNotEmpty() && request.frames.all { it.isNotEmpty() })
         require(request.deadlineMs > 0)
         val deadline = Runnable { onDeadline(request.writeId) }
         synchronized(lock) {
-            if (active != null) return false
+            val current = active
+            // A write parked for reconciliation, or stranded by a connection that has since been
+            // replaced, can never be answered on this link. Its uncertainty is already durable in
+            // PumpSession and the bolus journal, so it must not keep the transport occupied and block
+            // further therapy. Only a write still in flight on this same connection may refuse a start.
+            val occupied = current != null &&
+                !current.awaitingReconciliation &&
+                current.request.owner.gatt === request.owner.gatt
+            if (occupied) return false
+            if (current != null) current.deadline?.let { runCatching { cancelDeadline(it) } }
             active = Active(request = request.copy(frames = request.frames.map(ByteArray::copyOf)), deadline = deadline)
         }
         recorder.record(
@@ -282,9 +295,9 @@ internal class YpsoSerializedWriteTransport(
                         outcome =
                             possiblyApplied(
                                 current,
-                                YpsoWriteFailure.Layer.GATT_CALLBACK,
+                                if (status == 139 && current.frame + 1 == request.frames.size) YpsoWriteFailure.Layer.PUMP_COUNTER else YpsoWriteFailure.Layer.GATT_CALLBACK,
                                 status,
-                                "numeric callback status has no measured semantic classification",
+                                if (status == 139 && current.frame + 1 == request.frames.size) "pump returned APPERR_COUNTER_ERROR" else "numeric callback status has no measured semantic classification",
                             )
                         holdForReconciliationLocked(current, uncertaintyReported = true)
                     } else {
@@ -436,6 +449,21 @@ internal class YpsoSerializedWriteTransport(
     }
 
     internal fun hasUnresolvedWrite(): Boolean = synchronized(lock) { active != null }
+
+    /**
+     * Whether a write is still in flight on [gatt] itself. An entry left behind by a connection that
+     * has since been replaced cannot be answered by the pump any more, so it must not block therapy on
+     * the current link; durable uncertainty is tracked in [PumpSession], not here.
+     */
+    internal fun hasUnresolvedWriteOn(gatt: Any?): Boolean =
+        synchronized(lock) {
+            val current = active ?: return@synchronized false
+            // A write parked for reconciliation is no longer occupying the transport: its uncertainty is
+            // durable in PumpSession and the bolus journal, which own the therapy decision. Only a write
+            // still in flight on this very connection can conflict with a new command.
+            if (current.awaitingReconciliation) return@synchronized false
+            gatt != null && current.request.owner.gatt === gatt
+        }
 
     internal fun ownsGatt(gatt: Any): Boolean =
         synchronized(lock) {

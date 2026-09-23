@@ -301,6 +301,10 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         commandQueue.cancelExtended(null)
         assertThat(commandQueue.size()).isEqualTo(2)
 
+        // a second cancel must not replace or duplicate the pending cancellation
+        assertThat(commandQueue.cancelExtended(null)).isFalse()
+        assertThat(commandQueue.size()).isEqualTo(2)
+
         // add setProfile
         // TODO: this crash the test
         //        commandQueue.setProfile(validProfile, null)

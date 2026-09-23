@@ -57,6 +57,24 @@ data class YpsoHistoryEntry(
     /** Exact semantic state fingerprint, excluding only the moving ring index. */
     fun stateFingerprint(): YpsoHistoryFingerprint = pack(eventType, value1, value2, value3)
 
+    /** Match legacy persisted fingerprints as well as exact rows. Bolus state is mutable, but only
+     * within its family and the same start time, sequence and reboot epoch. Never cross-match shapes.
+     */
+    fun matchesCursor(cursor: YpsoHistoryCursor, reboot: Long): Boolean {
+        if (sequence != cursor.identity.sequence) return false
+        if (fingerprint() == cursor.fingerprint) return true
+        if (reboot != cursor.pumpReboot || factorySeconds != cursor.fingerprint.high ushr 24) return false
+        val oldType = ((cursor.fingerprint.high ushr 16) and 0xff).toInt()
+        return when (oldType) {
+            1 -> eventType == 1 || eventType == 3
+            19 -> eventType == 19 || eventType == 2
+            17 -> eventType == 17 || eventType == 18
+            // Delivered totals can be updated while the row already has its terminal type.
+            2, 3, 18 -> eventType == oldType
+            else -> false
+        }
+    }
+
     private fun pack(type: Int, v1: Int, v2: Int, v3: Int): YpsoHistoryFingerprint =
         YpsoHistoryFingerprint(
             (factorySeconds shl 24) or (type.toLong() shl 16) or v1.toLong(),

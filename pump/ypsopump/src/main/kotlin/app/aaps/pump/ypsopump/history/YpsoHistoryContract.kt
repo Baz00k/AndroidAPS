@@ -7,7 +7,10 @@ package app.aaps.pump.ypsopump.history
  * The publications may share lineage (one cites a common Python reference), so they corroborate
  * rather than independently confirm; target rows remain the empirical anchor. Value layouts are
  * claimed only where the target paired them, plus the centi-unit bolus convention shared by the
- * paired rows. Unknown numbers and unclaimed fields stay fail-closed.
+ * paired rows. Bolus completion rows (2, 3, 18) were paired against pump-reported delivery and carry
+ * the delivered amount, including partial amounts after a bench cancellation. Abort rows (29-31)
+ * remain unpaired and their amount fields are not accounting evidence. Unknown numbers and unclaimed
+ * fields stay fail-closed.
  */
 enum class YpsoHistoryKind {
     // Bolus family
@@ -72,7 +75,7 @@ data class YpsoHistorySemantics(
     val kind: YpsoHistoryKind,
     val amountUnits: Double? = null,
     val percent: Int? = null,
-    /** Delayed/square bolus programmed duration (type 3); never a TBR request or elapsed value. */
+    /** Delayed/square terminal elapsed minutes (type 3), quantized by the pump; zero can include insulin. */
     val durationMinutes: Int? = null,
     /** Requested TBR minutes from the active type-9 row. */
     val requestedDurationMinutes: Int? = null,
@@ -93,10 +96,13 @@ object YpsoHistoryClassifier {
     fun classify(entry: YpsoHistoryEntry): YpsoHistorySemantics =
         when (entry.eventType) {
             1 -> bolus(YpsoHistoryKind.DELAYED_BOLUS_RUNNING, entry)
+            // Paired: a completed 10.0-U standard bolus and a same-link cancelled 10.0-U standard
+            // bolus both reported the delivered amount (1000 and 91 centi-units).
             2 -> YpsoHistorySemantics(
                 YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED,
                 amountUnits = entry.value1 / 100.0,
             )
+            // Paired: 0.5-U/15-min cancellations reported 8 centi-units with elapsed 0 and 2 minutes.
             3 -> YpsoHistorySemantics(
                 YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
                 amountUnits = entry.value1 / 100.0,
@@ -126,6 +132,10 @@ object YpsoHistoryClassifier {
             }
             16 -> YpsoHistorySemantics(YpsoHistoryKind.REWIND_FINISHED)
             17 -> bolus(YpsoHistoryKind.COMBINED_BOLUS_RUNNING, entry)
+            // Paired: a completed 1.0-U combination (0.4 immediate + 0.6/15 min) reported
+            // value1 = 100 (delivered total), value2 = 40 (immediate part), value3 = 15 (minutes);
+            // a cancelled run reported value1 = 40 (delivered at abort). Value1 is the delivered
+            // total, matching the reference immediate = value2 layout.
             18 -> bolus(YpsoHistoryKind.COMBINED_BOLUS_COMPLETED, entry)
             19 -> bolus(YpsoHistoryKind.IMMEDIATE_BOLUS_RUNNING, entry)
             20 -> YpsoHistorySemantics(YpsoHistoryKind.DELAYED_BOLUS_BACKUP)
@@ -275,6 +285,11 @@ object YpsoHistoryReconciler {
     private const val HALF_RANGE = 0x80000000L
     private const val MODULUS = 0x100000000L
 
+    /** Diagnostic detail for the most recent INVALID_SNAPSHOT rejection; not part of the contract. */
+    @Volatile
+    var lastInvalidSnapshotDetail: String? = null
+        private set
+
     fun bootstrap(pumpSerial: String, sequenceGeneration: Int, snapshot: YpsoHistorySnapshot): YpsoHistoryReconciliation {
         invalidCounts(snapshot)?.let { return it }
         moving(snapshot)?.let { return it }
@@ -304,7 +319,7 @@ object YpsoHistoryReconciler {
         }
 
         val cursorIndex = snapshot.rowsNewestFirst.indexOfFirst {
-            it.sequence == cursor.identity.sequence && it.fingerprint() == cursor.fingerprint
+            it.matchesCursor(cursor, snapshot.pumpRebootAfter)
         }
         if (cursorIndex < 0) {
             return YpsoHistoryReconciliation.Gap(
@@ -320,6 +335,10 @@ object YpsoHistoryReconciler {
         var priorSequence = cursor.identity.sequence
         val newEvents = mutableListOf<YpsoHistoryEvent>()
         val stateUpdates = mutableListOf<YpsoHistoryEvent>()
+        val cursorRow = snapshot.rowsNewestFirst[cursorIndex]
+        if (cursorRow.fingerprint() != cursor.fingerprint) {
+            stateUpdates += YpsoHistoryEvent(cursor.identity, cursorRow)
+        }
         var activeTbr = cursor.activeTbr
         activeTbr?.let { tracked ->
             val current = snapshot.rowsNewestFirst.firstOrNull {
@@ -365,13 +384,11 @@ object YpsoHistoryReconciler {
         for (entry in chronological) {
             val delta = (entry.sequence - priorSequence + MODULUS) % MODULUS
             if (delta == 0L) continue
-            if (delta >= HALF_RANGE) {
+            val rebootReset = snapshot.pumpRebootAfter != cursor.pumpReboot && entry.sequence < priorSequence
+            if (delta >= HALF_RANGE && !rebootReset) {
                 return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.INVALID_ORDER_OR_RESET)
             }
             if (entry.sequence < priorSequence) {
-                if (snapshot.pumpRebootAfter != cursor.pumpReboot) {
-                    return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.SEQUENCE_RESET_AFTER_REBOOT)
-                }
                 if (generation == Int.MAX_VALUE) {
                     return YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.SEQUENCE_GENERATION_OVERFLOW)
                 }
@@ -401,11 +418,16 @@ object YpsoHistoryReconciler {
             priorSequence = entry.sequence
         }
         val latest = newEvents.lastOrNull()
-        // Do not absorb a reboot into an unchanged cursor. A later lower sequence may be a reset
-        // caused by that reboot; retaining the cursor's original reboot keeps that ambiguity blocked.
-        val nextCursor = latest?.let {
+        // Keep a running bolus inside the next scan window. Otherwise a newer system event moves
+        // the cursor past it and its eventual in-place terminal amount is never read again.
+        val runningAnchor = (listOf(YpsoHistoryEvent(cursor.identity, cursorRow)) + newEvents)
+            .firstOrNull { it.entry.eventType in setOf(1, 17, 19) }
+        // Finding the exact durable cursor in a stable snapshot proves continuity across a reboot.
+        // A lower subsequent sequence is assigned the next generation above, while a scan that cannot
+        // find the cursor remains a gap and cannot silently re-anchor or lose insulin.
+        val nextCursor = (runningAnchor ?: latest)?.let {
             YpsoHistoryCursor(it.identity, it.entry.fingerprint(), snapshot.pumpRebootAfter, activeTbr)
-        } ?: cursor.copy(activeTbr = activeTbr)
+        } ?: cursor.copy(fingerprint = cursorRow.fingerprint(), pumpReboot = snapshot.pumpRebootAfter, activeTbr = activeTbr)
         return YpsoHistoryReconciliation.Stable(cursor, nextCursor, newEvents, stateUpdates)
     }
 
@@ -454,6 +476,13 @@ object YpsoHistoryReconciler {
                 duplicateIdenticalSequence ||
                 snapshot.rowsNewestFirst.withIndex().any { (logicalIndex, row) -> row.index != logicalIndex }
         return if (invalid) {
+            lastInvalidSnapshotDetail = when {
+                snapshot.rowsNewestFirst.size > stableCount -> "scanned ${snapshot.rowsNewestFirst.size} rows above count $stableCount"
+                snapshot.fullCoverage && snapshot.rowsNewestFirst.size != stableCount ->
+                    "full coverage claimed with ${snapshot.rowsNewestFirst.size} of $stableCount rows"
+                duplicateIdenticalSequence -> "duplicate sequences in one snapshot"
+                else -> "row index does not match its scan position"
+            }
             YpsoHistoryReconciliation.Gap(YpsoHistoryReconciliation.Reason.INVALID_SNAPSHOT)
         } else {
             null

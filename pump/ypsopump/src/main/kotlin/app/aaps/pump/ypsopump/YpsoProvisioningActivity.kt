@@ -134,6 +134,7 @@ internal fun provisioningFeedback(
 class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var provisioning: YpsoProvisioningService
     @Inject lateinit var commandQueue: CommandQueue
+    @Inject lateinit var plugin: YpsoPumpPlugin
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -157,12 +158,19 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private fun handleShellOwnershipAction(): Boolean {
-        if (intent.action !in setOf(ACTION_INSPECT_OWNERSHIP, ACTION_IMPORT_OWNERSHIP)) return false
+        if (intent.action !in setOf(
+                ACTION_INSPECT_OWNERSHIP,
+                ACTION_IMPORT_OWNERSHIP,
+                ACTION_RECOVER_LOST_JOURNAL_READ_ONLY,
+                ACTION_RECOVER_LOST_JOURNAL,
+                ACTION_RECOVER_HISTORY_SELECTOR,
+            )
+        ) return false
         lifecycleScope.launch {
             val outcome = withContext(NonCancellable + Dispatchers.IO) {
                 runCatching {
                     when (intent.action) {
-                        ACTION_INSPECT_OWNERSHIP -> provisioning.ownershipStatus()
+                        ACTION_INSPECT_OWNERSHIP -> "${provisioning.ownershipStatus()},readiness={${plugin.readinessStatus()}}"
                         ACTION_IMPORT_OWNERSHIP -> {
                             val path = intent.getStringExtra(EXTRA_HANDOFF_PATH)?.takeIf(String::isNotBlank)
                                 ?: error("ownership handoff path is required")
@@ -171,6 +179,35 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                             val reviewed = File(path).inputStream().use { provisioning.reviewOwnershipHandoff(it, expected) }
                             provisioning.installOwnershipHandoff(reviewed)
                             provisioning.ownershipStatus()
+                        }
+                        ACTION_RECOVER_LOST_JOURNAL -> {
+                            val path = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_PATH)?.takeIf(String::isNotBlank)
+                                ?: error("session document path is required")
+                            val documentHash = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_SHA256)?.lowercase()
+                                ?: error("session document SHA-256 is required")
+                            val evidenceHash = intent.getStringExtra(EXTRA_BOLUS_EVIDENCE_SHA256)?.lowercase()
+                                ?: error("bolus evidence SHA-256 is required")
+                            File(path).inputStream().use {
+                                provisioning.recoverLostJournalForHistory(it, documentHash, evidenceHash)
+                            }
+                            provisioning.ownershipStatus()
+                        }
+                        ACTION_RECOVER_LOST_JOURNAL_READ_ONLY -> {
+                            val path = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_PATH)?.takeIf(String::isNotBlank)
+                                ?: error("session document path is required")
+                            val documentHash = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_SHA256)?.lowercase()
+                                ?: error("session document SHA-256 is required")
+                            File(path).inputStream().use {
+                                provisioning.recoverLostJournalReadOnly(it, documentHash)
+                            }
+                            plugin.onAppVisibilityChanged(true)
+                            "REQUESTED:${provisioning.ownershipStatus()}"
+                        }
+                        ACTION_RECOVER_HISTORY_SELECTOR -> {
+                            check(plugin.requestLowerBoundHistoryRecovery {
+                                commandQueue.readStatus(YpsoPumpPlugin.LOWER_BOUND_RECOVERY_REASON, null)
+                            }) { "selector lower-bound recovery is unavailable, already requested, or was not queued" }
+                            "REQUESTED:${provisioning.ownershipStatus()}"
                         }
                         else -> error("unsupported ownership action")
                     }
@@ -415,6 +452,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     result.onSuccess {
                         serialError = null; macError = null; keyError = null; generalError = null
                         key = ""; verificationState = service.verificationState()
+                        plugin.onAppVisibilityChanged(true)
                     }
                     .onFailure {
                         when (it) {
@@ -466,6 +504,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                 installing = false
                                 result.onSuccess {
                                     generalError = null; verificationState = service.verificationState()
+                                    plugin.onAppVisibilityChanged(true)
                                 }
                                 .onFailure {
                                     selectedDocument = null
@@ -557,8 +596,14 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     companion object {
         const val ACTION_INSPECT_OWNERSHIP = "app.aaps.pump.ypsopump.action.INSPECT_OWNERSHIP"
         const val ACTION_IMPORT_OWNERSHIP = "app.aaps.pump.ypsopump.action.IMPORT_REVIEWED_OWNERSHIP"
+        const val ACTION_RECOVER_LOST_JOURNAL_READ_ONLY = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL_READ_ONLY"
+        const val ACTION_RECOVER_LOST_JOURNAL = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL"
+        const val ACTION_RECOVER_HISTORY_SELECTOR = "app.aaps.pump.ypsopump.action.RECOVER_HISTORY_SELECTOR"
         const val EXTRA_HANDOFF_PATH = "ownership_handoff_path"
         const val EXTRA_HANDOFF_SHA256 = "ownership_handoff_sha256"
+        const val EXTRA_SESSION_DOCUMENT_PATH = "session_document_path"
+        const val EXTRA_SESSION_DOCUMENT_SHA256 = "session_document_sha256"
+        const val EXTRA_BOLUS_EVIDENCE_SHA256 = "bolus_evidence_sha256"
         const val OWNERSHIP_LOG_TAG = "YpsoOwnershipImport"
     }
 }

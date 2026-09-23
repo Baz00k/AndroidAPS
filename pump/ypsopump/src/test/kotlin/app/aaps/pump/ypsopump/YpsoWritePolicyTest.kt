@@ -10,16 +10,35 @@ import org.junit.jupiter.api.Test
 
 class YpsoWritePolicyTest {
     @Test
-    fun `distributed artifact permits authentication settings selectors and their setup only`() {
+    fun `distributed artifact permits authentication read selectors and their setup only`() {
         val permitted = YpsoRemoteWrite.entries.filter { YpsoWritePolicy.allows(it) }
 
         assertEquals(
             listOf(
                 YpsoRemoteWrite.AUTHENTICATION,
+                YpsoRemoteWrite.HISTORY_SELECTOR,
                 YpsoRemoteWrite.SETTINGS_SELECTOR,
                 YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR,
             ),
             permitted,
+        )
+        assertTrue(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoRemoteWrite.HISTORY_SELECTOR,
+                YpsoWritePolicy.EVENT_INDEX_UUID,
+                YpsoGlb.encode(0),
+                byteArrayOf(),
+                false,
+            ),
+        )
+        assertFalse(
+            YpsoWritePolicy.allowsCharacteristic(
+                YpsoRemoteWrite.HISTORY_SELECTOR,
+                YpsoWritePolicy.ALARM_INDEX_UUID,
+                YpsoGlb.encode(0),
+                byteArrayOf(),
+                false,
+            ),
         )
         assertTrue(
             YpsoWritePolicy.allowsCharacteristic(

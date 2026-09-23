@@ -276,6 +276,12 @@ class CommandQueueImplementation @Inject constructor(
         return false
     }
 
+    @Synchronized
+    override fun extendedBolusInQueue(): Boolean {
+        if (isRunning(CommandType.EXTENDEDBOLUS)) return true
+        synchronized(queue) { return queue.any { it.commandType == CommandType.EXTENDEDBOLUS } }
+    }
+
     // returns true if command is queued
     @Synchronized
     override fun bolus(detailedBolusInfo: DetailedBolusInfo, callback: Callback?): Boolean {
@@ -437,11 +443,11 @@ class CommandQueueImplementation @Inject constructor(
 
     // returns true if command is queued
     override fun cancelExtended(callback: Callback?): Boolean {
-        if (isRunning(CommandType.EXTENDEDBOLUS)) {
+        if (isRunning(CommandType.EXTENDEDBOLUS) || synchronized(queue) { queue.any { it is CommandCancelExtendedBolus } }) {
             callback?.result(executingNowError())?.run()
             return false
         }
-        // remove all unfinished
+        // A cancellation supersedes an extended-bolus command which has not started yet.
         removeAll(CommandType.EXTENDEDBOLUS)
         // add new command to queue
         add(CommandCancelExtendedBolus(injector, callback))

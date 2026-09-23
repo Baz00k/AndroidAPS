@@ -47,13 +47,11 @@ class SessionJournalTest {
         }
         override fun writeAndSync(value: String) {
             boundary("before-truncate")
-            file = ""
             boundary("after-truncate")
-            file = value.take(value.length / 2)
             boundary("partial-write")
-            file = value
             boundary("before-sync")
             boundary("after-sync")
+            file = value
         }
     }
 
@@ -61,8 +59,8 @@ class SessionJournalTest {
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
 
     @Test
-    fun `process termination before invalidation preserves exact committed journal with an extra key`() {
-        for (boundary in listOf("after-create", "before-delete")) {
+    fun `process termination before publication preserves exact committed journal with an extra key`() {
+        for (boundary in listOf("after-create", "before-truncate", "after-truncate", "partial-write", "before-sync", "after-sync")) {
             val storage = Storage()
             val journal = SessionJournal(storage)
             journal.commit(old)
@@ -81,6 +79,110 @@ class SessionJournalTest {
     }
 
     @Test
+    fun `process termination after retiring prior anchor exposes exact next revision`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        storage.terminateAt = "after-delete"
+
+        assertThrows(ThreadDeath::class.java) { journal.commit(next) }
+
+        storage.terminateAt = ""
+        assertEquals(next, SessionJournal(storage).load())
+        assertEquals(1, storage.anchors().size)
+    }
+
+    @Test
+    fun `unavailable journal replacement retires stale anchors before publishing recovery`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        val publishedAlias = org.json.JSONObject(checkNotNull(storage.file)).getString("anchor")
+        storage.keys.remove(publishedAlias)
+        storage.keys["ypso.session.revision.stale-restored-backup"] = byteArrayOf(1)
+        assertThrows(Exception::class.java) { journal.load() }
+
+        journal.replaceUnavailable(next)
+
+        assertEquals(next, SessionJournal(storage).load())
+        assertEquals(1, storage.anchors().size)
+        assertNotEquals("ypso.session.revision.stale-restored-backup", storage.anchors().single())
+    }
+
+    @Test
+    fun `healthy journal cannot be replaced through disaster recovery`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+
+        assertThrows(IllegalStateException::class.java) { journal.replaceUnavailable(next) }
+
+        assertEquals(old, journal.load())
+    }
+
+    @Test
+    fun `replacement interruption stays unavailable and can be retried without rollback`() {
+        val boundaries = listOf(
+            "after-create",
+            "before-delete",
+            "after-delete",
+            "before-truncate",
+            "after-truncate",
+            "partial-write",
+            "before-sync",
+            "after-sync",
+        )
+        for (boundary in boundaries) {
+            val storage = Storage()
+            val journal = SessionJournal(storage)
+            journal.commit(old)
+            val publishedAlias = org.json.JSONObject(checkNotNull(storage.file)).getString("anchor")
+            storage.keys.remove(publishedAlias)
+            storage.keys["ypso.session.revision.stale-restored-backup"] = byteArrayOf(1)
+            storage.terminateAt = boundary
+
+            assertThrows(ThreadDeath::class.java, { journal.replaceUnavailable(next) }, boundary)
+
+            storage.terminateAt = ""
+            assertThrows(Exception::class.java, { SessionJournal(storage).load() }, boundary)
+            journal.replaceUnavailable(next)
+            assertEquals(next, SessionJournal(storage).load(), boundary)
+            assertEquals(1, storage.anchors().size, boundary)
+        }
+    }
+
+    @Test
+    fun `process termination before retiring prior anchor keeps prior revision authoritative`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        storage.terminateAt = "before-delete"
+
+        assertThrows(ThreadDeath::class.java) { journal.commit(next) }
+
+        storage.terminateAt = ""
+        assertEquals(old, SessionJournal(storage).load())
+        assertEquals(2, storage.anchors().size)
+        journal.commit(next)
+        assertEquals(next, SessionJournal(storage).load())
+        assertEquals(1, storage.anchors().size)
+    }
+
+    @Test
+    fun `older orphan anchors are retired before authority moves to next revision`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        journal.commit(old)
+        storage.keys["orphan"] = byteArrayOf(1)
+        storage.fault = "before-delete"
+
+        assertThrows(IllegalStateException::class.java) { journal.commit(next) }
+
+        storage.fault = ""
+        assertEquals(old, SessionJournal(storage).load())
+    }
+
+    @Test
     fun `roundtrip and restoring stale file rejects deleted anchor`() {
         val storage = Storage()
         val journal = SessionJournal(storage)
@@ -90,6 +192,35 @@ class SessionJournalTest {
         assertEquals(next, journal.load())
         storage.file = backup
         assertThrows(IllegalStateException::class.java) { journal.load() }
+    }
+
+    @Test
+    fun `version seventeen roundtrip preserves lower bound recovery epoch`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val recovering = PumpSession.State(
+            records = listOf(
+                PumpSession.Record(
+                    pump = "pump",
+                    keyId = "00".repeat(32),
+                    generation = "generation",
+                    reboot = null,
+                    read = null,
+                    write = 9_035,
+                    writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
+                    lowerBoundRecoveryReboot = 21,
+                ),
+            ),
+            activeGeneration = "generation",
+            availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+        )
+
+        journal.commit(recovering)
+
+        assertEquals(recovering, journal.load())
+        val envelope = org.json.JSONObject(checkNotNull(storage.file))
+        val body = storage.open(envelope.getString("anchor"), envelope.getString("sealed"))
+        assertEquals(17, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -121,7 +252,7 @@ class SessionJournalTest {
         assertEquals(state, journal.load())
         val sealed = org.json.JSONObject(checkNotNull(storage.file)).getString("sealed")
         val body = storage.open(storage.anchors().single(), sealed)
-        assertEquals(15, org.json.JSONObject(body).getInt("version"))
+        assertEquals(17, org.json.JSONObject(body).getInt("version"))
     }
 
     @Test
@@ -1294,9 +1425,10 @@ class SessionJournalTest {
             storage.fault = ""
             val loaded = runCatching { SessionJournal(storage).load() }.getOrNull()
             when (boundary) {
-                "before-create", "after-create", "before-delete" -> assertEquals(old, loaded) // No change and no publication/dispatch.
-                "before-sync", "after-sync" -> assertEquals(next, loaded)
-                else -> assertNull(loaded, boundary)
+                "before-create", "after-create", "before-truncate", "after-truncate", "partial-write", "before-sync", "after-sync" ->
+                    assertEquals(old, loaded) // Atomic publication has not occurred.
+                "before-delete" -> assertEquals(old, loaded) // Transition still resolves to prior.
+                "after-delete" -> assertEquals(next, loaded) // Exact prior anchor was retired.
             }
         }
     }

@@ -1,14 +1,18 @@
-# YpsoPump status viewer
+# YpsoPump driver
 
-> **Experimental and not therapy-ready.** The supported artifact is status-only. Do not rely on it for
-> insulin delivery or as the only way to monitor the pump.
+> **Experimental.** Immediate bolus delivery is implemented behind `YpsoPumpConst.READ_ONLY_MODE`.
+> Keep the gate enabled unless you are deliberately building a therapy-enabled artifact.
 
 ## Supported artifact
 
-The supported artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes permit
-access authentication, the required control-notification CCCD, and profile setting selectors `1`
-and `14–61`. Selectors require an established durable write floor and strict-next accounting;
-an unknown floor or unresolved write blocks profile acquisition. They do not change configuration.
+The default artifact has `YpsoPumpConst.READ_ONLY_MODE` enabled. Its app-initiated GATT writes permit
+access authentication, the required control-notification CCCD, profile setting selectors `1` and
+`14–61`, and history selectors. Selectors use strict-next accounting above a durable floor. An
+unknown write floor is a normal state: the first write starts at zero and only a pump-confirmed
+final-frame counter error `139` advances a persisted exponential search (`+1,+2,+4,...`) until the
+pump accepts a counter, which durably establishes the floor and clears the uncertainty. An
+unresolved write still blocks new selectors until its outcome is reconciled or retired. Selectors
+do not change configuration.
 
 After a successful verified encrypted status read, the UI shows reservoir values and battery percent.
 The pump reports battery as 0–5 bars; the driver maps bars × 20 to percent. Status fields have bench
@@ -21,8 +25,19 @@ evidence on firmware V05.00.52; see the [capability matrix](docs/status-protocol
 - measurements expire five minutes after acquisition, including while disconnected;
 - a BLE MAC is never displayed or synthesized as a serial.
 
-Bolus, bolus cancellation, temporary basal, TBR cancellation, profile writes, history selectors,
-treatment reconciliation and loop/SMB actuation are blocked.
+When `READ_ONLY_MODE` is changed to `false`, normal AAPS immediate and square extended boluses use
+the production bolus controller: current status, exact dose/duration validation, durable
+persist-before-dispatch ownership, same-link fast- or slow-block identity proof, cancellation of only
+that proven identity, terminal history reconciliation, and PumpSync ingestion. Extended boluses accept
+0.1-U dose steps and 15-minute duration steps from 15 minutes through 12 hours. Temporary basal,
+combination-bolus UI and profile writes remain unsupported.
+
+A square bolus started on the pump itself is imported from its terminal history row, using the
+row's own start timestamp and its elapsed whole minutes. Combination boluses started on the pump
+are not imported: their immediate part cannot be separated without risking double accounting.
+A cancellation that AAPS dispatched but the pump never confirmed does not shorten the recorded
+dose, because the delivery may still be running; the programmed record stands until pump evidence
+replaces it.
 
 Profile programming and activation are manual. In **YpsoPump Preferences → Basal configuration**,
 use **Read pump basal profiles** during setup and
@@ -43,7 +58,8 @@ yields to newly queued commands after the current selector has been reconciled. 
 refresh leaves the previous complete configuration intact. The UI shows the last observed program
 and schedule read age; an unreported pump edit can leave this information outdated. A different
 phone timezone inhibits comparison until a configuration read confirms the clock in that zone.
-Therapy readiness remains a separate capability; reading configuration does not authorize delivery.
+Profile configuration is monitoring evidence, not bolus authorization. Bolus delivery does
+not read or compare basal schedules; profile acquisition remains an explicit operator action.
 
 ### Divergence is reported, not tolerated
 
@@ -60,16 +76,21 @@ effective profile switch it needs to run a loop. Reporting failure in that case 
 alarm every five minutes while the pump delivered exactly the requested schedule. An unread or
 divergent configuration still fails, because neither proves what the pump is delivering.
 
-**Before therapy is enabled**, that confirmation must be strengthened. Retained configuration is
-scoped by pump-session generation and timezone only, so it can outlive an edit made on the pump
-between reads, and the recorded effective profile switch would then rest on a stale schedule. This is
-harmless while delivery is blocked — nothing doses from it — but enabling bolus/TBR requires bounding
-the confirmation with current pump-side evidence: at minimum active-program continuity plus detection
-of schedule edits.
+Bolus preflight reads current pump and bolus status. It uses the existing durable
+history cursor instead of scanning history before dispatch. Routine status and KeepAlive polling also
+never scans history inline, because those commands share the serialized therapy queue. A successful
+status command instead schedules a bounded background recovery scan. That scan anchors an empty store,
+imports later pump-originated boluses, and reconciles restart/reboot or delayed history; it
+cancels and yields the BLE link whenever therapy is queued. A new bolus remains inhibited until one
+such scan has proved the durable cursor usable in the current plugin lifecycle. Active boluses read history afterward
+to confirm delivered insulin and complete PumpSync accounting. Stop signals cancellation promptly but
+continues observing status and history so partial delivery remains accounted. Same-command bolus status
+may update UI progress, but only terminal history is accounting authority. Bolus delivery does not
+acquire or compare the basal profile. TBR remains unsupported.
 
 ## Protected setup
 
-The signed, non-debuggable status-only artifact provides **Pump connection setup** in the YpsoPump
+The signed artifact provides **Pump connection setup** in the YpsoPump
 plugin preferences. The AAPS target phone does not need root, ADB, `run-as`, recompilation or direct
 preference editing. Configuration requires all of:
 
@@ -123,12 +144,13 @@ Availability causes are persisted separately: unconfigured, bond/permission, tra
 encrypted-status unavailable, suspected re-key required, counter uncertain and identity mismatch.
 The presentation boundary translates these diagnostic facts into one operator-facing state and next
 action. Screens and notifications consume that presentation model rather than displaying cause sets.
-Write-counter uncertainty (`COUNTER_UNCERTAIN`) remains internal replay protection; a verified status-only
-session normally retains it because no write floor exists, without making status monitoring unavailable.
+Write-counter uncertainty (`COUNTER_UNCERTAIN`) is an informational replay-protection fact, not a
+capability gate. A verified session without a known floor reconciles it on the first selector or
+therapy write, starting at zero; it clears only when a pump-accepted counter establishes the floor.
 Transport retries back off at 5 s, 15 s, 30 s, 60 s and 5 min; a durable alert is raised after the third
 consecutive transport failure, while actionable non-transport failures alert immediately. Dismissing an
 alert does not clear the condition. Only a verified current-pump encrypted status clears status-related
-causes; status-only write-counter uncertainty remains explicit.
+causes.
 
 Code 140 is reported as **suspected re-key/session loss**, preserving the code, operation and observed
 firmware. Its exact pump semantics and lifetime trigger remain unproven. Automatic retries stop until an
@@ -147,7 +169,9 @@ another verification attempt is allowed.
   missing protected records block reads. Re-importing the same key cannot erase replay protection.
 - A second controller cannot be reliably excluded by Android inspection alone. Exclusive ownership also
   requires the operator to quiesce and physically control the other phone.
-- Therapy remains blocked unless a future exact artifact is independently qualified.
+- Therapy capability is governed by the `YpsoPumpConst.READ_ONLY_MODE` source gate; released
+  artifacts keep it enabled until the therapy path is independently qualified. The plugin
+  description follows that gate, so the advertised capability always matches the built mode.
 
 Implementation details are in [status lifecycle](docs/status-lifecycle.md), [session ownership](docs/session-ownership.md)
 and [status protocol](docs/status-protocol.md). The qualified read-only event schema, pump-local time
@@ -158,7 +182,7 @@ the same change. Unverified observations must not be presented as supported beha
 ## Build
 
 ```bash
-./gradlew :app:assembleFullLoop   # non-debuggable; YpsoPump remains status-only
+./gradlew :app:assembleFullLoop   # non-debuggable; therapy follows the READ_ONLY_MODE source gate
 ./gradlew :app:assembleFullDebug  # debuggable setup/testing artifact
 ```
 

@@ -1300,6 +1300,8 @@ class PersistenceLayerImpl @Inject constructor(
 
     override fun getLastExtendedBolusId(): Long? = repository.getLastExtendedBolusId()
     override fun getExtendedBolusByNSId(nsId: String): EB? = repository.findExtendedBolusByNSId(nsId)?.fromDb()
+    override fun getExtendedBolusByPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB? =
+        repository.findExtendedBolusByPumpId(pumpId, pumpType.toDb(), pumpSerial)?.fromDb()
 
     override fun getExtendedBolusesStartingFromTimeToTime(startTime: Long, endTime: Long, ascending: Boolean): List<EB> =
         repository.getExtendedBolusesStartingFromTimeToTime(startTime, endTime, ascending)

@@ -22,6 +22,7 @@ internal object YpsoWritePolicy {
     // Conflicting complaint-index descriptions have no independently verified UUID; fail closed.
     val SETTING_ID_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb3147bc5")
     val CONTROL_NOTIFY_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
+    val BOLUS_START_STOP_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     fun allowsCharacteristic(
@@ -33,7 +34,8 @@ internal object YpsoWritePolicy {
     ): Boolean = when (write) {
         YpsoRemoteWrite.AUTHENTICATION -> destination == AUTH_UUID && authenticating &&
             payload.size == 16 && payload.contentEquals(expectedAuthentication)
-        YpsoRemoteWrite.HISTORY_SELECTOR -> false
+        YpsoRemoteWrite.HISTORY_SELECTOR -> destination == EVENT_INDEX_UUID &&
+            YpsoGlb.decodeExact(payload)?.let { it >= 0 } == true
         YpsoRemoteWrite.SETTINGS_SELECTOR -> destination == SETTING_ID_UUID &&
             YpsoGlb.decodeExact(payload)?.let { settingId ->
                 settingId == 1 || settingId in 14..61
@@ -54,7 +56,7 @@ internal object YpsoWritePolicy {
 
     fun allows(write: YpsoRemoteWrite): Boolean = when (write) {
         YpsoRemoteWrite.AUTHENTICATION -> true
-        YpsoRemoteWrite.HISTORY_SELECTOR -> false
+        YpsoRemoteWrite.HISTORY_SELECTOR,
         YpsoRemoteWrite.SETTINGS_SELECTOR,
         YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR ->
             true

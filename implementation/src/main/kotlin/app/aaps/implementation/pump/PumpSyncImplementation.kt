@@ -186,7 +186,63 @@ class PumpSyncImplementation @Inject constructor(
     }
 
     override fun syncBolusWithPumpId(timestamp: Long, amount: Double, type: BS.Type?, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean {
-        if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return false
+        return syncBolusWithPumpIdDetailed(timestamp, amount, type, pumpId, pumpType, pumpSerial) == PumpSync.BolusSyncResult.INSERTED
+    }
+
+    override fun syncBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
+        if (!confirmActivePump(timestamp, pumpType, pumpSerial)) return PumpSync.BolusSyncResult.REJECTED
+        return persistBolus(timestamp, amount, type, pumpId, pumpType, pumpSerial)
+    }
+
+    override fun replayConfirmedBolusWithPumpIdDetailed(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
+        val storedType = preferences.get(StringNonKey.ActivePumpType)
+        val storedSerial = preferences.get(StringNonKey.ActivePumpSerialNumber)
+        val activePump = activePlugin.activePump
+        val activeIdentityMatches =
+            activePump !is VirtualPump &&
+                activePump.model() == pumpType &&
+                activePump.serialNumber() == pumpSerial
+        val storedIdentityMatches =
+            pumpType.description == storedType && pumpSerial == storedSerial
+        val storedIdentityAbsent = storedType.isEmpty() && storedSerial.isEmpty()
+        if (!activeIdentityMatches || (!storedIdentityMatches && !storedIdentityAbsent)) {
+            aapsLogger.error(
+                LTag.PUMP,
+                "Ignoring confirmed bolus replay for inactive pump ${pumpType.description} $pumpSerial"
+            )
+            return PumpSync.BolusSyncResult.REJECTED
+        }
+        if (storedIdentityAbsent) {
+            aapsLogger.debug(LTag.PUMP, "Registering new pump ${pumpType.description} $pumpSerial from confirmed bolus replay")
+            preferences.put(StringNonKey.ActivePumpType, pumpType.description)
+            preferences.put(StringNonKey.ActivePumpSerialNumber, pumpSerial)
+            preferences.put(LongNonKey.ActivePumpChangeTimestamp, dateUtil.now())
+        }
+        return persistBolus(timestamp, amount, type, pumpId, pumpType, pumpSerial)
+    }
+
+    private fun persistBolus(
+        timestamp: Long,
+        amount: Double,
+        type: BS.Type?,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): PumpSync.BolusSyncResult {
         val bolus = BS(
             timestamp = timestamp,
             amount = amount,
@@ -198,7 +254,13 @@ class PumpSyncImplementation @Inject constructor(
             )
         )
         return persistenceLayer.syncPumpBolus(bolus, type)
-            .map { result -> result.inserted.isNotEmpty() }
+            .map { result ->
+                when {
+                    result.inserted.isNotEmpty() -> PumpSync.BolusSyncResult.INSERTED
+                    result.updated.isNotEmpty() -> PumpSync.BolusSyncResult.UPDATED
+                    else -> PumpSync.BolusSyncResult.UNCHANGED
+                }
+            }
             .blockingGet()
     }
 
@@ -422,6 +484,57 @@ class PumpSyncImplementation @Inject constructor(
         return persistenceLayer.syncPumpExtendedBolus(extendedBolus)
             .map { result -> result.inserted.isNotEmpty() }
             .blockingGet()
+    }
+
+    override fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB? =
+        persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial)
+
+    override fun correctExtendedBolusWithPumpId(
+        timestamp: Long,
+        amount: Double,
+        duration: Long,
+        isEmulatingTB: Boolean,
+        pumpId: Long,
+        pumpType: PumpType,
+        pumpSerial: String,
+    ): Boolean {
+        if (!confirmActivePumpIdentity(pumpType, pumpSerial)) return false
+        // Only an already recorded dose may be corrected; this must never import unseen history.
+        persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial) ?: return false
+        val extendedBolus = EB(
+            timestamp = timestamp,
+            amount = amount,
+            duration = duration,
+            isEmulatingTempBasal = isEmulatingTB,
+            ids = IDs(
+                pumpId = pumpId,
+                pumpType = pumpType,
+                pumpSerial = pumpSerial
+            )
+        )
+        return persistenceLayer.syncPumpExtendedBolus(extendedBolus)
+            .map { result -> result.inserted.isNotEmpty() || result.updated.isNotEmpty() }
+            .blockingGet()
+    }
+
+    /**
+     * Identity half of [confirmActivePump] without its activation-timestamp bound, for corrections to
+     * records this driver already owns. It never registers a new pump.
+     */
+    private fun confirmActivePumpIdentity(type: PumpType, serialNumber: String): Boolean {
+        val activePump = activePlugin.activePump
+        if (activePump is VirtualPump) return true
+        if (activePump.model() != type || activePump.serialNumber() != serialNumber) {
+            aapsLogger.error(LTag.PUMP, "Ignoring correction for inactive pump ${type.description} $serialNumber")
+            return false
+        }
+        val storedType = preferences.get(StringNonKey.ActivePumpType)
+        val storedSerial = preferences.get(StringNonKey.ActivePumpSerialNumber)
+        if (storedType.isNotEmpty() && (type.description != storedType || serialNumber != storedSerial)) {
+            aapsLogger.error(LTag.PUMP, "Ignoring correction for unregistered pump ${type.description} $serialNumber")
+            return false
+        }
+        return true
     }
 
     override fun syncStopExtendedBolusWithPumpId(timestamp: Long, endPumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean {
