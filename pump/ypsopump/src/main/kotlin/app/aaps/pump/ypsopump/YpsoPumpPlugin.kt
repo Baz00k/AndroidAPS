@@ -59,6 +59,14 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
+import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptFileStore
+import app.aaps.pump.ypsopump.tbr.YpsoTbrBleLink
+import app.aaps.pump.ypsopump.tbr.YpsoTbrController
+import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
+import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRequest
 import android.content.Context
 import android.content.Intent
 import androidx.preference.Preference
@@ -119,12 +127,47 @@ class YpsoPumpPlugin @Inject constructor(
     /** Last published mismatch text, or null when no mismatch is currently published. */
     private var publishedProfileMismatch: String? = null
     private var publishedUnresolvedBolusWarning: String? = null
+    private val tbrJournal by lazy {
+        YpsoTbrJournal(YpsoTbrAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-tbr-attempts.json")))
+    }
     private val historyIngestion by lazy {
         YpsoHistoryIngestion(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
+            tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal),
         )
+    }
+    private val tbrController by lazy {
+        YpsoTbrController(
+            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
+            tbrJournal,
+            tbrRecords,
+            ::serialNumber,
+            historyBaseline = { historyIngestion.currentCursor()?.identity?.aapsPumpId },
+        )
+    }
+    private val tbrRecords = object : YpsoTbrRecords {
+        override fun started(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
+            pumpSync.addTemporaryBasalWithTempId(
+                timestamp, attempt.percent.toDouble(), attempt.durationMinutes * 60_000L, false,
+                attempt.temporaryId, PumpSync.TemporaryBasalType.valueOf(attempt.type), PumpType.YPSOPUMP, attempt.pumpSerial,
+            )
+            val running = pumpSync.expectedPumpState().temporaryBasal
+            return running != null && running.timestamp == timestamp && !running.isAbsolute &&
+                running.rate == attempt.percent.toDouble() && running.pumpSerial == attempt.pumpSerial
+        }
+
+        override fun stopped(timestamp: Long): Boolean {
+            val running = pumpSync.expectedPumpState().temporaryBasal ?: return true
+            if (running.timestamp >= timestamp) {
+                // A record that starts at or after the proven stop never ran on the pump.
+                return pumpSync.invalidateTemporaryBasal(running.id, app.aaps.core.data.ue.Sources.Pump, timestamp) ||
+                    pumpSync.expectedPumpState().temporaryBasal == null
+            }
+            pumpSync.syncStopTemporaryBasalWithPumpId(timestamp, timestamp, PumpType.YPSOPUMP, serialNumber(), ignorePumpIds = true)
+            return pumpSync.expectedPumpState().temporaryBasal == null
+        }
     }
     private val bolusController by lazy {
         YpsoImmediateBolusController(
@@ -167,11 +210,10 @@ class YpsoPumpPlugin @Inject constructor(
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
         isBolusCapable = !YpsoPumpConst.READ_ONLY_MODE
-        // Basal writes and TBR remain unsupported independently of bolus therapy.
         isExtendedBolusCapable = !YpsoPumpConst.READ_ONLY_MODE
         extendedBolusDurationStep = 15.0
         extendedBolusMaxDuration = 12.0 * 60.0
-        isTempBasalCapable = false
+        isTempBasalCapable = !YpsoPumpConst.READ_ONLY_MODE
         isSetBasalProfileCapable = false
         supportsTDDs = false
         needsManualTDDLoad = false
@@ -189,7 +231,7 @@ class YpsoPumpPlugin @Inject constructor(
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
     // Background accounting is abandonable and must never hold the serialized therapy queue.
-    override fun isBusy(): Boolean = bolusController.isBusy
+    override fun isBusy(): Boolean = bolusController.isBusy || tbrController.isBusy
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -727,9 +769,15 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN, message, Notification.URGENT)
     }
 
-    /** Everything that must happen after a status read lands in the status-only artifact. */
+    /** Everything that must happen after a status read lands. */
     private fun onStatusRead() {
         checkReservoir()
+        if (!YpsoPumpConst.READ_ONLY_MODE && !tbrController.isBusy) {
+            bleManager.observedTbr(System.currentTimeMillis())?.let { observation ->
+                runCatching { tbrController.resolvePending(observation) }
+                    .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR resolution failed: ${it.message}") }
+            }
+        }
     }
 
     /**
@@ -1027,7 +1075,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     private fun historyRecoveryMustYield(): Boolean =
-        !historyRecoveryEnabled || bolusController.isBusy ||
+        !historyRecoveryEnabled || bolusController.isBusy || tbrController.isBusy ||
             commandQueue.size() > 0 || commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue()
 
     private fun cancelHistoryRecovery() {
@@ -1362,14 +1410,78 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
-    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =
-        fail(R.string.ypsopump_read_only_tbr_blocked)
+    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
+        // AAPS schedules 100% as a cancellation; the pump itself treats it as the scheduled rate.
+        if (percent == YpsoTbrRequest.STOP_PERCENT) return cancelTempBasal(enforceNew)
+        val request = runCatching { YpsoTbrRequest(percent.coerceAtMost(YpsoTbrRequest.MAX_PERCENT), durationInMinutes) }
+            .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
+        return enactTbr(request, tbrType)
+    }
 
-    override fun setTempBasalAbsolute(absoluteRate: Double, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult =
-        fail(R.string.ypsopump_read_only_tbr_blocked)
+    override fun setTempBasalAbsolute(absoluteRate: Double, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
+        // The pump only runs percent TBRs. AAPS records percent TBRs against the profile rate at each
+        // instant, and setNewBasalProfile only succeeds when the pump schedule matches that profile.
+        val percent = runCatching { YpsoTbrRequest.percentFor(absoluteRate, profile.getBasal()) }
+            .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
+        return setTempBasalPercent(percent, durationInMinutes, profile, enforceNew, tbrType)
+    }
 
-    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult =
-        fail(R.string.ypsopump_read_only_tbr_cancel_blocked)
+    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult {
+        if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_cancel_blocked)
+        return tbrResult(tbrController.cancel(), cancel = true)
+    }
+
+    private fun enactTbr(request: YpsoTbrRequest, type: PumpSync.TemporaryBasalType): PumpEnactResult =
+        tbrResult(tbrController.start(request, type.name), cancel = false)
+
+    private fun tbrResult(result: YpsoTbrController.Result, cancel: Boolean): PumpEnactResult {
+        scheduleHistoryRecovery("temporary basal")
+        publishUncertainTbrWarning(result)
+        return when (result) {
+            is YpsoTbrController.Result.Started -> pumpEnactResultProvider.get().success(true).enacted(true)
+                .isPercent(true).percent(result.request.percent).duration(result.request.durationMinutes)
+                .comment(rh.gs(R.string.ypsopump_tbr_started, result.request.percent, result.request.durationMinutes))
+            is YpsoTbrController.Result.Stopped -> pumpEnactResultProvider.get().success(true).enacted(result.enacted)
+                .isTempCancel(true).comment(rh.gs(R.string.ypsopump_tbr_cancelled))
+            is YpsoTbrController.Result.NotChanged -> fail(R.string.ypsopump_tbr_failed, tbrMessage(result.reason))
+                .isTempCancel(cancel)
+            // The pump changed or may have changed. enacted=true tells AAPS to re-read state rather than
+            // assume nothing happened; the uncertainty warning stays until a status read resolves it.
+            is YpsoTbrController.Result.Uncertain -> pumpEnactResultProvider.get().success(false).enacted(true)
+                .isTempCancel(cancel || result.previousStopped)
+                .comment(rh.gs(R.string.ypsopump_tbr_uncertain, tbrMessage(result.reason)))
+        }
+    }
+
+    private fun tbrMessage(reason: YpsoTbrController.Reason): String = rh.gs(
+        when (reason) {
+            YpsoTbrController.Reason.PUMP_UNREADABLE     -> R.string.ypsopump_bolus_pump_unreadable
+            YpsoTbrController.Reason.PUMP_STOPPED        -> R.string.ypsopump_tbr_pump_stopped
+            YpsoTbrController.Reason.NOT_SET_UP          -> R.string.ypsopump_bolus_pump_not_set_up
+            YpsoTbrController.Reason.HISTORY_NOT_READY   -> R.string.ypsopump_bolus_sync_in_progress
+            YpsoTbrController.Reason.COMMAND_NOT_SENT    -> R.string.ypsopump_tbr_not_sent
+            YpsoTbrController.Reason.STOP_NOT_CONFIRMED  -> R.string.ypsopump_tbr_stop_unconfirmed
+            YpsoTbrController.Reason.START_REJECTED      -> R.string.ypsopump_tbr_start_rejected
+            YpsoTbrController.Reason.START_NOT_CONFIRMED -> R.string.ypsopump_tbr_start_unconfirmed
+            YpsoTbrController.Reason.NOT_SAVED           -> R.string.ypsopump_tbr_not_saved
+            YpsoTbrController.Reason.INTERNAL_ERROR      -> R.string.ypsopump_tbr_start_unconfirmed
+        }
+    )
+
+    @Synchronized
+    private fun publishUncertainTbrWarning(result: YpsoTbrController.Result) {
+        val uncertain = result is YpsoTbrController.Result.Uncertain
+        if (uncertain == publishedUncertainTbr) return
+        publishedUncertainTbr = uncertain
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
+        if (uncertain) uiInteraction.addNotification(
+            Notification.YPSOPUMP_TBR_UNCERTAIN, rh.gs(R.string.ypsopump_tbr_uncertain_notification), Notification.URGENT,
+        )
+    }
+
+    private var publishedUncertainTbr = false
 
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult {
         val constrainedMaximum = constraintsChecker.getMaxExtendedBolusAllowed().value()

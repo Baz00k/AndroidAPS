@@ -133,9 +133,12 @@ class YpsoPumpState @Inject constructor() {
         timestamp: Long,
         batteryBars: Int? = null,
         activeBasalRate: Double? = null,
+        activeTbrRemainingMinutes: Int = 0,
     ) {
         this.isSuspended = isSuspended
         this.activeTbrPercent = activeTbrPercent
+        this.activeTbrRemainingMinutes = activeTbrRemainingMinutes
+        this.isTbrActive = !isSuspended && activeTbrPercent != 100 && activeTbrRemainingMinutes > 0
         this.activeBasalRate = activeBasalRate ?: 0.0
         sample =
             StatusSnapshot(
