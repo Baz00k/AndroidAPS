@@ -1986,9 +1986,10 @@ class YpsoBleManager @Inject constructor(
     }
 
     /** TBR state from the current fresh status sample, or null when there is none. */
-    internal fun observedTbr(at: Long): YpsoTbrObservation? {
+    /** TBR state of the current fresh status sample, stamped with the time that sample was read. */
+    internal fun observedTbr(): YpsoTbrObservation? {
         val sample = pumpState.statusSnapshot ?: return null
-        return YpsoTbrObservation(!sample.isSuspended, sample.activeTbrPercent, pumpState.activeTbrRemainingMinutes, at)
+        return YpsoTbrObservation(!sample.isSuspended, sample.activeTbrPercent, pumpState.activeTbrRemainingMinutes, sample.acquiredAt)
     }
 
     /** Owner of one dispatched TBR write, valid only on the connection that sent it. */

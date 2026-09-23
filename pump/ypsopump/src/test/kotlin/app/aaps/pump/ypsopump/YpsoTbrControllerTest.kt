@@ -67,16 +67,20 @@ class YpsoTbrControllerTest {
         data class Record(val start: Long, val percent: Int, var durationMs: Long)
         val byTempId = linkedMapOf<Long, Record>()
         var saves = true
-        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
-            if (!saves) return false
+        var shortens = true
+        val reconciled = mutableListOf<YpsoTbrObservation>()
+        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved {
+            if (!saves) return YpsoTbrRecords.Saved.NOT_SAVED
             byTempId.getOrPut(attempt.temporaryId) { Record(timestamp, attempt.percent, attempt.durationMinutes * 60_000L) }
-            return true
+            return YpsoTbrRecords.Saved.SAVED
         }
         override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
+            if (!shortens) return false
             val record = byTempId[attempt.temporaryId] ?: return false
             record.durationMs = minOf(record.durationMs, end - record.start)
             return true
         }
+        override fun reconcileWith(observation: YpsoTbrObservation) { reconciled += observation }
         fun runningAt(at: Long) = byTempId.values.lastOrNull { it.start <= at && it.start + it.durationMs > at }
     }
 
@@ -307,6 +311,35 @@ class YpsoTbrControllerTest {
     }
 
     @Test
+    fun `a stop whose record cut failed is replayed by later status`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(0, 60), "NORMAL")
+        records.shortens = false
+
+        assertEquals(Result.Stopped(enacted = true), controller.cancel())
+        assertTrue(controller.hasUnresolved())
+        assertEquals(60 * 60_000L, records.byTempId.values.single().durationMs)
+
+        records.shortens = true
+        clock += 1_000
+        controller.onStatus(pump.status()!!)
+
+        val record = records.byTempId.values.single()
+        assertEquals(stops.single().effectiveAt, record.start + record.durationMs)
+        assertFalse(controller.hasUnresolved())
+    }
+
+    @Test
+    fun `every status is also reconciled against active records`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        controller.onStatus(pump.status()!!)
+
+        assertEquals(1, records.reconciled.size)
+    }
+
+    @Test
     fun `routine status never resolves the command currently in flight`() {
         val pump = Pump()
         val controller = controller(pump)
@@ -317,6 +350,21 @@ class YpsoTbrControllerTest {
 
         assertTrue(observed is Result.Started)
         assertEquals(YpsoTbrAttempt.State.EFFECTIVE, starts.single().state)
+    }
+
+    @Test
+    fun `an unreadable journal fails closed without touching the pump`() {
+        val pump = Pump()
+        val broken = object : YpsoTbrAttemptStore {
+            override fun loadAll(): List<YpsoTbrAttempt> = error("unsupported TBR journal version")
+            override fun commitAll(attempts: List<YpsoTbrAttempt>) = error("unsupported TBR journal version")
+        }
+        val controller = YpsoTbrController(pump, YpsoTbrJournal(broken), records, { "10054912" }, { 7L }, { clock })
+
+        assertEquals(Result.Failed(Reason.INTERNAL_ERROR, true), controller.start(YpsoTbrRequest(150, 30), "NORMAL"))
+        assertEquals(Result.Failed(Reason.INTERNAL_ERROR, true), controller.cancel())
+        assertTrue(pump.commands.isEmpty())
+        assertTrue(runCatching { controller.hasUnresolved() }.isFailure)
     }
 
     @Test

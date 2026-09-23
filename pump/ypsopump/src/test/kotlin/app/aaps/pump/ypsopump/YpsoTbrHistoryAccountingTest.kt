@@ -37,7 +37,11 @@ class YpsoTbrHistoryAccountingTest {
     /** A fake database keyed by pump ID, with temp-ID binding, mirroring the PumpSync transactions. */
     private val saved = mutableMapOf<Long, Pair<Long, Long>>()
     private val provisional = mutableMapOf<Long, Pair<Long, Long>>()
-    private val accounting = YpsoTbrHistoryAccounting(sync, journal) { pumpId, _ -> saved[pumpId] }
+    private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup {
+        override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) = saved[pumpId]
+        override fun suspendActiveAt(pumpSerial: String, at: Long) = suspendOpen
+    })
+    private var suspendOpen = false
 
     init {
         whenever(sync.syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())).thenAnswer {
@@ -68,7 +72,7 @@ class YpsoTbrHistoryAccountingTest {
         ).also {
             journal.prepare(it)
             journal.dispatched(id, at - 500L)
-            journal.effective(id, at)
+            journal.effective(id, at, at)
             journal.accounted(id)
             provisional[tempId] = at to minutes * 60_000L
         }
@@ -112,7 +116,13 @@ class YpsoTbrHistoryAccountingTest {
     @Test
     fun `a TBR AAPS already stopped is not extended by its terminal row`() {
         startedAttempt()
-        journal.startsEndedBy(pumpStart + 2_000L + 90_000L)
+        val stop = YpsoTbrAttempt(
+            id = "stop", kind = YpsoTbrAttempt.Kind.STOP, pumpSerial = serial, percent = 100, durationMinutes = 0,
+            type = "", temporaryId = 5L, baselinePumpId = null, createdAt = pumpStart,
+        )
+        journal.prepare(stop)
+        journal.dispatched("stop", pumpStart + 91_000L)
+        journal.stopEffective("stop", pumpStart + 2_000L + 90_000L)
 
         accounting.apply(event(48_224, 10, 120, 2), serial, zone)
 
@@ -121,7 +131,7 @@ class YpsoTbrHistoryAccountingTest {
 
     @Test
     fun `a row whose pump start does not match the AAPS start is imported on its own`() {
-        startedAttempt(at = pumpStart + 40 * 60_000L)
+        startedAttempt(at = pumpStart + 3 * 60_000L)
 
         accounting.apply(event(48_224, 10, 120, 3), serial, zone)
 
@@ -140,7 +150,7 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `two same-percent attempts bind in start order`() {
+    fun `two same-percent attempts bind to their own rows by start window`() {
         startedAttempt("a", percent = 0, minutes = 30, tempId = 1L)
         startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 4 * 60_000L, tempId = 2L)
 
@@ -149,6 +159,33 @@ class YpsoTbrHistoryAccountingTest {
 
         assertEquals(48_224L, journal.find("a")!!.pumpId)
         assertEquals(48_226L, journal.find("b")!!.pumpId)
+    }
+
+    @Test
+    fun `a row that fits more than one AAPS start blocks instead of guessing`() {
+        startedAttempt("a", percent = 0, minutes = 30, tempId = 1L)
+        startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 30_000L, tempId = 2L)
+
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone))
+        assertNull(journal.find("a")!!.pumpId)
+    }
+
+    @Test
+    fun `replaying stop and resume rows is idempotent after resume ended the stop`() {
+        accounting.apply(event(48_215, 14, 3, 0), serial, zone)
+        accounting.apply(event(48_219, 14, 10, 0), serial, zone)
+        saved[48_215L] = pumpStart to 60_000L
+
+        assertNull(accounting.apply(event(48_215, 14, 3, 0), serial, zone))
+        assertNull(accounting.apply(event(48_219, 14, 10, 0), serial, zone))
+        assertEquals(pumpStart to 60_000L, saved[48_215L])
+    }
+
+    @Test
+    fun `a resume that did not end the recorded stop blocks the cursor`() {
+        suspendOpen = true
+
+        assertNotNull(accounting.apply(event(48_219, 14, 10, 0), serial, zone))
     }
 
     @Test

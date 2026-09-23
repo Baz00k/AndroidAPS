@@ -65,6 +65,8 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrBleLink
 import app.aaps.pump.ypsopump.tbr.YpsoTbrController
 import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
+import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRequest
 import android.content.Context
@@ -135,9 +137,13 @@ class YpsoPumpPlugin @Inject constructor(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
-            tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal) { pumpId, serial ->
-                tbrRecord(serial) { it.ids.pumpId == pumpId }?.let { it.timestamp to it.duration }
-            },
+            tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
+                override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
+                    tbrRecord(pumpSerial, start) { it.ids.pumpId == pumpId }?.let { it.timestamp to it.duration }
+
+                override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
+                    .any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }
+            }),
         )
     }
     private val tbrController by lazy {
@@ -150,50 +156,102 @@ class YpsoPumpPlugin @Inject constructor(
         )
     }
 
-    /** A valid YpsoPump TBR record from the last two days matching [predicate]; read-back for accounting. */
-    private fun tbrRecord(serial: String, predicate: (app.aaps.core.data.model.TB) -> Boolean): app.aaps.core.data.model.TB? {
+    /**
+     * The single valid YpsoPump TBR record starting at or after [notBefore] matching [predicate]. Every
+     * caller knows the start it wrote, so read-back works however old the record is.
+     */
+    private fun tbrRecord(serial: String, notBefore: Long, predicate: (app.aaps.core.data.model.TB) -> Boolean): app.aaps.core.data.model.TB? {
         if (!::persistenceLayer.isInitialized) return null
-        val from = System.currentTimeMillis() - TBR_READBACK_WINDOW_MS
-        return persistenceLayer.getTemporaryBasalsStartingFromTime(from, false).blockingGet()
+        return persistenceLayer.getTemporaryBasalsStartingFromTime(notBefore - 60_000L, false).blockingGet()
             .singleOrNull { it.isValid && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial && predicate(it) }
     }
+
+    private fun activeTbrRecords(serial: String, at: Long): List<app.aaps.core.data.model.TB> {
+        if (!::persistenceLayer.isInitialized) return emptyList()
+        return persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(at, at)
+            .filter { it.isValid && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
+    }
+
+    /** Last status time each record was still seen matching the pump, for the conservative end of a cut. */
+    private val lastSeenMatching = java.util.concurrent.ConcurrentHashMap<Long, Long>()
 
     /**
      * An AAPS start is a percent record under its temporary ID (or its bound pump ID). Ends are applied
      * as a shorter duration, never as an end-event identity, so pump history can still correct them.
      */
     private val tbrRecords = object : YpsoTbrRecords {
-        private fun find(attempt: YpsoTbrAttempt) = tbrRecord(attempt.pumpSerial) {
-            it.ids.temporaryId == attempt.temporaryId || attempt.pumpId != null && it.ids.pumpId == attempt.pumpId
+        private fun find(attempt: YpsoTbrAttempt, includeInvalid: Boolean = false): app.aaps.core.data.model.TB? {
+            val start = attempt.effectiveAt ?: attempt.createdAt
+            if (!::persistenceLayer.isInitialized) return null
+            return persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(start - 60_000L, false).blockingGet()
+                .filter { (includeInvalid || it.isValid) && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == attempt.pumpSerial }
+                .singleOrNull { it.ids.temporaryId == attempt.temporaryId || attempt.pumpId != null && it.ids.pumpId == attempt.pumpId }
         }
 
-        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Boolean {
-            val duration = attempt.durationMinutes * 60_000L
-            if (find(attempt) == null) {
+        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved {
+            val existing = find(attempt, includeInvalid = true)
+            if (existing != null && !existing.isValid) return YpsoTbrRecords.Saved.DELETED
+            if (existing == null) {
                 pumpSync.addTemporaryBasalWithTempId(
-                    timestamp, attempt.percent.toDouble(), duration, false,
+                    timestamp, attempt.percent.toDouble(), attempt.durationMinutes * 60_000L, false,
                     attempt.temporaryId, PumpSync.TemporaryBasalType.valueOf(attempt.type), PumpType.YPSOPUMP, attempt.pumpSerial,
                 )
             }
-            val saved = find(attempt) ?: return false
-            return saved.timestamp == timestamp && !saved.isAbsolute && saved.rate == attempt.percent.toDouble()
+            val saved = find(attempt) ?: return YpsoTbrRecords.Saved.NOT_SAVED
+            return if (saved.timestamp == timestamp && !saved.isAbsolute && saved.rate == attempt.percent.toDouble())
+                YpsoTbrRecords.Saved.SAVED else YpsoTbrRecords.Saved.NOT_SAVED
         }
 
         override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
             val saved = find(attempt) ?: return false
+            return shorten(saved, end)
+        }
+
+        /** Duration-only update; never an end-event identity, which would freeze the record. */
+        private fun shorten(saved: app.aaps.core.data.model.TB, end: Long): Boolean {
             val duration = (end - saved.timestamp).coerceAtLeast(1L)
             if (saved.duration <= duration) return true
-            if (saved.ids.pumpId != null) {
-                pumpSync.syncTemporaryBasalWithPumpId(
-                    saved.timestamp, saved.rate, duration, false, PumpSync.TemporaryBasalType.valueOf(attempt.type),
-                    checkNotNull(saved.ids.pumpId), PumpType.YPSOPUMP, attempt.pumpSerial,
+            val type = PumpSync.TemporaryBasalType.fromDbType(saved.type)
+            val pumpId = saved.ids.pumpId
+            val temporaryId = saved.ids.temporaryId
+            when {
+                pumpId != null -> pumpSync.syncTemporaryBasalWithPumpId(
+                    saved.timestamp, saved.rate, duration, saved.isAbsolute, type, pumpId, PumpType.YPSOPUMP, checkNotNull(saved.ids.pumpSerial),
                 )
-            } else {
-                pumpSync.syncTemporaryBasalWithTempId(
-                    saved.timestamp, saved.rate, duration, false, attempt.temporaryId, null, null, PumpType.YPSOPUMP, attempt.pumpSerial,
+                temporaryId != null -> pumpSync.syncTemporaryBasalWithTempId(
+                    saved.timestamp, saved.rate, duration, saved.isAbsolute, temporaryId, null, null, PumpType.YPSOPUMP, checkNotNull(saved.ids.pumpSerial),
                 )
+                else -> return false
             }
-            return (find(attempt)?.duration ?: Long.MAX_VALUE) <= duration
+            return activeTbrRecords(checkNotNull(saved.ids.pumpSerial), end).none { it.id == saved.id }
+        }
+
+        /**
+         * A fresh status that contradicts an active record means the pump ended it at some point since
+         * that record was last seen matching. The end is chosen so IOB errs high: a net-negative record
+         * (below 100 % or a stop) ends when it was last seen, a high TBR ends at this observation.
+         * Pump history later moves the end to the pump's own time.
+         */
+        override fun reconcileWith(observation: YpsoTbrObservation) {
+            val serial = serialNumber().takeIf(String::isNotBlank) ?: return
+            val at = observation.observedAt
+            for (record in activeTbrRecords(serial, at)) {
+                val matches = when (record.type) {
+                    app.aaps.core.data.model.TB.Type.PUMP_SUSPEND -> !observation.running
+                    else -> observation.running && !record.isAbsolute && record.rate.toInt() == observation.percent &&
+                        observation.remainingMinutes > 0
+                }
+                if (matches) {
+                    lastSeenMatching[record.id] = at
+                    continue
+                }
+                // A record written moments ago may still be settling against this sample.
+                if (record.timestamp > at - 60_000L) continue
+                val netNegative = record.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND || record.isAbsolute || record.rate < 100.0
+                val end = if (netNegative) lastSeenMatching[record.id] ?: record.timestamp + 1L else at
+                if (!shorten(record, end)) aapsLogger.warn(LTag.PUMP, "YpsoPump could not end TBR record ${record.id} contradicted by status")
+                lastSeenMatching.remove(record.id)
+            }
         }
     }
     private val bolusController by lazy {
@@ -800,7 +858,7 @@ class YpsoPumpPlugin @Inject constructor(
     private fun onStatusRead() {
         checkReservoir()
         if (!YpsoPumpConst.READ_ONLY_MODE) {
-            bleManager.observedTbr(System.currentTimeMillis())?.let { observation ->
+            bleManager.observedTbr()?.let { observation ->
                 runCatching { tbrController.onStatus(observation) }
                     .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR resolution failed: ${it.message}") }
             }
@@ -1899,7 +1957,6 @@ class YpsoPumpPlugin @Inject constructor(
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HISTORY_YIELD_GRACE_MS = 10_000L
-        private const val TBR_READBACK_WINDOW_MS = 2 * 24 * 60 * 60 * 1000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 

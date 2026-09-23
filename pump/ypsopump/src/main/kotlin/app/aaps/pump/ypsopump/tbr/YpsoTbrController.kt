@@ -8,11 +8,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the record back, and none sets an end-event identity that would stop history from correcting it.
  */
 internal interface YpsoTbrRecords {
-    /** Saves (idempotently, by temporary ID) a percent TBR starting at [timestamp]; true once read back. */
-    fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Boolean
+    enum class Saved { SAVED, NOT_SAVED, DELETED }
+
+    /** Saves (idempotently, by temporary ID) a percent TBR starting at [timestamp] and reads it back. */
+    fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): Saved
 
     /** Shortens this start's record so it ends at [end]; true once read back. */
     fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean
+
+    /**
+     * Fresh status contradicts every YpsoPump record still active at [observation]: shortens them by
+     * duration only, so pump history can still move each end to the pump's own time.
+     */
+    fun reconcileWith(observation: YpsoTbrObservation)
 }
 
 /**
@@ -120,6 +128,7 @@ internal class YpsoTbrController(
             if (attempt.awaitsStatus && attempt.createdAt < observation.observedAt) resolveFromStatus(attempt, observation)
         }
         for (attempt in journal.all()) if (attempt.awaitsAccounting) account(attempt)
+        records.reconcileWith(observation)
     }
 
     /** A command whose same-link status never arrived. Its effect can only still be visible now. */
@@ -131,7 +140,11 @@ internal class YpsoTbrController(
                 val elapsed = ((observation.observedAt - dispatchedAt) / MINUTE).toInt()
                 val runningThis = observation.running && observation.percent == attempt.percent &&
                     observation.remainingMinutes in (attempt.durationMinutes - elapsed - 1)..attempt.durationMinutes
-                if (runningThis) journal.effective(attempt.id, dispatchedAt)
+                if (runningThis) {
+                    // It began after dispatch and before the minutes it had already run by this read.
+                    val by = observation.observedAt - (attempt.durationMinutes - observation.remainingMinutes - 1).coerceAtLeast(0) * MINUTE
+                    journal.effective(attempt.id, dispatchedAt, by)
+                }
                 // It may have run briefly and ended; history then imports it on its own evidence.
                 else journal.noEffect(attempt.id, "later status: percent=${observation.percent} remaining=${observation.remainingMinutes}")
             }
@@ -140,13 +153,20 @@ internal class YpsoTbrController(
         }
     }
 
-    /** Saves a proven start and applies any AAPS stop that already ended it. */
+    /** Saves a proven start and applies any AAPS stop that already ended it. Safe to repeat. */
     private fun account(attempt: YpsoTbrAttempt): Boolean {
         if (!attempt.awaitsAccounting) return true
         val start = checkNotNull(attempt.effectiveAt)
-        if (!records.saveStart(attempt, start)) {
-            journal.detail(attempt.id, "AAPS did not save the started TBR")
-            return false
+        when (records.saveStart(attempt, start)) {
+            YpsoTbrRecords.Saved.SAVED -> Unit
+            YpsoTbrRecords.Saved.NOT_SAVED -> {
+                journal.detail(attempt.id, "AAPS did not save the started TBR")
+                return false
+            }
+            YpsoTbrRecords.Saved.DELETED -> {
+                journal.abandonAccounting(attempt.id, "the TBR record was removed in AAPS")
+                return true
+            }
         }
         if (attempt.stoppedAt != null && !records.shortenStart(attempt, attempt.stoppedAt)) {
             journal.detail(attempt.id, "AAPS did not save the TBR end")
@@ -158,19 +178,18 @@ internal class YpsoTbrController(
 
     private enum class StopOutcome { CONFIRMED, NOT_SENT, UNKNOWN }
 
+    private var pendingCuts: List<YpsoTbrAttempt> = emptyList()
+
     private fun stop(serial: String): StopOutcome {
         val attempt = newAttempt(YpsoTbrAttempt.Kind.STOP, serial, YpsoTbrRequest.STOP_PERCENT, YpsoTbrRequest.STOP_DURATION_MINUTES, "", null)
+        pendingCuts = emptyList()
         send(attempt) { it.idle }
         val current = checkNotNull(journal.find(attempt.id))
         return when {
             current.state == YpsoTbrAttempt.State.EFFECTIVE -> {
-                // Only AAPS's own starts are cut here, at the pump-confirmed stop time. A manual TBR
-                // keeps its record until history supplies the pump's own end.
-                for (ended in journal.startsEndedBy(checkNotNull(current.effectiveAt))) {
-                    if (ended.accounted && !records.shortenStart(ended, checkNotNull(ended.stoppedAt))) {
-                        journal.detail(ended.id, "AAPS did not save the TBR end")
-                    }
-                }
+                // AAPS's own starts are ended at the pump-confirmed stop time and replayed until saved.
+                // Any other record is corrected by the next idle status and, exactly, by history.
+                for (ended in pendingCuts) account(ended)
                 StopOutcome.CONFIRMED
             }
             current.state == YpsoTbrAttempt.State.NO_EFFECT && current.dispatchedAt == null -> StopOutcome.NOT_SENT
@@ -191,10 +210,13 @@ internal class YpsoTbrController(
         val after = evidence.after
         when {
             dispatchedAt == null -> journal.noEffect(attempt.id, "command was not sent: ${evidence.result}")
-            after != null && effective(after) && evidence.result !is YpsoTbrWriteResult.Rejected ->
+            after != null && effective(after) && evidence.result !is YpsoTbrWriteResult.Rejected -> {
                 // Acknowledgement is the latest moment the command can have taken effect; without it
-                // the dispatch time is used.
-                journal.effective(attempt.id, evidence.acknowledgedAt ?: dispatchedAt)
+                // the dispatch time is used, bounded by the status that proved the effect.
+                val at = evidence.acknowledgedAt ?: dispatchedAt
+                if (attempt.kind == YpsoTbrAttempt.Kind.STOP) pendingCuts = journal.stopEffective(attempt.id, at)
+                else journal.effective(attempt.id, at, evidence.acknowledgedAt ?: after.observedAt)
+            }
             after != null && !effective(after) && evidence.result is YpsoTbrWriteResult.Rejected ->
                 journal.noEffect(attempt.id, "${evidence.result.reason} confirmed by status")
             after != null && !effective(after) && attempt.kind == YpsoTbrAttempt.Kind.START && (after.idle || !after.running) ->
