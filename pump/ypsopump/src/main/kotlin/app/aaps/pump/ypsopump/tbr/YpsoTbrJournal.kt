@@ -28,6 +28,8 @@ data class YpsoTbrAttempt(
     val dispatchedAt: Long? = null,
     /** When the command took effect: pump acknowledgement, or dispatch when the ACK was lost. */
     val effectiveAt: Long? = null,
+    /** Latest moment a start can have taken effect; bounds which history row can be its own. */
+    val effectiveBy: Long? = null,
     /** A start's record was saved and read back. A stop has no record of its own. */
     val accounted: Boolean = false,
     /** Set on a start when a later confirmed AAPS stop ended it. */
@@ -85,9 +87,33 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
         if (it.state == YpsoTbrAttempt.State.DISPATCHED) it else it.copy(state = YpsoTbrAttempt.State.DISPATCHED, dispatchedAt = at)
     }
 
-    @Synchronized fun effective(id: String, at: Long) = update(id) {
-        check(it.awaitsStatus) { "TBR attempt outcome is already known" }
-        it.copy(state = YpsoTbrAttempt.State.EFFECTIVE, effectiveAt = at, detail = null)
+    /** A start took effect at [at], and no later than [by]. */
+    @Synchronized fun effective(id: String, at: Long, by: Long = at) = update(id) {
+        check(it.awaitsStatus && it.kind == YpsoTbrAttempt.Kind.START) { "TBR start outcome is already known" }
+        it.copy(state = YpsoTbrAttempt.State.EFFECTIVE, effectiveAt = at, effectiveBy = maxOf(at, by), detail = null)
+    }
+
+    /**
+     * A stop took effect at [at]. In the same commit, every AAPS start still recorded as running then
+     * gets its end and is queued for accounting again, so a crash at any later point is replayed.
+     */
+    @Synchronized fun stopEffective(id: String, at: Long): List<YpsoTbrAttempt> {
+        val attempts = store.loadAll()
+        val stop = attempts.firstOrNull { it.id == id } ?: error("unknown TBR attempt")
+        check(stop.awaitsStatus && stop.kind == YpsoTbrAttempt.Kind.STOP) { "TBR stop outcome is already known" }
+        val ended = attempts.filter {
+            it.kind == YpsoTbrAttempt.Kind.START && it.state == YpsoTbrAttempt.State.EFFECTIVE && it.stoppedAt == null &&
+                checkNotNull(it.effectiveAt) < at && checkNotNull(it.effectiveAt) + it.durationMinutes * MINUTE > at
+        }.map(YpsoTbrAttempt::id).toSet()
+        val next = attempts.map {
+            when {
+                it.id == id -> it.copy(state = YpsoTbrAttempt.State.EFFECTIVE, effectiveAt = at, effectiveBy = at, detail = null)
+                it.id in ended -> it.copy(stoppedAt = at, accounted = false)
+                else -> it
+            }
+        }
+        store.commitAll(next)
+        return next.filter { it.id in ended }
     }
 
     @Synchronized fun noEffect(id: String, detail: String) = update(id) {
@@ -102,18 +128,10 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
 
     @Synchronized fun detail(id: String, detail: String) = update(id) { it.copy(detail = detail) }
 
-    /** A confirmed stop at [at] ended every AAPS-started TBR still shown as running before it. */
-    @Synchronized fun startsEndedBy(at: Long): List<YpsoTbrAttempt> {
-        val attempts = store.loadAll()
-        val ended = attempts.filter {
-            it.kind == YpsoTbrAttempt.Kind.START && it.state == YpsoTbrAttempt.State.EFFECTIVE && it.stoppedAt == null &&
-                checkNotNull(it.effectiveAt) < at && checkNotNull(it.effectiveAt) + it.durationMinutes * MINUTE > at
-        }
-        if (ended.isEmpty()) return emptyList()
-        val ids = ended.map(YpsoTbrAttempt::id).toSet()
-        val next = attempts.map { if (it.id in ids) it.copy(stoppedAt = at) else it }
-        store.commitAll(next)
-        return next.filter { it.id in ids }
+    /** The record is gone (e.g. deleted by the user); there is nothing left to account. */
+    @Synchronized fun abandonAccounting(id: String, detail: String) = update(id) {
+        check(it.awaitsAccounting) { "TBR attempt is not awaiting accounting" }
+        it.copy(accounted = true, detail = detail)
     }
 
     @Synchronized fun bound(id: String, pumpId: Long) = update(id) {

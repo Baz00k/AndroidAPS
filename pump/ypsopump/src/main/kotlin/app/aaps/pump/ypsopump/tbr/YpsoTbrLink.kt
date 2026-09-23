@@ -48,7 +48,7 @@ internal class YpsoTbrBleLink(
 
     override fun status(): YpsoTbrObservation? {
         if (!readStatus()) return null
-        return bleManager.observedTbr(now())
+        return bleManager.observedTbr()
     }
 
     override fun command(
