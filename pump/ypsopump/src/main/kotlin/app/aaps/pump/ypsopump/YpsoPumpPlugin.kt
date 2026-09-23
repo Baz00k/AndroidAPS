@@ -371,7 +371,7 @@ class YpsoPumpPlugin @Inject constructor(
      * points fail), because the recorded effective profile switch drives no insulin. Before enabling
      * therapy, this confirmation must additionally be bounded by current pump-side evidence — at
      * minimum active-program continuity plus detection of schedule edits — rather than by retained
-     * configuration alone. See issue #14 and the Ypsopump README.
+     * configuration alone. See issue #14 and docs/driver.md.
      */
     override fun setNewBasalProfile(profile: Profile): PumpEnactResult {
         if (isThisProfileSet(profile))

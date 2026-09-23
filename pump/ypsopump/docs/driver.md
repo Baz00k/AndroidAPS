@@ -1,0 +1,23 @@
+# Driver behavior
+
+## Capabilities
+
+`YpsoPumpConst.READ_ONLY_MODE` is the build-time gate for pump-changing therapy writes. The only therapy writes currently implemented are immediate and square extended bolus delivery and cancellation; read-only mode disables them. Authentication and selectors required to read pump data remain available. When therapy writes are enabled, the driver validates exact 0.1 U steps (0.1–30 U, subject to AAPS constraints); extended delivery requires 15-minute steps from 15 minutes to 12 hours. Stop/cancel applies only to an identified AAPS-started bolus. The plugin does not currently enact TBRs, program basal profiles, offer combination-bolus UI or load TDDs.
+
+## Status and availability
+
+An authenticated encrypted status read makes reservoir, pump running/Stop state, active TBR percentage and a coarse battery display available (the pump reports 0–5 bars, mapped to 0–100%). In read-only mode the plugin does not expose the Stop state through AAPS' `isSuspended()` therapy interface. Current basal from status includes any TBR scaling; it is not proof of the scheduled profile. Status samples expire after five minutes, including across an idle disconnect. Failed reads invalidate the current sample. An absent GATT serial is never replaced with a serial inferred from the BLE address.
+
+The protected session records distinct causes for missing setup, bond/permission, transport, authentication, encrypted-status failure, identity mismatch, counter uncertainty and suspected re-key. Counter uncertainty is informational: an unknown write floor can be established by a pump-accepted write. Transport retries back off; persistent failures and actionable non-transport failures produce notifications. A pump code 140 is presented as suspected session/key loss: automatic retries stop pending a different key and successful verification. Its exact pump-side lifetime is unknown.
+
+## Basal schedules
+
+Pump basal programming and A/B activation remain manual. In **YpsoPump Preferences → Basal configuration**, use **Read pump basal profiles** after setup or editing schedules on the pump. This explicitly reads the active program, all 24 hourly settings for A and B, the active program again and pump clock on one connection. An incomplete or inconsistent read does not replace the last complete configuration. The stored schedules survive disconnects and restarts for that pump-session generation; they do not expire with status samples.
+
+Use **Check active pump profile** after switching A/B on the pump. It checks the active selector against the stored schedules without rereading all hours. The driver compares the complete effective AAPS basal schedule with the last observed active pump schedule and reports *not read*, *matches* or *mismatch*. A mismatch displays an urgent notification and pump-tab banner. `setNewBasalProfile()` never writes the pump: it returns success without enacting only when the retained configuration matches. Routine status polls do not read profile settings. Unreported manual edits or a switch away and back between reads may leave the stored comparison outdated; a timezone change requires another full read. This retained comparison is not current pump-side proof of schedule continuity, even when therapy writes are enabled by the build-time gate.
+
+## Bolus delivery and history
+
+Before dispatch, therapy checks current pump/bolus status and a usable durable history cursor. A bolus attempt is persisted before the write. A transport ACK or idle bolus status does not prove delivered insulin. Same-link fast/slow sequence readback identifies the bolus for subsequent observation or cancellation; terminal history is the accounting authority. If an immediate bolus may have reached the pump, its requested amount is provisionally recorded until history resolves it, rather than retrying a possibly delivered dose. A square extended bolus is recorded after its pump identity is established; an uncertain start without that identity has no provisional PumpSync entry and awaits terminal-history recovery. An unconfirmed cancellation does not reduce an existing recorded dose.
+
+Status polling schedules bounded background history recovery instead of scanning history on the therapy queue. Recovery yields to queued therapy; active delivery observes status and then terminal history. Later pump-originated immediate and square boluses can be imported from terminal history rows; a running pump-originated square bolus is not yet imported. Pump-originated combination boluses are not imported because their immediate part cannot be separated reliably for accounting. See [event history](history.md) for identity and timestamp handling.

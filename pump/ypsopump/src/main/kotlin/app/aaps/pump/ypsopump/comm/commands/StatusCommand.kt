@@ -5,7 +5,7 @@ import app.aaps.pump.ypsopump.comm.YpsoCommandCodes
 
 /**
  * System status characteristic read, SDK index 30 (not a wire opcode).
- * V05.00.52 captures and physical comparisons: see docs/status-protocol.md.
+ * V05.00.52 status layout: see docs/protocol.md.
  * CRC and mandatory counter tail must have been validated and stripped first.
  */
 class StatusCommand : YpsoCommand(YpsoCommandCodes.GET_SYSTEM_STATUS) {
