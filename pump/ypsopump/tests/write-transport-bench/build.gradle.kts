@@ -20,6 +20,7 @@ val sharedDriverSources =
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/YpsoCommandCodes.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/commands/BolusCommand.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/commands/StatusCommand.kt",
+        "../../src/main/kotlin/app/aaps/pump/ypsopump/comm/commands/TbrCommand.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoHistoryEntry.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoHistoryContract.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/history/YpsoBolusPumpIdentity.kt",
@@ -33,6 +34,7 @@ val sharedDriverSources =
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoSerializedWriteTransport.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoWriteAccounting.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoBolusWriteCoordinator.kt",
+        "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoTbrWriteCoordinator.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoHistorySelectorCoordinator.kt",
         "../../src/main/kotlin/app/aaps/pump/ypsopump/ble/YpsoProfileSelectorCoordinator.kt",
     )
