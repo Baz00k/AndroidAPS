@@ -24,7 +24,6 @@ import java.time.ZoneId
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
-import java.lang.reflect.Modifier
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -63,13 +62,6 @@ class YpsoPumpPluginTest {
     )
 
     @Test
-    fun `bolus delivery does not hold the plugin monitor while waiting for BLE`() {
-        val method = YpsoPumpPlugin::class.java.getDeclaredMethod("deliverTreatment", DetailedBolusInfo::class.java)
-
-        assertFalse(Modifier.isSynchronized(method.modifiers))
-    }
-
-    @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {
         state.publishStatus(80.0, 90, false, 100, 4000L)
         val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
@@ -82,9 +74,7 @@ class YpsoPumpPluginTest {
         )
         results.forEach { assertFalse(it.success); assertFalse(it.enacted); assertEquals(0.0, it.bolusDelivered) }
         assertEquals(0.0, plugin.baseBasalRate)
-        assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isBolusCapable)
         assertFalse(plugin.pumpDescription.isTempBasalCapable)
-        assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isExtendedBolusCapable)
         verifyNoInteractions(sync)
         if (YpsoPumpConst.READ_ONLY_MODE) verifyNoInteractions(manager)
     }

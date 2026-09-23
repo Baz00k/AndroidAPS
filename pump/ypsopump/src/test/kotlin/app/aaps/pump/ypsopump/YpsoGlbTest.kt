@@ -7,13 +7,12 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 class YpsoGlbTest {
+    private val selector = byteArrayOf(0x78, 0x56, 0x34, 0x12, 0x87.toByte(), 0xa9.toByte(), 0xcb.toByte(), 0xed.toByte())
+
     @Test
     fun `selector is exact little endian value and complement transaction`() {
-        assertArrayEquals(
-            byteArrayOf(0x78, 0x56, 0x34, 0x12, 0x87.toByte(), 0xa9.toByte(), 0xcb.toByte(), 0xed.toByte()),
-            YpsoGlb.encode(0x12345678),
-        )
-        assertEquals(0x12345678, YpsoGlb.decodeExact(YpsoGlb.encode(0x12345678)))
+        assertArrayEquals(selector, YpsoGlb.encode(0x12345678))
+        assertEquals(0x12345678, YpsoGlb.decodeExact(selector))
     }
 
     @Test

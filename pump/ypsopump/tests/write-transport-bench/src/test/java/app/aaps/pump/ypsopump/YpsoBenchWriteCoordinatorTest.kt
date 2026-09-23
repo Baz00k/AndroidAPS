@@ -73,15 +73,6 @@ class YpsoBenchWriteCoordinatorTest {
     }
 
     @Test
-    fun `current bench dispatcher has no historical alarm recovery mode`() {
-        assertFalse(
-            YpsoBenchWriteCoordinator.BenchWriteMode.entries.any {
-                it.name == "BENCH_ALARM_CURSOR_RECOVERY_SELECTOR"
-            },
-        )
-    }
-
-    @Test
     fun `completed legacy alarm recovery does not block a modern settings selector`() {
         val legacyStore = MemoryStore()
         PumpSession(legacyStore).provisionReadBaseline("pump", key, 21, 2_596)

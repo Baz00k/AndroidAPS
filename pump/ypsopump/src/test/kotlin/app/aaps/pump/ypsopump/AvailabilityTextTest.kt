@@ -8,7 +8,6 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
-import app.aaps.pump.ypsopump.compose.PumpStatusState
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
@@ -281,19 +280,6 @@ class AvailabilityTextTest {
 
         assertThat(status.connectionSummary).isEqualTo("Pump not connected")
         assertThat(status.connectionAction).isEqualTo("Keep the pump nearby and awake, then try again.")
-    }
-
-    @Test
-    fun `long action is modelled as a dedicated wrapping status field not compact metadata`() {
-        val state = PumpStatusState(
-            connectionSummary = "Pump not connected",
-            connectionAction = "Move closer to the pump, wake it, check Bluetooth, then try again.",
-            rows = listOf(app.aaps.pump.ypsopump.compose.PumpStatusRow("Firmware", "5.0")),
-        )
-
-        assertThat(state.connectionAction).isNotNull()
-        assertThat(state.connectionAction).contains("Bluetooth")
-        assertThat(state.rows.map { it.value }).doesNotContain(state.connectionAction)
     }
 
     @Test

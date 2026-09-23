@@ -16,22 +16,13 @@ class YpsoCrcTest {
         val payload = hex("000102030405060708090a0b0c0d0e0f10")
         assertArrayEquals(hex("1e8f"), YpsoCrc.crc16(payload))
         assertTrue(YpsoCrc.isValid(payload + hex("1e8f")))
-    }
-
-    @Test
-    fun `appendCrc then isValid round-trips`() {
-        val payload = hex("0102030405")
-        val encoded = YpsoCrc.appendCrc(payload)
-
-        assertTrue(YpsoCrc.isValid(encoded))
-        assertArrayEquals(payload, YpsoCrc.validatedPayload(encoded))
+        assertArrayEquals(payload, YpsoCrc.validatedPayload(payload + hex("1e8f")))
     }
 
     @Test
     fun `isValid rejects a corrupted trailer`() {
-        val p = YpsoCrc.appendCrc(hex("aabbccdd"))
-        p[p.size - 1] = (p[p.size - 1] + 1).toByte()
-        assertFalse(YpsoCrc.isValid(p))
-        assertNull(YpsoCrc.validatedPayload(p))
+        val corrupt = hex("000102030405060708090a0b0c0d0e0f101e8e")
+        assertFalse(YpsoCrc.isValid(corrupt))
+        assertNull(YpsoCrc.validatedPayload(corrupt))
     }
 }

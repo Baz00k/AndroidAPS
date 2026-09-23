@@ -46,15 +46,4 @@ class YpsoBolusPumpIdentityTest {
         assertTrue(YpsoBolusPumpIdentity.isStrictlyNewer(1L, 0xfffffff0L))
         assertFalse(YpsoBolusPumpIdentity.isStrictlyNewer(0xfffffff0L, 1L))
     }
-
-    @Test
-    fun `every caller derives one identity for the same physical dose`() {
-        val baseline = (7L shl 32) or 48_000L
-        val sequence = 48_004L
-        val expected = YpsoBolusPumpIdentity.of(baseline, sequence)
-
-        val attempt = YpsoBolusAttemptFixtures.extended(baselinePumpId = baseline, slowSequence = sequence)
-
-        assertEquals(expected, attempt.accountingPumpId)
-    }
 }

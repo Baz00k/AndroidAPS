@@ -19,9 +19,9 @@ class YpsoBolusNotificationTest {
         val started = requireNotNull(YpsoBolusNotification.decode(hex("000000000001ecbb00005d45f1")))
         val terminal = requireNotNull(YpsoBolusNotification.decode(hex("000000000004ecbb00005e543c")))
 
-        assertEquals(YpsoBolusNotification.STATUS_DELIVERING, started.slowStatusCode)
+        assertEquals(1, started.slowStatusCode)
         assertEquals(48108L, started.slowSequence)
-        assertEquals(YpsoBolusNotification.STATUS_COMPLETED, terminal.slowStatusCode)
+        assertEquals(4, terminal.slowStatusCode)
         assertEquals(48108L, terminal.slowSequence)
 
         assertFalse(started.isTerminalFor(YpsoBolusBlock.SLOW, 48108L))
@@ -33,7 +33,7 @@ class YpsoBolusNotificationTest {
         val started = requireNotNull(YpsoBolusNotification.decode(hex("01edbb000000000000005f4fb3")))
         val terminal = requireNotNull(YpsoBolusNotification.decode(hex("04edbb000000000000006055ed")))
 
-        assertEquals(YpsoBolusNotification.STATUS_DELIVERING, started.fastStatusCode)
+        assertEquals(1, started.fastStatusCode)
         assertEquals(48109L, started.fastSequence)
         assertEquals(48109L, terminal.fastSequence)
         assertTrue(terminal.isTerminalFor(YpsoBolusBlock.FAST, 48109L))
@@ -53,7 +53,7 @@ class YpsoBolusNotificationTest {
     fun `cancelled code is accepted as terminal alongside completed`() {
         val cancelled = requireNotNull(YpsoBolusNotification.decode(hex("000000000003ecbb00005e543c")))
 
-        assertEquals(YpsoBolusNotification.STATUS_CANCELLED, cancelled.slowStatusCode)
+        assertEquals(3, cancelled.slowStatusCode)
         assertTrue(cancelled.isTerminalFor(YpsoBolusBlock.SLOW, 48108L))
     }
 

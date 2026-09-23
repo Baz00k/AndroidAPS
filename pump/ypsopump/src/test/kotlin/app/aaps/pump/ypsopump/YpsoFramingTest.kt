@@ -36,14 +36,13 @@ class YpsoFramingTest {
     }
 
     @Test
-    fun `chunk then parse round-trips with correct headers`() {
+    fun `chunk emits exact frames with correct headers and payload slices`() {
         val data = ByteArray(50) { it.toByte() } // 50 bytes -> 19 + 19 + 12
         val frames = YpsoFraming.chunkPayload(data)
         assertEquals(3, frames.size)
-        assertEquals(0x13, frames[0][0].toInt() and 0xFF) // (1 shl 4) or 3
-        assertEquals(0x23, frames[1][0].toInt() and 0xFF) // (2 shl 4) or 3
-        assertEquals(0x33, frames[2][0].toInt() and 0xFF) // (3 shl 4) or 3
-        assertArrayEquals(data, YpsoFraming.parseMultiFrameRead(frames))
+        assertArrayEquals(byteArrayOf(0x13) + data.copyOfRange(0, 19), frames[0])
+        assertArrayEquals(byteArrayOf(0x23) + data.copyOfRange(19, 38), frames[1])
+        assertArrayEquals(byteArrayOf(0x33) + data.copyOfRange(38, 50), frames[2])
     }
 
     @Test

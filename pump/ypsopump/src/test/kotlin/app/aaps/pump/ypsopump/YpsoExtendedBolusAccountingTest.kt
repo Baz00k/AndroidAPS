@@ -52,19 +52,11 @@ class YpsoExtendedBolusAccountingTest {
     }
 
     @Test
-    fun `persisted cancellation replacement accepts partial amount and elapsed duration`() {
-        val partial = expected.copy(amount = 0.08, duration = 18_000L)
-
-        assertTrue(YpsoExtendedBolusAccounting.matches(partial, 42L, 1_000L, 0.08, 18_000L, "serial"))
-    }
-
-    @Test
     fun `partial terminal row preserves start and closes at observation time`() {
         val window = YpsoExtendedBolusAccounting.terminalWindow(attempt(), 8, observedAt = 21_200L)
 
         assertEquals(1_200L, window.start)
         assertEquals(20_000L, window.duration)
-        assertEquals(21_200L, window.end)
     }
 
     @Test

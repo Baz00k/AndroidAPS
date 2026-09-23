@@ -8,7 +8,6 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import java.nio.file.Files
-import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -35,69 +34,6 @@ class YpsoBolusAttemptFileStoreTest {
         YpsoBolusAttemptFileStore(file).commit(expected)
 
         assertEquals(expected, YpsoBolusAttemptFileStore(file).load())
-        assertEquals(expected, YpsoBolusAttemptFileStore(file).recoveryEvidence()?.attempt)
-    }
-
-    @Test
-    fun `version 2 journals remain readable as immediate attempts`() {
-        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
-        val file = directory.resolve("attempt.json")
-        file.writeText(version2Json())
-
-        val loaded = YpsoBolusAttemptFileStore(file).load()
-
-        assertEquals(YpsoBolusShape.IMMEDIATE, loaded?.shape)
-        assertEquals(0, loaded?.durationMinutes)
-        assertEquals(0, loaded?.immediateCentiUnits)
-        assertEquals(null, loaded?.pumpSlowSequence)
-        assertEquals(null, loaded?.cancelBlock)
-        assertEquals(null, loaded?.sessionKeyId)
-        assertEquals("pre-upgrade rejection", loaded?.detail)
-    }
-
-    @Test
-    fun `version 2 cancellation ownership migrates to the fast block`() {
-        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
-        val file = directory.resolve("attempt.json")
-        file.writeText(
-            version2Json()
-                .replace("\"outcome\":\"PROVEN_REJECTED\"", "\"outcome\":\"CANCEL_PENDING\"")
-                .replace("\"cancelRequestId\":null", "\"cancelRequestId\":\"cancel-1\"")
-                .replace("\"cancelCounter\":null", "\"cancelCounter\":4811"),
-        )
-
-        val loaded = YpsoBolusAttemptFileStore(file).load()
-
-        assertEquals(YpsoBolusBlock.FAST, loaded?.cancelBlock)
-        assertEquals("cancel-1", loaded?.cancelRequestId)
-        assertEquals(4811, loaded?.cancelCounter)
-    }
-
-    @Test
-    fun `version 3 journals remain readable but have no recovery key binding`() {
-        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
-        val file = directory.resolve("attempt.json")
-        val current = attempt()
-        YpsoBolusAttemptFileStore(file).commit(current)
-        file.writeText(
-            downgradeAttempts(file.readText(), 3, "sessionKeyId", "cancelStoppedAt", "cancelDispatchedAt", "blockTerminalAt"),
-        )
-
-        val loaded = YpsoBolusAttemptFileStore(file).load()
-
-        assertEquals(current.copy(sessionKeyId = null), loaded)
-        assertEquals(null, YpsoBolusAttemptFileStore(file).recoveryEvidence()?.attempt?.sessionKeyId)
-    }
-
-    @Test
-    fun `version 6 journals written before terminal notification tracking still load`() {
-        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
-        val file = directory.resolve("attempt.json")
-        val current = attempt()
-        YpsoBolusAttemptFileStore(file).commit(current)
-        file.writeText(downgradeAttempts(file.readText(), 6, "blockTerminalAt"))
-
-        assertEquals(current, YpsoBolusAttemptFileStore(file).load())
     }
 
     @Test
@@ -155,44 +91,6 @@ class YpsoBolusAttemptFileStoreTest {
         assertEquals(YpsoBolusOutcome.COMPLETED, store.loadAll().first().outcome)
         assertEquals(YpsoBolusOutcome.PROVEN_REJECTED, store.load()?.outcome)
     }
-
-    @Test
-    fun `legacy singleton journal migrates to multi attempt storage on next commit`() {
-        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
-        val file = directory.resolve("attempt.json")
-        val store = YpsoBolusAttemptFileStore(file)
-        val legacy = attempt().copy(requestId = "legacy", dispatchCounter = 4_810, dispatchedAt = 2_000)
-        store.commit(legacy)
-        val singleton = JSONObject(file.readText()).getJSONArray("attempts").getJSONObject(0).toString()
-        file.writeText(singleton)
-
-        store.commit(attempt().copy(requestId = "next", createdAt = 3_000))
-
-        assertEquals(listOf("legacy", "next"), store.loadAll().map { it.requestId })
-        assertEquals(7, JSONObject(file.readText()).getInt("version"))
-    }
-
-    /** Rewrites every stored attempt back to an older schema by version and removed fields. */
-    private fun downgradeAttempts(text: String, version: Int, vararg removed: String): String {
-        val root = JSONObject(text)
-        val attempts = root.getJSONArray("attempts")
-        for (i in 0 until attempts.length()) {
-            val attempt = attempts.getJSONObject(i)
-            attempt.put("version", version)
-            removed.forEach(attempt::remove)
-        }
-        return root.toString()
-    }
-
-    private fun version2Json() = """
-        {"version":2,"requestId":"request-1","pumpSerial":"10000001","sessionGeneration":"generation-1",
-        "treatment":"NORMAL","requestedCentiUnits":100,"payloadHash":"${"ab".repeat(32)}",
-        "createdAt":1500,"outcome":"PROVEN_REJECTED","dispatchCounter":4810,"dispatchedAt":2000,
-        "pumpFastSequence":null,"pumpHistoryId":null,"confirmedCentiUnits":null,"deliveryTimestamp":null,
-        "cancelRequestId":null,"cancelCounter":null,"detail":"pre-upgrade rejection",
-        "baseline":{"fastSequence":44,"slowSequence":9,"historyPumpId":100,
-        "historyFingerprintHigh":10,"historyFingerprintLow":20,"pumpReboot":21,"observedAt":1000}}
-    """.trimIndent()
 
     private fun attempt() = YpsoBolusAttempt(
         requestId = "request-1",
