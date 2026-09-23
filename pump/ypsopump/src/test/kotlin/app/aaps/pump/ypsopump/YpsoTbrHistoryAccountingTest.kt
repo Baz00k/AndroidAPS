@@ -218,6 +218,14 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `a running row waits while an AAPS start with its percent is not yet identified`() {
+        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
+
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
+        assertNull(saved[48_224L])
+    }
+
+    @Test
     fun `a manual row overlapping an AAPS start it is not is imported on its own`() {
         startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L, row = 48_226L)
 

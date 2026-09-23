@@ -351,6 +351,35 @@ class YpsoTbrControllerTest {
     }
 
     @Test
+    fun `a start the pump rejected is never attributed to AAPS even when status matches`() {
+        val pump = Pump()
+        val controller = controller(pump)
+        // Someone starts the same TBR on the pump between the idle pre-check and the command.
+        pump.onCommand = { if (it > 0) { pump.percent = 150; pump.remaining = 30 } }
+
+        val result = controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+
+        assertEquals(Result.Failed(Reason.START_REJECTED, pumpChanged = false), result)
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, starts.single().state)
+        clock += 1_000
+        controller.onStatus(pump.status()!!)
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, starts.single().state)
+        assertTrue(records.byTempId.isEmpty())
+    }
+
+    @Test
+    fun `a status stamped before the dispatch still resolves a pending start`() {
+        val pump = Pump().apply { statusAfterCommand = false }
+        val controller = controller(pump)
+        controller.start(YpsoTbrRequest(150, 30), "NORMAL")
+        clock -= 60 * 60_000L
+
+        controller.onStatus(pump.status()!!)
+
+        assertEquals(YpsoTbrAttempt.State.EFFECTIVE, starts.single().state)
+    }
+
+    @Test
     fun `a proven start is identified by its own history row on the command link`() {
         val pump = Pump()
         controller(pump).start(YpsoTbrRequest(150, 30), "NORMAL")
