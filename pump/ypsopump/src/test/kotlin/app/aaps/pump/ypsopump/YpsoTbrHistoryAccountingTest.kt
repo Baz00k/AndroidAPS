@@ -9,6 +9,7 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
@@ -37,15 +38,24 @@ class YpsoTbrHistoryAccountingTest {
     /** A fake database keyed by pump ID, with temp-ID binding, mirroring the PumpSync transactions. */
     private val saved = mutableMapOf<Long, Pair<Long, Long>>()
     private val provisional = mutableMapOf<Long, Pair<Long, Long>>()
-    private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup {
-        override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) = saved[pumpId]
+    private val invalid = mutableSetOf<Long>()
+    private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : YpsoTbrRecordLookup {
+        override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
+            saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid) }
         override fun suspendActiveAt(pumpSerial: String, at: Long) = suspendOpen
+        override fun latestSuspendBefore(pumpSerial: String, at: Long) = saved.entries
+            .filter { it.key in suspends && it.value.first <= at }.maxByOrNull { it.value.first }
+            ?.let { YpsoTbrRecordLookup.Suspend(it.key, it.value.first, it.value.second, it.key !in invalid) }
     })
     private var suspendOpen = false
+    private val suspends = mutableSetOf<Long>()
 
     init {
         whenever(sync.syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())).thenAnswer {
-            saved[it.getArgument(5)] = it.getArgument<Long>(0) to it.getArgument(2)
+            val pumpId = it.getArgument<Long>(5)
+            if (pumpId in invalid) return@thenAnswer false
+            saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
+            if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
             true
         }
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
@@ -162,22 +172,52 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a row that fits more than one AAPS start blocks instead of guessing`() {
+    fun `a row that fits two AAPS starts binds the earlier one and the next row the later`() {
         startedAttempt("a", percent = 0, minutes = 30, tempId = 1L)
         startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 30_000L, tempId = 2L)
 
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone))
-        assertNull(journal.find("a")!!.pumpId)
+        assertNull(accounting.apply(event(48_224, 10, 0, 0), serial, zone))
+        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 30), serial, zone))
+
+        assertEquals(48_224L, journal.find("a")!!.pumpId)
+        assertEquals(48_226L, journal.find("b")!!.pumpId)
+    }
+
+    @Test
+    fun `a row overlapping an unmatched AAPS start with the same percent blocks instead of duplicating it`() {
+        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
+
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
+        assertNull(saved[48_224L])
+    }
+
+    @Test
+    fun `a record the user removed is treated as applied`() {
+        accounting.apply(event(48_224, 9, 110, 15), serial, zone)
+        invalid += 48_224L
+
+        assertNull(accounting.apply(event(48_224, 10, 110, 4), serial, zone))
+        assertEquals(pumpStart to 15 * 60_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `resume restores the exact stop window even after a status cut it short`() {
+        accounting.apply(event(48_215, 14, 3, 0), serial, zone)
+        saved[48_215L] = pumpStart to 1L
+
+        assertNull(accounting.apply(event(48_219, 14, 10, 0, seconds = pumpStartSeconds + 600), serial, zone))
+
+        assertEquals(pumpStart to 600_000L, saved[48_215L])
     }
 
     @Test
     fun `replaying stop and resume rows is idempotent after resume ended the stop`() {
         accounting.apply(event(48_215, 14, 3, 0), serial, zone)
-        accounting.apply(event(48_219, 14, 10, 0), serial, zone)
-        saved[48_215L] = pumpStart to 60_000L
+        accounting.apply(event(48_219, 14, 10, 0, seconds = pumpStartSeconds + 60), serial, zone)
+        assertEquals(pumpStart to 60_000L, saved[48_215L])
 
         assertNull(accounting.apply(event(48_215, 14, 3, 0), serial, zone))
-        assertNull(accounting.apply(event(48_219, 14, 10, 0), serial, zone))
+        assertNull(accounting.apply(event(48_219, 14, 10, 0, seconds = pumpStartSeconds + 60), serial, zone))
         assertEquals(pumpStart to 60_000L, saved[48_215L])
     }
 
@@ -198,10 +238,10 @@ class YpsoTbrHistoryAccountingTest {
     @Test
     fun `pump stop and resume rows bound a zero basal window at pump time`() {
         assertNull(accounting.apply(event(48_215, 14, 3, 0), serial, zone))
-        accounting.apply(event(48_219, 14, 10, 0), serial, zone)
-
         assertEquals(pumpStart to 24 * 60 * 60_000L, saved[48_215L])
-        verify(sync).syncStopTemporaryBasalWithPumpId(pumpStart, 48_219L, PumpType.YPSOPUMP, serial)
+
+        assertNull(accounting.apply(event(48_219, 14, 10, 0, seconds = pumpStartSeconds + 1_200), serial, zone))
+        assertEquals(pumpStart to 1_200_000L, saved[48_215L])
     }
 
     @Test
