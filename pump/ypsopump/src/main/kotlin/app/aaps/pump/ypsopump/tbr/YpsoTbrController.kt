@@ -126,7 +126,9 @@ internal class YpsoTbrController(
 
     private fun resolve(observation: YpsoTbrObservation) {
         for (attempt in journal.all()) {
-            if (attempt.awaitsStatus && attempt.createdAt < observation.observedAt) resolveFromStatus(attempt, observation)
+            // Commands and status reads share the serialized queue thread and a command resolves its own
+            // attempts, so any observation seen here was read after every journalled dispatch.
+            if (attempt.awaitsStatus) resolveFromStatus(attempt, observation)
         }
         for (attempt in journal.all()) if (attempt.awaitsAccounting) account(attempt)
         // A start whose row could not be read on its command link is identified while the pump still
@@ -143,7 +145,7 @@ internal class YpsoTbrController(
             ?: return run { journal.noEffect(attempt.id, "no dispatch was recorded") }
         when (attempt.kind) {
             YpsoTbrAttempt.Kind.START -> {
-                val elapsed = ((observation.observedAt - dispatchedAt) / MINUTE).toInt()
+                val elapsed = ((observation.observedAt - dispatchedAt) / MINUTE).toInt().coerceAtLeast(0)
                 val runningThis = observation.running && observation.percent == attempt.percent &&
                     observation.remainingMinutes in (attempt.durationMinutes - elapsed - 1)..attempt.durationMinutes
                 if (runningThis) {
@@ -175,7 +177,7 @@ internal class YpsoTbrController(
 
     /** The pump still runs this start: same percent, and remaining minutes match its elapsed time. */
     private fun stillRunning(attempt: YpsoTbrAttempt, observation: YpsoTbrObservation): Boolean {
-        val elapsed = ((observation.observedAt - checkNotNull(attempt.effectiveAt)) / MINUTE).toInt()
+        val elapsed = ((observation.observedAt - checkNotNull(attempt.effectiveAt)) / MINUTE).toInt().coerceAtLeast(0)
         val expected = attempt.durationMinutes - elapsed
         return observation.running && observation.percent == attempt.percent &&
             observation.remainingMinutes > 0 && observation.remainingMinutes in (expected - 2)..(expected + 1)
@@ -240,6 +242,10 @@ internal class YpsoTbrController(
         val after = evidence.after
         when {
             dispatchedAt == null -> journal.noEffect(attempt.id, "command was not sent: ${evidence.result}")
+            // Every measured rejection code left the pump unchanged. A rejected start is never AAPS's,
+            // even if status shows matching therapy: someone else started it, and history imports it.
+            attempt.kind == YpsoTbrAttempt.Kind.START && evidence.result is YpsoTbrWriteResult.Rejected ->
+                journal.noEffect(attempt.id, "${evidence.result.reason} reported by the pump")
             after != null && effective(after) && evidence.result !is YpsoTbrWriteResult.Rejected -> {
                 // Acknowledgement is the latest moment the command can have taken effect; without it
                 // the dispatch time is used, bounded by the status that proved the effect.

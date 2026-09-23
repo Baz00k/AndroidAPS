@@ -62,13 +62,15 @@ class YpsoTbrHistoryAccounting(
         val running = kind == YpsoHistoryKind.TEMP_BASAL_STARTED
         val attempt = bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial)
         if (attempt != null) return syncAttempt(attempt, pumpId, minutes * MINUTE)
-        // A start whose outcome status has not proven yet may be this very row: importing the row
-        // now would record the same TBR twice once status resolves the start. Wait for status.
+        // A start whose outcome status has not proven yet, or whose own row is not identified yet, may
+        // be this very row: importing it now would record the same TBR twice. Hold until status or
+        // identification settles it. A started TBR that is still running gets identified by the next
+        // status; one that has ended can no longer be identified and falls back to the time window.
         journal.all().firstOrNull {
-            it.kind == YpsoTbrAttempt.Kind.START && it.awaitsStatus && it.dispatchedAt != null &&
-                it.pumpSerial == pumpSerial && it.percent == percent &&
-                (it.baselinePumpId == null || it.baselinePumpId < pumpId)
-        }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which status has not resolved yet" }
+            it.kind == YpsoTbrAttempt.Kind.START && it.pumpSerial == pumpSerial && it.percent == percent &&
+                (it.baselinePumpId == null || it.baselinePumpId < pumpId) &&
+                (it.awaitsStatus && it.dispatchedAt != null || it.awaitsBinding && it.rowPumpId == null && it.stoppedAt == null && running)
+        }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which is not settled yet" }
         val duration = (minutes * MINUTE).coerceAtLeast(1L)
         return sync(pumpId, pumpSerial, start, duration) {
             pumpSync.syncTemporaryBasalWithPumpId(

@@ -1357,7 +1357,7 @@ class YpsoBleManager @Inject constructor(
         headOnly: Boolean,
         onResult: (YpsoHistorySnapshot?) -> Unit,
     ): HistoryReadAttempt {
-        require(maxRows > 0 && (!headOnly || maxRows == 1))
+        require(maxRows > 0)
         val attempt = HistoryReadAttempt()
         if (!acquirePumpOperation(historyReadActive)) {
             attempt.tryComplete()

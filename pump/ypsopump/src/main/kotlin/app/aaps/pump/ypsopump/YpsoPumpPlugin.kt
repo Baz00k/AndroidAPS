@@ -1014,19 +1014,23 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     /**
-     * The newest history row with its PumpSync identity, read right after a TBR start was proven. Its
-     * sequence generation comes from the durable cursor: the row is newer than the cursor, and a
-     * sequence below the cursor's means the 32-bit counter wrapped once.
+     * The running TBR row among the history rows newer than the durable cursor, read right after a
+     * TBR start was proven. The pump runs one TBR at a time, so a running (type 9) row is the TBR the
+     * pump runs now. Its PumpSync identity equals the one history reconciliation assigns only while no
+     * reboot and no sequence decrease lie between cursor and row; otherwise the identity stays unknown.
      */
     private fun readHistoryHead(): app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow? {
         val cursor = historyIngestion.currentCursor() ?: return null
-        val snapshot = readHistoryBlocking(timeoutMs = 20_000, maxRows = 1, headOnly = true) ?: return null
+        val snapshot = readHistoryBlocking(timeoutMs = 20_000, maxRows = HEAD_ROWS, headOnly = true) ?: return null
         if (snapshot.countBefore != snapshot.countAfter || snapshot.headBefore != snapshot.headAfter) return null
-        val head = snapshot.rowsNewestFirst.singleOrNull() ?: return null
-        val cursorSequence = cursor.identity.sequence
-        val generation = cursor.identity.sequenceGeneration + if (head.sequence < cursorSequence) 1 else 0
+        if (snapshot.pumpRebootBefore != cursor.pumpReboot || snapshot.pumpRebootAfter != cursor.pumpReboot) return null
+        val newer = snapshot.rowsNewestFirst.takeWhile { it.sequence > cursor.identity.sequence }
+        // Sequences must fall strictly toward the cursor; anything else is not a plain continuation.
+        if (newer.zipWithNext().any { (a, b) -> a.sequence <= b.sequence }) return null
+        val running = newer.filter { it.eventType == 9 }
+        val row = running.singleOrNull() ?: return null
         return app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow(
-            (generation.toLong() shl 32) or head.sequence, head.eventType, head.value1, head.value2,
+            (cursor.identity.sequenceGeneration.toLong() shl 32) or row.sequence, row.eventType, row.value1, row.value2,
         )
     }
 
@@ -1991,6 +1995,8 @@ class YpsoPumpPlugin @Inject constructor(
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HISTORY_YIELD_GRACE_MS = 10_000L
+        /** Rows read back from the newest when identifying an AAPS TBR start's history row. */
+        private const val HEAD_ROWS = 8
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 
