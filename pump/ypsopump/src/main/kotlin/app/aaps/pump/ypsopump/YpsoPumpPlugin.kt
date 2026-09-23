@@ -139,10 +139,17 @@ class YpsoPumpPlugin @Inject constructor(
             resolveProvisional = ::bindProvisionalBolusToPumpId,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
-                    tbrRecord(pumpSerial, start) { it.ids.pumpId == pumpId }?.let { it.timestamp to it.duration }
+                    tbrRecords(pumpSerial, start, includeInvalid = true).singleOrNull { it.ids.pumpId == pumpId }
+                        ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid) }
 
                 override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
                     .any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }
+
+                override fun latestSuspendBefore(pumpSerial: String, at: Long) =
+                    tbrRecords(pumpSerial, at - 24 * 60 * 60_000L, includeInvalid = true)
+                        .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId != null && it.timestamp <= at }
+                        .maxByOrNull { it.timestamp }
+                        ?.let { YpsoTbrRecordLookup.Suspend(checkNotNull(it.ids.pumpId), it.timestamp, it.duration, it.isValid) }
             }),
         )
     }
@@ -157,13 +164,13 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     /**
-     * The single valid YpsoPump TBR record starting at or after [notBefore] matching [predicate]. Every
-     * caller knows the start it wrote, so read-back works however old the record is.
+     * YpsoPump TBR records starting at or after [notBefore] (less a minute). Every caller knows the
+     * start it wrote, so read-back works however old the record is.
      */
-    private fun tbrRecord(serial: String, notBefore: Long, predicate: (app.aaps.core.data.model.TB) -> Boolean): app.aaps.core.data.model.TB? {
-        if (!::persistenceLayer.isInitialized) return null
-        return persistenceLayer.getTemporaryBasalsStartingFromTime(notBefore - 60_000L, false).blockingGet()
-            .singleOrNull { it.isValid && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial && predicate(it) }
+    private fun tbrRecords(serial: String, notBefore: Long, includeInvalid: Boolean = false): List<app.aaps.core.data.model.TB> {
+        if (!::persistenceLayer.isInitialized) return emptyList()
+        return persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(notBefore - 60_000L, false).blockingGet()
+            .filter { (includeInvalid || it.isValid) && it.referenceId == null && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
     }
 
     private fun activeTbrRecords(serial: String, at: Long): List<app.aaps.core.data.model.TB> {
@@ -180,13 +187,9 @@ class YpsoPumpPlugin @Inject constructor(
      * as a shorter duration, never as an end-event identity, so pump history can still correct them.
      */
     private val tbrRecords = object : YpsoTbrRecords {
-        private fun find(attempt: YpsoTbrAttempt, includeInvalid: Boolean = false): app.aaps.core.data.model.TB? {
-            val start = attempt.effectiveAt ?: attempt.createdAt
-            if (!::persistenceLayer.isInitialized) return null
-            return persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(start - 60_000L, false).blockingGet()
-                .filter { (includeInvalid || it.isValid) && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == attempt.pumpSerial }
+        private fun find(attempt: YpsoTbrAttempt, includeInvalid: Boolean = false): app.aaps.core.data.model.TB? =
+            tbrRecords(attempt.pumpSerial, attempt.effectiveAt ?: attempt.createdAt, includeInvalid)
                 .singleOrNull { it.ids.temporaryId == attempt.temporaryId || attempt.pumpId != null && it.ids.pumpId == attempt.pumpId }
-        }
 
         override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved {
             val existing = find(attempt, includeInvalid = true)
@@ -395,6 +398,7 @@ class YpsoPumpPlugin @Inject constructor(
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
         val statusRead = readStatusBlocking()
+        if (statusRead) reconcileTbrWithStatus()
         if (reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)) {
             val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
             // Compare before publishing the message, so the result names the consequence of the read
@@ -854,16 +858,22 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN, message, Notification.URGENT)
     }
 
-    /** Everything that must happen after a status read lands. */
+    /** Everything that must happen after a status read lands. Runs on the BLE callback thread. */
     private fun onStatusRead() {
         checkReservoir()
-        if (!YpsoPumpConst.READ_ONLY_MODE) {
-            bleManager.observedTbr()?.let { observation ->
-                runCatching { tbrController.onStatus(observation) }
-                    .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR resolution failed: ${it.message}") }
-            }
-            publishTbrWarningIfNeeded()
+    }
+
+    /**
+     * TBR reconciliation after a routine status read. Runs on the reading thread, not the BLE callback
+     * thread: it performs database work and must not race a queued TBR command for the controller.
+     */
+    private fun reconcileTbrWithStatus() {
+        if (YpsoPumpConst.READ_ONLY_MODE) return
+        bleManager.observedTbr()?.let { observation ->
+            runCatching { tbrController.onStatus(observation) }
+                .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR resolution failed: ${it.message}") }
         }
+        publishTbrWarningIfNeeded()
     }
 
     /**

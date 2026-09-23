@@ -168,9 +168,28 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
     override fun loadAll(): List<YpsoTbrAttempt> {
         if (!file.exists()) return emptyList()
         val root = JSONObject(file.readText())
-        require(root.getInt("version") == VERSION) { "unsupported TBR journal version" }
+        val version = root.getInt("version")
+        if (version != VERSION) return retireEarlierVersion(root, version)
         val array = root.getJSONArray("attempts")
         return (0 until array.length()).map { decode(array.getJSONObject(it)) }
+    }
+
+    /**
+     * Pre-release journals used another schema. One whose attempts are all settled holds nothing that
+     * could still change a record, so it is archived and a new journal starts. Anything else stays
+     * unreadable, which fails every TBR operation closed.
+     */
+    private fun retireEarlierVersion(root: JSONObject, version: Int): List<YpsoTbrAttempt> {
+        require(version in 1 until VERSION) { "unsupported TBR journal version" }
+        val array = root.getJSONArray("attempts")
+        val settled = (0 until array.length()).all {
+            val attempt = array.getJSONObject(it)
+            attempt.getString("state") == "NOT_STARTED" ||
+                attempt.getString("state") in setOf("STARTED", "EFFECTIVE") && !attempt.isNull("pumpId")
+        }
+        require(settled) { "TBR journal version $version holds unresolved attempts" }
+        check(file.renameTo(File(file.parentFile, "${file.name}.v$version"))) { "cannot archive TBR journal version $version" }
+        return emptyList()
     }
 
     override fun commitAll(attempts: List<YpsoTbrAttempt>) {
@@ -204,6 +223,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         .put("state", value.state.name)
         .putNullable("dispatchedAt", value.dispatchedAt)
         .putNullable("effectiveAt", value.effectiveAt)
+        .putNullable("effectiveBy", value.effectiveBy)
         .put("accounted", value.accounted)
         .putNullable("stoppedAt", value.stoppedAt)
         .putNullable("pumpId", value.pumpId)
@@ -224,6 +244,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
             state = YpsoTbrAttempt.State.valueOf(json.getString("state")),
             dispatchedAt = json.longOrNull("dispatchedAt"),
             effectiveAt = json.longOrNull("effectiveAt"),
+            effectiveBy = json.longOrNull("effectiveBy"),
             accounted = json.getBoolean("accounted"),
             stoppedAt = json.longOrNull("stoppedAt"),
             pumpId = json.longOrNull("pumpId"),
@@ -235,10 +256,10 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
     private fun JSONObject.longOrNull(name: String): Long? = if (isNull(name)) null else getLong(name)
 
     companion object {
-        private const val VERSION = 2
+        private const val VERSION = 3
         private val FIELDS = setOf(
             "id", "kind", "pumpSerial", "percent", "durationMinutes", "type", "temporaryId", "baselinePumpId", "createdAt",
-            "state", "dispatchedAt", "effectiveAt", "accounted", "stoppedAt", "pumpId", "detail",
+            "state", "dispatchedAt", "effectiveAt", "effectiveBy", "accounted", "stoppedAt", "pumpId", "detail",
         )
     }
 }

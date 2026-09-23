@@ -183,13 +183,15 @@ internal class YpsoTbrController(
     private fun stop(serial: String): StopOutcome {
         val attempt = newAttempt(YpsoTbrAttempt.Kind.STOP, serial, YpsoTbrRequest.STOP_PERCENT, YpsoTbrRequest.STOP_DURATION_MINUTES, "", null)
         pendingCuts = emptyList()
-        send(attempt) { it.idle }
+        val evidence = send(attempt) { it.idle }
         val current = checkNotNull(journal.find(attempt.id))
         return when {
             current.state == YpsoTbrAttempt.State.EFFECTIVE -> {
                 // AAPS's own starts are ended at the pump-confirmed stop time and replayed until saved.
-                // Any other record is corrected by the next idle status and, exactly, by history.
+                // Any other record (a TBR set on the pump) is ended now against the same-link idle
+                // status, erring toward higher IOB; history later moves it to the pump's own time.
                 for (ended in pendingCuts) account(ended)
+                evidence.after?.let(records::reconcileWith)
                 StopOutcome.CONFIRMED
             }
             current.state == YpsoTbrAttempt.State.NO_EFFECT && current.dispatchedAt == null -> StopOutcome.NOT_SENT
