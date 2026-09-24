@@ -406,6 +406,111 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
+    fun `a square bolus running at registration counts its share delivered from then on`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        var saved: app.aaps.core.data.model.EB? = null
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenAnswer { saved }
+        whenever(sync.syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            saved = app.aaps.core.data.model.EB(timestamp = it.getArgument(0), amount = it.getArgument(1), duration = it.getArgument(2))
+            true
+        }
+        whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            saved = app.aaps.core.data.model.EB(timestamp = it.getArgument(0), amount = it.getArgument(1), duration = it.getArgument(2))
+            true
+        }
+        // Delivered 1.00 U over 29 whole minutes (up to 30); registration came 10 minutes in.
+        val dose = row(101, 3, 100).copy(value2 = 29)
+        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val registered = start + 10 * 60_000L
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer { it.getArgument<Long>(0) < registered }
+        val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { registered })
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        val before = store.value
+        val rows = snapshot(listOf(dose, row(100, 2, 0)))
+
+        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+
+        // 20 of at most 30 minutes, rounded up to 0.01 U.
+        assertEquals(registered, saved?.timestamp)
+        assertEquals(0.67, saved?.amount)
+        assertEquals(19 * 60_000L, saved?.duration)
+
+        // A replay keeps the cut record instead of restoring the whole amount.
+        store.value = before
+        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+        assertEquals(registered to 0.67, saved?.timestamp to saved?.amount)
+        assertEquals(19 * 60_000L, saved?.duration)
+    }
+
+    @Test
+    fun `a cut square keeps its cut when the pump is registered again later`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val dose = row(101, 3, 100).copy(value2 = 29)
+        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val cut = app.aaps.core.data.model.EB(timestamp = start + 10 * 60_000L, amount = 0.67, duration = 19 * 60_000L)
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(cut)
+        val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { start + 60 * 60 * 60_000L })
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0))))
+
+        assertTrue(result is YpsoHistoryIngestionResult.Applied)
+        verify(sync, org.mockito.kotlin.never()).correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+        verify(sync, org.mockito.kotlin.never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `an AAPS extended bolus starting after its row's latest end is corrected, never mistaken for a cut`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val dose = row(101, 3, 20).copy(value2 = 2)
+        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        // Recorded on the phone clock; the pump clock runs five minutes behind.
+        val recorded = app.aaps.core.data.model.EB(timestamp = start + 5 * 60_000L, amount = 1.0, duration = 30 * 60_000L)
+        whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(recorded)
+        whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenReturn(true)
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0))))
+
+        verify(sync).correctExtendedBolusWithPumpId(eq(start + 5 * 60_000L), eq(0.2), eq(2 * 60_000L), any(), any(), any(), eq("10000001"))
+    }
+
+    @Test
+    fun `a square whose latest end is exactly registration is passed over, not blocked`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val dose = row(101, 3, 100).copy(value2 = 29)
+        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val registered = start + 30 * 60_000L
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer { it.getArgument<Long>(0) < registered }
+        val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { registered })
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+
+        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0)))) is YpsoHistoryIngestionResult.Applied)
+        verify(sync, org.mockito.kotlin.never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `square share after registration never rounds insulin down`() {
+        val part = app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting.squareFrom(
+            registeredAt = 60_000L, start = 0L, elapsedMinutes = 2, amount = 0.10,
+        )
+        // Latest end at 3 minutes: 2 of 3 minutes, 0.0667 U, rounds up.
+        assertEquals(0.07, part.amount)
+        assertEquals(60_000L to 60_000L, part.start to part.duration)
+        val whole = app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting.squareFrom(0L, 0L, 2, 0.10)
+        assertEquals(0.10, whole.amount)
+    }
+
+    @Test
     fun `an already recorded extended bolus is corrected rather than imported again`() {
         val store = Store()
         val sync: PumpSync = mock()

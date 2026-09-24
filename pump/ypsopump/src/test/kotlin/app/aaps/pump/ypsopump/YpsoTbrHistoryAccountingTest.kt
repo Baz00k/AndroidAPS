@@ -16,6 +16,7 @@ import java.time.temporal.ChronoUnit
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
@@ -51,6 +52,9 @@ class YpsoTbrHistoryAccountingTest {
             .filter { it.key in suspends && it.value.first <= at }.maxByOrNull { it.value.first }
             ?.let { YpsoTbrRecordLookup.Suspend(it.key, null, it.value.first, it.value.second, it.key !in invalid) }
         override fun statusSuspendsFrom(pumpSerial: String, from: Long) = statusSuspends.filter { it.start >= from }
+        override fun rowSuspendsAt(pumpSerial: String, at: Long) = saved.entries
+            .filter { it.key in suspends && it.value.first == at }
+            .map { YpsoTbrRecordLookup.Suspend(it.key, null, it.value.first, it.value.second, it.key !in invalid) }
     }, registeredAt = { registeredAt })
     private var suspendOpen = false
     private val suspends = mutableSetOf<Long>()
@@ -61,6 +65,10 @@ class YpsoTbrHistoryAccountingTest {
             if (pumpId in invalid) return@thenAnswer false
             saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
             if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
+            true
+        }
+        whenever(sync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenAnswer {
+            invalid += it.getArgument<Long>(0)
             true
         }
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
@@ -267,11 +275,86 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `rows from before the pump was registered in AAPS are passed over`() {
-        registeredAt = pumpStart + 60_000L
+    fun `a TBR that ended before the pump was registered in AAPS is passed over`() {
+        registeredAt = pumpStart + 31 * 60_000L
 
         assertNull(accounting.apply(event(48_221, 10, 300, 30), serial, zone))
+        assertEquals(emptyMap<Long, Pair<Long, Long>>(), saved)
+    }
+
+    @Test
+    fun `a TBR running at registration counts from registration until it ends`() {
+        registeredAt = pumpStart + 10 * 60_000L
+
+        assertNull(accounting.apply(event(48_221, 9, 300, 30), serial, zone))
+        assertEquals(registeredAt to 20 * 60_000L, saved[48_221L])
+
+        assertNull(accounting.apply(event(48_221, 10, 300, 25), serial, zone))
+        assertEquals(registeredAt to 15 * 60_000L, saved[48_221L])
+    }
+
+    @Test
+    fun `a TBR recorded from its running row and cancelled before registration is ended there`() {
+        registeredAt = pumpStart + 10 * 60_000L
+        accounting.apply(event(48_221, 9, 300, 30), serial, zone)
+
+        assertNull(accounting.apply(event(48_221, 10, 300, 5), serial, zone))
+
+        assertEquals(registeredAt to 1L, saved[48_221L])
+    }
+
+    @Test
+    fun `a pump stop running at registration counts from registration until its resume`() {
+        registeredAt = pumpStart + 10 * 60_000L
+
         assertNull(accounting.apply(event(48_222, 14, 3, 0), serial, zone))
+        assertEquals(registeredAt to 24 * 60 * 60_000L - 10 * 60_000L, saved[48_222L])
+        assertNull(accounting.apply(event(48_223, 14, 10, 0, seconds = pumpStartSeconds + 1_800), serial, zone))
+
+        assertEquals(registeredAt to 20 * 60_000L, saved[48_222L])
+    }
+
+    @Test
+    fun `a pump stop and resume both before registration leave nothing and never block`() {
+        registeredAt = pumpStart + 60 * 60_000L
+
+        repeat(2) {
+            assertNull(accounting.apply(event(48_222, 14, 3, 0), serial, zone))
+            assertNull(accounting.apply(event(48_223, 14, 10, 0, seconds = pumpStartSeconds + 600), serial, zone))
+        }
+
+        assertTrue(saved.keys.all { it in invalid })
+    }
+
+    @Test
+    fun `replaying an earlier stop and resume never removes a later stop still running at registration`() {
+        registeredAt = pumpStart + 60 * 60_000L
+        val stopA = event(48_222, 14, 3, 0)
+        val resumeA = event(48_223, 14, 10, 0, seconds = pumpStartSeconds + 600)
+        val stopB = event(48_224, 14, 3, 0, seconds = pumpStartSeconds + 1_200)
+
+        repeat(2) { listOf(stopA, resumeA, stopB).forEach { assertNull(accounting.apply(it, serial, zone)) } }
+
+        assertTrue(48_222L in invalid)
+        assertTrue(48_224L !in invalid)
+        assertEquals(registeredAt, saved[48_224L]?.first)
+    }
+
+    @Test
+    fun `a stop running at registration still lapses a day after the pump stopped`() {
+        registeredAt = pumpStart + 23 * 60 * 60_000L
+
+        assertNull(accounting.apply(event(48_222, 14, 3, 0), serial, zone))
+
+        assertEquals(registeredAt to 60 * 60_000L, saved[48_222L])
+    }
+
+    @Test
+    fun `a pump stop a day before registration has lapsed and is passed over`() {
+        registeredAt = pumpStart + 24 * 60 * 60_000L
+
+        assertNull(accounting.apply(event(48_222, 14, 3, 0), serial, zone))
+
         assertEquals(emptyMap<Long, Pair<Long, Long>>(), saved)
     }
 
