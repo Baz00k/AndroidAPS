@@ -440,43 +440,48 @@ private fun InsulinUndoSheet(
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             SheetSurface(title = "Insulin on board", onClose = onClose) {
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DetailRow("Total", state.iob.ifBlank { "--" })
-                        DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
-                        DetailRow("From basal", state.iobBasal.ifBlank { "--" })
-                    }
-                }
-                if (state.recentInsulin.isEmpty()) {
-                    Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
-                } else {
-                    Text(
-                        "Remove a dose the pump did not actually deliver.",
-                        style = AapsTheme.type.caption, color = colors.textTertiary
-                    )
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
+                ) {
                     AapsCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            state.recentInsulin.forEachIndexed { i, e ->
-                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                        Text(
-                                            if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
-                                            style = AapsTheme.type.caption, color = colors.textTertiary
-                                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            DetailRow("Total", state.iob.ifBlank { "--" })
+                            DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
+                            DetailRow("From basal", state.iobBasal.ifBlank { "--" })
+                        }
+                    }
+                    if (state.recentInsulin.isEmpty()) {
+                        Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
+                    } else {
+                        Text(
+                            "Remove a dose the pump did not actually deliver.",
+                            style = AapsTheme.type.caption, color = colors.textTertiary
+                        )
+                        AapsCard(Modifier.fillMaxWidth()) {
+                            Column {
+                                state.recentInsulin.forEachIndexed { i, e ->
+                                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                                            Text(
+                                                if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
+                                                style = AapsTheme.type.caption, color = colors.textTertiary
+                                            )
+                                        }
+                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
                                     }
-                                    RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
                                 }
                             }
                         }
                     }
+                    Box(Modifier.height(8.dp))
                 }
-                Box(Modifier.height(8.dp))
             }
         }
     }
