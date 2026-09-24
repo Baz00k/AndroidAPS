@@ -608,7 +608,8 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun setAvailability(availability: Availability) {
         val current = state ?: throw SecurityException("Session storage unavailable")
-        persist(if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability))
+        val next = if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability)
+        if (next != current) persist(next)
     }
 
     @Synchronized
@@ -1139,6 +1140,13 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == id && phase.ordinal == reserved.phase.ordinal + 1) { "Invalid write transition" }
+        if (phase == Phase.ACKED) {
+            // POSSIBLY_SENT is already durable. After a crash the pump outcome remains uncertain
+            // whether or not an acknowledgement was observed, so retaining the conservative
+            // durable phase avoids a Keystore rotation without permitting a new allocation.
+            record = old.copy(reservation = reserved.copy(phase = phase))
+            return
+        }
         update(old.copy(reservation = reserved.copy(phase = phase)))
     }
 

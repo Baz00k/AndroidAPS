@@ -12,6 +12,7 @@ class SessionJournalTest {
     private class Storage : SessionJournal.Storage {
         var file: String? = null
         val keys = mutableMapOf<String, ByteArray>()
+        var generations = 0
         var fault = ""
         var failSeal = false
         var terminateAt = ""
@@ -24,6 +25,7 @@ class SessionJournalTest {
         override fun create(alias: String) {
             boundary("before-create")
             keys[alias] = java.security.MessageDigest.getInstance("SHA-256").digest(alias.toByteArray())
+            generations++
             boundary("after-create")
         }
         override fun delete(alias: String) {
@@ -57,6 +59,44 @@ class SessionJournalTest {
 
     private val old = PumpSession.State(listOf(PumpSession.Record("pump", "00".repeat(32), "generation", 8, 100, null)))
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
+
+    @Test
+    fun `acknowledging a write does not rotate its journal anchor`() {
+        val storage = Storage()
+        val owner = PumpSession(SessionJournal(storage))
+        val key = ByteArray(32) { 1 }
+        owner.provisionReadBaseline("pump", key, 8, 100)
+        val token = owner.open("pump", key)
+        val transaction = owner.begin(token)
+        val reservation = owner.reserve(token, transaction, PumpSession.WriteIntent("write", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        val beforeAck = storage.generations
+
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+
+        assertEquals(beforeAck, storage.generations)
+        assertEquals(PumpSession.Phase.ACKED, owner.snapshot()?.reservation?.phase)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, PumpSession(SessionJournal(storage)).activeRecord()?.reservation?.phase)
+        owner.finish(token, transaction)
+        owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "pump confirmed write")
+        assertEquals(PumpSession.Phase.VERIFIED, PumpSession(SessionJournal(storage)).activeRecord()?.reservation?.phase)
+    }
+
+    @Test
+    fun `repeated identical availability does not rotate the journal anchor`() {
+        val storage = Storage()
+        val owner = PumpSession(SessionJournal(storage))
+        val availability = PumpSession.Availability(
+            setOf(PumpSession.AvailabilityCause.TRANSPORT), since = 123,
+        )
+        owner.setAvailability(availability)
+        val before = storage.generations
+
+        owner.setAvailability(availability)
+
+        assertEquals(before, storage.generations)
+        assertEquals(availability, PumpSession(SessionJournal(storage)).availability())
+    }
 
     @Test
     fun `process termination before publication preserves exact committed journal with an extra key`() {
