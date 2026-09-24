@@ -1541,6 +1541,32 @@ class YpsoBleManager @Inject constructor(
                 readSelected(index, done)
             }
         }
+        /**
+         * Pump clock offset from two plain reads (no selector write). A date change between the
+         * reads, or any read failure, leaves the offset unknown rather than failing the scan.
+         */
+        fun readPumpClockOffset(done: (Long?) -> Unit) {
+            if (!attempt.isActive || !owned()) return done(null)
+            fun plain(uuid: UUID, next: (ByteArray?) -> Unit) =
+                readMultiframe(uuid, expectedGatt = gatt, onFailure = { next(null) }) { ownerGatt, frames ->
+                    next(if (ownerGatt === gatt && owned()) runCatching { decryptOwned(frames) }.getOrNull() else null)
+                }
+            plain(CHAR_SYSTEM_DATE) { date ->
+                val before = System.currentTimeMillis()
+                plain(CHAR_SYSTEM_TIME) { time ->
+                    val after = System.currentTimeMillis()
+                    val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
+                    val offset = local?.let {
+                        val phone = (before + after) / 2
+                        val pumpAsPhoneLocal = it.atZone(pumpState.historyZone).toInstant().toEpochMilli()
+                        pumpAsPhoneLocal - phone
+                    }
+                    // The time is read after the date; near midnight the pair may straddle two days.
+                    val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
+                    done(offset?.takeIf { !nearMidnight })
+                }
+            }
+        }
         fun finishScan() {
             if (yieldAtSafeBoundary()) return
             readCount { countAfter ->
@@ -1550,18 +1576,21 @@ class YpsoBleManager @Inject constructor(
                     return@readCount
                 }
                 select(0) { headAfter ->
-                    finish(
-                        YpsoHistorySnapshot(
-                            countBefore,
-                            countAfter,
-                            reboot.toLong(),
-                            reboot.toLong(),
-                            headBefore,
-                            headAfter,
-                            rows.toList(),
-                            fullCoverage = rows.size == countBefore,
-                        ),
-                    )
+                    readPumpClockOffset { offset ->
+                        finish(
+                            YpsoHistorySnapshot(
+                                countBefore,
+                                countAfter,
+                                reboot.toLong(),
+                                reboot.toLong(),
+                                headBefore,
+                                headAfter,
+                                rows.toList(),
+                                fullCoverage = rows.size == countBefore,
+                                pumpClockOffsetMs = offset,
+                            ),
+                        )
+                    }
                 }
             }
         }

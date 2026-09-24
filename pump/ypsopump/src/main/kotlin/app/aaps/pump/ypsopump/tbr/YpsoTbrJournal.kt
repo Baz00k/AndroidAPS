@@ -58,14 +58,6 @@ data class YpsoTbrAttempt(
     val awaitsBinding: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && pumpId == null
     /** Anything that keeps AAPS from knowing it represents the pump truthfully. */
     val unresolved: Boolean get() = awaitsStatus || awaitsAccounting
-
-    /** The pump still runs this start: same percent, and remaining minutes match its elapsed time. */
-    fun runningPer(observation: YpsoTbrObservation): Boolean {
-        val elapsed = ((observation.observedAt - checkNotNull(effectiveAt)) / 60_000L).toInt().coerceAtLeast(0)
-        val expected = durationMinutes - elapsed
-        return observation.running && observation.percent == percent &&
-            observation.remainingMinutes > 0 && observation.remainingMinutes in (expected - 2)..(expected + 1)
-    }
 }
 
 interface YpsoTbrAttemptStore {
