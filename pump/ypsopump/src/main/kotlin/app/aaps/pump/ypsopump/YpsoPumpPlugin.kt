@@ -136,6 +136,7 @@ class YpsoPumpPlugin @Inject constructor(
         YpsoHistoryIngestion(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
+            hasRecordedBolus = ::hasRecordedHistoryBolus,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.
@@ -313,6 +314,7 @@ class YpsoPumpPlugin @Inject constructor(
         Thread(runnable, "ypso-history-recovery").apply { isDaemon = true }
     }
     internal var dispatchHistoryRecovery: ((() -> Unit) -> Unit) = { task -> historyRecoveryExecutor.execute(task) }
+    private var transientHistoryFailures = 0
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
@@ -747,6 +749,17 @@ class YpsoPumpPlugin @Inject constructor(
         }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump provisional bolus accounting failed: ${it.message}") }
     }
 
+    internal fun hasRecordedHistoryBolus(pumpSerial: String, pumpId: Long): Boolean =
+        persistenceLayer.getBolusByPumpId(pumpId, PumpType.YPSOPUMP, pumpSerial) != null ||
+            journalledImmediateBolus(pumpSerial, pumpId) != null
+
+    private fun journalledImmediateBolus(pumpSerial: String, pumpId: Long): YpsoBolusAttempt? {
+        val candidates = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
+            .loadAll().filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial && it.accountingPumpId == pumpId }
+        check(candidates.size <= 1) { "multiple bolus attempts claim the same pump history identity" }
+        return candidates.singleOrNull()
+    }
+
     /**
      * Links the provisional record for this dose to the pump identity of its terminal history row, so
      * the authoritative amount updates that record rather than inserting a second one.
@@ -759,12 +772,7 @@ class YpsoPumpPlugin @Inject constructor(
         type: BS.Type,
         knownAttempt: YpsoBolusAttempt? = null,
     ) {
-        val attempt = knownAttempt ?: run {
-            val candidates = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
-                .loadAll().filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial && it.accountingPumpId == pumpId }
-            check(candidates.size <= 1) { "multiple bolus attempts claim the same pump history identity" }
-            candidates.singleOrNull() ?: return
-        }
+        val attempt = knownAttempt ?: journalledImmediateBolus(pumpSerial, pumpId) ?: return
         if (::persistenceLayer.isInitialized) {
             persistenceLayer.syncPumpBolusWithTempId(
                 BS(timestamp = timestamp, amount = amount, type = type,
@@ -1129,6 +1137,7 @@ class YpsoPumpPlugin @Inject constructor(
         maxRows: Int = 128,
         stopWhen: () -> Boolean = { false },
         onAttempt: (YpsoBleManager.HistoryReadAttempt) -> Unit = {},
+        onTimeout: () -> Unit = {},
     ): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
@@ -1145,6 +1154,7 @@ class YpsoPumpPlugin @Inject constructor(
                 attempt.requestYield()
             }
             if (android.os.SystemClock.elapsedRealtime() >= deadline) {
+                onTimeout()
                 // A deadline is also a cooperative stop: let an in-flight selector finish its
                 // read-back instead of stranding a write reservation on an otherwise healthy link.
                 attempt.requestYield()
@@ -1204,30 +1214,63 @@ class YpsoPumpPlugin @Inject constructor(
                 // events were missed by seeing it. A short scan reports COVERAGE_INCOMPLETE and is
                 // discarded whole, so background recovery always reads the full ring.
                 val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
+                var timedOut = false
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
                     stopWhen = ::historyRecoveryMustYield,
                     onAttempt = historyRecoveryAttempt::set,
+                    onTimeout = { timedOut = true },
                 )
                 // Report the outcome: a recovery that reads nothing leaves cancelled doses showing
                 // their planned amount, and silence here hides that from the logs entirely.
                 when {
-                    snapshot == null              ->
-                        aapsLogger.warn(LTag.PUMP, "YpsoPump history recovery after $reason read no usable history")
-                    historyRecoveryMustYield()    ->
+                    historyRecoveryMustYield() || (!timedOut && historyRecoveryAttempt.get()?.shouldYield == true) ->
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason yielded to a pump command")
+                    snapshot == null              -> {
+                        aapsLogger.warn(LTag.PUMP, "YpsoPump history recovery after $reason read no usable history")
+                        reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("no usable history", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT))
+                    }
                     else                          -> {
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot)}")
+                        val result = ingestHistory(snapshot)
+                        reportHistoryRecovery(result)
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: $result")
                         if (!YpsoPumpConst.READ_ONLY_MODE) publishTbrWarningIfNeeded()
                     }
                 }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
+                reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("history recovery exception"))
             } finally {
                 historyRecoveryAttempt.set(null)
                 historyRecoveryActive.set(false)
                 if (idleDisconnectDeferredToHistory.getAndSet(false)) releaseIdleConnection("history recovery")
+            }
+        }
+    }
+
+    /** Only a committed history result clears this warning; status reads and intentional yields do not. */
+    @Synchronized
+    internal fun reportHistoryRecovery(result: YpsoHistoryIngestionResult) {
+        if (!historyRecoveryEnabled) return
+        when (result) {
+            is YpsoHistoryIngestionResult.Applied -> {
+                transientHistoryFailures = 0
+                uiInteraction.dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+            }
+            is YpsoHistoryIngestionResult.Blocked -> {
+                // The ingestion layer itself bounds clock retries; the next pass accounts or reports
+                // a real failure. Do not warn during that grace period or clear an existing warning.
+                if (result.retry == YpsoHistoryIngestionResult.Retry.BOUNDED) return
+                transientHistoryFailures = (transientHistoryFailures + 1).coerceAtMost(HISTORY_WARNING_RETRIES)
+                if (result.retry == YpsoHistoryIngestionResult.Retry.NONE || transientHistoryFailures >= HISTORY_WARNING_RETRIES) {
+                    // NotificationStore updates the same ID in place. No looping alarm, expiry or dismiss/add.
+                    uiInteraction.addNotification(
+                        Notification.YPSOPUMP_HISTORY_INCOMPLETE,
+                        rh.gs(R.string.ypsopump_history_incomplete_notification),
+                        Notification.NORMAL,
+                    )
+                }
             }
         }
     }
@@ -1330,7 +1373,7 @@ class YpsoPumpPlugin @Inject constructor(
             ) == true && terminalSequence != null && snapshot.rowsNewestFirst.any {
                 it.sequence == terminalSequence && app.aaps.pump.ypsopump.history.YpsoHistoryClassifier.classify(it).kind in terminalKinds
             }) {
-            return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")
+            return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
         }
         val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event ->
             if (attempt?.pumpHistoryId == event.identity.aapsPumpId) {
@@ -1920,10 +1963,17 @@ class YpsoPumpPlugin @Inject constructor(
     override fun onStop() {
         appLifecycle.removeVisibilityListener(visibilityListener)
         foregroundConnectionLease.set(false)
-        historyRecoveryEnabled = false
+        stopHistoryNotifications()
         cancelHistoryRecovery()
         super.onStop()
         dismissAvailabilityNotification()
+    }
+
+    @Synchronized
+    private fun stopHistoryNotifications() {
+        historyRecoveryEnabled = false
+        transientHistoryFailures = 0
+        uiInteraction.dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
     }
 
     /**
@@ -2091,6 +2141,7 @@ class YpsoPumpPlugin @Inject constructor(
     companion object {
         internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
+        private const val HISTORY_WARNING_RETRIES = 3
         private const val HISTORY_COMPLETION_GRACE_MS = 2_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L

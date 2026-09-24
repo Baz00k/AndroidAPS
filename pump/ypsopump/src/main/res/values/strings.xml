@@ -134,4 +134,5 @@
     <string name="ypsopump_cause_rekey">The saved pump key is wrong or expired. Enter the current key.</string>
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>
     <string name="ypsopump_rekey_new_key_required">Enter the pump’s new key. The old one won’t work.</string>
+    <string name="ypsopump_history_incomplete_notification">YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.</string>
 </resources>

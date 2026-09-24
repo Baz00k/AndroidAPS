@@ -479,6 +479,9 @@ class AppRepository @Inject internal constructor(
         database.foodDao.getLastId()
 
     // BOLUS
+    fun findBolusByPumpId(pumpId: Long, pumpType: InterfaceIDs.PumpType, pumpSerial: String): Bolus? =
+        database.bolusDao.findByPumpIds(pumpId, pumpType, pumpSerial)
+
     fun getBolusByNSId(nsId: String): Bolus? =
         database.bolusDao.getByNSId(nsId)
 

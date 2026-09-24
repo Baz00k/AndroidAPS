@@ -539,6 +539,14 @@ interface PumpSync {
 
     fun syncExtendedBolusWithPumpId(timestamp: Long, amount: Double, duration: Long, isEmulatingTB: Boolean, pumpId: Long, pumpType: PumpType, pumpSerial: String): Boolean
 
+    /**
+     * True only when the registered and currently active physical pump both match, and [timestamp]
+     * precedes its activation cutoff. Read-only: never registers a pump or changes the cutoff.
+     * History readers may use a completed delivery's end to distinguish deliberately excluded old
+     * history from a failed database write. Existing records still require normal reconciliation.
+     */
+    fun isHistoryRecordBeforeActivePump(timestamp: Long, pumpType: PumpType, pumpSerial: String): Boolean
+
     /** Read back an extended bolus by the same stable identity used for synchronization. */
     fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): app.aaps.core.data.model.EB?
 

@@ -155,6 +155,8 @@ class PersistenceLayerImpl @Inject constructor(
 
     override fun getLastBolusId(): Long? = repository.getLastBolusId()
     override fun getBolusByNSId(nsId: String): BS? = repository.getBolusByNSId(nsId)?.fromDb()
+    override fun getBolusByPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): BS? =
+        repository.findBolusByPumpId(pumpId, pumpType.toDb(), pumpSerial)?.fromDb()
 
     override fun getBolusesFromTime(startTime: Long, ascending: Boolean): Single<List<BS>> =
         repository.getBolusesDataFromTime(startTime, ascending)

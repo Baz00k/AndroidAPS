@@ -62,6 +62,38 @@ class PumpSyncImplementationTest : TestBase() {
     }
 
     @Test
+    fun `history exclusion is strictly before activation and requires both pump identities`() {
+        assertTrue(pumpSync.isHistoryRecordBeforeActivePump(1_999L, PumpType.YPSOPUMP, "10000001"))
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(2_000L, PumpType.YPSOPUMP, "10000001"))
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(2_001L, PumpType.YPSOPUMP, "10000001"))
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "20000002"))
+        whenever(activePump.serialNumber()).thenReturn("20000002")
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "10000001"))
+        whenever(activePump.serialNumber()).thenReturn("10000001")
+        whenever(preferences.get(StringNonKey.ActivePumpSerialNumber)).thenReturn("20000002")
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "10000001"))
+        whenever(preferences.get(StringNonKey.ActivePumpSerialNumber)).thenReturn("")
+        whenever(preferences.get(StringNonKey.ActivePumpType)).thenReturn("")
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "10000001"))
+        verify(preferences, never()).put(eq(LongNonKey.ActivePumpChangeTimestamp), any<Long>())
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    @Test
+    fun `history exclusion requires a known cutoff and matching pump types`() {
+        whenever(preferences.get(LongNonKey.ActivePumpChangeTimestamp)).thenReturn(0L)
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(-1L, PumpType.YPSOPUMP, "10000001"))
+        whenever(preferences.get(LongNonKey.ActivePumpChangeTimestamp)).thenReturn(2_000L)
+        whenever(activePump.model()).thenReturn(PumpType.USER)
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "10000001"))
+        whenever(activePump.model()).thenReturn(PumpType.YPSOPUMP)
+        whenever(preferences.get(StringNonKey.ActivePumpType)).thenReturn(PumpType.USER.description)
+        assertFalse(pumpSync.isHistoryRecordBeforeActivePump(1_000L, PumpType.YPSOPUMP, "10000001"))
+        verify(preferences, never()).put(eq(LongNonKey.ActivePumpChangeTimestamp), any<Long>())
+        verify(persistenceLayer, never()).syncPumpExtendedBolus(any())
+    }
+
+    @Test
     fun `ordinary history rejects a bolus older than pump activation`() {
         val result = pumpSync.syncBolusWithPumpIdDetailed(
             1_000L,
