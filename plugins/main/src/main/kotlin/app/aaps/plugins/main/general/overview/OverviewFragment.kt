@@ -100,6 +100,7 @@ import app.aaps.core.ui.elements.SingleClickButton
 import app.aaps.core.ui.extensions.runOnUiThread
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
+import app.aaps.core.utils.compactDurationLabel
 import app.aaps.plugins.main.R
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
@@ -803,21 +804,5 @@ class OverviewFragment : DaggerFragment() {
                 }
             }
         }
-    }
-}
-
-/**
- * Compact duration label for the Home supply tiles: whole minutes below an hour, whole hours below
- * a day, then days + remainder hours ("27m", "23h", "1d 3h"). Shared by the cannula age and the
- * sensor countdown so the two tiles cannot drift apart. The hours component is kept even when zero
- * ("2d 0h") so the days part stays in place at day boundaries.
- */
-internal fun compactDurationLabel(millis: Long): String {
-    val elapsed = millis.coerceAtLeast(0L)
-    val hours = TimeUnit.MILLISECONDS.toHours(elapsed)
-    return when {
-        hours >= 24 -> "${hours / 24}d ${hours % 24}h"
-        hours >= 1  -> "${hours}h"
-        else        -> "${TimeUnit.MILLISECONDS.toMinutes(elapsed)}m"
     }
 }
