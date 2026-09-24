@@ -13,6 +13,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.utils.compactDurationLabel
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.compose.PumpStatusRow
 import app.aaps.pump.ypsopump.compose.PumpStatusScreen
@@ -88,7 +89,7 @@ internal fun buildPumpStatusState(
         }
         if (pumpState.profileConfigurationReadAt > 0) {
             add(PumpStatusRow(rh.gs(R.string.ypsopump_last_read_program), pumpState.lastReadProgram))
-            add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_read_at), dateUtil.minOrSecAgo(rh, pumpState.profileConfigurationReadAt)))
+            add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_read_at), compactDurationLabel(dateUtil.now() - pumpState.profileConfigurationReadAt)))
         }
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))

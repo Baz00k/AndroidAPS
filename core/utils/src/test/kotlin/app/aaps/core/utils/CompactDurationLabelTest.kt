@@ -1,4 +1,4 @@
-package app.aaps.plugins.main.general.overview
+package app.aaps.core.utils
 
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
