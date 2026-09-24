@@ -608,7 +608,8 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun setAvailability(availability: Availability) {
         val current = state ?: throw SecurityException("Session storage unavailable")
-        persist(if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability))
+        val next = if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability)
+        if (next != current) persist(next)
     }
 
     @Synchronized
@@ -1139,7 +1140,17 @@ class PumpSession(private val store: Store) {
         check(transaction == id) { "Stale transaction" }
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == id && phase.ordinal == reserved.phase.ordinal + 1) { "Invalid write transition" }
-        update(old.copy(reservation = reserved.copy(phase = phase)))
+        val next = old.copy(reservation = reserved.copy(phase = phase))
+        if (phase == Phase.ACKED) {
+            // POSSIBLY_SENT already durably blocks reuse. Losing an ACK on process death only
+            // leaves that conservative uncertainty; semantic resolution still requires a commit.
+            // Keep both live views coherent so reconnects and unrelated commits retain the ACK.
+            val current = checkNotNull(state)
+            state = current.copy(records = current.records.map { if (it.generation == next.generation) next else it })
+            record = next
+        } else {
+            update(next)
+        }
     }
 
     /**
@@ -1314,20 +1325,24 @@ class PumpSession(private val store: Store) {
             WriteResolution.REJECTED_COUNTER_NOT_CONSUMED ->
                 restoreAfterNotConsumed(old, reserved, evidence)
         }
-        update(next)
-        // Establishing the floor clears the informational uncertainty cause for every candidate,
-        // not only the lower-bound recovery path.
-        if (next.writeBootstrapState == WriteBootstrapState.ESTABLISHED &&
+        // Resolution and its availability change are one durable transition. There is no useful
+        // crash boundary between establishing the floor and clearing its informational warning.
+        val current = checkNotNull(state)
+        val resolved = current.copy(records = current.records.map { if (it.generation == next.generation) next else it })
+        val committed = if (next.writeBootstrapState == WriteBootstrapState.ESTABLISHED &&
             old.writeBootstrapState != WriteBootstrapState.ESTABLISHED
         ) {
-            val current = checkNotNull(state)
-            val available = current.availability.copy(
-                causes = current.availability.causes - AvailabilityCause.COUNTER_UNCERTAIN,
-                retryAt = null,
+            resolved.copy(
+                availability = current.availability.copy(
+                    causes = current.availability.causes - AvailabilityCause.COUNTER_UNCERTAIN,
+                    retryAt = null,
+                ),
             )
-            persist(current.copy(availability = available))
-            record = next
+        } else {
+            resolved
         }
+        persist(committed)
+        record = next
     }
 
     @Synchronized

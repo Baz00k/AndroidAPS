@@ -119,8 +119,12 @@ class YpsoWriteAccountingTest {
         assertEquals(listOf(1L, 2L, 4L, 8L), dispatchedCounters)
 
         frames.clear()
+        val beforeAck = store.commits
         transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0)
         assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
+        assertEquals(beforeAck, store.commits)
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.saved.records.single().reservation?.phase)
+        assertEquals(session.snapshot(), session.activeRecord())
         assertTrue(
             accounting.reconcile(
                 "selector-1",
@@ -132,6 +136,8 @@ class YpsoWriteAccountingTest {
             ),
         )
         assertTrue(outcomes.last() is YpsoWriteOutcome.Verified)
+        assertEquals(beforeAck + 1, store.commits)
+        assertFalse(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in PumpSession(store).availability().causes)
         val record = session.snapshot()!!
         assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, record.writeBootstrapState)
         assertEquals(8L, record.write)

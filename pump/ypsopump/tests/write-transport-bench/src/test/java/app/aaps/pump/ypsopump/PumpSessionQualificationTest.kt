@@ -1105,12 +1105,15 @@ class PumpSessionTest {
                 if (phase == PumpSession.Phase.RESERVED) owner.reserve(token, transaction)
                 else owner.advance(token, transaction, phase)
             }
-            if (fault == 0) operation() else assertThrows(SecurityException::class.java) { operation() }
+            // ACKED refines the live view; restart retains the durable POSSIBLY_SENT boundary.
+            if (fault == 0 || phase == PumpSession.Phase.ACKED) operation()
+            else assertThrows(SecurityException::class.java) { operation() }
             store.fault = 0
             val restored = PumpSession(store)
             val next = restored.open(pump, key)
             val id = restored.begin(next)
             val saved = store.saved.records.single()
+            if (phase == PumpSession.Phase.ACKED) assertEquals(PumpSession.Phase.POSSIBLY_SENT, saved.reservation?.phase)
             if (saved.reservation != null && saved.reservation.phase != PumpSession.Phase.VERIFIED)
                 assertThrows(IllegalStateException::class.java) { restored.reserve(next, id) }
             if (saved.reservation != null) assertEquals(43L, saved.write)

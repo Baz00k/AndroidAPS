@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 class SessionJournalTest {
     private class Storage : SessionJournal.Storage {
         var file: String? = null
+        var generations = 0
         val keys = mutableMapOf<String, ByteArray>()
         var fault = ""
         var failSeal = false
@@ -23,6 +24,7 @@ class SessionJournalTest {
         override fun anchors() = keys.keys.toList()
         override fun create(alias: String) {
             boundary("before-create")
+            generations++
             keys[alias] = java.security.MessageDigest.getInstance("SHA-256").digest(alias.toByteArray())
             boundary("after-create")
         }
@@ -57,6 +59,129 @@ class SessionJournalTest {
 
     private val old = PumpSession.State(listOf(PumpSession.Record("pump", "00".repeat(32), "generation", 8, 100, null)))
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
+
+    @Test
+    fun `ack refinement is coherent in memory but restart remains conservatively uncertain`() {
+        val storage = Storage()
+        val owner = PumpSession(SessionJournal(storage))
+        val key = ByteArray(32) { 1 }
+        owner.provisionReadBaseline("pump", key, 8, 100)
+        val token = owner.open("pump", key)
+        val transaction = owner.begin(token)
+        owner.reserve(token, transaction, PumpSession.WriteIntent("write", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        val beforeAck = storage.generations
+
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+
+        assertEquals(beforeAck, storage.generations)
+        assertEquals(PumpSession.Phase.ACKED, owner.snapshot()?.reservation?.phase)
+        assertEquals(owner.snapshot(), owner.activeRecord())
+        assertEquals(owner.snapshot(), owner.recordForGeneration(token.generation))
+        // A no-op availability update must not accidentally flush the volatile ACK.
+        owner.setAvailability(owner.availability())
+        assertEquals(beforeAck, storage.generations)
+        val restored = PumpSession(SessionJournal(storage))
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, restored.activeRecord()?.reservation?.phase)
+        val restoredToken = restored.open("pump", key)
+        val restoredTransaction = restored.begin(restoredToken)
+        assertThrows(IllegalStateException::class.java) { restored.reserve(restoredToken, restoredTransaction) }
+        owner.finish(token, transaction)
+        owner.open("pump", key)
+        assertEquals(PumpSession.Phase.ACKED, owner.snapshot()?.reservation?.phase)
+        // An actual durable change carries the coherent live state, including ACK.
+        owner.setAvailability(PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT), since = 123))
+        assertEquals(beforeAck + 1, storage.generations)
+        assertEquals(PumpSession.Phase.ACKED, PumpSession(SessionJournal(storage)).activeRecord()?.reservation?.phase)
+    }
+
+    @Test
+    fun `first accepted write establishes floor and clears uncertainty in one rotation`() {
+        val storage = Storage()
+        val owner = PumpSession(SessionJournal(storage))
+        val key = ByteArray(32) { 1 }
+        owner.provisionReadBaseline("pump", key, 8, 100)
+        owner.setAvailability(PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), retryAt = 123))
+        val token = owner.open("pump", key)
+        val transaction = owner.begin(token)
+        val beforeWrite = storage.generations
+        val reservation = owner.reserve(token, transaction, PumpSession.WriteIntent("write", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        owner.advance(token, transaction, PumpSession.Phase.ACKED)
+        owner.finish(token, transaction)
+        val beforeResolution = storage.generations
+
+        owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "pump confirmed write")
+
+        assertEquals(1, storage.generations - beforeResolution)
+        assertEquals(3, storage.generations - beforeWrite)
+        val restored = PumpSession(SessionJournal(storage))
+        assertEquals(PumpSession.Phase.VERIFIED, restored.activeRecord()?.reservation?.phase)
+        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, restored.activeRecord()?.writeBootstrapState)
+        assertFalse(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in restored.availability().causes)
+        assertNull(restored.availability().retryAt)
+        assertEquals(owner.snapshot(), restored.activeRecord())
+    }
+
+    @Test
+    fun `interrupted first resolution exposes either uncertainty or the complete accepted state`() {
+        for (boundary in listOf("before-create", "after-create", "before-truncate", "after-truncate", "partial-write", "before-sync", "after-sync", "before-delete", "after-delete")) {
+            val storage = Storage()
+            val owner = PumpSession(SessionJournal(storage))
+            val key = ByteArray(32) { 1 }
+            owner.provisionReadBaseline("pump", key, 8, 100)
+            owner.setAvailability(PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), retryAt = 123))
+            val token = owner.open("pump", key)
+            val transaction = owner.begin(token)
+            val reservation = owner.reserve(token, transaction, PumpSession.WriteIntent("write", "characteristic", "SETTINGS_SELECTOR", "ab".repeat(32)))
+            owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            owner.advance(token, transaction, PumpSession.Phase.ACKED)
+            owner.finish(token, transaction)
+            val priorFile = storage.file
+            storage.terminateAt = boundary
+
+            assertThrows(ThreadDeath::class.java) {
+                owner.resolveWrite(token, reservation.id, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "pump confirmed write")
+            }
+
+            storage.terminateAt = ""
+            val restored = PumpSession(SessionJournal(storage))
+            val restoredToken = restored.open("pump", key)
+            val restoredRecord = restored.snapshot()!!
+            assertEquals(reservation.counter, restoredRecord.write, boundary)
+            if (boundary == "after-delete") {
+                assertEquals(PumpSession.Phase.VERIFIED, restoredRecord.reservation?.phase)
+                assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, restoredRecord.writeBootstrapState)
+                assertEquals(PumpSession.WriteResolution.ACCEPTED, restoredRecord.writeEvidence.single().resolution)
+                assertFalse(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in restored.availability().causes)
+                assertNull(restored.availability().retryAt)
+                val next = restored.reserve(restoredToken, restored.begin(restoredToken))
+                assertTrue(next.counter > reservation.counter)
+                storage.file = priorFile
+                assertThrows(SessionJournal.AnchorMismatch::class.java) { SessionJournal(storage).load() }
+            } else {
+                assertEquals(PumpSession.Phase.POSSIBLY_SENT, restoredRecord.reservation?.phase)
+                assertTrue(restoredRecord.writeEvidence.isEmpty())
+                assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in restored.availability().causes)
+                assertEquals(123L, restored.availability().retryAt)
+                assertThrows(IllegalStateException::class.java) { restored.reserve(restoredToken, restored.begin(restoredToken)) }
+            }
+        }
+    }
+
+    @Test
+    fun `unchanged availability does not rotate but changed availability remains durable`() {
+        val storage = Storage()
+        val owner = PumpSession(SessionJournal(storage))
+        val availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT), since = 123)
+        owner.setAvailability(availability)
+        val before = storage.generations
+        owner.setAvailability(availability)
+        assertEquals(before, storage.generations)
+        owner.setAvailability(availability.copy(since = 124))
+        assertEquals(before + 1, storage.generations)
+        assertEquals(availability.copy(since = 124), PumpSession(SessionJournal(storage)).availability())
+    }
 
     @Test
     fun `process termination before publication preserves exact committed journal with an extra key`() {
