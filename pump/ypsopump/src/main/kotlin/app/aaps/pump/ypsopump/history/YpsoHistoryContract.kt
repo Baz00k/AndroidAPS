@@ -226,6 +226,11 @@ data class YpsoHistorySnapshot(
     val rowsNewestFirst: List<YpsoHistoryEntry>,
     /** True only when every row represented by the count was read under the snapshot contract. */
     val fullCoverage: Boolean,
+    /**
+     * Pump clock minus phone clock in milliseconds, measured on the scan's link, or null when it
+     * could not be read. Includes whole-second truncation and read latency (about ±2 s).
+     */
+    val pumpClockOffsetMs: Long? = null,
 )
 
 data class YpsoHistoryAttemptCursor(

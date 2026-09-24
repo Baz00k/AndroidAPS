@@ -9,7 +9,6 @@ import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
-import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -40,10 +39,8 @@ class YpsoTbrHistoryAccountingTest {
     private val saved = mutableMapOf<Long, Pair<Long, Long>>()
     private val provisional = mutableMapOf<Long, Pair<Long, Long>>()
     private val invalid = mutableSetOf<Long>()
-    private var status: YpsoTbrObservation? = null
     private var registeredAt = 0L
     private val statusSuspends = mutableListOf<YpsoTbrRecordLookup.StatusSuspend>()
-    private val rowPercent = mutableMapOf<Long, Int>()
     private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : YpsoTbrRecordLookup {
         override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
             saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid) }
@@ -54,9 +51,7 @@ class YpsoTbrHistoryAccountingTest {
             .filter { it.key in suspends && it.value.first <= at }.maxByOrNull { it.value.first }
             ?.let { YpsoTbrRecordLookup.Suspend(it.key, null, it.value.first, it.value.second, it.key !in invalid) }
         override fun statusSuspendsFrom(pumpSerial: String, from: Long) = statusSuspends.filter { it.start >= from }
-        override fun tbrRowsBetween(pumpSerial: String, percent: Int, after: Long, before: Long, runningAt: Long) =
-            saved.filter { (id, record) -> id !in suspends && id in rowPercent.filterValues { it == percent }.keys && id > after && id < before && record.first + record.second > runningAt }.keys.toList()
-    }, observation = { status }, registeredAt = { registeredAt })
+    }, registeredAt = { registeredAt })
     private var suspendOpen = false
     private val suspends = mutableSetOf<Long>()
 
@@ -65,7 +60,6 @@ class YpsoTbrHistoryAccountingTest {
             val pumpId = it.getArgument<Long>(5)
             if (pumpId in invalid) return@thenAnswer false
             saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
-            rowPercent[pumpId] = it.getArgument<Double>(1).toInt()
             if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
             true
         }
@@ -85,10 +79,6 @@ class YpsoTbrHistoryAccountingTest {
         YpsoEventIdentity(serial, 0, sequence),
         YpsoHistoryEntry(seconds, type, v1, v2, 0, sequence, 0),
     )
-
-    private fun runningStatus(percent: Int, remaining: Int, at: Long) {
-        status = YpsoTbrObservation(true, percent, remaining, at)
-    }
 
     private fun startedAttempt(id: String = "a", percent: Int = 120, minutes: Int = 15, baseline: Long = 48_222L, at: Long = pumpStart + 2_000L, tempId: Long = 99L, row: Long? = null) =
         YpsoTbrAttempt(
@@ -121,9 +111,8 @@ class YpsoTbrHistoryAccountingTest {
     @Test
     fun `AAPS started TBR binds its row to the provisional record at the AAPS start time`() {
         startedAttempt()
-        runningStatus(120, 14, pumpStart + 60_000L)
 
-        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone, readAt = pumpStart + 70_000L))
+        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
 
         assertEquals(pumpStart + 2_000L to 15 * 60_000L, saved[48_224L])
         verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
@@ -133,8 +122,7 @@ class YpsoTbrHistoryAccountingTest {
     @Test
     fun `bound TBR cancelled on the pump shortens without moving its start`() {
         startedAttempt()
-        runningStatus(120, 14, pumpStart + 60_000L)
-        accounting.apply(event(48_224, 9, 120, 15), serial, zone, readAt = pumpStart + 70_000L)
+        accounting.apply(event(48_224, 9, 120, 15), serial, zone)
 
         accounting.apply(event(48_224, 10, 120, 6), serial, zone)
 
@@ -158,10 +146,18 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `without a measured clock an ended row that could be an AAPS start waits`() {
+        startedAttempt(at = pumpStart + 3 * 60_000L)
+
+        assertNotNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone))
+        assertNull(saved[48_224L])
+    }
+
+    @Test
     fun `a row whose pump start does not match the AAPS start is imported on its own`() {
         startedAttempt(at = pumpStart + 3 * 60_000L)
 
-        accounting.apply(event(48_224, 10, 120, 3), serial, zone)
+        accounting.apply(event(48_224, 10, 120, 3), serial, zone, pumpClockOffsetMs = 0L)
 
         assertEquals(pumpStart to 3 * 60_000L, saved[48_224L])
         assertNull(store.attempts.single().pumpId)
@@ -170,9 +166,8 @@ class YpsoTbrHistoryAccountingTest {
     @Test
     fun `a row older than the attempt baseline is never bound to it`() {
         startedAttempt(baseline = 48_230L)
-        runningStatus(120, 14, pumpStart + 60_000L)
 
-        accounting.apply(event(48_224, 9, 120, 15), serial, zone, readAt = pumpStart + 70_000L)
+        accounting.apply(event(48_224, 9, 120, 15), serial, zone)
 
         assertEquals(pumpStart to 15 * 60_000L, saved[48_224L])
         assertNull(store.attempts.single().pumpId)
@@ -184,8 +179,7 @@ class YpsoTbrHistoryAccountingTest {
         startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 4 * 60_000L, tempId = 2L)
 
         accounting.apply(event(48_224, 10, 0, 3), serial, zone)
-        runningStatus(0, 29, pumpStart + 5 * 60_000L)
-        accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 240), serial, zone, readAt = pumpStart + 5 * 60_000L)
+        accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 240), serial, zone)
 
         assertEquals(48_224L, journal.find("a")!!.pumpId)
         assertEquals(48_226L, journal.find("b")!!.pumpId)
@@ -197,33 +191,10 @@ class YpsoTbrHistoryAccountingTest {
         startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 30_000L, tempId = 2L)
 
         assertNull(accounting.apply(event(48_224, 10, 0, 0), serial, zone))
-        runningStatus(0, 29, pumpStart + 90_000L)
-        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 30), serial, zone, readAt = pumpStart + 90_000L))
+        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 30), serial, zone))
 
         assertEquals(48_224L, journal.find("a")!!.pumpId)
         assertEquals(48_226L, journal.find("b")!!.pumpId)
-    }
-
-    @Test
-    fun `a running row status shows is an AAPS start binds to it whatever the pump clock says`() {
-        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
-        runningStatus(0, 115, pumpStart + 15 * 60_000L)
-
-        assertNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone, readAt = pumpStart + 15 * 60_000L + 5_000L))
-
-        assertEquals(pumpStart + 10 * 60_000L to 120 * 60_000L, saved[48_224L])
-        assertEquals(48_224L, store.attempts.single().pumpId)
-    }
-
-    @Test
-    fun `a status-matched start binds even when its row falls in a DST overlap`() {
-        val warsaw = ZoneId.of("Europe/Warsaw")
-        val overlapSeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 2, 30))
-        startedAttempt()
-        runningStatus(120, 14, pumpStart + 60_000L)
-
-        assertNull(accounting.apply(event(48_224, 9, 120, 15, seconds = overlapSeconds), serial, warsaw, readAt = pumpStart + 70_000L))
-        assertEquals(48_224L, store.attempts.single().pumpId)
     }
 
     @Test
@@ -235,37 +206,34 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a running row read before its start took effect waits for a later scan`() {
-        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L)
-        runningStatus(0, 30, pumpStart + 10 * 60_000L + 1_000L)
+    fun `with a measured pump clock a far-off row time still binds its AAPS start`() {
+        // The pump clock runs ten minutes behind the phone.
+        val offset = -10 * 60_000L
+        startedAttempt(percent = 0, minutes = 120)
 
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone, readAt = pumpStart + 9 * 60_000L))
-        assertNull(saved[48_224L])
+        assertNull(accounting.apply(event(48_224, 9, 0, 120, seconds = pumpStartSeconds - 600), serial, zone, pumpClockOffsetMs = offset))
+
+        assertEquals(pumpStart + 2_000L to 120 * 60_000L, saved[48_224L])
+        assertEquals(48_224L, store.attempts.single().pumpId)
     }
 
     @Test
-    fun `a running row with status showing another TBR is imported as the pump's`() {
-        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L)
-        runningStatus(50, 60, pumpStart + 12 * 60_000L)
+    fun `with a measured pump clock a TBR set again on the pump is never taken for the AAPS start`() {
+        val offset = -10 * 60_000L
+        startedAttempt(percent = 0, minutes = 30)
+        // Cancelled on the pump after 30 s and set again two minutes later, identical.
+        assertNull(accounting.apply(event(48_224, 10, 0, 0, seconds = pumpStartSeconds - 600), serial, zone, pumpClockOffsetMs = offset))
+        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds - 600 + 150), serial, zone, pumpClockOffsetMs = offset))
 
-        assertNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone, readAt = pumpStart + 12 * 60_000L + 1_000L))
-        assertEquals(pumpStart to 30 * 60_000L, saved[48_224L])
-        assertNull(store.attempts.single().pumpId)
+        assertEquals(48_224L, store.attempts.single().pumpId)
+        assertEquals(pumpStart + 150_000L to 30 * 60_000L, saved[48_226L])
     }
 
     @Test
-    fun `a running row waits while its AAPS start was stopped after the read began`() {
-        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L)
-        val stop = YpsoTbrAttempt(
-            id = "stop", kind = YpsoTbrAttempt.Kind.STOP, pumpSerial = serial, percent = 100, durationMinutes = 0,
-            type = "", temporaryId = 5L, baselinePumpId = null, createdAt = pumpStart + 12 * 60_000L,
-        )
-        journal.prepare(stop)
-        journal.dispatched("stop", pumpStart + 12 * 60_000L)
-        journal.stopEffective("stop", pumpStart + 12 * 60_000L)
-        runningStatus(100, 0, pumpStart + 12 * 60_000L + 1_000L)
+    fun `without a measured pump clock a running row that could be an AAPS start waits`() {
+        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
 
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone, readAt = pumpStart + 11 * 60_000L))
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
         assertNull(saved[48_224L])
     }
 
@@ -276,19 +244,6 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(event(48_221, 10, 300, 30), serial, zone))
         assertNull(accounting.apply(event(48_222, 14, 3, 0), serial, zone))
         assertEquals(emptyMap<Long, Pair<Long, Long>>(), saved)
-    }
-
-    @Test
-    fun `a manual TBR set again after cancelling an unmatched AAPS start is never taken for it`() {
-        // The AAPS start's own row ended with the pump clock far off, so it was imported on its own.
-        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L)
-        assertNull(accounting.apply(event(48_224, 10, 0, 2), serial, zone))
-        runningStatus(0, 30, pumpStart + 13 * 60_000L)
-
-        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 120), serial, zone, readAt = pumpStart + 13 * 60_000L + 1_000L))
-
-        assertEquals(pumpStart + 120_000L to 30 * 60_000L, saved[48_226L])
-        assertNull(store.attempts.single().pumpId)
     }
 
     @Test
@@ -330,18 +285,19 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a running row waits without fresh status while an AAPS start could be it`() {
-        startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
-
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone, readAt = pumpStart + 15 * 60_000L))
-        assertNull(saved[48_224L])
-    }
-
-    @Test
     fun `a manual row overlapping an AAPS start it is not is imported on its own`() {
         startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L, row = 48_226L)
 
         assertNull(accounting.apply(event(48_224, 10, 0, 10), serial, zone))
+        assertEquals(pumpStart to 10 * 60_000L, saved[48_224L])
+        assertNull(store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `a manual row with a measured clock is imported beside an AAPS start it does not fit`() {
+        startedAttempt(percent = 0, minutes = 30, at = pumpStart + 10 * 60_000L)
+
+        assertNull(accounting.apply(event(48_224, 10, 0, 10), serial, zone, pumpClockOffsetMs = 0L))
         assertEquals(pumpStart to 10 * 60_000L, saved[48_224L])
         assertNull(store.attempts.single().pumpId)
     }

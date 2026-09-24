@@ -385,12 +385,16 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `the queue waits while an idle disconnect is deciding`() {
-        val release = plugin.javaClass.getDeclaredField("idleRelease").apply { isAccessible = true }
-            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
-        release.set(true)
+    fun `an idle disconnect never closes the link under a running command`() {
+        val lock = plugin.javaClass.getDeclaredField("linkUse").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.locks.ReentrantLock
+        val holder = Thread { lock.lock(); Thread.sleep(300); lock.unlock() }.apply { start() }
+        Thread.sleep(50)
 
-        assertTrue(plugin.isBusy())
+        plugin.disconnect("Queue empty")
+        holder.join()
+
+        verify(manager, never()).disconnect(any())
     }
 
     @Test

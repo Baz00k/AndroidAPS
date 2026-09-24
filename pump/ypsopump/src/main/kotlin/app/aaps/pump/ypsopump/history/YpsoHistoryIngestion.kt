@@ -71,8 +71,6 @@ class YpsoHistoryIngestion(
         zone: ZoneId,
         reboot: Long,
         snapshot: YpsoHistorySnapshot,
-        /** When the pump read of [snapshot] began. */
-        readAt: Long = Long.MAX_VALUE,
         bolusType: (YpsoHistoryEvent) -> BS.Type = { BS.Type.NORMAL },
     ): YpsoHistoryIngestionResult {
         if (!retryPending(pumpSerial)) return YpsoHistoryIngestionResult.Blocked("pending PumpSync record was rejected")
@@ -159,7 +157,7 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> tbrAccounting?.apply(event, pumpSerial, zone, readAt)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
+                        else -> tbrAccounting?.apply(event, pumpSerial, zone, snapshot.pumpClockOffsetMs)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                     }
                 }
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))

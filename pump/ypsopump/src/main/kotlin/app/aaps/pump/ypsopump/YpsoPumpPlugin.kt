@@ -157,18 +157,10 @@ class YpsoPumpPlugin @Inject constructor(
                         .maxByOrNull { it.timestamp }
                         ?.let { YpsoTbrRecordLookup.Suspend(it.ids.pumpId, it.ids.temporaryId, it.timestamp, it.duration, it.isValid) }
 
-                override fun tbrRowsBetween(pumpSerial: String, percent: Int, after: Long, before: Long, runningAt: Long) =
-                    tbrRecords(pumpSerial, runningAt - 24 * 60 * 60_000L)
-                        .filter {
-                            it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.rate.toInt() == percent &&
-                                it.timestamp + it.duration > runningAt
-                        }
-                        .mapNotNull { it.ids.pumpId }.filter { it > after && it < before }
-
                 override fun statusSuspendsFrom(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
                     .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }
                     .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.StatusSuspend(it, record.timestamp, record.duration) } }
-            }, observation = { bleManager.observedTbr() }, registeredAt = ::pumpRegisteredAt),
+            }, registeredAt = ::pumpRegisteredAt),
         )
     }
     private val tbrControllerLazy = lazy {
@@ -323,8 +315,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
-    /** An idle disconnect is deciding or closing; the queue waits instead of starting a command. */
-    private val idleRelease = AtomicBoolean(false)
+    /** Held by every queued pump command and by the idle disconnect; see [onLink]. */
+    private val linkUse = java.util.concurrent.locks.ReentrantLock()
     private val lowerBoundRecoveryRequested = AtomicBoolean(false)
     private val foregroundConnectionLease = AtomicBoolean(false)
     private val visibilityListener: (Boolean) -> Unit = ::onAppVisibilityChanged
@@ -370,7 +362,7 @@ class YpsoPumpPlugin @Inject constructor(
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
     // Background accounting is abandonable and must never hold the serialized therapy queue.
-    override fun isBusy(): Boolean = idleRelease.get() || bolusController.isBusy || tbrController.isBusy
+    override fun isBusy(): Boolean = bolusController.isBusy || tbrController.isBusy
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -447,9 +439,13 @@ class YpsoPumpPlugin @Inject constructor(
      * A link fault still tears the connection down wherever it is detected.
      */
     private fun releaseIdleConnection(reason: String) {
-        // While this runs, isBusy() holds the queue worker back, so no command can start on the link
-        // between the check and the disconnect. A command already queued is seen by the check.
-        if (!idleRelease.compareAndSet(false, true)) return
+        // Commands run under the same lock, so none can start between the check and the disconnect.
+        // A running command holds it, and the link is not idle then; this never waits for it, so it is
+        // safe on the main thread. A command queued meanwhile finds the link closed and reopens it.
+        if (!linkUse.tryLock()) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump idle disconnect after $reason skipped: a pump command uses the connection")
+            return
+        }
         try {
             val user = when {
                 commandQueue.performing() != null || commandQueue.size() > 0 -> "a queued pump command"
@@ -464,12 +460,33 @@ class YpsoPumpPlugin @Inject constructor(
             }
             bleManager.disconnect(preserveStatus = true)
         } finally {
-            idleRelease.set(false)
+            linkUse.unlock()
+        }
+    }
+
+    /**
+     * Runs one queued pump command. It holds [linkUse] for its whole run, so no idle disconnect can
+     * close the link under it; a link fault still disconnects at once. If an idle disconnect closed
+     * the link just before a therapy command took the lock, the link is reopened first.
+     */
+    private fun <T> onLink(reopen: Boolean = true, command: () -> T): T {
+        linkUse.lock()
+        try {
+            if (reopen && !bleManager.isConnected && configured()) {
+                seedAndConnect()
+                val deadline = android.os.SystemClock.elapsedRealtime() + RECONNECT_FOR_COMMAND_MS
+                while (!bleManager.isConnected && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(100L)
+            }
+            return command()
+        } finally {
+            linkUse.unlock()
         }
     }
     override fun stopConnecting() { bleManager.disconnect() }
 
-    override fun getPumpStatus(reason: String) {
+    override fun getPumpStatus(reason: String) = onLink(reopen = false) { getPumpStatusNow(reason) }
+
+    private fun getPumpStatusNow(reason: String) {
         aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
         // CommandReadStatus infers success from lastDataTime. Clear the prior sample even when this
         // invocation only starts a connection, so it cannot report a recent older read as current.
@@ -635,7 +652,9 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_PROFILE_MISMATCH, message, Notification.URGENT)
     }
 
-    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
+    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult = onLink { deliverTreatmentNow(detailedBolusInfo) }
+
+    private fun deliverTreatmentNow(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
         try {
@@ -1172,7 +1191,6 @@ class YpsoPumpPlugin @Inject constructor(
                 // events were missed by seeing it. A short scan reports COVERAGE_INCOMPLETE and is
                 // discarded whole, so background recovery always reads the full ring.
                 val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
-                val readAt = System.currentTimeMillis()
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
@@ -1187,7 +1205,7 @@ class YpsoPumpPlugin @Inject constructor(
                     historyRecoveryMustYield()    ->
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason yielded to a pump command")
                     else                          ->
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot, readAt)}")
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot)}")
                 }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
@@ -1266,7 +1284,7 @@ class YpsoPumpPlugin @Inject constructor(
         return !historyRecoveryActive.get()
     }
 
-    private fun ingestHistory(snapshot: YpsoHistorySnapshot, readAt: Long): YpsoHistoryIngestionResult {
+    private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
         logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
         val zone = pumpState.historyZone
@@ -1299,7 +1317,7 @@ class YpsoPumpPlugin @Inject constructor(
             }) {
             return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")
         }
-        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot, readAt) { event ->
+        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event ->
             if (attempt?.pumpHistoryId == event.identity.aapsPumpId) {
                 when (attempt.treatment) {
                     app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> app.aaps.core.data.model.BS.Type.NORMAL
@@ -1584,10 +1602,12 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
 
-    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
+    override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult = onLink { setTempBasalPercentNow(percent, durationInMinutes, profile, enforceNew, tbrType) }
+
+    private fun setTempBasalPercentNow(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_blocked)
         // AAPS schedules 100% as a cancellation; the pump itself treats it as the scheduled rate.
-        if (percent == YpsoTbrRequest.STOP_PERCENT) return cancelTempBasal(enforceNew)
+        if (percent == YpsoTbrRequest.STOP_PERCENT) return cancelTempBasalNow(enforceNew)
         val request = runCatching { YpsoTbrRequest(percent.coerceAtMost(YpsoTbrRequest.MAX_PERCENT), durationInMinutes) }
             .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
         return enactTbr(request, tbrType)
@@ -1599,10 +1619,12 @@ class YpsoPumpPlugin @Inject constructor(
         // instant, and setNewBasalProfile only succeeds when the pump schedule matches that profile.
         val percent = runCatching { YpsoTbrRequest.percentFor(absoluteRate, profile.getBasal()) }
             .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
-        return setTempBasalPercent(percent, durationInMinutes, profile, enforceNew, tbrType)
+        return setTempBasalPercentNow(percent, durationInMinutes, profile, enforceNew, tbrType)
     }
 
-    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult {
+    override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult = onLink { cancelTempBasalNow(enforceNew) }
+
+    private fun cancelTempBasalNow(enforceNew: Boolean): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_tbr_cancel_blocked)
         return tbrResult(tbrController.cancel(), cancel = true)
     }
@@ -1663,7 +1685,9 @@ class YpsoPumpPlugin @Inject constructor(
 
     @Volatile private var publishedUncertainTbr = false
 
-    override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult {
+    override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult = onLink { setExtendedBolusNow(insulin, durationInMinutes) }
+
+    private fun setExtendedBolusNow(insulin: Double, durationInMinutes: Int): PumpEnactResult {
         val constrainedMaximum = constraintsChecker.getMaxExtendedBolusAllowed().value()
         val request = runCatching {
             YpsoBolusRequestValidator.validateDelivery(
@@ -1677,7 +1701,9 @@ class YpsoPumpPlugin @Inject constructor(
         return deliverExtended(request)
     }
 
-    override fun cancelExtendedBolus(): PumpEnactResult {
+    override fun cancelExtendedBolus(): PumpEnactResult = onLink { cancelExtendedBolusNow() }
+
+    private fun cancelExtendedBolusNow(): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         // Therapy cancellation outranks abandonable accounting. Do not overlap bolus status/cancel I/O
         // with an in-flight selector transaction; it must first reconcile at a selector-safe boundary.
@@ -2048,6 +2074,8 @@ class YpsoPumpPlugin @Inject constructor(
          * therapy commands fail while history was still stepping aside.
          */
         private const val HISTORY_YIELD_GRACE_MS = 30_000L
+        /** A command whose link an idle disconnect closed a moment earlier waits this long to reopen it. */
+        private const val RECONNECT_FOR_COMMAND_MS = 20_000L
         /** A stop seen by status is open until status, or the pump's Resume row, ends it. */
         private const val STATUS_STOP_WINDOW_MS = 24 * 60 * 60_000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"

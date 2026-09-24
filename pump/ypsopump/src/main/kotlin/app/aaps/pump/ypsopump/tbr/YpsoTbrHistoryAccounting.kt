@@ -36,11 +36,6 @@ interface YpsoTbrRecordLookup {
     /** Valid status-written stop records starting at or after [from]. */
     fun statusSuspendsFrom(pumpSerial: String, from: Long): List<StatusSuspend>
 
-    /**
-     * Pump IDs of pump-row TBR records (not stops) with [percent] and a pump ID in ([after], [before])
-     * that were still running at [runningAt].
-     */
-    fun tbrRowsBetween(pumpSerial: String, percent: Int, after: Long, before: Long, runningAt: Long): List<Long>
 }
 
 /**
@@ -54,16 +49,15 @@ class YpsoTbrHistoryAccounting(
     private val pumpSync: PumpSync,
     private val journal: YpsoTbrJournal,
     private val lookup: YpsoTbrRecordLookup,
-    /** Fresh pump status, or null when none is current. Proves which TBR the pump runs now. */
-    private val observation: () -> YpsoTbrObservation? = { null },
     /** AAPS accepts pump records only from this pump's registration on; older rows are not its to import. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
 ) {
     /**
-     * Applies one reconciled history event; returns a blocking reason or null when applied. [readAt]
-     * is when the pump read of this event's snapshot began.
+     * Applies one reconciled history event; returns a blocking reason or null when applied.
+     * [pumpClockOffsetMs] is the pump clock minus the phone clock, measured on the read that returned
+     * this event, or null when it could not be measured.
      */
-    fun apply(event: YpsoHistoryEvent, pumpSerial: String, zone: ZoneId, readAt: Long = Long.MAX_VALUE): String? {
+    fun apply(event: YpsoHistoryEvent, pumpSerial: String, zone: ZoneId, pumpClockOffsetMs: Long? = null): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
         val mode = kind == YpsoHistoryKind.PUMP_MODE_CHANGED
@@ -74,28 +68,31 @@ class YpsoTbrHistoryAccounting(
         // after natural expiry. Floored minutes keep a cancelled TBR within the minute the pump reports.
         val minutes = event.entry.value2
         val running = kind == YpsoHistoryKind.TEMP_BASAL_STARTED
-        // An AAPS start matched by row identity is timed by AAPS, so it needs no pump wall-clock time.
-        var ambiguousRunning = false
+        // An AAPS start already matched to this row is timed by AAPS and needs no pump time.
+        if (tbr) (journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId))?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+        val pumpTime = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
+            ?.instant?.toEpochMilli()
+        // On the phone's clock. With the offset measured on this read, a row's time is exact to a few
+        // seconds; without it, only the drift profile reads allow bounds it.
+        val start = pumpTime?.let { it - (pumpClockOffsetMs ?: 0L) } ?: return "TBR or pump-mode timestamp is ambiguous"
+        val skew = if (pumpClockOffsetMs != null) MEASURED_SKEW else CLOCK_SKEW
         if (tbr) {
-            val match = if (running) runningStart(pumpId, percent, minutes, pumpSerial, readAt) else null
-            match?.hold?.let { return it }
-            ambiguousRunning = match?.ambiguous == true
-            val known = journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId) ?: match?.attempt
-            if (known != null) return syncAttempt(known, pumpId, minutes * MINUTE)
+            bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
+                ?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            // Without a measured clock a start's own row can fall outside the drift window and would be
+            // imported beside its AAPS record. Wait for a read that measures the clock instead.
+            if (pumpClockOffsetMs == null) {
+                journal.all().firstOrNull {
+                    it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == pumpSerial && it.percent == percent &&
+                        (it.baselinePumpId == null || it.baselinePumpId < pumpId)
+                }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}; pump clock was not measured" }
+            }
         }
-        val start = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-            ?.instant?.toEpochMilli() ?: return "TBR or pump-mode timestamp is ambiguous"
         // PumpSync refuses records from before this pump was registered; the pump's history reaches
-        // further back than AAPS' use of it. Such a row was never AAPS's, so it is passed over. An
-        // AAPS start's row may still read slightly earlier through clock skew, so starts bind first.
-        val preRegistration = start < registeredAt(pumpSerial)
-        if (mode) return if (preRegistration) null else pumpMode(event.semantics.modeChange, start, pumpId, pumpSerial)
-        // A running row that status could not match falls back to the time window only when another
-        // same-percent pump row lies between it and a start; otherwise status alone decides.
-        val attempt = if (running) bindCandidate(pumpId, percent, minutes, start, pumpSerial).takeIf { ambiguousRunning }
-        else bindCandidate(pumpId, percent, null, start, pumpSerial)
-        if (attempt != null) return syncAttempt(attempt, pumpId, minutes * MINUTE)
-        if (preRegistration) return null
+        // further back than AAPS' use of it. Such a row was never AAPS's, so it is passed over. AAPS
+        // starts, whose rows may read slightly earlier through clock skew, were matched above.
+        if (start < registeredAt(pumpSerial)) return null
+        if (mode) return pumpMode(event.semantics.modeChange, start, pumpId, pumpSerial, skew)
         // A start whose outcome status has not proven yet may be this very row: importing it now would
         // record the same TBR twice. Hold until status settles it.
         journal.all().firstOrNull {
@@ -110,62 +107,24 @@ class YpsoTbrHistoryAccounting(
         }
     }
 
-    private class RunningMatch(val attempt: YpsoTbrAttempt? = null, val hold: String? = null, val ambiguous: Boolean = false)
-
     /**
-     * The AAPS start this running row is, proven by status rather than by the pump's clock. The pump
-     * runs one TBR at a time and keeps only that TBR's row running (type 9). A start that took effect
-     * before this history read began, and that status read at most [STATUS_BEFORE_READ] before the
-     * read still shows running, was the TBR running while the read saw this row.
-     * When the evidence is not there yet (status is stale or predates a start, or an AAPS stop came
-     * after the read began) the row waits: importing it could record the same TBR twice.
-     */
-    private fun runningStart(pumpId: Long, percent: Int, minutes: Int, serial: String, readAt: Long): RunningMatch {
-        val candidates = journal.all().filter {
-            it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial &&
-                it.percent == percent && it.durationMinutes == minutes && (it.baselinePumpId == null || it.baselinePumpId < pumpId)
-        }
-        if (journal.boundTo(pumpId) != null || journal.identifiedAs(pumpId) != null) return RunningMatch()
-        if (candidates.isEmpty()) return RunningMatch()
-        // Status shows only what runs now, not which row began it. If another same-percent pump row,
-        // still running once a start took effect, lies between that start and this row, the start may
-        // have been cancelled and set again on the pump. Status cannot tell them apart; only the time
-        // window may bind then.
-        if (candidates.any {
-                lookup.tbrRowsBetween(serial, percent, it.baselinePumpId ?: Long.MIN_VALUE, pumpId, checkNotNull(it.effectiveAt) - CLOCK_SKEW)
-                    .any { id -> journal.boundTo(id) == null }
-            }) {
-            return RunningMatch(ambiguous = true)
-        }
-        val hold = RunningMatch(hold = "TBR row $pumpId awaits status matching it to an AAPS start")
-        val status = observation()?.takeIf { it.observedAt >= readAt - STATUS_BEFORE_READ } ?: return hold
-        // A start stopped by AAPS after the read began may be the row the read saw running.
-        if (candidates.any { it.stoppedAt != null && it.stoppedAt >= readAt - STATUS_BEFORE_READ }) return hold
-        val live = candidates.filter { it.stoppedAt == null }
-        // The start must have run before the read began, so the row the read saw can be its row, and
-        // before the status, which otherwise says nothing about it.
-        if (live.any { checkNotNull(it.effectiveBy ?: it.effectiveAt) > minOf(readAt, status.observedAt) }) return hold
-        val match = live.filter { it.runningPer(status) }.maxByOrNull { checkNotNull(it.effectiveAt) }
-        // Status taken during the read may postdate this row: the start may have ended since.
-        if (match == null && status.observedAt > readAt) return hold
-        return RunningMatch(attempt = match)
-    }
-
-    /**
-     * Fallback for a start whose row history saw only after it ended. The pump was proven
-     * idle right before each start was sent, so its row began inside [dispatch, latest effect],
-     * widened by pump/phone clock skew. Rows older than the attempt's history baseline are never its
+     * The AAPS start whose time window this row's start falls in. The pump was proven idle right
+     * before each start was sent, so its row began inside [dispatch, latest effect], widened by
+     * [skew]: a few seconds when the pump clock was measured on this read, otherwise the drift that
+     * profile reads allow. With a measured clock this is identity: an identical TBR set on the pump
+     * instead would have to start within seconds of the AAPS command, which the pump would reject
+     * while the AAPS TBR runs. [requestedMinutes] is the duration a running row still carries. Rows older than the attempt's history baseline are never its
      * own. Rows arrive oldest first, so of several windows the earliest-dispatched attempt is this
      * row's. A start that fits no row keeps its own record, which status reconciles against the pump.
      */
-    private fun bindCandidate(pumpId: Long, percent: Int, requestedMinutes: Int?, pumpStart: Long, serial: String): YpsoTbrAttempt? =
+    private fun bindCandidate(pumpId: Long, percent: Int, requestedMinutes: Int?, rowStart: Long, serial: String, skew: Long): YpsoTbrAttempt? =
         journal.all()
             .filter {
                 it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial && it.percent == percent &&
                     (requestedMinutes == null || it.durationMinutes == requestedMinutes) &&
                     (it.baselinePumpId == null || it.baselinePumpId < pumpId) &&
-                    pumpStart >= checkNotNull(it.dispatchedAt) - CLOCK_SKEW &&
-                    pumpStart <= (it.effectiveBy ?: checkNotNull(it.effectiveAt)) + CLOCK_SKEW
+                    rowStart >= checkNotNull(it.dispatchedAt) - skew &&
+                    rowStart <= (it.effectiveBy ?: checkNotNull(it.effectiveAt)) + skew
             }
             .minByOrNull { checkNotNull(it.dispatchedAt) }
 
@@ -211,14 +170,14 @@ class YpsoTbrHistoryAccounting(
      * Stop and resume rows carry the pump's own time, so the zero-delivery window is not inferred.
      * A stop without a resume row stays recorded for one day, then lapses.
      */
-    private fun pumpMode(change: YpsoPumpModeChange?, at: Long, pumpId: Long, serial: String): String? = when (change) {
+    private fun pumpMode(change: YpsoPumpModeChange?, at: Long, pumpId: Long, serial: String, skew: Long): String? = when (change) {
         // Inserted once. A replayed row keeps whatever end its resume row or a status already gave it.
         YpsoPumpModeChange.STOPPED -> if (lookup.byPumpId(pumpId, serial, at) != null) null else {
             // Status records a stop when it first sees one. This row's record covers only the time
             // before that, so the two never overlap: counting the same zero basal twice would
             // understate IOB. If status saw a later stop instead, this stop's Resume row cuts it.
             // A status stop that ended before this Stop row is an earlier stop and says nothing here.
-            val seenAt = lookup.statusSuspendsFrom(serial, at - CLOCK_SKEW).filter { it.start + it.duration > at }.minOfOrNull { it.start }
+            val seenAt = lookup.statusSuspendsFrom(serial, at - skew).filter { it.start + it.duration > at }.minOfOrNull { it.start }
             val duration = seenAt?.let { it - at } ?: SUSPEND_WINDOW
             // A status stop already covering this row's time is this stop, recorded from status.
             if (duration <= 0L) null else {
@@ -254,8 +213,8 @@ class YpsoTbrHistoryAccounting(
         private const val SUSPEND_WINDOW = 24 * 60 * MINUTE
         /** Profile reads reject pump clock drift above 30 s; this also covers the pump's whole-second rows. */
         private const val CLOCK_SKEW = 90_000L
-        /** Status this much older than the history read still describes the TBR the read saw. */
-        private const val STATUS_BEFORE_READ = 2 * 60_000L
+        /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
+        private const val MEASURED_SKEW = 15_000L
         private const val NO_ID = Long.MIN_VALUE
         private val TBR_KINDS = setOf(
             YpsoHistoryKind.TEMP_BASAL_STARTED,
