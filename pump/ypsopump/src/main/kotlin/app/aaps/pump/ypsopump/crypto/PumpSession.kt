@@ -296,7 +296,7 @@ class PumpSession(private val store: Store) {
 
     // A completed attempt is feedback for the interaction that produced it, not durable state: a
     // fresh process renders the journaled availability instead of replaying the previous result.
-    private val loadedState = runCatching { store.load().also(::validate) }
+    private val loadedState = runCatching { compactSelectorEvidence(store.load().also(::validate)) }
     internal val loadFailureLocation: String? = loadedState.exceptionOrNull()?.let { error ->
         if (error is SessionJournal.AnchorMismatch) "anchor_count=${error.count},contains_current=${error.containsCurrent}"
         else error.javaClass.simpleName + ":" + error.stackTrace.firstOrNull { it.className.startsWith("app.aaps.pump.ypsopump") }
@@ -1326,7 +1326,7 @@ class PumpSession(private val store: Store) {
                 retryAt = null,
             )
             persist(current.copy(availability = available))
-            record = next
+            record = checkNotNull(state).records.single { it.generation == next.generation }
         }
     }
 
@@ -1400,7 +1400,7 @@ class PumpSession(private val store: Store) {
     private fun update(next: Record) {
         val current = checkNotNull(state)
         persist(current.copy(records = current.records.map { if (it.generation == next.generation) next else it }))
-        record = next
+        record = checkNotNull(state).records.single { it.generation == next.generation }
     }
 
     private fun mergeWriteEvidence(
@@ -1412,8 +1412,9 @@ class PumpSession(private val store: Store) {
     private fun persist(next: State) {
         try {
             validate(next)
-            store.commit(next)
-            state = next
+            val compacted = compactSelectorEvidence(next)
+            store.commit(compacted)
+            state = compacted
         } catch (e: Exception) {
             state = null
             quiesce()
@@ -1468,6 +1469,27 @@ class PumpSession(private val store: Store) {
             }
 
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
+
+        /**
+         * Successful ordinary selector writes are not a lifetime audit log. Their replay protection
+         * is the record's durable counter, not thousands of old read-back hashes. Retain a small
+         * diagnostic tail; never trim therapy, uncertain/rejected writes, qualification evidence,
+         * or the current reservation's proof. Predecessor bindings cannot reference STANDARD writes.
+         * Validate BEFORE trimming so corrupt legacy evidence cannot disappear during migration.
+         */
+        private fun compactSelectorEvidence(state: State): State = state.copy(records = state.records.map { record ->
+            if (record.writeEvidence.size <= SELECTOR_EVIDENCE_LIMIT) return@map record
+            var recent = 0
+            val retained = record.writeEvidence.asReversed().filter { evidence ->
+                val completedSelector = evidence.candidate == WriteCandidate.STANDARD &&
+                    evidence.resolution == WriteResolution.ACCEPTED &&
+                    isAmbiguityConvergenceSelector(evidence.characteristic, evidence.purpose)
+                !completedSelector || ++recent <= SELECTOR_EVIDENCE_LIMIT || evidence.reservationId == record.reservation?.id
+            }.asReversed()
+            if (retained.size == record.writeEvidence.size) record else record.copy(writeEvidence = retained)
+        })
+
+        private const val SELECTOR_EVIDENCE_LIMIT = 32
 
         fun validate(state: State) {
             val duplicateKeys = state.records.groupBy { it.keyId }.filterValues { it.size > 1 }
