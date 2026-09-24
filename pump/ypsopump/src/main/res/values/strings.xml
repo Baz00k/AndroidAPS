@@ -80,6 +80,7 @@
     <string name="ypsopump_tbr_start_rejected">The pump did not start the new temporary basal. The scheduled basal is running.</string>
     <string name="ypsopump_tbr_start_unconfirmed">The pump did not confirm the new temporary basal.</string>
     <string name="ypsopump_tbr_not_saved">AAPS could not save the temporary basal record.</string>
+    <string name="ypsopump_tbr_unmatched_notification">%1$d temporary basal(s) set by AAPS could not be matched to pump history because the pump clock could not be read or was changed. Their AAPS records are kept as is. Check the pump clock.</string>
     <string name="ypsopump_tbr_uncertain_notification">A temporary basal change could not be confirmed. Check the pump before relying on the loop.</string>
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
     <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>

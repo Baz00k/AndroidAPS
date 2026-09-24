@@ -146,11 +146,40 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `without a measured clock an ended row that could be an AAPS start waits`() {
+    fun `without a usable clock an ended row that could be an AAPS start waits for a reading`() {
         startedAttempt(at = pumpStart + 3 * 60_000L)
 
-        assertNotNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone))
+        assertNotNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone, waitForClock = true))
         assertNull(saved[48_224L])
+    }
+
+    @Test
+    fun `when no clock reading comes the AAPS record stands in for the row and history moves on`() {
+        startedAttempt(at = pumpStart + 3 * 60_000L)
+
+        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
+        assertNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone, pumpClockOffsetMs = 0L))
+
+        assertNull(saved[48_224L])
+        assertEquals(48_224L, store.attempts.single().unmatchedRowPumpId)
+        assertNull(store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `an unmatched start no longer holds later rows with its percent`() {
+        startedAttempt(at = pumpStart + 3 * 60_000L)
+        accounting.apply(event(48_224, 9, 120, 15), serial, zone)
+
+        assertNull(accounting.apply(event(48_230, 9, 120, 15, seconds = pumpStartSeconds + 3_600), serial, zone, waitForClock = true))
+        assertEquals(pumpStart + 3_600_000L to 15 * 60_000L, saved[48_230L])
+    }
+
+    @Test
+    fun `a replayed pump row keeps the start first written despite a slightly different offset`() {
+        assertNull(accounting.apply(event(48_224, 9, 110, 15), serial, zone, pumpClockOffsetMs = 1_000L))
+        assertNull(accounting.apply(event(48_224, 10, 110, 4), serial, zone, pumpClockOffsetMs = 2_000L))
+
+        assertEquals(pumpStart - 1_000L to 4 * 60_000L, saved[48_224L])
     }
 
     @Test
@@ -233,7 +262,7 @@ class YpsoTbrHistoryAccountingTest {
     fun `without a measured pump clock a running row that could be an AAPS start waits`() {
         startedAttempt(percent = 0, minutes = 120, at = pumpStart + 10 * 60_000L)
 
-        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone))
+        assertNotNull(accounting.apply(event(48_224, 9, 0, 120), serial, zone, waitForClock = true))
         assertNull(saved[48_224L])
     }
 

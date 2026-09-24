@@ -55,9 +55,16 @@ class YpsoTbrHistoryAccounting(
     /**
      * Applies one reconciled history event; returns a blocking reason or null when applied.
      * [pumpClockOffsetMs] is the pump clock minus the phone clock, measured on the read that returned
-     * this event, or null when it could not be measured.
+     * this event, or null when it could not be measured or does not hold for this event because the
+     * pump clock was set after it. [waitForClock] is true while a later read may still measure it.
      */
-    fun apply(event: YpsoHistoryEvent, pumpSerial: String, zone: ZoneId, pumpClockOffsetMs: Long? = null): String? {
+    fun apply(
+        event: YpsoHistoryEvent,
+        pumpSerial: String,
+        zone: ZoneId,
+        pumpClockOffsetMs: Long? = null,
+        waitForClock: Boolean = false,
+    ): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
         val mode = kind == YpsoHistoryKind.PUMP_MODE_CHANGED
@@ -70,6 +77,8 @@ class YpsoTbrHistoryAccounting(
         val running = kind == YpsoHistoryKind.TEMP_BASAL_STARTED
         // An AAPS start already matched to this row is timed by AAPS and needs no pump time.
         if (tbr) (journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId))?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+        // The AAPS record of an unmatched start stands in for this row, in every later rewrite too.
+        if (tbr && journal.unmatchedAs(pumpId) != null) return null
         val pumpTime = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
             ?.instant?.toEpochMilli()
         // On the phone's clock. With the offset measured on this read, a row's time is exact to a few
@@ -79,13 +88,18 @@ class YpsoTbrHistoryAccounting(
         if (tbr) {
             bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
                 ?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
-            // Without a measured clock a start's own row can fall outside the drift window and would be
-            // imported beside its AAPS record. Wait for a read that measures the clock instead.
+            // Without a usable clock a start's own row can fall outside the drift window, and importing
+            // it would count the same TBR twice. A later read may still measure the clock; after that,
+            // the start keeps its AAPS record in place of this row, and history moves on.
             if (pumpClockOffsetMs == null) {
                 journal.all().firstOrNull {
                     it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == pumpSerial && it.percent == percent &&
                         (it.baselinePumpId == null || it.baselinePumpId < pumpId)
-                }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}; pump clock was not measured" }
+                }?.let {
+                    if (waitForClock) return "TBR row $pumpId may belong to AAPS start ${it.id}; $CLOCK_WAIT"
+                    journal.unmatched(it.id, pumpId)
+                    return null
+                }
             }
         }
         // PumpSync refuses records from before this pump was registered; the pump's history reaches
@@ -100,9 +114,9 @@ class YpsoTbrHistoryAccounting(
                 (it.baselinePumpId == null || it.baselinePumpId < pumpId) && it.awaitsStatus && it.dispatchedAt != null
         }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which status has not resolved yet" }
         val duration = (minutes * MINUTE).coerceAtLeast(1L)
-        return sync(pumpId, pumpSerial, start, duration) {
+        return sync(pumpId, pumpSerial, start, duration, keepStart = true) { at ->
             pumpSync.syncTemporaryBasalWithPumpId(
-                start, percent.toDouble(), duration, false, PumpSync.TemporaryBasalType.NORMAL, pumpId, PumpType.YPSOPUMP, pumpSerial,
+                at, percent.toDouble(), duration, false, PumpSync.TemporaryBasalType.NORMAL, pumpId, PumpType.YPSOPUMP, pumpSerial,
             )
         }
     }
@@ -148,16 +162,23 @@ class YpsoTbrHistoryAccounting(
             journal.bound(attempt.id, pumpId)
             return null
         }
-        return sync(pumpId, attempt.pumpSerial, start, duration) {
-            pumpSync.syncTemporaryBasalWithPumpId(start, attempt.percent.toDouble(), duration, false, type, pumpId, PumpType.YPSOPUMP, attempt.pumpSerial)
+        return sync(pumpId, attempt.pumpSerial, start, duration) { at ->
+            pumpSync.syncTemporaryBasalWithPumpId(at, attempt.percent.toDouble(), duration, false, type, pumpId, PumpType.YPSOPUMP, attempt.pumpSerial)
         }
     }
 
-    private fun sync(pumpId: Long, serial: String, start: Long, duration: Long, write: () -> Unit): String? {
+    /**
+     * Writes a record under [pumpId] and reads it back. With [keepStart], a record already written
+     * for this row keeps its start: a pump row's time depends on the offset measured on each read,
+     * which differs by a second or two, or not at all once the clock was set since.
+     */
+    private fun sync(pumpId: Long, serial: String, start: Long, duration: Long, keepStart: Boolean = false, write: (start: Long) -> Unit): String? {
         val existing = lookup.byPumpId(pumpId, serial, start)
-        if (existing != null && (!existing.valid || existing.start == start && existing.duration == duration)) return null
-        write()
-        return verify(pumpId, serial, start, duration)
+        if (existing != null && !existing.valid) return null
+        val at = existing?.start?.takeIf { keepStart } ?: start
+        if (existing != null && existing.start == at && existing.duration == duration) return null
+        write(at)
+        return verify(pumpId, serial, at, duration)
     }
 
     private fun verify(pumpId: Long, serial: String, start: Long, duration: Long): String? {
@@ -215,6 +236,10 @@ class YpsoTbrHistoryAccounting(
         private const val CLOCK_SKEW = 90_000L
         /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
         private const val MEASURED_SKEW = 15_000L
+        private const val CLOCK_WAIT = "waiting for a pump clock reading"
+
+        /** Whether [apply] held a row only because the pump clock could not be used for it yet. */
+        fun isClockWait(reason: String): Boolean = reason.endsWith(CLOCK_WAIT)
         private const val NO_ID = Long.MIN_VALUE
         private val TBR_KINDS = setOf(
             YpsoHistoryKind.TEMP_BASAL_STARTED,

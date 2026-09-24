@@ -25,6 +25,12 @@ class YpsoHistoryIngestion(
     private val resolveProvisional: (pumpSerial: String, pumpId: Long, timestamp: Long, amount: Double, type: BS.Type) -> Unit = { _, _, _, _, _ -> },
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
+
+    /**
+     * Scans that reached a row needing a pump clock reading without one. Kept in memory only: a
+     * restart simply grants the reading a few more scans.
+     */
+    private val clocklessScans = java.util.concurrent.atomic.AtomicInteger(0)
     /** Cheap local gate for a new dose. Never performs pump I/O. */
     fun bolusReadiness(pumpSerial: String, reboot: Long): YpsoBolusMessage? {
         if (!retryPending(pumpSerial)) return YpsoBolusMessage.SAVING_PREVIOUS_DOSE
@@ -95,7 +101,19 @@ class YpsoHistoryIngestion(
                 )
             }
             is YpsoHistoryReconciliation.Stable -> {
-                for (event in reconciliation.stateUpdates + reconciliation.newEventsOldestFirst) {
+                val events = reconciliation.stateUpdates + reconciliation.newEventsOldestFirst
+                // The offset was measured at the end of this read. It holds for a row only if the pump
+                // clock was not set between that row and the read: a date/time change row after it in
+                // the pump's own order (sequence) ends its validity. The clock rows in this scan cover
+                // everything newer than the cursor; an in-place update (stateUpdates) is older than all.
+                val lastClockChange = snapshot.rowsNewestFirst
+                    .filter { YpsoHistoryClassifier.classify(it).kind in CLOCK_CHANGES }
+                    .maxOfOrNull { it.sequence }
+                val waitForClock = clocklessScans.get() < CLOCK_WAIT_SCANS
+                for (event in events) {
+                    val offset = snapshot.pumpClockOffsetMs?.takeIf {
+                        lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
+                    }
                     when (event.semantics.kind) {
                         // Only immediate-bolus terminal rows are ingested as an instantaneous normal
                         // bolus. Square/combination terminal rows carry the pump-confirmed delivered
@@ -157,12 +175,22 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> tbrAccounting?.apply(event, pumpSerial, zone, snapshot.pumpClockOffsetMs)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
+                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock)?.let {
+                            if (app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.isClockWait(it)) clocklessScans.incrementAndGet()
+                            return YpsoHistoryIngestionResult.Blocked(it)
+                        }
                     }
                 }
+                clocklessScans.set(0)
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
         }
+    }
+
+    companion object {
+        private val CLOCK_CHANGES = setOf(YpsoHistoryKind.DATE_CHANGED, YpsoHistoryKind.TIME_CHANGED)
+        /** Scans a TBR row waits for a pump clock reading before its AAPS start is left unmatched. */
+        private const val CLOCK_WAIT_SCANS = 3
     }
 }

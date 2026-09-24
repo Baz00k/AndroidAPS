@@ -38,6 +38,11 @@ data class YpsoTbrAttempt(
     val rowPumpId: Long? = null,
     /** Pump ID the AAPS record is bound to, once history has applied the row. */
     val pumpId: Long? = null,
+    /**
+     * A history row that may be this start's but could not be proven so, because the pump clock was
+     * unknown for it. The AAPS record stands in for that row, which is never imported on its own.
+     */
+    val unmatchedRowPumpId: Long? = null,
     val detail: String? = null,
 ) {
     enum class Kind { START, STOP }
@@ -55,7 +60,7 @@ data class YpsoTbrAttempt(
 
     val awaitsStatus: Boolean get() = state == State.PREPARED || state == State.DISPATCHED
     val awaitsAccounting: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && !accounted
-    val awaitsBinding: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && pumpId == null
+    val awaitsBinding: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && pumpId == null && unmatchedRowPumpId == null
     /** Anything that keeps AAPS from knowing it represents the pump truthfully. */
     val unresolved: Boolean get() = awaitsStatus || awaitsAccounting
 }
@@ -153,6 +158,14 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
 
     @Synchronized fun boundTo(pumpId: Long): YpsoTbrAttempt? = store.loadAll().firstOrNull { it.pumpId == pumpId }
 
+    /** History reached a row that may be this start's without a usable pump clock; see [YpsoTbrAttempt.unmatchedRowPumpId]. */
+    @Synchronized fun unmatched(id: String, rowPumpId: Long) = update(id) {
+        check(it.awaitsBinding) { "TBR attempt is not awaiting a pump identity" }
+        it.copy(unmatchedRowPumpId = rowPumpId)
+    }
+
+    @Synchronized fun unmatchedAs(rowPumpId: Long): YpsoTbrAttempt? = store.loadAll().firstOrNull { it.unmatchedRowPumpId == rowPumpId }
+
     private fun update(id: String, change: (YpsoTbrAttempt) -> YpsoTbrAttempt): YpsoTbrAttempt {
         val attempts = store.loadAll()
         val current = attempts.firstOrNull { it.id == id } ?: error("unknown TBR attempt")
@@ -164,7 +177,8 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
     /** Keeps every attempt that can still change AAPS records, plus a short diagnostic tail. */
     private fun retained(attempts: List<YpsoTbrAttempt>): List<YpsoTbrAttempt> {
         val recent = attempts.takeLast(RETAINED_ATTEMPTS).toSet()
-        return attempts.filter { it.unresolved || it.awaitsBinding || it in recent }.takeLast(MAX_ATTEMPTS)
+        // An unmatched start keeps its row out of history, including the row's later terminal rewrite.
+        return attempts.filter { it.unresolved || it.awaitsBinding || it.unmatchedRowPumpId != null || it in recent }.takeLast(MAX_ATTEMPTS)
     }
 
     companion object {
@@ -243,11 +257,16 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
         .putNullable("stoppedAt", value.stoppedAt)
         .putNullable("rowPumpId", value.rowPumpId)
         .putNullable("pumpId", value.pumpId)
+        .putNullable("unmatchedRowPumpId", value.unmatchedRowPumpId)
         .putNullable("detail", value.detail)
 
     private fun decode(json: JSONObject, version: Int): YpsoTbrAttempt {
-        // Version 3 lacks only the row identity, which starts unknown.
-        val expected = if (version == 3) FIELDS - "rowPumpId" else FIELDS
+        // Version 3 lacks the row identity and version 4 the unmatched row; both start unknown.
+        val expected = when (version) {
+            3 -> FIELDS - "rowPumpId" - "unmatchedRowPumpId"
+            4 -> FIELDS - "unmatchedRowPumpId"
+            else -> FIELDS
+        }
         require(json.keys().asSequence().toSet() == expected) { "unexpected TBR journal fields" }
         return YpsoTbrAttempt(
             id = json.getString("id"),
@@ -267,6 +286,7 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
             stoppedAt = json.longOrNull("stoppedAt"),
             rowPumpId = if (json.has("rowPumpId")) json.longOrNull("rowPumpId") else null,
             pumpId = json.longOrNull("pumpId"),
+            unmatchedRowPumpId = if (json.has("unmatchedRowPumpId")) json.longOrNull("unmatchedRowPumpId") else null,
             detail = if (json.isNull("detail")) null else json.getString("detail"),
         )
     }
@@ -275,12 +295,12 @@ class YpsoTbrAttemptFileStore(private val file: File) : YpsoTbrAttemptStore {
     private fun JSONObject.longOrNull(name: String): Long? = if (isNull(name)) null else getLong(name)
 
     companion object {
-        private const val VERSION = 4
+        private const val VERSION = 5
         /** Oldest version read in place; older pre-release journals are archived when settled. */
         private const val MIGRATABLE = 3
         private val FIELDS = setOf(
             "id", "kind", "pumpSerial", "percent", "durationMinutes", "type", "temporaryId", "baselinePumpId", "createdAt",
-            "state", "dispatchedAt", "effectiveAt", "effectiveBy", "accounted", "stoppedAt", "rowPumpId", "pumpId", "detail",
+            "state", "dispatchedAt", "effectiveAt", "effectiveBy", "accounted", "stoppedAt", "rowPumpId", "pumpId", "unmatchedRowPumpId", "detail",
         )
     }
 }

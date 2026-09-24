@@ -138,8 +138,9 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
+                // Row times move by the clock offset measured on each read; search well before this one.
                 override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
-                    tbrRecords(pumpSerial, start, includeInvalid = true).singleOrNull { it.ids.pumpId == pumpId }
+                    tbrRecords(pumpSerial, start - 24 * 60 * 60_000L, includeInvalid = true).singleOrNull { it.ids.pumpId == pumpId }
                         ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid) }
 
                 override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
@@ -315,6 +316,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
+    /** Stop was requested for the bolus being prepared, before its controller lifecycle began. */
+    private val bolusStopBeforeStart = AtomicBoolean(false)
     /** Held by every queued pump command and by the idle disconnect; see [onLink]. */
     private val linkUse = java.util.concurrent.locks.ReentrantLock()
     private val lowerBoundRecoveryRequested = AtomicBoolean(false)
@@ -652,11 +655,20 @@ class YpsoPumpPlugin @Inject constructor(
         uiInteraction.addNotification(Notification.YPSOPUMP_PROFILE_MISMATCH, message, Notification.URGENT)
     }
 
-    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult = onLink { deliverTreatmentNow(detailedBolusInfo) }
+    override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
+        bolusStopBeforeStart.set(false)
+        return onLink {
+            // A stop pressed while the link was reopening belongs to this bolus; beginDelivery clears
+            // the controller's own flag, so it is carried across here and nothing is dispatched.
+            if (bolusStopBeforeStart.get()) fail(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
+            else deliverTreatmentNow(detailedBolusInfo)
+        }
+    }
 
     private fun deliverTreatmentNow(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
+        if (bolusStopBeforeStart.get()) bolusController.requestStop()
         try {
         return runCatching {
         if (detailedBolusInfo.carbs != 0.0) return fail(R.string.ypsopump_bolus_invalid, message(YpsoBolusMessage.CARBS_NOT_STORED))
@@ -709,6 +721,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun stopBolusDelivering() {
+        bolusStopBeforeStart.set(true)
         cancelHistoryRecovery()
         if (!YpsoPumpConst.READ_ONLY_MODE) runCatching { bolusController.requestStop() }
             .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
@@ -1204,8 +1217,10 @@ class YpsoPumpPlugin @Inject constructor(
                         aapsLogger.warn(LTag.PUMP, "YpsoPump history recovery after $reason read no usable history")
                     historyRecoveryMustYield()    ->
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason yielded to a pump command")
-                    else                          ->
+                    else                          -> {
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot)}")
+                        if (!YpsoPumpConst.READ_ONLY_MODE) publishTbrWarningIfNeeded()
+                    }
                 }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
@@ -1619,7 +1634,7 @@ class YpsoPumpPlugin @Inject constructor(
         // instant, and setNewBasalProfile only succeeds when the pump schedule matches that profile.
         val percent = runCatching { YpsoTbrRequest.percentFor(absoluteRate, profile.getBasal()) }
             .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
-        return setTempBasalPercentNow(percent, durationInMinutes, profile, enforceNew, tbrType)
+        return setTempBasalPercent(percent, durationInMinutes, profile, enforceNew, tbrType)
     }
 
     override fun cancelTempBasal(enforceNew: Boolean): PumpEnactResult = onLink { cancelTempBasalNow(enforceNew) }
@@ -1674,6 +1689,14 @@ class YpsoPumpPlugin @Inject constructor(
     /** Derived from durable journal state, so it survives restarts and clears only on pump evidence. */
     @Synchronized
     private fun publishTbrWarningIfNeeded() {
+        val unmatched = runCatching { tbrController.unmatchedStarts() }.getOrDefault(0)
+        if (unmatched != publishedUnmatchedTbrs) {
+            publishedUnmatchedTbrs = unmatched
+            rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNMATCHED))
+            if (unmatched > 0) uiInteraction.addNotification(
+                Notification.YPSOPUMP_TBR_UNMATCHED, rh.gs(R.string.ypsopump_tbr_unmatched_notification, unmatched), Notification.NORMAL,
+            )
+        }
         val unresolved = runCatching { tbrController.hasUnresolved() }.getOrDefault(true)
         if (unresolved == publishedUncertainTbr) return
         publishedUncertainTbr = unresolved
@@ -1684,6 +1707,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     @Volatile private var publishedUncertainTbr = false
+    @Volatile private var publishedUnmatchedTbrs = 0
 
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult = onLink { setExtendedBolusNow(insulin, durationInMinutes) }
 
@@ -1885,7 +1909,9 @@ class YpsoPumpPlugin @Inject constructor(
         publishAvailabilityNotification()
         publishUnresolvedBolusWarningIfNeeded()
         publishedUncertainTbr = false
+        publishedUnmatchedTbrs = 0
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
+        rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNMATCHED))
         if (!YpsoPumpConst.READ_ONLY_MODE) publishTbrWarningIfNeeded()
         appLifecycle.addVisibilityListener(visibilityListener)
         onAppVisibilityChanged(appLifecycle.uiVisible)
