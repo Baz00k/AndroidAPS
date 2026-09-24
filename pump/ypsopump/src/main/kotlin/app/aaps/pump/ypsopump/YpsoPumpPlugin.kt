@@ -138,6 +138,7 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
             hasRecordedBolus = ::hasRecordedHistoryBolus,
             resolveProvisional = ::bindProvisionalBolusToPumpId,
+            registeredAt = ::pumpRegisteredAt,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.
                 override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
@@ -158,6 +159,10 @@ class YpsoPumpPlugin @Inject constructor(
                         }
                         .maxByOrNull { it.timestamp }
                         ?.let { YpsoTbrRecordLookup.Suspend(it.ids.pumpId, it.ids.temporaryId, it.timestamp, it.duration, it.isValid) }
+
+                override fun rowSuspendsAt(pumpSerial: String, at: Long) = tbrRecords(pumpSerial, at, includeInvalid = true)
+                    .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.timestamp == at && it.ids.pumpId != null }
+                    .map { YpsoTbrRecordLookup.Suspend(it.ids.pumpId, it.ids.temporaryId, it.timestamp, it.duration, it.isValid) }
 
                 override fun statusSuspendsFrom(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
                     .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }

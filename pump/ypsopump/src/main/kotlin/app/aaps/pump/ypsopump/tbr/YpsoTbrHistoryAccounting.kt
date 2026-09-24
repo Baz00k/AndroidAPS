@@ -36,6 +36,9 @@ interface YpsoTbrRecordLookup {
     /** Valid status-written stop records starting at or after [from]. */
     fun statusSuspendsFrom(pumpSerial: String, from: Long): List<StatusSuspend>
 
+    /** PUMP_SUSPEND records from Stop rows starting exactly at [at], including removed ones. */
+    fun rowSuspendsAt(pumpSerial: String, at: Long): List<Suspend>
+
 }
 
 /**
@@ -103,18 +106,33 @@ class YpsoTbrHistoryAccounting(
             }
         }
         // PumpSync refuses records from before this pump was registered; the pump's history reaches
-        // further back than AAPS' use of it. Such a row was never AAPS's, so it is passed over. AAPS
+        // further back than AAPS' use of it. Basal delivered before then is not AAPS's to count, like
+        // any earlier delivery; a TBR or stop still running at registration counts from then on. AAPS
         // starts, whose rows may read slightly earlier through clock skew, were matched above.
-        if (start < registeredAt(pumpSerial)) return null
-        if (mode) return pumpMode(event.semantics.modeChange, start, pumpId, pumpSerial, skew)
+        val registered = registeredAt(pumpSerial)
+        val from = maxOf(start, registered)
+        if (mode) {
+            val change = event.semantics.modeChange
+            if (start <= registered) when (change) {
+                // A stop without its resume lapses a day after the pump stopped.
+                YpsoPumpModeChange.STOPPED -> if (start + SUSPEND_WINDOW <= registered) return null
+                // The stop before it ended by registration too: nothing of it is AAPS's to count.
+                YpsoPumpModeChange.RESUMED -> return dropStopFrom(registered, pumpId, pumpSerial)
+                null -> return null
+            }
+            return pumpMode(change, from, pumpId, pumpSerial, skew, lapseAt = start + SUSPEND_WINDOW)
+        }
+        val until = start + minutes * MINUTE
+        // Ended before registration. A record already written (from its running row) is ended there.
+        if (until <= registered && lookup.byPumpId(pumpId, pumpSerial, from) == null) return null
         // A start whose outcome status has not proven yet may be this very row: importing it now would
         // record the same TBR twice. Hold until status settles it.
         journal.all().firstOrNull {
             it.kind == YpsoTbrAttempt.Kind.START && it.pumpSerial == pumpSerial && it.percent == percent &&
                 (it.baselinePumpId == null || it.baselinePumpId < pumpId) && it.awaitsStatus && it.dispatchedAt != null
         }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which status has not resolved yet" }
-        val duration = (minutes * MINUTE).coerceAtLeast(1L)
-        return sync(pumpId, pumpSerial, start, duration, keepStart = true) { at ->
+        val duration = (until - from).coerceAtLeast(1L)
+        return sync(pumpId, pumpSerial, from, duration, keepStart = true) { at ->
             pumpSync.syncTemporaryBasalWithPumpId(
                 at, percent.toDouble(), duration, false, PumpSync.TemporaryBasalType.NORMAL, pumpId, PumpType.YPSOPUMP, pumpSerial,
             )
@@ -191,7 +209,29 @@ class YpsoTbrHistoryAccounting(
      * Stop and resume rows carry the pump's own time, so the zero-delivery window is not inferred.
      * A stop without a resume row stays recorded for one day, then lapses.
      */
-    private fun pumpMode(change: YpsoPumpModeChange?, at: Long, pumpId: Long, serial: String, skew: Long): String? = when (change) {
+    /**
+     * A Stop row before registration was recorded from registration on; a Resume also before it
+     * leaves nothing of that stop after registration, so the record is removed. Every such stop
+     * starts at registration, so the Resume's own Stop is the one directly before it in pump order.
+     */
+    private fun dropStopFrom(registered: Long, resumePumpId: Long, serial: String): String? {
+        val stop = lookup.rowSuspendsAt(serial, registered)
+            .filter { checkNotNull(it.pumpId) < resumePumpId }
+            .maxByOrNull { checkNotNull(it.pumpId) }
+            ?.takeIf { it.valid } ?: return null
+        val pumpId = checkNotNull(stop.pumpId)
+        pumpSync.invalidateTemporaryBasalWithPumpId(pumpId, PumpType.YPSOPUMP, serial)
+        return if (lookup.byPumpId(pumpId, serial, stop.start)?.valid == false) null else "PumpSync did not remove pump stop $pumpId"
+    }
+
+    private fun pumpMode(
+        change: YpsoPumpModeChange?,
+        at: Long,
+        pumpId: Long,
+        serial: String,
+        skew: Long,
+        lapseAt: Long = at + SUSPEND_WINDOW,
+    ): String? = when (change) {
         // Inserted once. A replayed row keeps whatever end its resume row or a status already gave it.
         YpsoPumpModeChange.STOPPED -> if (lookup.byPumpId(pumpId, serial, at) != null) null else {
             // Status records a stop when it first sees one. This row's record covers only the time
@@ -199,7 +239,7 @@ class YpsoTbrHistoryAccounting(
             // understate IOB. If status saw a later stop instead, this stop's Resume row cuts it.
             // A status stop that ended before this Stop row is an earlier stop and says nothing here.
             val seenAt = lookup.statusSuspendsFrom(serial, at - skew).filter { it.start + it.duration > at }.minOfOrNull { it.start }
-            val duration = seenAt?.let { it - at } ?: SUSPEND_WINDOW
+            val duration = minOf(seenAt ?: lapseAt, lapseAt) - at
             // A status stop already covering this row's time is this stop, recorded from status.
             if (duration <= 0L) null else {
                 pumpSync.syncTemporaryBasalWithPumpId(
