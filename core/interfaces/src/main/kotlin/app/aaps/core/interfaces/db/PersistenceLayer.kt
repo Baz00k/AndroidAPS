@@ -82,6 +82,9 @@ interface PersistenceLayer {
      */
     fun getBolusByNSId(nsId: String): BS?
 
+    /** Current record by pump identity, including invalidated records (not tracked-change copies). */
+    fun getBolusByPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): BS?
+
     /**
      * Get boluses from time
      *

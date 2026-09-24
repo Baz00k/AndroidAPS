@@ -174,9 +174,94 @@ class YpsoHistoryIngestionTest {
         val results = (1..4).map { ingestion.ingest("10000001", ZoneId.of("UTC"), 21, scan) }
 
         assertEquals(listOf(true, true, true, false), waits)
+        results.take(3).forEach { assertEquals(YpsoHistoryIngestionResult.Retry.BOUNDED, (it as YpsoHistoryIngestionResult.Blocked).retry) }
         assertTrue(results.last() is YpsoHistoryIngestionResult.Applied)
         assertEquals(101, store.value.cursor?.identity?.sequence)
         assertTrue(probe.seen.isEmpty())
+    }
+
+    @Test
+    fun `unrecorded immediate bolus before activation is skipped without blocking newer history`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val ingestion = YpsoHistoryIngestion(store, sync, hasRecordedBolus = { _, _ -> false })
+        val anchor = row(100, 2, 0)
+        val oldDose = row(101, 2, 80)
+        val oldTime = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(oldDose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        whenever(sync.isHistoryRecordBeforeActivePump(eq(oldTime), any(), eq("10000001"))).thenReturn(true)
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+            .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+        val scan = snapshot(listOf(row(102, 2, 90), oldDose, anchor))
+
+        repeat(2) {
+            assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, scan) is YpsoHistoryIngestionResult.Applied)
+            assertEquals(102L, store.value.cursor?.identity?.sequence)
+            assertNull(store.value.pendingBolus)
+        }
+        verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), eq(101L), any(), any())
+        verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(0.9), any(), eq(102L), any(), any())
+    }
+
+    @Test
+    fun `an already owned immediate bolus is corrected even before activation`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), any())).thenReturn(true)
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+            .thenReturn(PumpSync.BolusSyncResult.UPDATED)
+        val bindings = mutableListOf<Long>()
+        val ingestion = YpsoHistoryIngestion(store, sync,
+            hasRecordedBolus = { serial, id -> serial == "10000001" && id == 101L },
+            resolveProvisional = { _, id, _, _, _ -> bindings += id })
+        val anchor = row(100, 2, 0)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 0), anchor)))
+
+        assertTrue(result is YpsoHistoryIngestionResult.Applied)
+        assertEquals(listOf(101L), bindings)
+        verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(0.0), any(), eq(101L), any(), any())
+    }
+
+    @Test
+    fun `a persisted bolus outbox is never discarded by a later activation cutoff`() {
+        val sync: PumpSync = mock()
+        val pending = app.aaps.pump.ypsopump.history.YpsoPendingBolusSync("10000001", 101L, 1_700_000_000_000L, 80, 101L)
+        val store = Store(YpsoHistoryState(cursor = cursor(100), pendingBolus = pending))
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), any())).thenReturn(true)
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+            .thenReturn(PumpSync.BolusSyncResult.REJECTED, PumpSync.BolusSyncResult.UNCHANGED)
+
+        assertEquals(false, YpsoHistoryIngestion(store, sync).retryPending("10000001"))
+        assertEquals(pending, store.value.pendingBolus)
+        // Restart, then recover the original intent, without asking the import filter to discard it.
+        assertTrue(YpsoHistoryIngestion(store, sync).retryPending("10000001"))
+        assertNull(store.value.pendingBolus)
+        verify(sync, org.mockito.kotlin.never()).isHistoryRecordBeforeActivePump(any(), any(), any())
+    }
+
+    @Test
+    fun `a bolus at activation is imported but a database failure still blocks the scan`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val dose = row(101, 2, 80)
+        val timestamp = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), any())).thenAnswer { it.getArgument<Long>(0) < timestamp }
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+            .thenReturn(PumpSync.BolusSyncResult.REJECTED)
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        val anchor = row(100, 2, 0)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+
+        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, anchor)))
+
+        assertTrue(result is YpsoHistoryIngestionResult.Blocked)
+        assertEquals(100L, store.value.cursor?.identity?.sequence)
+        assertNotNull(store.value.pendingBolus)
+        verify(sync).replayConfirmedBolusWithPumpIdDetailed(eq(timestamp), any(), any(), eq(101L), any(), any())
     }
 
     @Test
@@ -250,6 +335,47 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
+    fun `a completed unrecorded square wholly before pump activation does not cause endless rescans`() {
+        val store = Store()
+        val sync: PumpSync = mock()
+        val ingestion = YpsoHistoryIngestion(store, sync)
+        val cursor = row(100, 2, 0)
+        val oldDose = row(101, 3, 80).copy(value2 = 3)
+        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(oldDose.factorySeconds, ZoneId.of("UTC"))
+            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        // Whole-minute elapsed time is rounded down: exclude only after the entire next minute.
+        whenever(sync.isHistoryRecordBeforeActivePump(eq(start + 4 * 60_000L), any(), eq("10000001"))).thenReturn(true)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(cursor)))
+        val rows = snapshot(listOf(row(102, 4, 0), oldDose, cursor))
+        repeat(2) {
+            assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+            assertEquals(102L, store.value.cursor?.identity?.sequence)
+        }
+        verify(sync, org.mockito.kotlin.never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `a dose overlapping activation or an ordinary persistence rejection still blocks cursor advancement`() {
+        for (activationDelta in listOf(120_000L, 240_000L, -1L)) {
+            val store = Store()
+            val sync: PumpSync = mock()
+            val ingestion = YpsoHistoryIngestion(store, sync)
+            val cursor = row(100, 2, 0)
+            val dose = row(101, 3, 80).copy(value2 = 3)
+            val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
+                as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+            whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer {
+                it.getArgument<Long>(0) < start + activationDelta
+            }
+            ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(cursor)))
+            val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, cursor)))
+            assertTrue(result is YpsoHistoryIngestionResult.Blocked)
+            assertEquals(100L, store.value.cursor?.identity?.sequence)
+            verify(sync).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
+        }
+    }
+
+    @Test
     fun `square bolus started on the pump is accounted over its elapsed window`() {
         val store = Store()
         val sync: PumpSync = mock()
@@ -295,6 +421,7 @@ class YpsoHistoryIngestionTest {
         verify(sync, org.mockito.kotlin.never())
             .syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
         verify(sync).correctExtendedBolusWithPumpId(eq(5_000L), eq(0.5), eq(900_000L), any(), any(), any(), eq("10000001"))
+        verify(sync, org.mockito.kotlin.never()).isHistoryRecordBeforeActivePump(any(), any(), any())
     }
 
     @Test

@@ -21,6 +21,12 @@ import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.core.interfaces.profile.Profile.ProfileValue
 import java.time.ZoneId
+import java.io.File
+import org.junit.jupiter.api.io.TempDir
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
+import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.core.data.model.BS
+import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
@@ -31,6 +37,7 @@ import org.mockito.kotlin.*
 import javax.inject.Provider
 
 class YpsoPumpPluginTest {
+    @TempDir lateinit var historyDirectory: File
     private val rh: ResourceHelper = mock {
         on { gs(any()) } doReturn "localized message"
         on { gs(any(), anyVararg()) } doReturn "localized message"
@@ -275,13 +282,187 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(false)
             YpsoBleManager.ProfileReadAttempt()
         }
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("previous history failure"))
+        clearInvocations(ui)
         plugin.getPumpStatus("manual change")
 
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
         verify(manager, never()).readProfile(any())
         verify(manager, never()).readProfileConfiguration(any(), any(), any())
         verify(manager, never()).readStableHistory(any(), any(), any())
         assertNotNull(recovery, "status completion should schedule independent recovery")
         assertTrue(state.hasFreshProfileEvidence)
+    }
+
+    @Test
+    fun `history recovery exception raises a persistent accounting warning`() {
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadHistory).thenReturn(true)
+        whenever(manager.noBackupDirectory()).thenThrow(IllegalStateException("unreadable history store"))
+        plugin.dispatchHistoryRecovery = { it() }
+
+        plugin.javaClass.getDeclaredMethod("scheduleHistoryRecovery", String::class.java)
+            .apply { isAccessible = true }.invoke(plugin, "test")
+
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+    }
+
+    @Test
+    fun `history warning does not start an alarm and clears only on applied history`() {
+        repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database write rejected")) }
+        verify(ui, times(2)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        // A temporary clock wait must not clear an existing warning.
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
+        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verifyNoMoreInteractions(ui)
+    }
+
+    @Test
+    fun `bounded clock retries do not warn and successful reconciliation resets transient failures`() {
+        repeat(3) {
+            plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
+        }
+        verifyNoInteractions(ui)
+        repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT)) }
+        verifyNoInteractions(ui)
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
+        clearInvocations(ui)
+        repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT)) }
+        verifyNoInteractions(ui)
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT))
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+    }
+
+    @Test
+    fun `repeated empty reads publish warning through actual recovery path`() {
+        prepareHistoryRecovery(null)
+        repeat(2) { runHistoryRecovery() }
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        runHistoryRecovery()
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+    }
+
+    @Test
+    fun `intentional yields do not count as history failures or clear a warning`() {
+        prepareHistoryRecovery(null)
+        whenever(commandQueue.size()).thenReturn(1)
+        repeat(4) { runHistoryRecovery() }
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+    }
+
+    @Test
+    fun `a completed cooperative yield is ignored even after the command leaves the queue`() {
+        prepareHistoryRecovery(null)
+        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+            it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(null)
+            YpsoBleManager.HistoryReadAttempt().apply { requestYield() }
+        }
+        repeat(4) { runHistoryRecovery() }
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+    }
+
+    @Test
+    fun `successful history commit clears the warning through the recovery path`() {
+        prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true))
+        prepareHistoryIdentity()
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("previous failure"))
+
+        runHistoryRecovery()
+
+        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        assertTrue(File(historyDirectory, "ypsopump-history-state.json").isFile)
+    }
+
+    @Test
+    fun `excluded old bolus advances real recovery without inserting insulin or warning`() {
+        prepareHistoryIdentity()
+        plugin.persistenceLayer = mock()
+        val anchor = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 100L, 0)
+        prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
+        runHistoryRecovery()
+        val dose = anchor.copy(eventType = 2, value1 = 80, sequence = 101L)
+        whenever(sync.isHistoryRecordBeforeActivePump(any(), eq(PumpType.YPSOPUMP), eq(PUMP_SERIAL))).thenReturn(true)
+        prepareHistoryRecovery(YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true))
+        clearInvocations(ui)
+
+        runHistoryRecovery()
+
+        verify(sync, never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+        verify(plugin.persistenceLayer).getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL)
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        val saved = app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore(File(historyDirectory, "ypsopump-history-state.json")).load()
+        assertEquals(101L, saved.cursor?.identity?.sequence)
+        assertNull(saved.pendingBolus)
+    }
+
+    @Test
+    fun `early ingestion identity failure also publishes the history warning`() {
+        prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true))
+        runHistoryRecovery()
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+    }
+
+    @Test
+    fun `deactivating the driver clears its warning and suppresses late recovery results`() {
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database"))
+        plugin.onStop()
+        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        clearInvocations(ui)
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("late database error"))
+        verifyNoInteractions(ui)
+    }
+
+    @Test
+    fun `existing invalidated bolus is still owned and must not be treated as an unseen old import`() {
+        plugin.persistenceLayer = mock()
+        whenever(plugin.persistenceLayer.getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL))
+            .thenReturn(BS(timestamp = 1_000L, amount = 0.5, type = BS.Type.NORMAL, isValid = false))
+        assertTrue(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 101L))
+        verify(plugin.persistenceLayer).getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL)
+        verifyNoInteractions(manager)
+    }
+
+    @Test
+    fun `journalled immediate dose remains owned before a database record is available`() {
+        plugin.persistenceLayer = mock()
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        val attempt = immediateAttempt(80).copy(pumpFastSequence = 48_134L)
+        app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json")).commit(attempt)
+        assertTrue(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 48_134L))
+        assertFalse(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 48_135L))
+        assertFalse(plugin.hasRecordedHistoryBolus("20000002", 48_134L))
+    }
+
+    private fun prepareHistoryIdentity() {
+        state.currentZone = { ZoneId.of("UTC") }
+        state.serialNumber = PUMP_SERIAL
+        val session: PumpSession = mock()
+        val record = PumpSession.Record("pump", "key", "generation", 21, 1L, 1L)
+        whenever(manager.session).thenReturn(session)
+        whenever(session.snapshot()).thenReturn(record)
+        whenever(session.activeRecord()).thenReturn(record)
+    }
+
+    private fun prepareHistoryRecovery(snapshot: YpsoHistorySnapshot?) {
+        whenever(manager.isConnected).thenReturn(true)
+        whenever(manager.canReadHistory).thenReturn(true)
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+            it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(snapshot)
+            YpsoBleManager.HistoryReadAttempt()
+        }
+        plugin.dispatchHistoryRecovery = { it() }
+    }
+
+    private fun runHistoryRecovery() {
+        plugin.javaClass.getDeclaredMethod("scheduleHistoryRecovery", String::class.java)
+            .apply { isAccessible = true }.invoke(plugin, "test")
     }
 
     @Test
