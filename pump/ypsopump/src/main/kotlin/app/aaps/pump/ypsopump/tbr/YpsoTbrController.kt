@@ -86,7 +86,6 @@ internal class YpsoTbrController(
         }
         val attempt = newAttempt(YpsoTbrAttempt.Kind.START, serial, request.percent, request.durationMinutes, type, baseline)
         val evidence = send(attempt) { it.justStarted(request) }
-        identify(attempt.id)
         val current = checkNotNull(journal.find(attempt.id))
         when {
             current.state == YpsoTbrAttempt.State.NO_EFFECT ->
@@ -131,11 +130,6 @@ internal class YpsoTbrController(
             if (attempt.awaitsStatus) resolveFromStatus(attempt, observation)
         }
         for (attempt in journal.all()) if (attempt.awaitsAccounting) account(attempt)
-        // A start whose row could not be read on its command link is identified while the pump still
-        // runs it and has not logged anything newer.
-        journal.all().lastOrNull { it.awaitsBinding && it.rowPumpId == null && it.stoppedAt == null }
-            ?.takeIf { stillRunning(it, observation) }
-            ?.let { identify(it.id) }
         records.reconcileWith(observation)
     }
 
@@ -159,28 +153,6 @@ internal class YpsoTbrController(
             // Idle now does not prove this stop ended anything; history carries the real end time.
             YpsoTbrAttempt.Kind.STOP -> journal.noEffect(attempt.id, "stop outcome resolved by history")
         }
-    }
-
-    /**
-     * Binds a start that status just proved to its own history row. The pump appends that row when the
-     * TBR starts, so the newest row, if it is a running TBR with this request and newer than the
-     * start's baseline, is this start's row. Otherwise history binds it later by time window.
-     */
-    private fun identify(id: String) {
-        val attempt = journal.find(id)?.takeIf { it.awaitsBinding } ?: return
-        val head = runCatching { link.headRow() }.getOrNull() ?: return
-        val isThisStart = head.eventType == RUNNING_TBR_ROW && head.percent == attempt.percent &&
-            head.minutes == attempt.durationMinutes && (attempt.baselinePumpId == null || head.pumpId > attempt.baselinePumpId) &&
-            journal.boundTo(head.pumpId) == null
-        if (isThisStart) journal.identified(id, head.pumpId)
-    }
-
-    /** The pump still runs this start: same percent, and remaining minutes match its elapsed time. */
-    private fun stillRunning(attempt: YpsoTbrAttempt, observation: YpsoTbrObservation): Boolean {
-        val elapsed = ((observation.observedAt - checkNotNull(attempt.effectiveAt)) / MINUTE).toInt().coerceAtLeast(0)
-        val expected = attempt.durationMinutes - elapsed
-        return observation.running && observation.percent == attempt.percent &&
-            observation.remainingMinutes > 0 && observation.remainingMinutes in (expected - 2)..(expected + 1)
     }
 
     /** Saves a proven start and applies any AAPS stop that already ended it. Safe to repeat. */
@@ -296,6 +268,5 @@ internal class YpsoTbrController(
 
     companion object {
         private const val MINUTE = 60_000L
-        private const val RUNNING_TBR_ROW = 9
     }
 }

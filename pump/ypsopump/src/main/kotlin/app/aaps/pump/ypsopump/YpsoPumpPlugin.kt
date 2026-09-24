@@ -150,21 +150,37 @@ class YpsoPumpPlugin @Inject constructor(
 
                 override fun latestSuspendBefore(pumpSerial: String, at: Long) =
                     tbrRecords(pumpSerial, at - 24 * 60 * 60_000L, includeInvalid = true)
-                        .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId != null && it.timestamp <= at }
+                        .filter {
+                            it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.timestamp <= at &&
+                                (it.ids.pumpId != null || it.ids.temporaryId != null)
+                        }
                         .maxByOrNull { it.timestamp }
-                        ?.let { YpsoTbrRecordLookup.Suspend(checkNotNull(it.ids.pumpId), it.timestamp, it.duration, it.isValid) }
-            }),
+                        ?.let { YpsoTbrRecordLookup.Suspend(it.ids.pumpId, it.ids.temporaryId, it.timestamp, it.duration, it.isValid) }
+
+                override fun tbrRowsBetween(pumpSerial: String, percent: Int, after: Long, before: Long, runningAt: Long) =
+                    tbrRecords(pumpSerial, runningAt - 24 * 60 * 60_000L)
+                        .filter {
+                            it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.rate.toInt() == percent &&
+                                it.timestamp + it.duration > runningAt
+                        }
+                        .mapNotNull { it.ids.pumpId }.filter { it > after && it < before }
+
+                override fun statusSuspendsFrom(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
+                    .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }
+                    .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.StatusSuspend(it, record.timestamp, record.duration) } }
+            }, observation = { bleManager.observedTbr() }, registeredAt = ::pumpRegisteredAt),
         )
     }
-    private val tbrController by lazy {
+    private val tbrControllerLazy = lazy {
         YpsoTbrController(
-            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }, readHead = ::readHistoryHead),
+            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
             tbrJournal,
             tbrRecords,
             ::serialNumber,
             historyBaseline = { historyIngestion.currentCursor()?.identity?.aapsPumpId },
         )
     }
+    private val tbrController by tbrControllerLazy
 
     /**
      * YpsoPump TBR records starting at or after [notBefore] (less a minute). Every caller knows the
@@ -175,6 +191,11 @@ class YpsoPumpPlugin @Inject constructor(
         return persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(notBefore - 60_000L, false).blockingGet()
             .filter { (includeInvalid || it.isValid) && it.referenceId == null && it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
     }
+
+    /** Start of AAPS' use of this pump; PumpSync refuses pump records from before it. */
+    private fun pumpRegisteredAt(serial: String): Long =
+        if (preferences.get(app.aaps.core.keys.StringNonKey.ActivePumpSerialNumber) == serial)
+            preferences.get(app.aaps.core.keys.LongNonKey.ActivePumpChangeTimestamp) else 0L
 
     private fun activeTbrRecords(serial: String, at: Long): List<app.aaps.core.data.model.TB> {
         if (!::persistenceLayer.isInitialized) return emptyList()
@@ -241,6 +262,7 @@ class YpsoPumpPlugin @Inject constructor(
         override fun reconcileWith(observation: YpsoTbrObservation) {
             val serial = serialNumber().takeIf(String::isNotBlank) ?: return
             val at = observation.observedAt
+            var allEnded = true
             for (record in activeTbrRecords(serial, at)) {
                 val matches = when (record.type) {
                     app.aaps.core.data.model.TB.Type.PUMP_SUSPEND -> !observation.running
@@ -251,16 +273,39 @@ class YpsoPumpPlugin @Inject constructor(
                     lastSeenMatching[record.id] = at
                     continue
                 }
-                // A record written moments ago may still be settling against this sample.
-                if (record.timestamp > at - 60_000L) continue
+                // A record written moments ago may still be settling against this sample. A stopped
+                // pump runs no TBR at all, so that contradiction is final at once.
+                if (observation.running && record.timestamp > at - 60_000L) continue
                 val netNegative = record.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND || record.isAbsolute || record.rate < 100.0
                 val end = if (netNegative) lastSeenMatching[record.id] ?: record.timestamp + 1L else at
-                if (!shorten(record, end)) aapsLogger.warn(LTag.PUMP, "YpsoPump could not end TBR record ${record.id} contradicted by status")
-                lastSeenMatching.remove(record.id)
+                if (shorten(record, end)) lastSeenMatching.remove(record.id)
+                else {
+                    allEnded = false
+                    aapsLogger.warn(LTag.PUMP, "YpsoPump could not end TBR record ${record.id} contradicted by status")
+                }
             }
+            // A stop record on top of a TBR record still open would count the missing basal twice.
+            if (!observation.running && allEnded) recordStop(serial, at)
+        }
+
+        /**
+         * A stopped pump delivers nothing, so AAPS must record zero basal as soon as status sees it,
+         * not only when history reports the Stop row. The pump stopped at some point before this
+         * observation; starting the record here keeps IOB on the high side. The Stop row later moves
+         * the start to the pump's own time, and status or the Resume row ends it.
+         */
+        private fun recordStop(serial: String, at: Long) {
+            if (activeTbrRecords(serial, at).any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }) return
+            val temporaryId = java.util.UUID.randomUUID().mostSignificantBits and Long.MAX_VALUE
+            pumpSync.addTemporaryBasalWithTempId(
+                at, 0.0, STATUS_STOP_WINDOW_MS, true, temporaryId, PumpSync.TemporaryBasalType.PUMP_SUSPEND, PumpType.YPSOPUMP, serial,
+            )
+            val saved = activeTbrRecords(serial, at).firstOrNull { it.ids.temporaryId == temporaryId }
+            if (saved == null) aapsLogger.warn(LTag.PUMP, "YpsoPump could not record the pump stop seen by status")
+            else lastSeenMatching[saved.id] = at
         }
     }
-    private val bolusController by lazy {
+    private val bolusControllerLazy = lazy {
         YpsoImmediateBolusController(
             bleManager,
             YpsoBolusAttemptJournal(
@@ -270,6 +315,7 @@ class YpsoPumpPlugin @Inject constructor(
             historyIngestion::currentCursor,
         )
     }
+    private val bolusController by bolusControllerLazy
     private val historyRecoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "ypso-history-recovery").apply { isDaemon = true }
     }
@@ -277,6 +323,8 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
+    /** An idle disconnect is deciding or closing; the queue waits instead of starting a command. */
+    private val idleRelease = AtomicBoolean(false)
     private val lowerBoundRecoveryRequested = AtomicBoolean(false)
     private val foregroundConnectionLease = AtomicBoolean(false)
     private val visibilityListener: (Boolean) -> Unit = ::onAppVisibilityChanged
@@ -322,7 +370,7 @@ class YpsoPumpPlugin @Inject constructor(
     // mode byte. The status-only artifact exposes this state without enabling dose requests.
     override fun isSuspended(): Boolean = !YpsoPumpConst.READ_ONLY_MODE && (pumpState.isSuspended || reservoirEmpty())
     // Background accounting is abandonable and must never hold the serialized therapy queue.
-    override fun isBusy(): Boolean = bolusController.isBusy || tbrController.isBusy
+    override fun isBusy(): Boolean = idleRelease.get() || bolusController.isBusy || tbrController.isBusy
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -377,16 +425,47 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun disconnect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "disconnect: $reason")
-        if (reason == "Queue empty" && appLifecycle.uiVisible) {
-            aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect suppressed by foreground connection lease")
+        if (reason == "Queue empty") {
+            if (appLifecycle.uiVisible) {
+                aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect suppressed by foreground connection lease")
+                return
+            }
+            if (historyRecoveryActive.get()) {
+                idleDisconnectDeferredToHistory.set(true)
+                aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect deferred until history recovery releases the connection")
+                return
+            }
+            releaseIdleConnection("queue empty")
             return
         }
-        if (reason == "Queue empty" && historyRecoveryActive.get()) {
-            idleDisconnectDeferredToHistory.set(true)
-            aapsLogger.debug(LTag.PUMP, "YpsoPump queue-empty disconnect deferred until history recovery releases the connection")
-            return
+        bleManager.disconnect()
+    }
+
+    /**
+     * The only place an idle connection is closed. Commands never manage the link themselves: while
+     * any queued or running command, therapy controller or history read needs it, it stays open.
+     * A link fault still tears the connection down wherever it is detected.
+     */
+    private fun releaseIdleConnection(reason: String) {
+        // While this runs, isBusy() holds the queue worker back, so no command can start on the link
+        // between the check and the disconnect. A command already queued is seen by the check.
+        if (!idleRelease.compareAndSet(false, true)) return
+        try {
+            val user = when {
+                commandQueue.performing() != null || commandQueue.size() > 0 -> "a queued pump command"
+                bolusControllerLazy.isInitialized() && bolusController.isBusy -> "a bolus command"
+                tbrControllerLazy.isInitialized() && tbrController.isBusy     -> "a TBR command"
+                historyRecoveryActive.get()                                 -> "history recovery"
+                else                                                        -> null
+            }
+            if (user != null) {
+                aapsLogger.debug(LTag.PUMP, "YpsoPump idle disconnect after $reason skipped: $user uses the connection")
+                return
+            }
+            bleManager.disconnect(preserveStatus = true)
+        } finally {
+            idleRelease.set(false)
         }
-        bleManager.disconnect(preserveStatus = reason == "Queue empty")
     }
     override fun stopConnecting() { bleManager.disconnect() }
 
@@ -1013,37 +1092,15 @@ class YpsoPumpPlugin @Inject constructor(
         return false
     }
 
-    /**
-     * The running TBR row among the history rows newer than the durable cursor, read right after a
-     * TBR start was proven. The pump runs one TBR at a time, so a running (type 9) row is the TBR the
-     * pump runs now. Its PumpSync identity equals the one history reconciliation assigns only while no
-     * reboot and no sequence decrease lie between cursor and row; otherwise the identity stays unknown.
-     */
-    private fun readHistoryHead(): app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow? {
-        val cursor = historyIngestion.currentCursor() ?: return null
-        val snapshot = readHistoryBlocking(timeoutMs = 20_000, maxRows = HEAD_ROWS, headOnly = true) ?: return null
-        if (snapshot.countBefore != snapshot.countAfter || snapshot.headBefore != snapshot.headAfter) return null
-        if (snapshot.pumpRebootBefore != cursor.pumpReboot || snapshot.pumpRebootAfter != cursor.pumpReboot) return null
-        val newer = snapshot.rowsNewestFirst.takeWhile { it.sequence > cursor.identity.sequence }
-        // Sequences must fall strictly toward the cursor; anything else is not a plain continuation.
-        if (newer.zipWithNext().any { (a, b) -> a.sequence <= b.sequence }) return null
-        val running = newer.filter { it.eventType == 9 }
-        val row = running.singleOrNull() ?: return null
-        return app.aaps.pump.ypsopump.tbr.YpsoTbrHeadRow(
-            (cursor.identity.sequenceGeneration.toLong() shl 32) or row.sequence, row.eventType, row.value1, row.value2,
-        )
-    }
-
     private fun readHistoryBlocking(
         timeoutMs: Long = 120_000,
         maxRows: Int = 128,
-        headOnly: Boolean = false,
         stopWhen: () -> Boolean = { false },
         onAttempt: (YpsoBleManager.HistoryReadAttempt) -> Unit = {},
     ): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
-        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows, headOnly) {
+        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows) {
             snapshot = it
             latch.countDown()
         }
@@ -1115,6 +1172,7 @@ class YpsoPumpPlugin @Inject constructor(
                 // events were missed by seeing it. A short scan reports COVERAGE_INCOMPLETE and is
                 // discarded whole, so background recovery always reads the full ring.
                 val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
+                val readAt = System.currentTimeMillis()
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
@@ -1129,18 +1187,14 @@ class YpsoPumpPlugin @Inject constructor(
                     historyRecoveryMustYield()    ->
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason yielded to a pump command")
                     else                          ->
-                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot)}")
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: ${ingestHistory(snapshot, readAt)}")
                 }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
             } finally {
                 historyRecoveryAttempt.set(null)
                 historyRecoveryActive.set(false)
-                if (idleDisconnectDeferredToHistory.getAndSet(false) &&
-                    commandQueue.size() == 0 && !bolusController.isBusy
-                ) {
-                    bleManager.disconnect(preserveStatus = true)
-                }
+                if (idleDisconnectDeferredToHistory.getAndSet(false)) releaseIdleConnection("history recovery")
             }
         }
     }
@@ -1189,11 +1243,7 @@ class YpsoPumpPlugin @Inject constructor(
                 aapsLogger.error(LTag.PUMP, "YpsoPump lower-bound history recovery failed after $reason: ${exception.message}")
             } finally {
                 historyRecoveryActive.set(false)
-                if (idleDisconnectDeferredToHistory.getAndSet(false) &&
-                    commandQueue.size() == 0 && !bolusController.isBusy
-                ) {
-                    bleManager.disconnect(preserveStatus = true)
-                }
+                if (idleDisconnectDeferredToHistory.getAndSet(false)) releaseIdleConnection("lower-bound recovery")
             }
         }
     }
@@ -1216,7 +1266,7 @@ class YpsoPumpPlugin @Inject constructor(
         return !historyRecoveryActive.get()
     }
 
-    private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
+    private fun ingestHistory(snapshot: YpsoHistorySnapshot, readAt: Long): YpsoHistoryIngestionResult {
         logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
         val zone = pumpState.historyZone
@@ -1249,7 +1299,7 @@ class YpsoPumpPlugin @Inject constructor(
             }) {
             return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation")
         }
-        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event ->
+        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot, readAt) { event ->
             if (attempt?.pumpHistoryId == event.identity.aapsPumpId) {
                 when (attempt.treatment) {
                     app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> app.aaps.core.data.model.BS.Type.NORMAL
@@ -1833,9 +1883,7 @@ class YpsoPumpPlugin @Inject constructor(
     internal fun onAppVisibilityChanged(visible: Boolean) {
         if (!visible) {
             foregroundConnectionLease.set(false)
-            if (commandQueue.performing() == null && commandQueue.size() == 0 && !historyRecoveryActive.get()) {
-                bleManager.disconnect(preserveStatus = true)
-            }
+            releaseIdleConnection("app left the foreground")
             return
         }
         if (!foregroundConnectionLease.compareAndSet(false, true)) return
@@ -1994,9 +2042,14 @@ class YpsoPumpPlugin @Inject constructor(
         private const val HISTORY_COMPLETION_GRACE_MS = 2_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
-        private const val HISTORY_YIELD_GRACE_MS = 10_000L
-        /** Rows read back from the newest when identifying an AAPS TBR start's history row. */
-        private const val HEAD_ROWS = 8
+        /**
+         * One history selector step, which a yield waits for, costs several session-journal commits.
+         * Each commit rotates a Keystore key (up to ~1 s on the bench phone), so a shorter grace made
+         * therapy commands fail while history was still stepping aside.
+         */
+        private const val HISTORY_YIELD_GRACE_MS = 30_000L
+        /** A stop seen by status is open until status, or the pump's Resume row, ends it. */
+        private const val STATUS_STOP_WINDOW_MS = 24 * 60 * 60_000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 

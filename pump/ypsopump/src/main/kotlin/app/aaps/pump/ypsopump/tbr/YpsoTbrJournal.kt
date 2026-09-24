@@ -34,7 +34,7 @@ data class YpsoTbrAttempt(
     val accounted: Boolean = false,
     /** Set on a start when a later confirmed AAPS stop ended it. */
     val stoppedAt: Long? = null,
-    /** Pump ID of this start's own history row, read on the same link right after status proved it. */
+    /** Pump ID of this start's own history row, when it was identified before history applied it. */
     val rowPumpId: Long? = null,
     /** Pump ID the AAPS record is bound to, once history has applied the row. */
     val pumpId: Long? = null,
@@ -58,6 +58,14 @@ data class YpsoTbrAttempt(
     val awaitsBinding: Boolean get() = kind == Kind.START && state == State.EFFECTIVE && pumpId == null
     /** Anything that keeps AAPS from knowing it represents the pump truthfully. */
     val unresolved: Boolean get() = awaitsStatus || awaitsAccounting
+
+    /** The pump still runs this start: same percent, and remaining minutes match its elapsed time. */
+    fun runningPer(observation: YpsoTbrObservation): Boolean {
+        val elapsed = ((observation.observedAt - checkNotNull(effectiveAt)) / 60_000L).toInt().coerceAtLeast(0)
+        val expected = durationMinutes - elapsed
+        return observation.running && observation.percent == percent &&
+            observation.remainingMinutes > 0 && observation.remainingMinutes in (expected - 2)..(expected + 1)
+    }
 }
 
 interface YpsoTbrAttemptStore {
@@ -137,7 +145,7 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
         it.copy(accounted = true, detail = detail)
     }
 
-    /** The start's own history row was identified on the command link. */
+    /** Row identity journalled by an earlier build; kept so such starts still bind by identity. */
     @Synchronized fun identified(id: String, rowPumpId: Long) = update(id) {
         check(it.awaitsBinding && it.rowPumpId == null) { "TBR attempt is not awaiting identification" }
         it.copy(rowPumpId = rowPumpId)

@@ -21,25 +21,10 @@ data class YpsoTbrCommandEvidence(
     val after: YpsoTbrObservation?,
 )
 
-/** The pump's newest history row, read right after a start was proven by status. */
-data class YpsoTbrHeadRow(
-    /** PumpSync pump ID of the row: sequence generation and sequence. */
-    val pumpId: Long,
-    val eventType: Int,
-    val percent: Int,
-    val minutes: Int,
-)
-
 /** Blocking pump operations used by [YpsoTbrController]. */
 internal interface YpsoTbrLink {
     /** A fresh status read, or null when the pump cannot be read now. */
     fun status(): YpsoTbrObservation?
-
-    /**
-     * The newest history row, read with stable count and head brackets, or null when it cannot be
-     * read now. Its identity is continuous with the durable history cursor.
-     */
-    fun headRow(): YpsoTbrHeadRow?
 
     /**
      * Sends one START_STOP_TBR command and reads status on the same link. [effective] decides whether
@@ -58,7 +43,6 @@ internal interface YpsoTbrLink {
 internal class YpsoTbrBleLink(
     private val bleManager: YpsoBleManager,
     private val readStatus: () -> Boolean,
-    private val readHead: () -> YpsoTbrHeadRow?,
     private val now: () -> Long = System::currentTimeMillis,
 ) : YpsoTbrLink {
 
@@ -66,8 +50,6 @@ internal class YpsoTbrBleLink(
         if (!readStatus()) return null
         return bleManager.observedTbr()
     }
-
-    override fun headRow(): YpsoTbrHeadRow? = readHead()
 
     override fun command(
         percent: Int,

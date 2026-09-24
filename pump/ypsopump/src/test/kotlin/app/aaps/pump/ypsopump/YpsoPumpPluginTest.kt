@@ -296,6 +296,111 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `queue empty never disconnects while a pump command is running`() {
+        whenever(commandQueue.performing()).thenReturn(mock())
+
+        plugin.disconnect("Queue empty")
+
+        verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `history finishing never disconnects a command that started meanwhile`() {
+        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        active.set(true)
+        plugin.disconnect("Queue empty")
+        active.set(false)
+        whenever(commandQueue.size()).thenReturn(1)
+
+        plugin.javaClass.getDeclaredMethod("releaseIdleConnection", String::class.java).apply { isAccessible = true }
+            .invoke(plugin, "history recovery")
+
+        verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `status showing the pump stopped records zero basal at once, and only once`() {
+        val stored = mutableListOf<app.aaps.core.data.model.TB>()
+        val persistence: app.aaps.core.interfaces.db.PersistenceLayer = mock {
+            on { getTemporaryBasalsActiveBetweenTimeAndTime(any(), any()) } doAnswer { stored.toList() }
+        }
+        plugin.persistenceLayer = persistence
+        state.serialNumber = "10054912"
+        whenever(sync.addTemporaryBasalWithTempId(any(), any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            stored += app.aaps.core.data.model.TB(
+                timestamp = it.getArgument(0), rate = 0.0, duration = it.getArgument(2), isAbsolute = true,
+                type = app.aaps.core.data.model.TB.Type.PUMP_SUSPEND,
+                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = it.getArgument(4)),
+            ).apply { id = 1L }
+            true
+        }
+        val records = plugin.javaClass.getDeclaredField("tbrRecords").apply { isAccessible = true }
+            .get(plugin) as app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
+
+        records.reconcileWith(app.aaps.pump.ypsopump.tbr.YpsoTbrObservation(false, 100, 0, 5_000L))
+        records.reconcileWith(app.aaps.pump.ypsopump.tbr.YpsoTbrObservation(false, 100, 0, 65_000L))
+
+        verify(sync).addTemporaryBasalWithTempId(
+            eq(5_000L), eq(0.0), any(), eq(true), any(), eq(PumpSync.TemporaryBasalType.PUMP_SUSPEND), any(), eq("10054912"),
+        )
+        assertEquals(1, stored.size)
+    }
+
+    @Test
+    fun `a stopped pump ends a just-started TBR record before recording the stop`() {
+        val stored = mutableListOf<app.aaps.core.data.model.TB>()
+        val persistence: app.aaps.core.interfaces.db.PersistenceLayer = mock {
+            on { getTemporaryBasalsActiveBetweenTimeAndTime(any(), any()) } doAnswer { inv ->
+                val at = inv.getArgument<Long>(0)
+                stored.filter { it.timestamp <= at && it.timestamp + it.duration > at }
+            }
+        }
+        plugin.persistenceLayer = persistence
+        state.serialNumber = "10054912"
+        stored += app.aaps.core.data.model.TB(
+            timestamp = 1_000L, rate = 0.0, duration = 30 * 60_000L, isAbsolute = false,
+            type = app.aaps.core.data.model.TB.Type.NORMAL,
+            ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = 9L),
+        ).apply { id = 2L }
+        whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
+            val index = stored.indexOfFirst { tb -> tb.ids.temporaryId == it.getArgument<Long>(4) }
+            stored[index] = stored[index].copy(duration = it.getArgument(2)).apply { id = stored[index].id }
+            true
+        }
+        whenever(sync.addTemporaryBasalWithTempId(any(), any(), any(), any(), any(), any(), any(), any())).thenAnswer {
+            stored += app.aaps.core.data.model.TB(
+                timestamp = it.getArgument(0), rate = 0.0, duration = it.getArgument(2), isAbsolute = true,
+                type = app.aaps.core.data.model.TB.Type.PUMP_SUSPEND,
+                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = it.getArgument(4)),
+            ).apply { id = 3L }
+            true
+        }
+        val records = plugin.javaClass.getDeclaredField("tbrRecords").apply { isAccessible = true }
+            .get(plugin) as app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
+
+        records.reconcileWith(app.aaps.pump.ypsopump.tbr.YpsoTbrObservation(false, 100, 0, 30_000L))
+
+        assertEquals(listOf(app.aaps.core.data.model.TB.Type.PUMP_SUSPEND), stored.filter { it.timestamp <= 30_000L && it.timestamp + it.duration > 30_000L }.map { it.type })
+    }
+
+    @Test
+    fun `the queue waits while an idle disconnect is deciding`() {
+        val release = plugin.javaClass.getDeclaredField("idleRelease").apply { isAccessible = true }
+            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
+        release.set(true)
+
+        assertTrue(plugin.isBusy())
+    }
+
+    @Test
+    fun `an idle queue releases the connection`() {
+        plugin.disconnect("Queue empty")
+
+        verify(manager).disconnect(preserveStatus = true)
+    }
+
+    @Test
     fun `therapy waits until requested history yield releases operation ownership`() {
         val attempt = YpsoBleManager.HistoryReadAttempt()
         val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
