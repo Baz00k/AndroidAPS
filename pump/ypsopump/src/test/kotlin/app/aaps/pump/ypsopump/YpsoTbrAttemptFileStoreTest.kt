@@ -18,7 +18,7 @@ class YpsoTbrAttemptFileStoreTest {
         val attempt = YpsoTbrAttempt(
             id = "a", kind = YpsoTbrAttempt.Kind.START, pumpSerial = "10054912", percent = 150, durationMinutes = 30,
             type = "NORMAL", temporaryId = 42L, baselinePumpId = 48_222L, createdAt = 1L, state = YpsoTbrAttempt.State.EFFECTIVE,
-            dispatchedAt = 2L, effectiveAt = 3L, effectiveBy = 4L, accounted = true, stoppedAt = 6L, rowPumpId = 48_224L,
+            dispatchedAt = 2L, effectiveAt = 3L, effectiveBy = 4L, accounted = true, stoppedAt = 6L, rowPumpId = 48_224L, unmatchedRowPumpId = 48_230L,
             pumpId = 48_224L, detail = "d",
         )
         YpsoTbrAttemptFileStore(file).commitAll(listOf(attempt))
@@ -56,6 +56,7 @@ class YpsoTbrAttemptFileStoreTest {
         YpsoTbrAttemptFileStore(file).commitAll(listOf(attempt))
         val root = org.json.JSONObject(file.readText()).put("version", 3)
         root.getJSONArray("attempts").getJSONObject(0).remove("rowPumpId")
+        root.getJSONArray("attempts").getJSONObject(0).remove("unmatchedRowPumpId")
         file.writeText(root.toString())
 
         assertEquals(listOf(attempt), YpsoTbrAttemptFileStore(file).loadAll())

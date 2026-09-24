@@ -71,6 +71,9 @@ internal class YpsoTbrController(
     /** Whether any command or record is still unproven; drives the persistent warning. */
     fun hasUnresolved(): Boolean = journal.all().any { it.unresolved }
 
+    /** Starts whose history row could not be proven theirs, so pump history does not set their end. */
+    fun unmatchedStarts(): Int = journal.all().count { it.unmatchedRowPumpId != null && it.state == YpsoTbrAttempt.State.EFFECTIVE }
+
     fun start(request: YpsoTbrRequest, type: String): Result = exclusive { changed ->
         val before = link.status() ?: return@exclusive Result.Failed(Reason.PUMP_UNREADABLE, false)
         resolve(before)

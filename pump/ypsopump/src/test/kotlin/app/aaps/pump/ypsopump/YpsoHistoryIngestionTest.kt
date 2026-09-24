@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
@@ -127,6 +128,55 @@ class YpsoHistoryIngestionTest {
         assertEquals("20000002", store.value.cursor?.identity?.pumpSerial)
         assertEquals(101, store.value.cursor?.identity?.sequence)
         verify(sync, org.mockito.kotlin.never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
+    }
+
+    /** Records which clock offset each TBR row reached accounting with, and holds it on request. */
+    private class OffsetProbe {
+        val seen = mutableMapOf<Long, Long?>()
+        var hold: String? = null
+        val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
+            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any()) } doAnswer {
+                seen[it.getArgument<app.aaps.pump.ypsopump.history.YpsoHistoryEvent>(0).identity.sequence] = it.getArgument(3)
+                hold
+            }
+        }
+    }
+
+    @Test
+    fun `the measured clock offset is not applied to rows older than a pump clock change`() {
+        val store = Store()
+        val probe = OffsetProbe()
+        val ingestion = YpsoHistoryIngestion(store, mock(), probe.accounting)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+            snapshot(listOf(row(104, 9, 0), row(103, 13, 0), row(102, 10, 0), row(100, 2, 0))).copy(pumpClockOffsetMs = 5_000L))
+
+        assertEquals(mapOf(102L to null, 104L to 5_000L), probe.seen.filterKeys { it != 103L })
+    }
+
+    @Test
+    fun `a TBR row waits for a clock reading only a bounded number of scans`() {
+        val store = Store()
+        val probe = OffsetProbe()
+        val waits = mutableListOf<Boolean>()
+        val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
+            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any()) } doAnswer {
+                val wait = it.getArgument<Boolean>(4)
+                waits += wait
+                if (wait) "TBR row may belong to AAPS start; waiting for a pump clock reading" else null
+            }
+        }
+        val ingestion = YpsoHistoryIngestion(store, mock(), accounting)
+        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        val scan = snapshot(listOf(row(101, 10, 0), row(100, 2, 0)))
+
+        val results = (1..4).map { ingestion.ingest("10000001", ZoneId.of("UTC"), 21, scan) }
+
+        assertEquals(listOf(true, true, true, false), waits)
+        assertTrue(results.last() is YpsoHistoryIngestionResult.Applied)
+        assertEquals(101, store.value.cursor?.identity?.sequence)
+        assertTrue(probe.seen.isEmpty())
     }
 
     @Test

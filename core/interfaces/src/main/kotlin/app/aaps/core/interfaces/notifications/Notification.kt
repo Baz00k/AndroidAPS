@@ -156,6 +156,7 @@ open class Notification {
         const val YPSOPUMP_PROFILE_MISMATCH = 98
         const val YPSOPUMP_BOLUS_UNCERTAIN = 99
         const val YPSOPUMP_TBR_UNCERTAIN = 100
+        const val YPSOPUMP_TBR_UNMATCHED = 101
 
         const val USER_MESSAGE = 1000
 
