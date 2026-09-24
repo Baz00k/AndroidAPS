@@ -390,7 +390,7 @@ private fun CarbsUndoSheet(
                 if (carbs.isEmpty()) {
                     Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
                 } else {
-                    Text("Remove a mistaken or duplicate entry — this asks you to confirm.", style = AapsTheme.type.caption, color = colors.textTertiary)
+                    Text("Remove a mistaken or duplicate entry.", style = AapsTheme.type.caption, color = colors.textTertiary)
                     AapsCard(Modifier.fillMaxWidth()) {
                         Column {
                             carbs.forEachIndexed { i, c ->
@@ -451,7 +451,7 @@ private fun InsulinUndoSheet(
                     Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
                 } else {
                     Text(
-                        "Remove a dose the pump did not actually deliver — this asks you to confirm.",
+                        "Remove a dose the pump did not actually deliver.",
                         style = AapsTheme.type.caption, color = colors.textTertiary
                     )
                     AapsCard(Modifier.fillMaxWidth()) {
