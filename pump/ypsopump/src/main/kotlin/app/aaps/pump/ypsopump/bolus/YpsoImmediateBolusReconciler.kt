@@ -52,10 +52,19 @@ object YpsoImmediateBolusReconciler {
         val confirmedEvents = newerEvents.filter {
             it.semantics.kind == YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED
         }
+        // A status that no longer shows a newer block (cleared at terminal, or an old sequence) says
+        // nothing about this dose's amount; filtering rows by its zero amount would hide the dose.
+        val statusForThisDose = status?.takeIf {
+            it.fastSequence != 0L && strictlyNewer(it.fastSequence, attempt.baseline.fastSequence)
+        }
+        if (attempt.pumpFastSequence == null && status != null && statusForThisDose == null && confirmedEvents.isNotEmpty()) {
+            // Rows exist but nothing ties any of them to this command: never merge on proximity alone.
+            return YpsoImmediateBolusReconciliation.Unresolved(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_UNPROVEN)
+        }
         val compatible = attempt.pumpFastSequence?.let { provenSequence ->
             confirmedEvents.filter { it.identity.sequence == provenSequence }
-        } ?: if (status == null) confirmedEvents else confirmedEvents.filter {
-            Math.round(requireNotNull(it.semantics.amountUnits) * 100.0).toInt() == status.deliveredCentiUnits
+        } ?: if (statusForThisDose == null) confirmedEvents else confirmedEvents.filter {
+            Math.round(requireNotNull(it.semantics.amountUnits) * 100.0).toInt() == statusForThisDose.deliveredCentiUnits
         }
         if (compatible.isEmpty()) return YpsoImmediateBolusReconciliation.Unresolved(YpsoImmediateBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY)
         if (compatible.size > 1) return YpsoImmediateBolusReconciliation.Unresolved(YpsoImmediateBolusReconciliation.Reason.MULTIPLE_COMPATIBLE_HISTORY)

@@ -61,6 +61,7 @@
     <string name="ypsopump_bolus_stopped_amount_unknown">The bolus was stopped. Check the pump for the amount actually given.</string>
     <string name="ypsopump_bolus_stopped_not_saved">The bolus was stopped, but the delivered amount could not be saved. Check the pump.</string>
     <string name="ypsopump_bolus_not_confirmed_finished">The pump did not confirm this bolus finished.</string>
+    <string name="ypsopump_bolus_awaiting_history">Pump reported a bolus stopping. Amount awaiting history confirmation. Do not repeat this dose.</string>
     <string name="ypsopump_bolus_extended_not_saved">The extended bolus could not be saved. Check the pump.</string>
     <string name="ypsopump_bolus_extended_stop_unconfirmed">The pump did not confirm that the extended bolus stopped; it may still be delivering.</string>
     <string name="ypsopump_bolus_extended_cancel_unconfirmed">The extended bolus cancellation was not confirmed by the pump.</string>

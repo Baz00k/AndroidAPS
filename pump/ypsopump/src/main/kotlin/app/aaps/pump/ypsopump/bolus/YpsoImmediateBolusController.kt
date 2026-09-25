@@ -30,6 +30,11 @@ internal class YpsoImmediateBolusController(
         data class Started(val attempt: YpsoBolusAttempt, val observedDeliveredUnits: Double) : DeliveryResult
         data class NotSent(val reason: YpsoBolusMessage) : DeliveryResult
         data class Uncertain(val reason: YpsoBolusMessage) : DeliveryResult
+        /**
+         * Status never proved this command's programmed amount, but the pump named its sequence on
+         * CONTROL_NOTIFY and announced it stopped: a fast bolus. History supplies the amount.
+         */
+        data class AwaitingHistory(val attempt: YpsoBolusAttempt) : DeliveryResult
     }
 
     private val delivering = AtomicBoolean(false)
@@ -40,7 +45,46 @@ internal class YpsoImmediateBolusController(
     /** Terminal announcement seen before its block identity was journalled: block, sequence, time. */
     private val pendingTerminal = AtomicReference<Triple<YpsoBolusBlock, Long, Long>?>()
 
+    /**
+     * The dispatch in flight: its connection and counter. Notifications received on another connection,
+     * or before this was armed, are not its evidence. See [noteReceived].
+     */
+    private data class Dispatch(val connectionKey: String, val counter: Long, val armedAt: Long)
+    private val dispatchConnection = AtomicReference<Dispatch?>()
+
+    /** Where the notified sequence of the latest attempt was seen; outlives the command for its terminal. */
+    private data class NotifiedSource(val requestId: String, val connectionKey: String, val counter: Long, val armedAt: Long)
+    private val notifiedSource = AtomicReference<NotifiedSource?>()
+
+    /**
+     * First new fast sequence seen after dispatch from either source. Status and notifications must
+     * agree on one sequence, whichever reported first.
+     */
+    private val firstNewFastSequence = AtomicReference<Long?>()
+
+    /** Test seam: what the dispatch hook arms once the dispatch is durable. */
+    @Synchronized
+    internal fun armDispatchConnection(connectionKey: String, counter: Long, armedAt: Long = System.nanoTime()) {
+        firstNewFastSequence.set(null)
+        notifiedSource.set(null)
+        conflictSeen.set(false)
+        dispatchConnection.set(Dispatch(connectionKey, counter, armedAt))
+    }
+
+    /** Two different new fast sequences were seen after this dispatch: no identity may be adopted. */
+    private val conflictSeen = AtomicBoolean(false)
+
+    /** Test seam for the end of an unproven identity poll. */
+    internal fun awaitHistoryAfterUnprovenPoll(requestId: String): YpsoBolusAttempt? = awaitHistoryIfNotified(requestId)
+
     val isBusy: Boolean get() = delivering.get()
+
+    /** Every retained attempt, oldest first. */
+    fun retainedAttempts(): List<YpsoBolusAttempt> = journal.all()
+    fun confirmNotifiedTerminal(requestId: String, deliveredCentiUnits: Int, timestamp: Long, historyPumpId: Long): YpsoBolusAttempt =
+        journal.confirmNotifiedTerminal(requestId, deliveredCentiUnits, timestamp, historyPumpId)
+    fun rejectNotified(requestId: String, detail: String): YpsoBolusAttempt = journal.rejectNotified(requestId, detail)
+    fun expireAwaitingHistory(): List<YpsoBolusAttempt> = journal.expireAwaitingHistory(now())
     val cancellationRequested: Boolean get() = stopRequested.get()
     fun consumeHistoryYield(): Boolean = historyYieldRequested.getAndSet(false)
     fun currentAttempt(): YpsoBolusAttempt? = journal.current()
@@ -57,6 +101,9 @@ internal class YpsoImmediateBolusController(
 
     fun finishDelivery() {
         commandOwner.set(null)
+        dispatchConnection.set(null)
+        firstNewFastSequence.set(null)
+        conflictSeen.set(false)
         delivering.set(false)
     }
 
@@ -90,9 +137,16 @@ internal class YpsoImmediateBolusController(
      * naming the block and its sequence. That is the earliest and most reliable proof that this exact
      * command ended; the delivered amount still comes from history.
      */
-    fun observeBolusNotification(notification: YpsoBolusNotification, observedAt: Long = now()): YpsoBolusAttempt? {
+    fun observeBolusNotification(
+        notification: YpsoBolusNotification,
+        connectionKey: String? = null,
+        observedAt: Long = now(),
+        /** [System.nanoTime] when the BLE callback received it, before any wait for a lock. */
+        receivedAt: Long = System.nanoTime(),
+    ): YpsoBolusAttempt? {
         val attempt = journal.current() ?: return null
         if (!attempt.awaitsReconciliation) return null
+        observeNotifiedFast(attempt, notification, connectionKey, observedAt, receivedAt)
         val block = when (attempt.shape) {
             YpsoBolusShape.IMMEDIATE -> YpsoBolusBlock.FAST
             YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> YpsoBolusBlock.SLOW
@@ -104,6 +158,49 @@ internal class YpsoImmediateBolusController(
             ?: return rememberPendingTerminal(notification, block, observedAt)
         if (!notification.isTerminalFor(block, sequence)) return null
         return journal.observeBlockTerminal(attempt.requestId, observedAt)
+    }
+
+    /**
+     * Keeps the fast sequence the pump names after an immediate dispatch, durably. A bolus that ends
+     * before any status read can prove its programmed amount leaves this as its only link to its
+     * history row. Only notifications on the dispatch connection after the dispatch was committed
+     * count; any other new sequence makes the evidence unusable rather than being chosen between.
+     */
+    private fun observeNotifiedFast(
+        attempt: YpsoBolusAttempt,
+        notification: YpsoBolusNotification,
+        connectionKey: String?,
+        observedAt: Long,
+        receivedAt: Long,
+    ) {
+        if (attempt.shape != YpsoBolusShape.IMMEDIATE) return
+        val sequence = notification.fastSequence
+        if (sequence == 0L || notification.fastStatusCode == YpsoBolusNotification.STATUS_IDLE) return
+        if (!YpsoBolusPumpIdentity.isStrictlyNewer(sequence, attempt.baseline.fastSequence)) return
+        // Rows share this counter, so a dose after dispatch is also newer than the durable cursor.
+        if (!YpsoBolusPumpIdentity.isStrictlyNewer(sequence, attempt.baseline.historyPumpId and 0xffffffffL)) return
+        val terminalAt = observedAt.takeIf { notification.statusCode(YpsoBolusBlock.FAST) in YpsoBolusNotification.TERMINAL_CODES }
+        runCatching {
+            // The terminal announcement for an already notified sequence may arrive after the command
+            // returned; it counts only on the connection that sequence was first seen on.
+            val source = notifiedSource.get()
+            if (attempt.notifiedFastSequence == sequence && source != null && source.requestId == attempt.requestId) {
+                if (terminalAt != null && connectionKey == source.connectionKey && receivedAt - source.armedAt >= 0) {
+                    journal.observeNotifiedTerminal(attempt.requestId, source.counter, sequence, terminalAt)
+                }
+                return
+            }
+            val dispatched = dispatchConnection.get()
+            // Evidence is only attributable while this command owns its dispatch on that connection,
+            // for the committed dispatch counter, and was received after that dispatch was armed.
+            if (dispatched == null || connectionKey != dispatched.connectionKey) return
+            if (attempt.dispatchCounter != dispatched.counter || receivedAt - dispatched.armedAt < 0) return
+            if (!noteNewFastSequence(attempt, dispatched.counter, sequence)) return
+            val saved = journal.observeNotifiedFast(attempt.requestId, dispatched.counter, sequence, terminalAt)
+            if (saved.notifiedFastSequence == sequence && saved.notifiedDispatchCounter == dispatched.counter) {
+                notifiedSource.compareAndSet(null, NotifiedSource(attempt.requestId, dispatched.connectionKey, dispatched.counter, dispatched.armedAt))
+            }
+        }
     }
 
     /**
@@ -200,6 +297,9 @@ internal class YpsoImmediateBolusController(
                     beforeDispatch = { reservation ->
                         check(!stopRequested.get()) { "bolus was cancelled before dispatch" }
                         journal.beforeDispatch(requestId, reservation.counter, now())
+                        // Armed only once the dispatch is durable, before any frame leaves. A re-dispatch
+                        // re-arms, so evidence from the rejected dispatch never carries over.
+                        armDispatchConnection(baselineConnection, reservation.counter)
                     },
                     onOutcome = callback,
                 )
@@ -230,6 +330,9 @@ internal class YpsoImmediateBolusController(
             val proof = pollIdentity(attempt, request, owner)
             if (proof == null) {
                 bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "no bolus status proved this command's block identity")
+                // A fast bolus can end before any status read shows its programmed amount. The pump still
+                // named its sequence and announced it stopped, which lets history account for it.
+                awaitHistoryIfNotified(requestId)?.let { return DeliveryResult.AwaitingHistory(it) }
                 journal.unresolved(requestId, "no bolus status proved this command's block identity")
                 return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
@@ -353,14 +456,62 @@ internal class YpsoImmediateBolusController(
     ): BolusCommand? {
         var firstObserved: Long? = null
         repeat(8) {
-            when (val step = YpsoBolusIdentityPoll.evaluate(attempt, request, readBolusStatus(owner), firstObserved)) {
+            val status = readBolusStatus(owner)
+            val immediate = request.shape == YpsoBolusShape.IMMEDIATE
+            if (immediate) status?.fastSequence?.let { noteStatusSequence(attempt, it) }
+            // Two deliveries were seen across status and notifications: neither identity is this command's.
+            if (immediate && conflictSeen.get()) return null
+            when (val step = YpsoBolusIdentityPoll.evaluate(attempt, request, status, firstObserved ?: firstNewFastSequence.get())) {
                 is YpsoBolusIdentityPoll.Step.Proven    -> return step.status
-                is YpsoBolusIdentityPoll.Step.Abandon   -> return null
+                is YpsoBolusIdentityPoll.Step.Abandon   -> {
+                    val counter = dispatchConnection.get()?.counter
+                    if (immediate && counter != null) runCatching { journal.markNotifiedConflict(attempt.requestId, counter) }
+                    return null
+                }
                 is YpsoBolusIdentityPoll.Step.KeepGoing -> firstObserved = step.firstObservedSequence
             }
+            // The pump announced the notified block stopped and status shows it cleared: no later read
+            // can show its programmed amount, so waiting longer only delays the command.
+            if (immediate && status?.bolusStatusCode == BolusCommand.STATUS_IDLE &&
+                journal.current()?.takeIf { it.requestId == attempt.requestId }?.notifiedTerminalAt != null) return null
             Thread.sleep(150L)
         }
         return null
+    }
+
+    /** A status-reported new fast sequence joins the notifications' evidence. */
+    private fun noteStatusSequence(attempt: YpsoBolusAttempt, sequence: Long) {
+        if (sequence == 0L || !YpsoBolusPumpIdentity.isStrictlyNewer(sequence, attempt.baseline.fastSequence)) return
+        val counter = dispatchConnection.get()?.counter ?: return
+        noteNewFastSequence(attempt, counter, sequence)
+    }
+
+    /**
+     * Records [sequence] as the first new fast sequence after dispatch, or, when a different one was
+     * already seen by either source, persists the conflict. Returns whether [sequence] is still usable.
+     */
+    /** Synchronized with [armDispatchConnection], so evidence validated for an older dispatch never lands here. */
+    @Synchronized
+    private fun noteNewFastSequence(attempt: YpsoBolusAttempt, dispatchCounter: Long, sequence: Long): Boolean {
+        if (dispatchConnection.get()?.counter != dispatchCounter) return false
+        if (conflictSeen.get()) return false
+        val first = firstNewFastSequence.get() ?: sequence.also { firstNewFastSequence.set(it) }
+        if (first == sequence) return true
+        conflictSeen.set(true)
+        runCatching { journal.markNotifiedConflict(attempt.requestId, dispatchCounter) }
+        return false
+    }
+
+    /**
+     * Moves an unproven fast bolus to [YpsoBolusOutcome.AWAITING_HISTORY] when its notification evidence
+     * is complete and uncontested. Anything less stays uncertain with its warning.
+     */
+    private fun awaitHistoryIfNotified(requestId: String): YpsoBolusAttempt? {
+        val current = journal.current()?.takeIf { it.requestId == requestId } ?: return null
+        if (current.shape != YpsoBolusShape.IMMEDIATE || current.pumpFastSequence != null) return null
+        if (current.notifiedAccountingPumpId == null || current.notifiedTerminalAt == null) return null
+        if (current.outcome !in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED)) return null
+        return runCatching { journal.awaitHistory(requestId, now() + HISTORY_CONFIRMATION_WINDOW_MS) }.getOrNull()
     }
 
     private fun readBolusStatus(timeoutMs: Long = 15_000): BolusCommand? {
@@ -395,6 +546,12 @@ internal class YpsoImmediateBolusController(
     companion object {
         const val OBSERVATION_WINDOW_MS = 90_000L
         const val EXTENDED_RECONCILIATION_MARGIN_MS = 90_000L
+        /**
+         * How long a notified fast bolus waits quietly for its history row before its warning shows.
+         * Background history reaches a new row within minutes once caught up; this leaves room for a
+         * reconnect or a slow scan without hiding a dose history cannot confirm.
+         */
+        const val HISTORY_CONFIRMATION_WINDOW_MS = 30 * 60_000L
     }
 }
 
