@@ -76,7 +76,13 @@ class DataLayerListenerServiceMobile : WearableListenerService() {
         disposable += rxBus
             .toObservable(EventMobileToWear::class.java)
             .observeOn(aapsSchedulers.io)
-            .subscribe { sendMessage(rxPath, it.payload.serialize()) }
+            .subscribe({ event ->
+                           try {
+                               sendMessage(rxPath, event.payload.serialize())
+                           } catch (exception: Exception) {
+                               aapsLogger.error(LTag.WEAR, "Failed to send ${event.payload.javaClass.simpleName} to wear", exception)
+                           }
+                       }, { exception -> aapsLogger.error(LTag.WEAR, "Wear outgoing stream failed", exception) })
         disposable += rxBus
             .toObservable(EventMobileToWearWatchface::class.java)
             .observeOn(aapsSchedulers.io)

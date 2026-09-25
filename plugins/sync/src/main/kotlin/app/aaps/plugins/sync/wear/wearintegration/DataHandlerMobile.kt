@@ -1511,11 +1511,14 @@ class DataHandlerMobile @Inject constructor(
         // Reservoir Level
         val pump = activePlugin.activePump
         val maxReading = pump.pumpDescription.maxResorvoirReading.toDouble()
-        val reservoir = pump.reservoirLevel.let { if (pump.pumpDescription.isPatchPump && it > maxReading) maxReading else it }
+        // Some pumps report an unknown reservoir as NaN. Status is sent as JSON, which cannot encode NaN.
+        val reservoirReading = pump.reservoirLevel.let { if (pump.pumpDescription.isPatchPump && it > maxReading) maxReading else it }
+        val reservoir = finiteWearReservoir(reservoirReading)
         val reservoirString = if (reservoir > 0) decimalFormatter.to0Decimal(reservoir, rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname)) else ""
         val resUrgent = preferences.get(IntKey.OverviewResCritical)
         val resWarn = preferences.get(IntKey.OverviewResWarning)
         val reservoirLevel = when {
+            !reservoirReading.isFinite() -> 0 // Unknown is not a confirmed low reservoir.
             reservoir <= resUrgent -> 2
             reservoir <= resWarn   -> 1
             else                   -> 0
@@ -1926,3 +1929,5 @@ class DataHandlerMobile @Inject constructor(
     }
 
 }
+
+internal fun finiteWearReservoir(level: Double): Double = level.takeIf { it.isFinite() } ?: 0.0
