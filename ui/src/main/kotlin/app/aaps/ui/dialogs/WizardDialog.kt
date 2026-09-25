@@ -31,6 +31,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.wizard.BolusWizard
 import app.aaps.ui.dialogs.compose.WizardInputs
+import app.aaps.ui.dialogs.compose.WizardCarbControls
 import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.ui.dialogs.compose.WizardResult
 import app.aaps.ui.dialogs.compose.WizardScreen
@@ -99,7 +100,14 @@ class WizardDialog : DaggerDialogFragment() {
                         compute = ::compute,
                         onDeliver = ::deliver,
                         onCancel = { dismiss() },
-                        initialInputs = WizardInputs(carbs = initialCarbs)
+                        initialInputs = WizardInputs(carbs = initialCarbs),
+                        carbControls = WizardCarbControls.fromOverviewIncrements(
+                            listOf(
+                                preferences.get(IntKey.OverviewCarbsButtonIncrement1),
+                                preferences.get(IntKey.OverviewCarbsButtonIncrement2),
+                                preferences.get(IntKey.OverviewCarbsButtonIncrement3)
+                            )
+                        )
                     )
                 }
             }

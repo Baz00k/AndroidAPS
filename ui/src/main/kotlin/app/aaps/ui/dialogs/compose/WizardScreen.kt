@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -55,7 +57,7 @@ fun WizardScreen(
     onDeliver: (WizardInputs) -> Unit,
     onCancel: () -> Unit,
     initialInputs: WizardInputs = WizardInputs(),
-    quickChips: List<Int> = listOf(10, 20, 40, 60)
+    carbControls: WizardCarbControls
 ) {
     val colors = AapsTheme.colors
     var inputs by remember { mutableStateOf(initialInputs) }
@@ -94,7 +96,7 @@ fun WizardScreen(
             label = "wizard-step",
             modifier = Modifier.weight(1f)
         ) { onConfirm ->
-            if (!onConfirm) InputStep(inputs, result, quickChips, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
+            if (!onConfirm) InputStep(inputs, result, carbControls, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
             else ConfirmStep(inputs, result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
         }
     }
@@ -104,7 +106,7 @@ fun WizardScreen(
 private fun InputStep(
     inputs: WizardInputs,
     result: WizardResult,
-    quickChips: List<Int>,
+    carbControls: WizardCarbControls,
     colors: app.aaps.core.compose.theme.AapsColors,
     onInputs: (WizardInputs) -> Unit,
     onContinue: () -> Unit
@@ -171,30 +173,33 @@ private fun InputStep(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("CARBS", style = AapsTheme.type.label, color = colors.textSecondary)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
-                            onInputs(inputs.copy(carbs = (inputs.carbs - 5).coerceAtLeast(0)))
+                        StepperButton(AapsIcons.Remove, "Subtract ${carbControls.step} grams of carbs", colors.controlFill, colors.textPrimary) {
+                            onInputs(inputs.copy(carbs = carbControls.decrease(inputs.carbs)))
                         }
                         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("${inputs.carbs}", style = AapsTheme.type.bigValue, color = colors.textPrimary)
                             Text("grams", style = AapsTheme.type.caption, color = colors.textTertiary)
                         }
-                        StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
-                            onInputs(inputs.copy(carbs = inputs.carbs + 5))
+                        StepperButton(Icons.Rounded.Add, "Add ${carbControls.step} grams of carbs", colors.accentTint, colors.accentOnLight) {
+                            onInputs(inputs.copy(carbs = carbControls.increase(inputs.carbs)))
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        quickChips.forEach { g ->
-                            val active = inputs.carbs == g
+                        carbControls.quickIncrements.forEach { increment ->
                             Text(
-                                "$g",
+                                if (increment > 0) "+$increment g" else "$increment g",
                                 style = AapsTheme.type.listTitle,
-                                color = if (active) colors.accentOnLight else colors.textSecondary,
+                                color = colors.textSecondary,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .weight(1f)
+                                    .heightIn(min = 48.dp)
                                     .clip(AapsTheme.shape.pill)
-                                    .clickable { onInputs(inputs.copy(carbs = g)) }
-                                    .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                    .clickable(
+                                        onClickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs"
+                                    ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
+                                    .background(colors.controlFill)
+                                    .wrapContentHeight(Alignment.CenterVertically)
                                     .padding(vertical = 10.dp)
                             )
                         }
@@ -209,7 +214,7 @@ private fun InputStep(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("PRE-BOLUS", style = AapsTheme.type.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                            StepperButton(AapsIcons.Remove, "Move eating time 5 minutes earlier", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbTime = (inputs.carbTime - 5).coerceAtLeast(-60)))
                             }
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -226,7 +231,7 @@ private fun InputStep(
                                     style = AapsTheme.type.caption, color = colors.textTertiary
                                 )
                             }
-                            StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
+                            StepperButton(Icons.Rounded.Add, "Move eating time 5 minutes later", colors.accentTint, colors.accentOnLight) {
                                 onInputs(inputs.copy(carbTime = (inputs.carbTime + 5).coerceAtMost(60)))
                             }
                         }
@@ -234,15 +239,19 @@ private fun InputStep(
                             listOf(0, 15, 20, 30).forEach { m ->
                                 val active = inputs.carbTime == m
                                 Text(
-                                    if (m == 0) "now" else "+$m",
+                                    if (m == 0) "Now" else "$m min",
                                     style = AapsTheme.type.listTitle,
                                     color = if (active) colors.accentOnLight else colors.textSecondary,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier
                                         .weight(1f)
+                                        .heightIn(min = 48.dp)
                                         .clip(AapsTheme.shape.pill)
-                                        .clickable { onInputs(inputs.copy(carbTime = m)) }
+                                        .clickable(
+                                            onClickLabel = if (m == 0) "Set eating time to now" else "Set eating time to $m minutes from now"
+                                        ) { onInputs(inputs.copy(carbTime = m)) }
                                         .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                        .wrapContentHeight(Alignment.CenterVertically)
                                         .padding(vertical = 10.dp)
                                 )
                             }
@@ -257,7 +266,7 @@ private fun InputStep(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("CARB ABSORPTION", style = AapsTheme.type.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                            StepperButton(AapsIcons.Remove, "Shorten carb absorption by 1 hour", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours - 1).coerceAtLeast(0)))
                             }
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -270,7 +279,7 @@ private fun InputStep(
                                     style = AapsTheme.type.caption, color = colors.textTertiary
                                 )
                             }
-                            StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
+                            StepperButton(Icons.Rounded.Add, "Lengthen carb absorption by 1 hour", colors.accentTint, colors.accentOnLight) {
                                 onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours + 1).coerceAtMost(8)))
                             }
                         }
@@ -278,15 +287,19 @@ private fun InputStep(
                             listOf(0, 2, 3, 4).forEach { h ->
                                 val active = inputs.carbDurationHours == h
                                 Text(
-                                    if (h == 0) "fast" else "${h}h",
+                                    if (h == 0) "Fast" else "$h h",
                                     style = AapsTheme.type.listTitle,
                                     color = if (active) colors.accentOnLight else colors.textSecondary,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier
                                         .weight(1f)
+                                        .heightIn(min = 48.dp)
                                         .clip(AapsTheme.shape.pill)
-                                        .clickable { onInputs(inputs.copy(carbDurationHours = h)) }
+                                        .clickable(
+                                            onClickLabel = if (h == 0) "Set carb absorption to fast" else "Set carb absorption to $h hours"
+                                        ) { onInputs(inputs.copy(carbDurationHours = h)) }
                                         .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                        .wrapContentHeight(Alignment.CenterVertically)
                                         .padding(vertical = 10.dp)
                                 )
                             }
