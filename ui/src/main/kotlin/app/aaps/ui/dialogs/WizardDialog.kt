@@ -106,7 +106,8 @@ class WizardDialog : DaggerDialogFragment() {
                                 preferences.get(IntKey.OverviewCarbsButtonIncrement1),
                                 preferences.get(IntKey.OverviewCarbsButtonIncrement2),
                                 preferences.get(IntKey.OverviewCarbsButtonIncrement3)
-                            )
+                            ),
+                            maxCarbs = constraintChecker.getMaxCarbsAllowed().value()
                         )
                     )
                 }

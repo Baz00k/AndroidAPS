@@ -60,7 +60,7 @@ fun WizardScreen(
     carbControls: WizardCarbControls
 ) {
     val colors = AapsTheme.colors
-    var inputs by remember { mutableStateOf(initialInputs) }
+    var inputs by remember { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
     var confirming by remember { mutableStateOf(false) }
     val result = remember(inputs) { compute(inputs) }
 
@@ -96,7 +96,7 @@ fun WizardScreen(
             label = "wizard-step",
             modifier = Modifier.weight(1f)
         ) { onConfirm ->
-            if (!onConfirm) InputStep(inputs, result, carbControls, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
+            if (!onConfirm) InputStep(inputs, result, carbControls, colors, onInputs = { inputs = it.copy(carbs = carbControls.clamp(it.carbs)) }, onContinue = { confirming = true })
             else ConfirmStep(inputs, result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
         }
     }
@@ -204,6 +204,8 @@ private fun InputStep(
                             )
                         }
                     }
+                    if (inputs.carbs == carbControls.maxCarbs)
+                        Text("Maximum allowed: ${carbControls.maxCarbs} g", style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
             }
 
