@@ -266,6 +266,19 @@ class PersistenceLayerImpl @Inject constructor(
                 transactionResult
             }
 
+    override fun bindPumpBolusToTempIdIfValid(bolus: BS, type: BS.Type?): Single<PersistenceLayer.TempIdBinding> =
+        repository.runTransactionForResult(SyncBolusWithTempIdTransaction(bolus.toDb(), type?.toDb(), requireValid = true))
+            .doOnError { aapsLogger.error(LTag.DATABASE, "Error while binding Bolus", it) }
+            .map { result ->
+                result.updated.forEach { aapsLogger.debug(LTag.DATABASE, "Updated Bolus $it") }
+                when {
+                    result.refused         -> PersistenceLayer.TempIdBinding.REFUSED
+                    result.pumpRecordOnly  -> PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY
+                    !result.found          -> PersistenceLayer.TempIdBinding.NO_RECORD
+                    else           -> PersistenceLayer.TempIdBinding.BOUND
+                }
+            }
+
     override fun syncNsBolus(boluses: List<BS>, doLog: Boolean): Single<PersistenceLayer.TransactionResult<BS>> =
         repository.runTransactionForResult(SyncNsBolusTransaction(boluses.asSequence().map { it.toDb() }.toList()))
             .doOnError { aapsLogger.error(LTag.DATABASE, "Error while saving bolus", it) }

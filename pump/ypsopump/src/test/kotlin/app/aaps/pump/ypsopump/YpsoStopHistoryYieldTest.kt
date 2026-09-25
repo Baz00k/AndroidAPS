@@ -28,7 +28,7 @@ class YpsoStopHistoryYieldTest {
 
         // Observed on target: a short bolus finished and announced its terminal transition before
         // pollIdentity had journalled the fast sequence, so the announcement had nowhere to attach.
-        controller.observeBolusNotification(terminalFast(45), 2_400)
+        controller.observeBolusNotification(terminalFast(45), observedAt = 2_400)
         assertNull(store.value?.blockTerminalAt)
 
         journal.observeFastDelivering("request-1", 45, 100)
@@ -46,7 +46,7 @@ class YpsoStopHistoryYieldTest {
         journal.beforeDispatch("request-1", 4810, 2_000)
         assertTrue(controller.beginDelivery())
 
-        controller.observeBolusNotification(terminalFast(45), 2_400)
+        controller.observeBolusNotification(terminalFast(45), observedAt = 2_400)
         journal.observeFastDelivering("request-1", 46, 100)
         controller.applyPendingTerminal("request-1", YpsoBolusBlock.FAST, 46L)
 

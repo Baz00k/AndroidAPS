@@ -171,6 +171,19 @@ interface PersistenceLayer {
     fun syncPumpBolusWithTempId(bolus: BS, type: BS.Type?): Single<TransactionResult<BS>>
 
     /**
+     * Outcome of [bindPumpBolusToTempIdIfValid]: bound; no temporary-id record but a valid pump record
+     * owned by nothing else; neither record yet; or refused.
+     */
+    enum class TempIdBinding { BOUND, PUMP_RECORD_ONLY, NO_RECORD, REFUSED }
+
+    /**
+     * Like [syncPumpBolusWithTempId], for a link a driver inferred rather than proved: binds nothing
+     * if either record was removed, or the pump record already belongs to another temporary id.
+     * The check and the update are one transaction.
+     */
+    fun bindPumpBolusToTempIdIfValid(bolus: BS, type: BS.Type?): Single<TempIdBinding>
+
+    /**
      * Store records coming from NS to database
      *
      * @param boluses list of records

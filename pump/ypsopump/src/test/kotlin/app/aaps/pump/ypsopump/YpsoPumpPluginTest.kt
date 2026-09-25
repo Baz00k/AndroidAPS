@@ -982,25 +982,112 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `a dose that never proved its identity is merged onto its confirmed history row`() {
-        // Delivery happened, but the link dropped before any status proved the block identity, so
-        // the provisional record has no pump id. History is importing the same physical insulin.
-        val attempt = immediateAttempt(requestedCentiUnits = 200)
-
-        bindUnprovenProvisional(attempt, confirmedCentiUnits = 54, sequence = 48_134)
-
-        verify(sync).syncBolusWithTempId(any(), eq(0.54), any(), anyOrNull(), eq(48_134L), any(), any())
+    fun `a dose that proved no identity is never merged onto a row by amount or time`() {
+        assertTrue(YpsoPumpPlugin::class.java.declaredMethods.none { it.name == "bindUnprovenProvisionalBolus" })
     }
 
     @Test
-    fun `a larger history row is never merged onto a smaller dose`() {
-        // The pump cannot deliver more than this command programmed, so the row is another dose.
-        // Merging would replace 2.0 U of real insulin with 0.54 U and erase insulin from IOB.
-        val attempt = immediateAttempt(requestedCentiUnits = 50)
+    fun `a notified fast bolus is merged onto exactly its history row and confirmed`() {
+        val bound = mutableListOf<BS>()
+        plugin.persistenceLayer = mock {
+            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer {
+                bound += it.getArgument<BS>(0)
+                io.reactivex.rxjava3.core.Single.just(app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.BOUND)
+            }
+        }
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        val journalFile = File(historyDirectory, "ypsopump-bolus-attempt.json")
+        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(journalFile)
+        store.commit(notifiedAttempt("request", 40, 48_316))
+        // A later dose became current before history reached this one.
+        store.commit(immediateAttempt(100).copy(requestId = "later", outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED))
 
-        bindUnprovenProvisional(attempt, confirmedCentiUnits = 200, sequence = 48_134)
+        bindProvisional(48_316L, 0.4)
 
-        verify(sync, never()).syncBolusWithTempId(any(), any(), any(), anyOrNull(), any(), any(), any())
+        val merged = bound.single()
+        assertEquals(48_316L, merged.ids.pumpId)
+        assertEquals(0.4, merged.amount)
+        assertEquals(BS.Type.SMB, merged.type)
+        val saved = store.loadAll().single { it.requestId == "request" }
+        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED, saved.outcome)
+        assertEquals(48_316L, saved.pumpHistoryId)
+        // Nothing is linked through another sequence.
+        bindProvisional(48_317L, 0.4)
+        assertEquals(1, bound.size)
+    }
+
+    @Test
+    fun `a notified dose is never merged onto a larger row or across a removed record`() {
+        var binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.REFUSED
+        plugin.persistenceLayer = mock {
+            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer { io.reactivex.rxjava3.core.Single.just(binding) }
+        }
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
+
+        store.commit(notifiedAttempt("larger", 40, 48_316))
+        bindProvisional(48_316L, 0.5)
+        verify(plugin.persistenceLayer, never()).bindPumpBolusToTempIdIfValid(any(), anyOrNull())
+        assertTrue(store.loadAll().single { it.requestId == "larger" }.hasUnresolvedWarning)
+
+        store.commit(notifiedAttempt("removed", 40, 48_320))
+        bindProvisional(48_320L, 0.4)
+        assertTrue(store.loadAll().single { it.requestId == "removed" }.hasUnresolvedWarning)
+    }
+
+    @Test
+    fun `two doses naming the same row leave it to neither, at import and at repair`() {
+        plugin.persistenceLayer = mock {
+            on { getBolusByPumpId(any(), any(), any()) } doReturn BS(timestamp = 1_500L, amount = 0.4, type = BS.Type.NORMAL)
+        }
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
+        store.commit(notifiedAttempt("a", 40, 48_316))
+        store.commit(notifiedAttempt("b", 40, 48_316))
+
+        bindProvisional(48_316L, 0.4)
+        YpsoPumpPlugin::class.java.getDeclaredMethod("repairNotifiedAccounting", String::class.java)
+            .apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL)
+
+        verify(plugin.persistenceLayer, never()).bindPumpBolusToTempIdIfValid(any(), anyOrNull())
+    }
+
+    @Test
+    fun `a notified dose is confirmed only once a valid record carries its row`() {
+        var binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.NO_RECORD
+        plugin.persistenceLayer = mock {
+            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer { io.reactivex.rxjava3.core.Single.just(binding) }
+        }
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
+        store.commit(notifiedAttempt("request", 40, 48_316))
+
+        // Neither record yet (the row is about to be imported): nothing is confirmed.
+        bindProvisional(48_316L, 0.4)
+        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.AWAITING_HISTORY, store.loadAll().single().outcome)
+
+        binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY
+        bindProvisional(48_316L, 0.4)
+        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED, store.loadAll().single().outcome)
+    }
+
+    private fun notifiedAttempt(requestId: String, requestedCentiUnits: Int, sequence: Long) =
+        immediateAttempt(requestedCentiUnits).copy(
+            requestId = requestId,
+            treatment = app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.SMB,
+            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.AWAITING_HISTORY,
+            notifiedFastSequence = sequence,
+            notifiedDispatchCounter = 1,
+            notifiedTerminalAt = 2_000,
+            historyDeadline = System.currentTimeMillis() + 60_000,
+        )
+
+    private fun bindProvisional(pumpId: Long, amount: Double) {
+        YpsoPumpPlugin::class.java.getDeclaredMethod(
+            "bindProvisionalBolusToPumpId",
+            String::class.java, Long::class.javaPrimitiveType, Long::class.javaPrimitiveType, Double::class.javaPrimitiveType,
+            BS.Type::class.java, app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java,
+        ).apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL, pumpId, 1_500L, amount, BS.Type.NORMAL, null)
     }
 
     private fun immediateAttempt(requestedCentiUnits: Int) = app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt(
@@ -1016,26 +1103,6 @@ class YpsoPumpPluginTest {
         dispatchCounter = 1,
         dispatchedAt = 1_200,
     )
-
-    private fun bindUnprovenProvisional(
-        attempt: app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt,
-        confirmedCentiUnits: Int,
-        sequence: Long,
-    ) {
-        val entry = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(1, 2, confirmedCentiUnits, 0, 0, sequence, 0)
-        val event = app.aaps.pump.ypsopump.history.YpsoHistoryEvent(
-            app.aaps.pump.ypsopump.history.YpsoEventIdentity(PUMP_SERIAL, 0, sequence), entry,
-        )
-        val confirmed = app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation
-            .ConfirmedInsulin(event, confirmedCentiUnits)
-        YpsoPumpPlugin::class.java.getDeclaredMethod(
-            "bindUnprovenProvisionalBolus",
-            String::class.java,
-            app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java,
-            app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation.ConfirmedInsulin::class.java,
-            ZoneId::class.java,
-        ).apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL, attempt, confirmed, ZoneId.of("UTC"))
-    }
 
     private companion object {
         /** The plugin publishes its serial from pump state, which these unit tests never populate. */

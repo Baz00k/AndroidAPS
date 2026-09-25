@@ -14,6 +14,12 @@ enum class YpsoBolusOutcome {
     CANCEL_PENDING,
     CANCELLED_PARTIAL,
     UNRESOLVED,
+    /**
+     * A fast bolus that ended before any status read could prove its programmed amount. The pump named
+     * its sequence on CONTROL_NOTIFY and announced it stopped; history supplies the amount. Not a
+     * warning while [YpsoBolusAttempt.historyDeadline] lasts; never an identity for cancellation.
+     */
+    AWAITING_HISTORY,
 }
 
 enum class YpsoBolusTreatment { NORMAL, SMB, PRIME }
@@ -78,6 +84,20 @@ data class YpsoBolusAttempt(
     val detail: String? = null,
     /** SHA-256 identity of the protected pump key; required for journal-loss ownership recovery. */
     val sessionKeyId: String? = null,
+    /**
+     * First new fast sequence the pump named on CONTROL_NOTIFY after this dispatch, on its connection.
+     * Weaker than [pumpFastSequence]: it carries no programmed amount, so it only links the provisional
+     * record to the history row with the same sequence, and never targets a cancellation.
+     */
+    val notifiedFastSequence: Long? = null,
+    /** Dispatch counter [notifiedFastSequence] was observed under; a re-dispatch voids it. */
+    val notifiedDispatchCounter: Long? = null,
+    /** When the pump announced that [notifiedFastSequence] stopped delivering. */
+    val notifiedTerminalAt: Long? = null,
+    /** A second distinct new fast sequence appeared after dispatch: no sequence is this command's. */
+    val notifiedConflict: Boolean = false,
+    /** End of the quiet wait for history in [YpsoBolusOutcome.AWAITING_HISTORY]; persisted, never renewed. */
+    val historyDeadline: Long? = null,
 ) {
     init {
         require(requestId.isNotBlank() && pumpSerial.isNotBlank() && sessionGeneration.isNotBlank())
@@ -118,7 +138,25 @@ data class YpsoBolusAttempt(
         require(cancelDispatchedAt == null || cancelRequestId != null)
         require(cancelDispatchedAt == null || dispatchedAt != null && cancelDispatchedAt >= dispatchedAt)
         require(detail == null || detail.isNotBlank())
+        require(notifiedFastSequence == null || notifiedFastSequence in 1..0xffffffffL)
+        require((notifiedFastSequence == null) == (notifiedDispatchCounter == null))
+        require(notifiedTerminalAt == null || notifiedFastSequence != null)
+        require(outcome != YpsoBolusOutcome.AWAITING_HISTORY ||
+            (shape == YpsoBolusShape.IMMEDIATE && notifiedFastSequence != null && !notifiedConflict && historyDeadline != null))
     }
+
+    /**
+     * The history row this dose's provisional record may be merged onto: the pump-notified sequence,
+     * valid only for the dispatch it was seen under and only without a competing sequence.
+     */
+    val notifiedAccountingPumpId: Long?
+        get() {
+            if (shape != YpsoBolusShape.IMMEDIATE || notifiedConflict) return null
+            if (outcome in setOf(YpsoBolusOutcome.NOT_SENT, YpsoBolusOutcome.PROVEN_REJECTED)) return null
+            val sequence = notifiedFastSequence ?: return null
+            if (notifiedDispatchCounter != dispatchCounter) return null
+            return YpsoBolusPumpIdentity.of(baseline.historyPumpId, sequence)
+        }
 
     val requestedUnits: Double get() = requestedCentiUnits / 100.0
     val confirmedUnits: Double? get() = confirmedCentiUnits?.div(100.0)
@@ -175,6 +213,7 @@ data class YpsoBolusAttempt(
             YpsoBolusOutcome.DELIVERING,
             YpsoBolusOutcome.CANCEL_PENDING,
             YpsoBolusOutcome.UNRESOLVED,
+            YpsoBolusOutcome.AWAITING_HISTORY,
         )
 
     /**
@@ -211,8 +250,10 @@ data class YpsoBolusAttempt(
 
 interface YpsoBolusAttemptStore {
     fun load(): YpsoBolusAttempt?
-    /** Must durably commit before returning; failure throws. */
+    /** Must durably commit before returning; failure throws. Replaces the attempt with the same request id. */
     fun commit(attempt: YpsoBolusAttempt)
+    /** Every retained attempt, oldest first; the last is [load]. */
+    fun loadAll(): List<YpsoBolusAttempt> = listOfNotNull(load())
 }
 
 /**
@@ -223,6 +264,9 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
 
     @Synchronized
     fun current(): YpsoBolusAttempt? = store.load()
+
+    @Synchronized
+    fun all(): List<YpsoBolusAttempt> = store.loadAll()
 
     /** Preserve finite physical-delivery observation windows across process death. */
     @Synchronized
@@ -240,7 +284,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
         if (!attempt.awaitsReconciliation || attempt.withinDeliveryWindow(now, immediateWindowMs, extendedMarginMs)) {
             return attempt
         }
-        if (attempt.outcome == YpsoBolusOutcome.UNRESOLVED) return attempt
+        if (attempt.outcome in setOf(YpsoBolusOutcome.UNRESOLVED, YpsoBolusOutcome.AWAITING_HISTORY)) return attempt
         return attempt.copy(
             outcome = YpsoBolusOutcome.UNRESOLVED,
             detail = "terminal bolus evidence was not recovered before the observation deadline",
@@ -274,7 +318,11 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
                 }
                 require(it.dispatchCounter != null && counter > it.dispatchCounter) { "re-dispatched counter must advance" }
             }
-            it.copy(outcome = YpsoBolusOutcome.POSSIBLY_APPLIED, dispatchCounter = counter, dispatchedAt = now)
+            // The pump rejected the earlier dispatch, so a sequence named under it was another dose.
+            it.copy(
+                outcome = YpsoBolusOutcome.POSSIBLY_APPLIED, dispatchCounter = counter, dispatchedAt = now,
+                notifiedConflict = it.notifiedConflict || it.notifiedFastSequence != null,
+            )
         }
 
     fun transportAccepted(requestId: String): YpsoBolusAttempt =
@@ -309,6 +357,12 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             val expected = requireNotNull(it.programmedCentiUnits(YpsoBolusBlock.FAST)) { "attempt has no fast delivery block" }
             require(isStrictlyNewerUnsigned(fastSequence, it.baseline.fastSequence)) { "stale or invalid bolus status sequence" }
             require(programmedCentiUnits == expected) { "pump programmed amount differs from request" }
+            // Decided under the journal lock that also records conflicts: two deliveries after this
+            // dispatch leave neither as this command's identity.
+            require(it.pumpFastSequence != null || !it.notifiedConflict) { "a second bolus sequence appeared after dispatch" }
+            require(it.pumpFastSequence != null || it.notifiedFastSequence == null || it.notifiedFastSequence == fastSequence) {
+                "status sequence differs from the notified one"
+            }
             require(it.pumpFastSequence == null || it.pumpFastSequence == fastSequence) { "bolus status identity changed" }
             it.copy(outcome = YpsoBolusOutcome.DELIVERING, pumpFastSequence = fastSequence)
         }
@@ -433,6 +487,108 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     fun unresolved(requestId: String, detail: String): YpsoBolusAttempt =
         update(requestId) { it.copy(outcome = YpsoBolusOutcome.UNRESOLVED, detail = detail) }
 
+    /**
+     * Records a fast sequence the pump named after this dispatch. The first one becomes the notified
+     * identity; a different one, or a different status-proven sequence, voids it for good.
+     */
+    fun observeNotifiedFast(requestId: String, dispatchCounter: Long, sequence: Long, terminalAt: Long?): YpsoBolusAttempt =
+        update(requestId) {
+            require(it.shape == YpsoBolusShape.IMMEDIATE && it.dispatchCounter != null)
+            // Checked under the journal lock: a re-dispatch committed since the caller looked wins.
+            if (it.dispatchCounter != dispatchCounter) return@update it
+            require(it.outcome !in setOf(YpsoBolusOutcome.NOT_SENT, YpsoBolusOutcome.PROVEN_REJECTED))
+            require(sequence in 1..0xffffffffL)
+            val candidate = it.notifiedFastSequence
+            when {
+                it.notifiedConflict -> it
+                (it.pumpFastSequence != null && it.pumpFastSequence != sequence) ||
+                    (candidate != null && candidate != sequence) -> it.withNotifiedConflict()
+                candidate == null -> it.copy(
+                    notifiedFastSequence = sequence,
+                    notifiedDispatchCounter = it.dispatchCounter,
+                    notifiedTerminalAt = terminalAt,
+                )
+                else -> it.copy(notifiedTerminalAt = it.notifiedTerminalAt ?: terminalAt)
+            }
+        }
+
+    /** Another delivery appeared after dispatch, so no notified sequence can be attributed to this one. */
+    fun markNotifiedConflict(requestId: String, dispatchCounter: Long): YpsoBolusAttempt =
+        update(requestId) { if (it.notifiedConflict || it.dispatchCounter != dispatchCounter) it else it.withNotifiedConflict() }
+
+    /** A quietly waiting dose whose evidence turned contested is surfaced at once. */
+    private fun YpsoBolusAttempt.withNotifiedConflict(): YpsoBolusAttempt =
+        if (outcome == YpsoBolusOutcome.AWAITING_HISTORY) copy(
+            outcome = YpsoBolusOutcome.UNRESOLVED, notifiedConflict = true, historyDeadline = null,
+            detail = "a second bolus sequence appeared after dispatch",
+        ) else copy(notifiedConflict = true)
+
+    /** A terminal announcement for the already notified sequence, after the command returned. */
+    fun observeNotifiedTerminal(requestId: String, dispatchCounter: Long, sequence: Long, terminalAt: Long): YpsoBolusAttempt =
+        update(requestId) {
+            if (it.notifiedFastSequence != sequence || it.notifiedDispatchCounter != dispatchCounter ||
+                it.dispatchCounter != dispatchCounter || !it.awaitsReconciliation) it
+            else it.copy(notifiedTerminalAt = it.notifiedTerminalAt ?: terminalAt)
+        }
+
+    /** The pump announced the notified sequence stopped; history, not status, will give the amount. */
+    fun awaitHistory(requestId: String, deadline: Long): YpsoBolusAttempt =
+        update(requestId) {
+            require(it.outcome in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED))
+            require(it.notifiedAccountingPumpId != null && it.notifiedTerminalAt != null && it.pumpFastSequence == null)
+            it.copy(
+                outcome = YpsoBolusOutcome.AWAITING_HISTORY,
+                historyDeadline = deadline,
+                detail = "pump announced the notified bolus stopped; awaiting its history row",
+            )
+        }
+
+    /**
+     * History row [historyPumpId] is the notified sequence of a retained attempt: its amount is what
+     * that dose delivered. The row can never exceed the request; a larger one is another dose.
+     */
+    fun confirmNotifiedTerminal(requestId: String, deliveredCentiUnits: Int, timestamp: Long, historyPumpId: Long): YpsoBolusAttempt =
+        updateRetained(requestId) {
+            require(it.pumpFastSequence == null && it.notifiedAccountingPumpId == historyPumpId)
+            require(it.outcome in NOTIFIED_OPEN) { "notified bolus is no longer open" }
+            require(deliveredCentiUnits in 0..it.requestedCentiUnits)
+            it.copy(
+                outcome = if (deliveredCentiUnits == it.requestedCentiUnits) YpsoBolusOutcome.COMPLETED else YpsoBolusOutcome.CANCELLED_PARTIAL,
+                pumpHistoryId = historyPumpId,
+                confirmedCentiUnits = deliveredCentiUnits,
+                deliveryTimestamp = timestamp,
+                historyDeadline = null,
+                detail = null,
+            )
+        }
+
+    /** A notified attempt that history contradicted. Its warning stays until the operator checks. */
+    fun rejectNotified(requestId: String, detail: String): YpsoBolusAttempt =
+        updateRetained(requestId) {
+            if (it.outcome !in NOTIFIED_OPEN) it
+            else it.copy(outcome = YpsoBolusOutcome.UNRESOLVED, notifiedConflict = true, historyDeadline = null, detail = detail)
+        }
+
+    /** History did not confirm a quietly waiting dose in time: surface it. The deadline is never renewed. */
+    @Synchronized
+    fun expireAwaitingHistory(now: Long): List<YpsoBolusAttempt> =
+        store.loadAll()
+            .filter { it.outcome == YpsoBolusOutcome.AWAITING_HISTORY && now >= checkNotNull(it.historyDeadline) }
+            .map { expired ->
+                expired.copy(
+                    outcome = YpsoBolusOutcome.UNRESOLVED,
+                    detail = "pump history did not confirm the notified bolus before its deadline",
+                ).also(store::commit)
+            }
+
+    @Synchronized
+    private fun updateRetained(requestId: String, transform: (YpsoBolusAttempt) -> YpsoBolusAttempt): YpsoBolusAttempt {
+        val retained = requireNotNull(store.loadAll().lastOrNull { it.requestId == requestId }) { "bolus attempt is missing" }
+        val next = transform(retained)
+        store.commit(next)
+        return next
+    }
+
     @Synchronized
     private fun update(requestId: String, transform: (YpsoBolusAttempt) -> YpsoBolusAttempt): YpsoBolusAttempt {
         val current = requireNotNull(store.load()) { "bolus attempt is missing" }
@@ -444,4 +600,14 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
 
     private fun isStrictlyNewerUnsigned(candidate: Long, baseline: Long): Boolean =
         YpsoBolusPumpIdentity.isStrictlyNewer(candidate, baseline)
+
+    private companion object {
+        /** States from which history may still resolve a notified dose. */
+        val NOTIFIED_OPEN = setOf(
+            YpsoBolusOutcome.POSSIBLY_APPLIED,
+            YpsoBolusOutcome.ACCEPTED_UNVERIFIED,
+            YpsoBolusOutcome.AWAITING_HISTORY,
+            YpsoBolusOutcome.UNRESOLVED,
+        )
+    }
 }

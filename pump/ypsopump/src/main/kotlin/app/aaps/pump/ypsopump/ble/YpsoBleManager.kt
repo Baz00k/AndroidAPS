@@ -70,7 +70,11 @@ class YpsoBleManager @Inject constructor(
 
     /** Receives every decoded bolus state change the pump pushes on CONTROL_NOTIFY. */
     @Volatile
-    var onBolusNotification: ((YpsoBolusNotification) -> Unit)? = null
+    /**
+     * Receives each bolus notification with the connection key it arrived on (see [currentBolusConnectionKey])
+     * and its [System.nanoTime] receipt time.
+     */
+    var onBolusNotification: ((YpsoBolusNotification, String?, Long) -> Unit)? = null
     /**
      * A verified session with an authenticated read floor can acquire selectors. An unknown write
      * floor is normal: the first write reconciles it from zero through the pump-confirmed search.
@@ -2274,9 +2278,14 @@ class YpsoBleManager @Inject constructor(
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
+            // Receipt order, taken before any lock, is compared with the moment a dispatch was armed.
+            val receivedAt = System.nanoTime()
+            var connectionKey: String? = null
             val notification = synchronized(opLock) {
                 if (!ownsGattLocked(g)) return
                 aapsLogger.debug(LTag.PUMP, "YpsoPump notify ${ch.uuid}: ${value.joinToString("") { "%02x".format(it) }}")
+                // Captured with the payload so the observer can tell which connection it belongs to.
+                connectionKey = sessionToken?.let { "${System.identityHashCode(g)}:${it.generation}" }
                 if (ch.uuid != YpsoWritePolicy.CONTROL_NOTIFY_UUID) null
                 else YpsoBolusNotification.decode(value)
             } ?: return
@@ -2286,7 +2295,7 @@ class YpsoBleManager @Inject constructor(
                 "YpsoPump bolus notification fast=${notification.fastStatusCode}/${notification.fastSequence} " +
                     "slow=${notification.slowStatusCode}/${notification.slowSequence}",
             )
-            runCatching { onBolusNotification?.invoke(notification) }
+            runCatching { onBolusNotification?.invoke(notification, connectionKey, receivedAt) }
                 .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus notification observer failed: ${it.message}") }
         }
 

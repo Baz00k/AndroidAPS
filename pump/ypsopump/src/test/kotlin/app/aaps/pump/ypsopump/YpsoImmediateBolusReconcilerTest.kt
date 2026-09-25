@@ -76,10 +76,11 @@ class YpsoImmediateBolusReconcilerTest {
     }
 
     @Test
-    fun `stale sequence or amount disagreement preserves confirmed insulin but not request success`() {
+    fun `stale sequence or amount disagreement never completes the request`() {
+        // A status that is not newer than the baseline says nothing about this dose, so no row is offered.
         val stale = YpsoImmediateBolusReconciler.reconcile(attempt(), YpsoImmediateBolusStatus(44, 0, 100, 100), listOf(completedEvent(101, 100)))
         assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_UNPROVEN, (stale as YpsoImmediateBolusReconciliation.Unresolved).reason)
-        assertEquals(100, stale.confirmedInsulin?.amountCentiUnits)
+        assertEquals(null, stale.confirmedInsulin)
 
         val mismatch = YpsoImmediateBolusReconciler.reconcile(attempt(provenFastSequence = 45), YpsoImmediateBolusStatus(45, 0, 90, 90), listOf(completedEvent(45, 90)))
         assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_CHANGED, (mismatch as YpsoImmediateBolusReconciliation.Unresolved).reason)
@@ -87,6 +88,8 @@ class YpsoImmediateBolusReconcilerTest {
 
     @Test
     fun `terminal status cannot retroactively prove the attempt identity`() {
+        // Newer than the baseline, so its delivered amount picks the one compatible row, but only as
+        // unattributed insulin: the command itself stays unproven.
         val result = YpsoImmediateBolusReconciler.reconcile(
             attempt(),
             YpsoImmediateBolusStatus(45, 0, 100, 100),
@@ -108,6 +111,18 @@ class YpsoImmediateBolusReconcilerTest {
 
         val completed = result as YpsoImmediateBolusReconciliation.AttemptCompleted
         assertEquals(45, completed.event.identity.sequence)
+    }
+
+    @Test
+    fun `a cleared status never filters history by its zero amount`() {
+        // Bench: a 0.4 U bolus finished before the first status read; every later read showed an idle
+        // block with 0 delivered, which used to hide the dose's own row.
+        val result = YpsoImmediateBolusReconciler.reconcile(attempt(), YpsoImmediateBolusStatus(0, 0, 0, 0), listOf(completedEvent(101, 40)))
+
+        val unresolved = result as YpsoImmediateBolusReconciliation.Unresolved
+        assertEquals(YpsoImmediateBolusReconciliation.Reason.STATUS_IDENTITY_UNPROVEN, unresolved.reason)
+        // Nothing ties the row to the command: it is never offered for a proximity merge.
+        assertEquals(null, unresolved.confirmedInsulin)
     }
 
     private fun attempt(provenFastSequence: Long? = null) = YpsoBolusAttempt(
