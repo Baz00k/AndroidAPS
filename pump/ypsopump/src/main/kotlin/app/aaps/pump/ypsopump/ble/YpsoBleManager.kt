@@ -1388,6 +1388,11 @@ class YpsoBleManager @Inject constructor(
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
+        /**
+         * Positions in [rows] copied from an earlier scan's checkpoint. Only these can hold a stale
+         * copy of a running event; every other row was read from the pump during this scan.
+         */
+        val reusedPositions = mutableSetOf<Int>()
         val cached = partialScan?.takeIf { it.generation == token.generation && it.reboot == reboot.toLong() }
         var overlapPending = cached != null
         var cursorMismatchReported = false
@@ -1624,10 +1629,12 @@ class YpsoBleManager @Inject constructor(
             })
 
         // Cached running events can have been rewritten even if the ring's head did not change.
-        // Refresh these rows before handing a snapshot to accounting.
+        // Refresh those rows before handing a snapshot to accounting. Rows read in this scan are
+        // already current: re-selecting them only repeated a selector move, its read-backs, and the
+        // session commits each one costs.
         fun refreshMutableRows(position: Int = 0) {
             if (yieldAtSafeBoundary()) return
-            val next = (position until rows.size).firstOrNull { rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
+            val next = (position until rows.size).firstOrNull { it in reusedPositions && rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
                 ?: return finishScan()
             select(next) { fresh ->
                 if (fresh.sequence != rows[next].sequence || fresh.factorySeconds != rows[next].factorySeconds) {
@@ -1663,7 +1670,10 @@ class YpsoBleManager @Inject constructor(
                     select(shift + available.lastIndex) { freshTail ->
                         overlapPending = false
                         if (freshTail.sequence == tail.sequence && freshTail.fingerprint() == tail.fingerprint()) {
+                            val firstReused = rows.size
                             rows += available.drop(1).map { it.copy(index = it.index + shift) }
+                            // The boundary row was just re-read; the rows between came from the checkpoint.
+                            reusedPositions += firstReused until rows.lastIndex
                             rows[rows.lastIndex] = freshTail
                             aapsLogger.debug(LTag.PUMP, "YpsoPump history scan resumed with ${rows.size} cached rows (head shifted $shift)")
                         } else {
@@ -2245,6 +2255,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
                     markConnected(controlNotificationsEnabled = false)
+                    retireAbandonedHistorySelector()
                     aapsLogger.info(
                         LTag.PUMP,
                         if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
@@ -2493,6 +2504,25 @@ class YpsoBleManager @Inject constructor(
             descriptor.value = value
             g.writeDescriptor(descriptor)
         }
+    }
+
+    /**
+     * A history selector write interrupted by a lost connection stays reserved in the session journal,
+     * and every therapy write refuses to start while it is. The scan that owned it is gone and a
+     * selector move has no therapy effect, so it is retired here, on the new authenticated session,
+     * rather than left to block the next command until some later history scan clears it. Called with
+     * [opLock] held; no operation can use the new connection before it returns.
+     */
+    private fun retireAbandonedHistorySelector() {
+        val owner = session ?: return
+        val token = sessionToken ?: return
+        val reservation = owner.snapshot()?.reservation ?: return
+        if (reservation.phase == PumpSession.Phase.VERIFIED || !owner.isAbandonableHistorySelector(reservation)) return
+        // Only a selector no transport still holds: the old connection's scan was released on disconnect.
+        if (historyWriteTransportInstance?.isIdle() == false || historyReadActive.get()) return
+        runCatching { owner.retireAbandonedHistorySelector(token, reservation.id) }
+            .onSuccess { if (it) aapsLogger.info(LTag.PUMP, "YpsoPump retired history selector write ${reservation.id} left by a lost connection") }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire abandoned history selector write: ${it.message}") }
     }
 
     private fun markConnected(controlNotificationsEnabled: Boolean) {

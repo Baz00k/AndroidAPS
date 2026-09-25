@@ -1202,6 +1202,25 @@ class PumpSession(private val store: Store) {
     }
 
     /**
+     * Retires an ordinary event-history selector write left unresolved by a connection that is gone.
+     * A selector move has no therapy effect, so its unknown outcome matters only for the counter,
+     * which stays retained as the high-water mark exactly as in [recoverInterruptedWrite]. Anything
+     * else stays blocking: therapy writes, and lower-bound recovery probes, whose ambiguity must be
+     * resolved by pump evidence. [reservationId] must still be the current reservation.
+     *
+     * @return whether a reservation was retired
+     */
+    @Synchronized
+    fun retireAbandonedHistorySelector(origin: Token, reservationId: String): Boolean {
+        val old = owned(origin)
+        check(transaction == null) { "Another session transaction is active" }
+        val reserved = old.reservation?.takeIf { it.id == reservationId && it.phase != Phase.VERIFIED } ?: return false
+        if (!isAbandonableHistorySelector(reserved)) return false
+        recoverInterruptedWrite(origin)
+        return true
+    }
+
+    /**
      * Pump-originated APPERR_COUNTER_ERROR (139): the command was rejected and the next gap doubles
      * until [MAX_COUNTER_RECOVERY_EXPONENT]. The exponent bounds the increment, not the rejection
      * record: a 139 at the cap is still persisted, and later candidates advance by the largest
@@ -1391,6 +1410,11 @@ class PumpSession(private val store: Store) {
             WriteCandidate.BENCH_DUPLICATE_COUNTER_SELECTOR -> priorWrite == reservation.counter
             else -> priorWrite < reservation.counter
         }
+
+    internal fun isAbandonableHistorySelector(reservation: Reservation): Boolean =
+        reservation.candidate == WriteCandidate.STANDARD &&
+            reservation.purpose == "HISTORY_SELECTOR" &&
+            reservation.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
 
     private fun owned(origin: Token): Record {
         check(token == origin && state != null) { "Stale or unavailable session" }
