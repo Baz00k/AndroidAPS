@@ -3,6 +3,7 @@ package app.aaps.implementation.utils.fabric
 import android.os.Bundle
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import dagger.Reusable
 import javax.inject.Inject
@@ -51,5 +52,11 @@ class FabricPrivacyImpl @Inject constructor(
      * report; they now skip that work entirely.
      */
     override fun fabricEnabled(): Boolean = false
+
+    override fun logWearException(wearException: EventData.WearException) {
+        aapsLogger.error(LTag.WEAR, "Wear exception on ${wearException.manufacturer} ${wearException.model} " +
+            "(board=${wearException.board}, sdk=${wearException.sdk}, product=${wearException.product}, fingerprint=${wearException.fingerprint})")
+        // Do not deserialize untrusted Throwable bytes received over the wearable data layer.
+    }
 
 }

@@ -23,6 +23,7 @@ import app.aaps.core.ui.dialogs.WarningDialog
 import app.aaps.core.ui.locale.LocaleHelper
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.plugins.configuration.R
+import app.aaps.plugins.configuration.maintenance.CustomWatchfaceFileContract
 import app.aaps.plugins.configuration.maintenance.cloud.CloudConstants
 import app.aaps.plugins.configuration.maintenance.PrefsFileContract
 import dagger.android.support.DaggerAppCompatActivity
@@ -42,6 +43,7 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
 
     var accessTree: ActivityResultLauncher<Uri?>? = null
     var callForPrefFile: ActivityResultLauncher<Void?>? = null
+    var callForCustomWatchfaceFile: ActivityResultLauncher<Void?>? = null
     var callForBatteryOptimization: ActivityResultLauncher<Void?>? = null
     var requestMultiplePermissions: ActivityResultLauncher<Array<String>>? = null
 
@@ -91,6 +93,7 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
             // }
             importExportPrefs.doImportSharedPreferences(this)
         }
+        callForCustomWatchfaceFile = registerForActivityResult(CustomWatchfaceFileContract()) { }
 
         callForBatteryOptimization = registerForActivityResult(OptimizationPermissionContract()) {
             updateButtons()
@@ -106,6 +109,12 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
                             androidPermission.notifyForLocationPermissions(this)
                             ToastUtils.errorToast(this, getString(app.aaps.core.ui.R.string.location_permission_not_granted))
                         }
+
+                    Manifest.permission.ACCESS_BACKGROUND_LOCATION ->
+                        if (!it.value || ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                            androidPermission.notifyForLocationPermissions(this)
+                            ToastUtils.errorToast(this, getString(app.aaps.core.ui.R.string.location_permission_not_granted))
+                        }
                 }
             }
             updateButtons()
@@ -116,6 +125,7 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
         compositeDisposable.clear()
         accessTree = null
         callForPrefFile = null
+        callForCustomWatchfaceFile = null
         callForBatteryOptimization = null
         requestMultiplePermissions = null
         super.onDestroy()

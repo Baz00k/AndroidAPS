@@ -61,10 +61,12 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventLoopUpdateGui
+import app.aaps.core.interfaces.rx.events.EventMobileToWear
 import app.aaps.core.interfaces.rx.events.EventNewNotification
 import app.aaps.core.interfaces.rx.events.EventNewOpenLoopNotification
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.rx.events.EventTempTargetChange
+import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.HardLimits
@@ -589,6 +591,9 @@ class LoopPlugin @Inject constructor(
                                     )
                                 )
                                 rxBus.send(EventNewOpenLoopNotification())
+                                if (!preferences.get(BooleanKey.AlertUrgentAsAndroidNotification)) {
+                                    sendToWear(resultAfterConstraints.carbsRequiredText)
+                                }
                             }
                         } else {
                             //If carbs were required previously, but are no longer needed, dismiss notifications
@@ -701,12 +706,20 @@ class LoopPlugin @Inject constructor(
         // mId allows you to update the notification later on.
         mNotificationManager.notify(Constants.notificationID, builder.build())
         rxBus.send(EventNewOpenLoopNotification())
+        sendToWear(contentText)
     }
 
     private fun dismissSuggestion() {
         // dismiss notifications
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(Constants.notificationID)
+        rxBus.send(EventMobileToWear(EventData.CancelNotification(dateUtil.now())))
+    }
+
+    private fun sendToWear(contentText: String) {
+        lastRun?.let {
+            rxBus.send(EventMobileToWear(EventData.OpenLoopRequest(rh.gs(R.string.open_loop_new_suggestion), contentText, EventData.OpenLoopRequestConfirmed(dateUtil.now()))))
+        }
     }
 
     override fun acceptChangeRequest() {

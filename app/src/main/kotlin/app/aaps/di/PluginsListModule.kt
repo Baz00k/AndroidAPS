@@ -7,6 +7,7 @@ import app.aaps.plugins.aps.hovorka.HovorkaMpcPlugin
 import app.aaps.plugins.aps.openAPSAMA.OpenAPSAMAPlugin
 import app.aaps.plugins.aps.openAPSAutoISF.OpenAPSAutoISFPlugin
 import app.aaps.plugins.aps.openAPSSMB.OpenAPSSMBPlugin
+import app.aaps.plugins.automation.AutomationPlugin
 import app.aaps.plugins.configuration.configBuilder.ConfigBuilderPlugin
 import app.aaps.plugins.configuration.maintenance.MaintenancePlugin
 import app.aaps.plugins.constraints.bgQualityCheck.BgQualityCheckPlugin
@@ -36,6 +37,7 @@ import app.aaps.plugins.source.RandomBgPlugin
 import app.aaps.plugins.source.Libre3SourcePlugin
 import app.aaps.plugins.source.XdripSourcePlugin
 import app.aaps.plugins.sync.nsclientV3.NSClientV3Plugin
+import app.aaps.plugins.sync.wear.WearPlugin
 import app.aaps.pump.ypsopump.YpsoPumpPlugin
 import app.aaps.pump.medtrum.MedtrumPlugin
 import app.aaps.pump.virtual.VirtualPumpPlugin
@@ -172,6 +174,12 @@ abstract class PluginsListModule {
     @Binds
     @AllConfigs
     @IntoMap
+    @IntKey(250)
+    abstract fun bindAutomationPlugin(plugin: AutomationPlugin): PluginBase
+
+    @Binds
+    @AllConfigs
+    @IntoMap
     @IntKey(255)
     abstract fun bindAutotunePlugin(plugin: AutotunePlugin): PluginBase
 
@@ -210,6 +218,12 @@ abstract class PluginsListModule {
     @IntoMap
     @IntKey(355)
     abstract fun bindNSClientV3Plugin(plugin: NSClientV3Plugin): PluginBase
+
+    @Binds
+    @AllConfigs
+    @IntoMap
+    @IntKey(367)
+    abstract fun bindWearPlugin(plugin: WearPlugin): PluginBase
 
     @Binds
     @AllConfigs

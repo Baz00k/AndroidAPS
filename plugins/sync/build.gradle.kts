@@ -44,6 +44,8 @@ dependencies {
     api(libs.com.google.android.material)
     // socket.io is NSClientV3's websocket transport (NSClientV3Service), not only the retired v1 client.
     api(libs.io.socket.client)
+    api(libs.com.google.android.gms.playservices.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)

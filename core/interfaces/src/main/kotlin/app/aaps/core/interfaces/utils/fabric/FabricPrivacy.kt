@@ -1,6 +1,7 @@
 package app.aaps.core.interfaces.utils.fabric
 
 import android.os.Bundle
+import app.aaps.core.interfaces.rx.weardata.EventData
 
 interface FabricPrivacy {
 
@@ -10,4 +11,5 @@ interface FabricPrivacy {
     fun logMessage(message: String)
     fun logException(throwable: Throwable)
     fun fabricEnabled(): Boolean
+    fun logWearException(wearException: EventData.WearException)
 }
