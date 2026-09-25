@@ -19,6 +19,12 @@ internal open class YpsoWriteAccounting(
     private val transport: YpsoSerializedWriteTransport,
     private val reservationPolicy: ((Owner, String, PumpSession.WriteIntent) -> PumpSession.Reservation)? = null,
     private val retireInterruptedWrite: Boolean = true,
+    /**
+     * Persist the transport ACK as its own phase. POSSIBLY_SENT already records that the counter may
+     * be consumed, and an ACK proves no more than that, so a write resolved only by semantic read-back
+     * may skip this commit. Each commit rotates a Keystore key, which is most of a selector's cost.
+     */
+    private val persistTransportAck: Boolean = true,
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
 
@@ -95,7 +101,7 @@ internal open class YpsoWriteAccounting(
                 )
             }
             is YpsoWriteOutcome.AcceptedUnverified -> runCatching {
-                session.advance(request.owner.token, currentTransaction, PumpSession.Phase.ACKED)
+                if (persistTransportAck) session.advance(request.owner.token, currentTransaction, PumpSession.Phase.ACKED)
                 outcome
             }.getOrElse {
                 YpsoWriteOutcome.PossiblyApplied(

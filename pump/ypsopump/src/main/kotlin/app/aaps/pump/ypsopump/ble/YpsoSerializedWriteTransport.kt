@@ -468,6 +468,9 @@ internal class YpsoSerializedWriteTransport(
             gatt != null && current.request.owner.gatt === gatt
         }
 
+    /** Whether any write, on any connection, still occupies this transport. */
+    internal fun isIdle(): Boolean = synchronized(lock) { active == null }
+
     internal fun ownsGatt(gatt: Any): Boolean =
         synchronized(lock) {
             active?.request?.owner?.gatt === gatt

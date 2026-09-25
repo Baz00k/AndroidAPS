@@ -494,6 +494,46 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `a TBR row read in this scan is not read a second time`() {
+        val pump = HistoryPump()
+        pump.rows = pump.rows.mapIndexed { index, row -> if (index in 1..3) row.copy(eventType = 9, value2 = 30) else row }
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+
+        manager.readStableHistory(null, 3000, results::add)
+        pump.drain()
+
+        assertEquals(pump.rows, results.single()!!.rowsNewestFirst)
+        // Eight rows plus the final head read; the three TBR rows are not re-selected.
+        assertEquals(9, pump.rowReads)
+    }
+
+    @Test
+    fun `history selector writes skip the transport-ACK commit and resolve from POSSIBLY_SENT`() {
+        val pump = HistoryPump()
+        val phases = mutableListOf<PumpSession.Phase?>()
+        val record = manager.session!!.snapshot()!!
+        val store = object : PumpSession.Store {
+            var state = PumpSession.State(records = listOf(record), activeGeneration = record.generation)
+            override fun load() = state
+            override fun commit(state: PumpSession.State) {
+                phases += state.records.single().reservation?.phase
+                this.state = state
+            }
+        }
+        manager.session = PumpSession(store)
+        ownGatt(pump.fixture.gatt, ConnectionState.CONNECTED)
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+
+        manager.readStableHistory(null, 2, results::add)
+        pump.drain()
+
+        assertEquals(pump.rows.take(2), results.single()!!.rowsNewestFirst)
+        assertTrue(PumpSession.Phase.POSSIBLY_SENT in phases)
+        assertFalse(PumpSession.Phase.ACKED in phases)
+        assertEquals(PumpSession.Phase.VERIFIED, store.state.records.single().reservation?.phase)
+    }
+
+    @Test
     fun `changed cached tail causes fresh reads instead of stale reuse`() {
         val pump = HistoryPump()
         val results = mutableListOf<YpsoHistorySnapshot?>()
@@ -1083,6 +1123,92 @@ class YpsoBleManagerTest {
         manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
 
         assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
+    }
+
+    @Test
+    fun `authentication after a lost connection retires only its stranded history selector write`() {
+        val baseline = manager.session!!.committedRecord()!!
+        for ((purpose, retired) in listOf("HISTORY_SELECTOR" to true, "THERAPY_COMMAND" to false)) {
+            val record = baseline
+            manager.session = PumpSession(object : PumpSession.Store {
+                var state = PumpSession.State(
+                    records = listOf(record.copy(
+                        write = 4281,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        reservation = PumpSession.Reservation(
+                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "history-lost",
+                            YpsoWritePolicy.EVENT_INDEX_UUID.toString(), purpose, "ab".repeat(32), priorWrite = 4280,
+                        ),
+                    )),
+                    activeGeneration = record.generation,
+                )
+                override fun load() = state
+                override fun commit(state: PumpSession.State) { this.state = state }
+            })
+            val gatt: BluetoothGatt = mock()
+            val service: BluetoothGattService = mock()
+            val auth: BluetoothGattCharacteristic = mock()
+            whenever(auth.uuid).thenReturn(CHAR_AUTH)
+            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
+            whenever(gatt.services).thenReturn(listOf(service))
+            whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
+            ownGatt(gatt, ConnectionState.DISCOVERING)
+            manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
+
+            manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
+
+            val after = manager.session!!.snapshot()!!
+            assertEquals(retired, after.reservation == null, purpose)
+            assertEquals(4281L, after.write)
+        }
+    }
+
+    @Test
+    fun `authentication does not retire a selector a history transport still holds, or one it cannot save`() {
+        val baseline = manager.session!!.committedRecord()!!
+        for (case in listOf("held", "unsaved")) {
+            var failCommits = false
+            val store = object : PumpSession.Store {
+                var state = PumpSession.State(
+                    records = listOf(baseline.copy(
+                        write = 4281,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
+                        reservation = PumpSession.Reservation(
+                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "history-lost",
+                            YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR", "ab".repeat(32), priorWrite = 4280,
+                        ),
+                    )),
+                    activeGeneration = baseline.generation,
+                )
+                override fun load() = state
+                override fun commit(state: PumpSession.State) {
+                    check(!failCommits) { "journal unavailable" }
+                    this.state = state
+                }
+            }
+            manager.session = PumpSession(store)
+            val gatt: BluetoothGatt = mock()
+            val service: BluetoothGattService = mock()
+            val auth: BluetoothGattCharacteristic = mock()
+            whenever(auth.uuid).thenReturn(CHAR_AUTH)
+            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
+            whenever(gatt.services).thenReturn(listOf(service))
+            whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
+            ownGatt(gatt, ConnectionState.DISCOVERING)
+            manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
+            if (case == "held") {
+                manager.javaClass.getDeclaredField("historyReadActive").apply { isAccessible = true }
+                    .let { (it.get(manager) as java.util.concurrent.atomic.AtomicBoolean).set(true) }
+            } else failCommits = true
+
+            manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
+
+            // Still reserved, so write readiness keeps refusing therapy past it.
+            assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.state.records.single().reservation?.phase, case)
+            assertEquals("stranded", store.state.records.single().reservation?.id, case)
+            manager.javaClass.getDeclaredField("historyReadActive").apply { isAccessible = true }
+                .let { (it.get(manager) as java.util.concurrent.atomic.AtomicBoolean).set(false) }
+        }
     }
 
     @Test

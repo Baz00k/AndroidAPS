@@ -787,6 +787,80 @@ class ProductionPumpSessionTest {
         assertTrue(owner.snapshot()!!.writeEvidence.contains(legacyEvidence))
     }
 
+    @Test
+    fun `only an ordinary history selector left by a lost connection is retired, above its counter`() {
+        val selector = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
+        fun stranded(purpose: String, characteristic: String, phase: PumpSession.Phase): Pair<PumpSession, PumpSession.Token> {
+            val store = MemoryStore()
+            initialized(store)
+            store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+            val owner = PumpSession(store)
+            val token = owner.open(pump, key)
+            val transaction = owner.begin(token)
+            owner.reserve(token, transaction, PumpSession.WriteIntent("history-lost", characteristic, purpose, "ab".repeat(32)))
+            if (phase != PumpSession.Phase.RESERVED) owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+            if (phase == PumpSession.Phase.ACKED) owner.advance(token, transaction, PumpSession.Phase.ACKED)
+            owner.finish(token, transaction)
+            // The connection is gone; the next one opens a fresh token on the same durable record.
+            val restarted = PumpSession(store)
+            return restarted to restarted.open(pump, key)
+        }
+
+        for (phase in listOf(PumpSession.Phase.RESERVED, PumpSession.Phase.POSSIBLY_SENT, PumpSession.Phase.ACKED)) {
+            val (owner, token) = stranded("HISTORY_SELECTOR", selector, phase)
+            val id = owner.snapshot()!!.reservation!!.id
+            assertFalse(owner.retireAbandonedHistorySelector(token, "another-reservation"))
+            assertTrue(owner.retireAbandonedHistorySelector(token, id))
+            val retained = owner.snapshot()!!
+            assertNull(retained.reservation)
+            assertEquals(4281, retained.write)
+            // Unknown outcome, never a rejection: the next write goes strictly above the selector's counter.
+            assertNull(retained.writeEvidence.single().resolution)
+            assertEquals(4282, owner.reserve(token, owner.begin(token)).counter)
+        }
+
+        for ((purpose, characteristic) in listOf("THERAPY_COMMAND" to selector, "HISTORY_SELECTOR" to "other-characteristic")) {
+            val (owner, token) = stranded(purpose, characteristic, PumpSession.Phase.POSSIBLY_SENT)
+            assertFalse(owner.retireAbandonedHistorySelector(token, owner.snapshot()!!.reservation!!.id))
+            assertEquals(PumpSession.Phase.POSSIBLY_SENT, owner.snapshot()!!.reservation!!.phase)
+        }
+
+        // A write whose transaction is still open is not abandoned.
+        val (owner, token) = stranded("HISTORY_SELECTOR", selector, PumpSession.Phase.POSSIBLY_SENT)
+        val open = owner.begin(token)
+        assertThrows(IllegalStateException::class.java) { owner.retireAbandonedHistorySelector(token, owner.snapshot()!!.reservation!!.id) }
+        owner.finish(token, open)
+    }
+
+    @Test
+    fun `a selector interrupted after its ACK but before read-back keeps POSSIBLY_SENT and its counter across restart`() {
+        val store = MemoryStore()
+        initialized(store)
+        store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 4280) })
+        val owner = PumpSession(store)
+        val token = owner.open(pump, key)
+        val transaction = owner.begin(token)
+        owner.reserve(token, transaction, PumpSession.WriteIntent("history-x", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR", "ab".repeat(32)))
+        owner.advance(token, transaction, PumpSession.Phase.POSSIBLY_SENT)
+        // The transport ACK arrives; history selectors no longer persist it. Then the process dies.
+
+        val restarted = PumpSession(store)
+        restarted.open(pump, key)
+        val saved = restarted.snapshot()!!
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, saved.reservation!!.phase)
+        assertEquals(4281, saved.write)
+    }
+
+    @Test
+    fun `a lower-bound recovery selector is never retired as abandoned`() {
+        val reservation = PumpSession.Reservation(
+            "id", 43, PumpSession.Phase.POSSIBLY_SENT, "history-lost", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR",
+            candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
+        )
+        assertFalse(PumpSession(MemoryStore()).isAbandonableHistorySelector(reservation))
+        assertTrue(PumpSession(MemoryStore()).isAbandonableHistorySelector(reservation.copy(candidate = PumpSession.WriteCandidate.STANDARD)))
+    }
+
     private fun PumpSession.Record.established(write: Long): PumpSession.Record =
         copy(write = write, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
 }
