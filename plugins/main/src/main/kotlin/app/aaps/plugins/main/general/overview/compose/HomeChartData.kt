@@ -47,7 +47,9 @@ data class HomeChartData(
     val treatments: List<ChartTreatment> = emptyList(),
     val lowMark: Double = 4.0,
     val highMark: Double = 10.0,
-    val decimals: Int = 1
+    val decimals: Int = 1,
+    /** Effective target midpoint, separate from the glucose warning thresholds. */
+    val targets: List<GlucosePoint> = emptyList()
 ) {
 
     val hasData: Boolean get() = readings.isNotEmpty() && to > from

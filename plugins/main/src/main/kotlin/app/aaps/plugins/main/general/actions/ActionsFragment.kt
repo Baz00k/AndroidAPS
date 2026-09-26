@@ -12,12 +12,6 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.RM
-import app.aaps.plugins.main.general.actions.compose.ActionId
-import app.aaps.plugins.main.general.actions.compose.ActionsScreen
-import app.aaps.plugins.main.general.actions.compose.ActionsUiState
-import app.aaps.plugins.main.general.actions.compose.EventAction
-import app.aaps.plugins.main.general.actions.compose.TherapyAction
-import app.aaps.plugins.main.general.actions.compose.ToolAction
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
@@ -29,6 +23,7 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
+import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.pump.actions.CustomAction
 import app.aaps.core.interfaces.queue.Callback
@@ -37,9 +32,12 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventCustomActionsChanged
+import app.aaps.core.interfaces.rx.events.EventEffectiveProfileSwitchChanged
 import app.aaps.core.interfaces.rx.events.EventExtendedBolusChange
 import app.aaps.core.interfaces.rx.events.EventInitializationChanged
+import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventTempBasalChange
+import app.aaps.core.interfaces.rx.events.EventTempTargetChange
 import app.aaps.core.interfaces.rx.events.EventTherapyEventChange
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
@@ -56,10 +54,19 @@ import app.aaps.core.ui.elements.SingleClickButton
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.plugins.main.R
 import app.aaps.plugins.main.databinding.ActionsFragmentBinding
+import app.aaps.plugins.main.general.actions.compose.ActionId
+import app.aaps.plugins.main.general.actions.compose.ActionsScreen
+import app.aaps.plugins.main.general.actions.compose.ActionsUiState
+import app.aaps.plugins.main.general.actions.compose.EventAction
+import app.aaps.plugins.main.general.actions.compose.TherapyAction
+import app.aaps.plugins.main.general.actions.compose.ToolAction
+import app.aaps.plugins.main.general.overview.TargetDisplay
 import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
 import dagger.android.support.DaggerFragment
+import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class ActionsFragment : DaggerFragment() {
@@ -69,6 +76,7 @@ class ActionsFragment : DaggerFragment() {
     @Inject lateinit var rxBus: RxBus
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
+    @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var profileFunction: ProfileFunction
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var rh: ResourceHelper
@@ -192,16 +200,21 @@ class ActionsFragment : DaggerFragment() {
         }
     }
 
-    private fun buildActionsState(): ActionsUiState {
+    internal fun buildActionsState(): ActionsUiState {
         val pump = activePlugin.activePump
         val profile = profileFunction.getProfile()
         val now = dateUtil.now()
         val notClient = !config.AAPSCLIENT
         val notDisconnected = loop.runningMode != RM.Mode.DISCONNECTED_PUMP
 
+        val target = TargetDisplay.at(now, persistenceLayer.getTemporaryTargetActiveAt(now), null, null)
+        val targetStatus = target.temporaryTarget?.let {
+            "${target.range(profileFunction.getUnits(), profileUtil)} · ${dateUtil.untilString(it.end, rh)}"
+        }
         val therapy = buildList {
-            if (profile != null && loop.runningMode.isLoopRunning())
-                add(TherapyAction(ActionId.TEMP_TARGET, "Temp Target"))
+            // An existing target must remain visible and editable even when the loop is stopped.
+            if (targetStatus != null || (profile != null && loop.runningMode.isLoopRunning()))
+                add(TherapyAction(ActionId.TEMP_TARGET, "Temp Target", targetStatus.orEmpty(), active = targetStatus != null))
             if (pump.pumpDescription.isTempBasalCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && notClient) {
                 val active = processedTbrEbData.getTempBasalIncludingConvertedExtended(now)
                 if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temp Basal", active.toStringShort(rh), cancelable = true))
@@ -325,6 +338,19 @@ class ActionsFragment : DaggerFragment() {
             .subscribe({ updateGui() }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventTherapyEventChange::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ updateGui() }, fabricPrivacy::logException)
+        disposable += rxBus.toObservable(EventTempTargetChange::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ updateGui() }, fabricPrivacy::logException)
+        disposable += rxBus.toObservable(EventEffectiveProfileSwitchChanged::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ updateGui() }, fabricPrivacy::logException)
+        disposable += rxBus.toObservable(EventPreferenceChange::class.java)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ updateGui() }, fabricPrivacy::logException)
+        // Expiry and countdown do not necessarily emit a treatment-change event.
+        disposable += Observable.interval(1, TimeUnit.MINUTES, aapsSchedulers.io)
             .observeOn(aapsSchedulers.main)
             .subscribe({ updateGui() }, fabricPrivacy::logException)
         updateGui()

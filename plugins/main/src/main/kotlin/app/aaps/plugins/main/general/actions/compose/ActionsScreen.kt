@@ -93,7 +93,7 @@ private fun SectionLabel(text: String) =
 @Composable
 private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionId) -> Unit) {
     val colors = AapsTheme.colors
-    val accent = t.cancelable
+    val accent = t.cancelable || t.active
     AapsCard(
         modifier = modifier,
         color = if (accent) colors.accentTint else colors.surface,
@@ -107,7 +107,7 @@ private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionI
                     if (!t.enabled) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
                     style = AapsTheme.type.caption,
                     color = if (accent) colors.accentOnLight else colors.textTertiary,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                    maxLines = if (t.active) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis
                 )
             }
         }
