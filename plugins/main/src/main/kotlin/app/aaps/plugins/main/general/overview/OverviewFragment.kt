@@ -491,16 +491,17 @@ class OverviewFragment : DaggerFragment() {
         val rt = loop.lastRun?.constraintsProcessed?.rawData() as? RT
         val eventualMgdl = if (config.APS) rt?.eventualBG else null
 
-        // State line — describes the CURRENT reading only, vs the profile target band.
-        val targetLow = profile?.getTargetLowMgdl()
-        val targetHigh = profile?.getTargetHighMgdl()
-        val targetRange = if (targetLow != null && targetHigh != null)
-            "${profileUtil.fromMgdlToStringInUnits(targetLow)}–${profileUtil.fromMgdlToStringInUnits(targetHigh)} $unitsStr" else ""
-        val stateLine = if (bgMgdl != null && targetLow != null && targetHigh != null) when {
-            bgMgdl > targetHigh -> "${profileUtil.fromMgdlToStringInUnits(bgMgdl - targetHigh)} above target"
-            bgMgdl < targetLow  -> "${profileUtil.fromMgdlToStringInUnits(targetLow - bgMgdl)} below target"
-            else                -> "In target range"
-        } else ""
+        // Read once so the range, comparison and active-target ribbon describe the same target.
+        val now = dateUtil.now()
+        val target = TargetDisplay.at(
+            now, persistenceLayer.getTemporaryTargetActiveAt(now),
+            profile?.getTargetLowMgdl(), profile?.getTargetHighMgdl()
+        )
+        val targetRange = target.range(units, profileUtil)
+        val stateLine = target.stateLine(bgMgdl, units, profileUtil)
+        val tempTarget = target.temporaryTarget?.let {
+            "$targetRange · ${dateUtil.untilString(it.end, rh)}"
+        }
 
         // Basal — lead with the delivered rate (U/h); scheduled changes through the day.
         val basalData = profile?.let { iobCobCalculator.getBasalData(it, dateUtil.now()) }
@@ -518,7 +519,6 @@ class OverviewFragment : DaggerFragment() {
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
         // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
         val pump = activePlugin.activePump
-        val now = dateUtil.now()
         fun ageLabel(type: TE.Type): String? = persistenceLayer.getLastTherapyRecordUpToNow(type)?.let {
             compactDurationLabel(now - it.timestamp)
         }
@@ -618,7 +618,7 @@ class OverviewFragment : DaggerFragment() {
             algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
             sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
             profileName = profileFunction.getProfileName(),
-            tempTarget = null,
+            tempTarget = tempTarget,
             ready = true,
             notifications = notificationStore.snapshot().map {
                 HomeUiState.Alert(
@@ -680,6 +680,20 @@ class OverviewFragment : DaggerFragment() {
             t += stepMs
         }
 
+        // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
+        // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
+        val targets = ArrayList<GlucosePoint>()
+        var targetTime = from
+        while (true) {
+            val target = TargetDisplay.at(
+                targetTime, persistenceLayer.getTemporaryTargetActiveAt(targetTime),
+                profile.getTargetLowMgdl(targetTime), profile.getTargetHighMgdl(targetTime)
+            )
+            targets.add(GlucosePoint(targetTime, profileUtil.fromMgdlToUnits((target.low!! + target.high!!) / 2)))
+            if (targetTime == to) break
+            targetTime = (targetTime + 5 * 60_000L).coerceAtMost(to)
+        }
+
         val treatments = ArrayList<ChartTreatment>()
         persistenceLayer.getBolusesFromTimeToTime(from, to, true).forEach { b ->
             if (b.isValid && b.type != BS.Type.PRIMING && b.amount > 0.0)
@@ -701,6 +715,7 @@ class OverviewFragment : DaggerFragment() {
             basal = basal,
             scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,
+            targets = targets,
             // The SAME thresholds that colour the hero BG, so band and headline can never disagree.
             // UnitDoubleKey values are stored in the user's DISPLAY units already — converting them
             // from mg/dL here would divide 10.0 mmol down to 0.55 and collapse the band.
