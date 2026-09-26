@@ -82,6 +82,7 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
+import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.DoubleKey
@@ -115,6 +116,10 @@ import app.aaps.plugins.main.general.overview.compose.HomeActions
 import app.aaps.plugins.main.general.overview.compose.HomeScreen
 import app.aaps.plugins.main.general.overview.compose.TreatmentKind
 import app.aaps.plugins.main.general.overview.compose.HomeGlucoseChart
+import app.aaps.plugins.main.general.overview.compose.AdditionalGraphData
+import app.aaps.plugins.main.general.overview.compose.AdditionalGraphSettings
+import app.aaps.plugins.main.general.overview.compose.AdditionalSeries
+import app.aaps.plugins.main.general.overview.compose.HomeAdditionalGraphs
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
 import app.aaps.plugins.main.general.overview.compose.ChartTreatment
@@ -175,6 +180,7 @@ class OverviewFragment : DaggerFragment() {
     private var smallHeight = false
     private var axisWidth: Int = 0
     private var composeHome: ComposeView? = null
+    private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
     private lateinit var refreshLoop: Runnable
     private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
@@ -206,6 +212,7 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // ---- Redesigned Home (Compose) ----
+        additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
         val actions = buildHomeActions()
         composeHome?.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         composeHome?.setContent {
@@ -213,7 +220,13 @@ class OverviewFragment : DaggerFragment() {
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = { HomeGlucoseChart(chartData.value, Modifier.fillMaxSize()) }
+                    graph = { HomeGlucoseChart(chartData.value, Modifier.fillMaxSize()) },
+                    additionalGraphs = {
+                        HomeAdditionalGraphs(chartData.value, additionalGraphSettings.value) { settings ->
+                            preferences.put(StringNonKey.OverviewAdditionalGraphs, settings.encode())
+                            additionalGraphSettings.value = settings
+                        }
+                    }
                 )
             }
         }
@@ -643,13 +656,14 @@ class OverviewFragment : DaggerFragment() {
     /** Rebuild the chart series on the background handler, then publish to Compose. */
     private fun refreshChart() {
         handler.post {
-            val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); null }
-            d?.let { runOnUiThread { chartData.value = it } }
+            val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); HomeChartData() }
+            runOnUiThread { if (composeHome != null) chartData.value = d }
         }
     }
 
     private fun buildChartData(): HomeChartData {
         val profile = profileFunction.getProfile() ?: return HomeChartData()
+        val units = profileFunction.getUnits()
         val from = overviewData.fromTime
         val to = overviewData.toTime
         if (to <= from) return HomeChartData()
@@ -657,7 +671,7 @@ class OverviewFragment : DaggerFragment() {
         val readings = overviewData.bgReadingsArray
             .filter { it.timestamp in from..to }
             .sortedBy { it.timestamp }
-            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
+            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value, units)) }
         if (readings.isEmpty()) return HomeChartData()
 
         // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
@@ -665,7 +679,7 @@ class OverviewFragment : DaggerFragment() {
         val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy()
             ?.filter { it.timestamp in from..to }
             ?.sortedBy { it.timestamp }
-            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated)) }
+            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated, units)) }
             ?: emptyList()
 
         // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
@@ -692,7 +706,23 @@ class OverviewFragment : DaggerFragment() {
                 treatments.add(ChartTreatment(c.timestamp, c.amount, TreatmentKind.CARBS))
         }
 
+        val now = dateUtil.now()
+        val ads = iobCobCalculator.ads.clone()
+        val autosensSamples = (0 until ads.autosensDataTable.size()).map { ads.autosensDataTable.valueAt(it) }
+        val additional = AdditionalGraphData.fromAutosens(autosensSamples, from, to, now) { profileUtil.fromMgdlToUnits(it, units) }
+        val iob = ArrayList<GlucosePoint>()
+        var iobTime = from
+        while (iobTime <= minOf(to, now)) {
+            // Resolve historical profiles just as the original AAPS graph worker does.
+            profileFunction.getProfile(iobTime)?.let { historicalProfile ->
+                val value = iobCobCalculator.calculateFromTreatmentsAndTemps(iobTime, historicalProfile).iob
+                if (value.isFinite()) iob.add(GlucosePoint(iobTime, value))
+            }
+            iobTime += 5 * 60_000L
+        }
+
         return HomeChartData(
+            additional = additional.copy(points = additional.points + (AdditionalSeries.IOB to iob)),
             from = from,
             to = to,
             now = dateUtil.now(),
@@ -706,7 +736,8 @@ class OverviewFragment : DaggerFragment() {
             // from mg/dL here would divide 10.0 mmol down to 0.55 and collapse the band.
             lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
             highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
-            decimals = if (profileFunction.getUnits() == GlucoseUnit.MGDL) 0 else 1
+            decimals = if (units == GlucoseUnit.MGDL) 0 else 1,
+            glucoseUnits = if (units == GlucoseUnit.MGDL) "mg/dL" else "mmol/L"
         )
     }
 

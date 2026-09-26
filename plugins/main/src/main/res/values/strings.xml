@@ -336,4 +336,16 @@
     <string name="steps_shortname">STEPS</string>
     <string name="simple_mode_enabled">Simple mode enabled</string>
 
+    <string name="overview_additional_graphs">Additional graphs</string>
+    <string name="overview_graph_number">Graph %1$d</string>
+    <string name="overview_graph_choose">Choose a graph for each series. All graphs use the glucose graph’s time range.</string>
+    <string name="overview_graph_hidden">Hide</string>
+    <string name="overview_graph_left">left axis</string>
+    <string name="overview_graph_right">right axis</string>
+    <string name="overview_graph_no_data">No data</string>
+    <string name="overview_graph_units_insulin">U</string>
+    <string name="overview_graph_units_carbs">g</string>
+    <string name="overview_graph_units_impact">%1$s/5 min</string>
+    <string name="overview_graph_bgi_sign">BGI uses the AAPS graph convention: positive values indicate a glucose-lowering insulin effect (−BGI).</string>
+    <string name="overview_graph_sensitivity_zero">Autosens change: 0% is a ratio of 1.0. This estimate may be shown even when autosens is disabled.</string>
 </resources>
