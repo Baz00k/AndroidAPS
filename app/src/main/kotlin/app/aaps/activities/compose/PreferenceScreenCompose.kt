@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.TwoStatePreference
 import androidx.preference.PreferenceCategory
@@ -26,6 +27,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.keys.interfaces.BooleanPreferenceKey
 import app.aaps.core.keys.interfaces.DoublePreferenceKey
 import app.aaps.core.keys.interfaces.IntPreferenceKey
+import app.aaps.core.keys.interfaces.NonPreferenceKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.interfaces.StringPreferenceKey
 
@@ -38,9 +40,11 @@ import app.aaps.core.keys.interfaces.StringPreferenceKey
 sealed interface PrefRow {
     data class Section(val title: String) : PrefRow
     data object CardBreak : PrefRow
+
+    /** Display state is snapshotted so a changed value reaches Compose even if AndroidX reuses the [Preference]. */
     data class Leaf(
         val preference: Preference,
-        val summary: String? = preference.summary?.toString(),
+        val summary: String? = (if (preference is ListPreference) preference.entry else preference.summary)?.toString(),
         val checked: Boolean? = (preference as? TwoStatePreference)?.isChecked
     ) : PrefRow
 }
@@ -132,7 +136,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
     val pref = row.preference
     // Keyless preferences may still open dialogs or invoke actions.
     val keyString = pref.key
-    val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
+    val typed = remember(pref, keyString) { inlinePreferenceKey(pref, preferences) }
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
     val sub = row.summary?.takeIf { it.isNotBlank() }
     // Respect dependency and mode gating before writing.
@@ -202,7 +206,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
 }
 
 /** Disabled and non-selectable preferences must not expose click actions. */
-private fun clickHandler(pref: Preference): (() -> Unit)? =
+internal fun clickHandler(pref: Preference): (() -> Unit)? =
     if (pref.isEnabled && pref.isSelectable) ({ pref.performClick() }) else null
 
 /** A step that feels right across the very different ranges these keys span (0.05 U vs 500 mg/dL). */
@@ -215,3 +219,8 @@ private fun pickStep(min: Double, max: Double): Double {
         else          -> 5.0
     }
 }
+
+/** List preferences are named choices even when the stored key is an Int; they keep the native dialog. */
+internal fun inlinePreferenceKey(pref: Preference, preferences: Preferences): NonPreferenceKey? =
+    if (pref is ListPreference) null
+    else pref.key?.let { key -> runCatching { preferences.get(key) }.getOrNull() }
