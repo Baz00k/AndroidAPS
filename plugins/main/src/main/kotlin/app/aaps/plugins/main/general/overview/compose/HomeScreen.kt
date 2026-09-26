@@ -60,7 +60,8 @@ import app.aaps.core.compose.theme.color
 fun HomeScreen(
     state: HomeUiState,
     actions: HomeActions,
-    graph: @Composable () -> Unit
+    graph: @Composable () -> Unit,
+    additionalGraphs: @Composable () -> Unit = {}
 ) {
     val colors = AapsTheme.colors
     var showDetails by remember { mutableStateOf(false) }
@@ -85,6 +86,7 @@ fun HomeScreen(
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
+                additionalGraphs()
                 DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }

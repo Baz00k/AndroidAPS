@@ -47,7 +47,9 @@ data class HomeChartData(
     val treatments: List<ChartTreatment> = emptyList(),
     val lowMark: Double = 4.0,
     val highMark: Double = 10.0,
-    val decimals: Int = 1
+    val decimals: Int = 1,
+    val glucoseUnits: String = "mmol/L",
+    val additional: AdditionalGraphData = AdditionalGraphData()
 ) {
 
     val hasData: Boolean get() = readings.isNotEmpty() && to > from
