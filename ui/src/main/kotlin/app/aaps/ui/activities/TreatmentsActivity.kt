@@ -19,15 +19,16 @@ import app.aaps.ui.activities.history.HistoryItem
 import app.aaps.ui.activities.history.HistoryKind
 import app.aaps.ui.activities.history.HistoryScreen
 import app.aaps.ui.activities.history.HistoryUiState
+import app.aaps.ui.activities.history.toHistoryItem
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 
 /**
- * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped, read-only list
- * of boluses / carbs / therapy events over the last 14 days, merged from the persistence layer off the
- * main thread. (Edit/delete of individual treatments is a later pass — see the redesign notes.)
+ * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped list
+ * of boluses / carbs / temporary basals / therapy events over the last 14 days, merged from the persistence layer off the
+ * main thread. Temporary basals are display-only to preserve insulin accounting.
  */
 class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
@@ -64,12 +65,14 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private fun toggle(item: HistoryItem) {
+        if (!item.removable) return
         val sel = historyState.value.selected.toMutableSet()
         if (!sel.add(item.key)) sel.remove(item.key)
         historyState.value = historyState.value.copy(selected = sel)
     }
 
     private fun startSelecting(item: HistoryItem) {
+        if (!item.removable) return
         historyState.value = historyState.value.copy(selecting = true, selected = historyState.value.selected + item.key)
     }
 
@@ -86,7 +89,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
      */
     private fun removeSelected() {
         val keys = historyState.value.selected
-        val items = historyState.value.items.filter { it.key in keys }
+        val items = historyState.value.items.filter { it.removable && it.key in keys }
         if (items.isEmpty()) return
 
         // Plain text, not HTML: the only thing the HTML was buying here was line breaks, and
@@ -112,6 +115,8 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                         HistoryKind.SMB   -> persistenceLayer.invalidateBolus(item.id, Action.BOLUS_REMOVED, Sources.Treatments, null, ts)
 
                         HistoryKind.CARBS -> persistenceLayer.invalidateCarbs(item.id, Action.CARBS_REMOVED, Sources.Treatments, null, ts)
+
+                        HistoryKind.TBR   -> return@forEach // Display-only; never invalidate basal history.
 
                         HistoryKind.EVENT -> persistenceLayer.invalidateTherapyEvent(item.id, Action.CAREPORTAL_REMOVED, Sources.Treatments, null, ts)
                     }.subscribe()
@@ -169,6 +174,9 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                 te.id, te.timestamp, dayLabel(te.timestamp, now), dateUtil.timeString(te.timestamp),
                 HistoryKind.EVENT, eventTitle(te.type), te.note ?: "", ""
             )
+        }
+        persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(from, now, false).forEach { basal ->
+            basal.toHistoryItem(from, now, dayLabel(basal.timestamp, now), dateUtil.timeString(basal.timestamp))?.let(items::add)
         }
         items.sortByDescending { it.timestamp }
         return HistoryUiState(loading = false, items = items)
