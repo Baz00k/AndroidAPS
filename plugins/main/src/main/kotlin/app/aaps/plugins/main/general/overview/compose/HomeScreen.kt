@@ -185,6 +185,19 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     if (state.targetRange.isNotBlank())
                         Text(" · ${state.targetRange}", style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
                 }
+            state.tempTarget?.let { target ->
+                AapsCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = colors.accentTint,
+                    onClick = actions.onTempTarget
+                ) {
+                    Text(
+                        "Temp target · $target",
+                        style = AapsTheme.type.listTitle,
+                        color = colors.accentOnLight
+                    )
+                }
+            }
             // divider + stat row (IOB / COB / Basal)
             Box(
                 Modifier
