@@ -82,6 +82,26 @@ class AutosensDataStoreDenseTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun `successive one minute readings advance the latest bucket only every five minutes`() {
+        val start = T.hours(2).msecs()
+        var store = autosensDataStore
+        val latestTimestamps = (0 until 15).map { minute ->
+            store.bgReadings = (0 until 60).map { age ->
+                gv(age.toLong(), 100.0).copy(timestamp = start + T.mins((minute - age).toLong()).msecs())
+            }
+            store.createBucketedData(aapsLogger, dateUtil)
+            // Both IOB/COB workers clone the store and replace the live instance after each run.
+            store = store.clone() as AutosensDataStoreObject
+            store.lastBg()!!.timestamp
+        }
+
+        // InvokeLoopWorker gates on this bucket timestamp, not the incoming raw timestamp.
+        assertThat(latestTimestamps).containsExactlyElementsIn(
+            (0 until 15).map { start + T.mins((it / 5 * 5).toLong()).msecs() }
+        ).inOrder()
+    }
+
+    @Test
     fun `ordinary five minute data is untouched by the dense path`() {
         // 5-min data must take the regular path; a median interval of 5 min is far above the
         // 2.5 min density threshold.

@@ -48,6 +48,8 @@ class AutosensDataStoreObject : AutosensDataStore {
     override fun clone(): AutosensDataStore =
         AutosensDataStoreObject().also {
             synchronized(dataLock) {
+                // IOB/COB workers replace the live store with this clone; keep the bucket grid anchored.
+                it.referenceTime = this.referenceTime
                 it.bgReadings = this.bgReadings.toMutableList()
                 it.autosensDataTable = LongSparseArray<AutosensData>(this.autosensDataTable.size).apply { putAll(this@AutosensDataStoreObject.autosensDataTable) }
                 it.bucketedData = this.bucketedData?.toMutableList()
