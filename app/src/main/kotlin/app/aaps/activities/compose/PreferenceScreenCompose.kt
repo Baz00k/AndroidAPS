@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceGroup
@@ -19,13 +20,13 @@ import androidx.preference.PreferenceScreen
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.ListRow
 import app.aaps.core.compose.components.NumberField
-import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.keys.interfaces.BooleanPreferenceKey
 import app.aaps.core.keys.interfaces.DoublePreferenceKey
 import app.aaps.core.keys.interfaces.IntPreferenceKey
+import app.aaps.core.keys.interfaces.NonPreferenceKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.interfaces.StringPreferenceKey
 
@@ -53,7 +54,12 @@ import app.aaps.core.keys.interfaces.StringPreferenceKey
 /** One rendered line: either a section heading or a leaf preference. */
 sealed interface PrefRow {
     data class Section(val title: String) : PrefRow
-    data class Leaf(val preference: Preference) : PrefRow
+    // Snapshot mutable display state so a dialog change makes the refreshed rows unequal and
+    // reaches Compose even when AndroidX reuses the same Preference instance.
+    data class Leaf(
+        val preference: Preference,
+        val summary: String? = (if (preference is ListPreference) preference.entry else preference.summary)?.toString()
+    ) : PrefRow
 }
 
 /** Flatten a built [PreferenceScreen] into rows, honouring `isVisible` exactly as the legacy list does. */
@@ -110,10 +116,10 @@ fun PreferenceScreenCompose(
         while (i < rows.size) {
             val row = rows[i]
             if (row is PrefRow.Section) {
-                val leaves = mutableListOf<Preference>()
+                val leaves = mutableListOf<PrefRow.Leaf>()
                 var j = i + 1
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
-                    leaves += (rows[j] as PrefRow.Leaf).preference; j++
+                    leaves += rows[j] as PrefRow.Leaf; j++
                 }
                 Text(row.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
                 if (leaves.isNotEmpty()) AapsCard {
@@ -123,10 +129,10 @@ fun PreferenceScreenCompose(
                 }
                 i = j
             } else {
-                val leaves = mutableListOf<Preference>()
+                val leaves = mutableListOf<PrefRow.Leaf>()
                 var j = i
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
-                    leaves += (rows[j] as PrefRow.Leaf).preference; j++
+                    leaves += rows[j] as PrefRow.Leaf; j++
                 }
                 if (leaves.isNotEmpty()) AapsCard {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -140,15 +146,16 @@ fun PreferenceScreenCompose(
 }
 
 @Composable
-private fun PreferenceRow(pref: Preference, preferences: Preferences) {
+private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
+    val pref = row.preference
     // A preference need not have a key: AndroidX allows keyless rows that only open something, and
     // returning early on one drew NOTHING while leaving it in the tree — an entry point that exists,
     // is clickable in the legacy hierarchy, and is simply invisible here. Treat a missing key as
     // "no stored value", which lands on the click-through row at the bottom of the `when`.
     val keyString = pref.key
-    val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
+    val typed = remember(pref, keyString) { inlinePreferenceKey(pref, preferences) }
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
-    val sub = pref.summary?.toString()?.takeIf { it.isNotBlank() }
+    val sub = row.summary?.takeIf { it.isNotBlank() }
     // `isEnabled` is how the tree expresses dependency and mode gating, so a disabled row must not
     // write. On a screen that sets max basal and max IOB, accepting an edit the tree refused is a
     // safety bug, not a cosmetic one.
@@ -216,7 +223,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
  * present a value rather than an action. Returning null also stops the row from advertising itself as
  * clickable, instead of accepting a tap and doing nothing.
  */
-private fun clickHandler(pref: Preference): (() -> Unit)? =
+internal fun clickHandler(pref: Preference): (() -> Unit)? =
     if (pref.isEnabled && pref.isSelectable) ({ pref.performClick() }) else null
 
 /** A step that feels right across the very different ranges these keys span (0.05 U vs 500 mg/dL). */
@@ -229,3 +236,11 @@ private fun pickStep(min: Double, max: Double): Double {
         else          -> 5.0
     }
 }
+
+/**
+ * List preferences describe choices, even when their stored key is an integer. Leave them on the
+ * click-through path so AndroidX owns the allowed entries, change listener and persistence.
+ */
+internal fun inlinePreferenceKey(pref: Preference, preferences: Preferences): NonPreferenceKey? =
+    if (pref is ListPreference) null
+    else pref.key?.let { key -> runCatching { preferences.get(key) }.getOrNull() }
