@@ -42,6 +42,7 @@ data class HomeChartData(
      * bucketing is a no-op and [readings] is already the right thing to draw.
      */
     val bucketed: List<GlucosePoint> = emptyList(),
+    val predictions: List<ChartPrediction> = emptyList(),
     val basal: List<BasalStep> = emptyList(),
     val scheduledBasal: Double = 0.0,
     val treatments: List<ChartTreatment> = emptyList(),

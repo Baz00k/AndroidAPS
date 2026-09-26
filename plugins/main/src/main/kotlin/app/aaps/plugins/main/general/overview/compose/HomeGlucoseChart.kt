@@ -1,9 +1,16 @@
 package app.aaps.plugins.main.general.overview.compose
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -13,6 +20,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -21,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.plugins.main.R
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
@@ -40,11 +51,16 @@ import kotlin.math.sqrt
  *    the rotated overlapping value labels;
  *  - delivered insulin below as a step area, with scheduled basal as a dashed reference.
  *
- * Everything is drawn from the design-system tokens, so it inherits the app's palette and typeface
- * rather than approximating them.
+ * Historical data uses the design-system tokens; forecasts use distinct colours and dashed strokes.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HomeGlucoseChart(data: HomeChartData, modifier: Modifier = Modifier) {
+fun HomeGlucoseChart(
+    data: HomeChartData,
+    modifier: Modifier = Modifier,
+    showPredictions: Boolean = false,
+    onShowPredictionsChange: (Boolean) -> Unit = {}
+) {
     val colors = AapsTheme.colors
     val measurer = rememberTextMeasurer()
     // Derived from the skin's own caption style rather than a hardcoded family, so the axis labels
@@ -53,10 +69,34 @@ fun HomeGlucoseChart(data: HomeChartData, modifier: Modifier = Modifier) {
     val axisStyle = caption.copy(fontSize = 9.sp, color = colors.textTertiary)
     val valueStyle = caption.copy(fontSize = 13.sp)
 
-    Box(modifier) {
-        Canvas(Modifier.fillMaxSize()) {
+    val predictionLabel = stringResource(R.string.overview_show_predictions)
+    val predictions = if (showPredictions) data.predictions else emptyList()
+    val plotted = data.copy(
+        predictions = predictions,
+        to = maxOf(data.to, predictions.flatMap { it.points }.maxOfOrNull { it.time } ?: data.to)
+    )
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(predictionLabel, style = caption, color = colors.textTertiary)
+            Switch(checked = showPredictions, onCheckedChange = onShowPredictionsChange, modifier = Modifier.semantics { contentDescription = predictionLabel })
+        }
+        if (showPredictions) {
+            Text(
+                stringResource(if (predictions.isEmpty()) R.string.overview_predictions_unavailable else R.string.overview_predictions_estimates),
+                style = caption, color = colors.textTertiary
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                predictions.forEach { series ->
+                    Text(
+                        stringResource(series.kind.labelResource()),
+                        style = caption, color = series.kind.color()
+                    )
+                }
+            }
+        }
+        Canvas(Modifier.fillMaxWidth().weight(1f)) {
             if (!data.hasData) return@Canvas
-            drawChart(data, colors, measurer, axisStyle, valueStyle)
+            drawChart(plotted, colors, measurer, axisStyle, valueStyle)
         }
     }
 }
@@ -76,7 +116,7 @@ private fun DrawScope.drawChart(
     val rightPad = 6.dp.toPx()
     val axisH = 14.dp.toPx()
     val plotW = size.width - leftPad - rightPad
-    if (plotW <= 0f) return
+    if (plotW <= 0f || size.height <= axisH) return
 
     val bodyH = size.height - axisH
     val gTop = 2.dp.toPx()
@@ -89,9 +129,10 @@ private fun DrawScope.drawChart(
     fun x(t: Long): Float = leftPad + (t - d.from) / span * plotW
 
     // Glucose scale: always show the band plus a little headroom, and grow for excursions.
-    val maxReading = d.readings.maxOf { it.value }
+    val glucoseValues = (d.readings + d.trace + d.predictions.flatMap { it.points }).map { it.value }
+    val maxReading = glucoseValues.max()
     val gHi = max(d.highMark + 2.0, kotlin.math.ceil(maxReading + 0.5))
-    val gLo = min(d.lowMark - 1.0, d.readings.minOf { it.value } - 0.5).coerceAtLeast(0.0)
+    val gLo = min(d.lowMark - 1.0, glucoseValues.min() - 0.5).coerceAtLeast(0.0)
     fun y(v: Double): Float = gTop + ((gHi - v.coerceIn(gLo, gHi)) / (gHi - gLo)).toFloat() * gH
 
     // ---- target band (behind everything) ----
@@ -159,6 +200,22 @@ private fun DrawScope.drawChart(
         )
     }
 
+    // Dashed forecasts have no fill, measured-value marker or connection to the historical trace.
+    d.predictions.forEach { series ->
+        val path = Path()
+        series.points.forEachIndexed { index, point ->
+            val previous = series.points.getOrNull(index - 1)
+            if (previous == null || point.time - previous.time != 5 * 60_000L) path.moveTo(x(point.time), y(point.value))
+            else path.lineTo(x(point.time), y(point.value))
+        }
+        drawPath(path, series.kind.color(), style = Stroke(1.8.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 3.dp.toPx()))))
+        // A lone remaining prediction is still an estimate, rendered as an unfilled point.
+        if (series.points.size == 1) {
+            val point = series.points.single()
+            drawCircle(series.kind.color(), 2.dp.toPx(), Offset(x(point.time), y(point.value)), style = Stroke(1.dp.toPx()))
+        }
+    }
+
     // ---- treatment rail ----
     drawLine(colors.divider, Offset(leftPad, railY), Offset(size.width - rightPad, railY), 1f)
     d.treatments.forEach { t ->
@@ -195,8 +252,8 @@ private fun DrawScope.drawChart(
                 lineTo(px, iy(d.basal[i - 1].rate))
                 lineTo(px, iy(d.basal[i].rate))
             }
-            lineTo(size.width - rightPad, iy(d.basal.last().rate))
-            lineTo(size.width - rightPad, iTop + iH)
+            lineTo(x(d.basal.last().time), iy(d.basal.last().rate))
+            lineTo(x(d.basal.last().time), iTop + iH)
             lineTo(leftPad, iTop + iH)
             close()
         }
@@ -225,7 +282,7 @@ private fun DrawScope.drawChart(
 
     if (d.scheduledBasal > 0) {
         drawLine(
-            colors.textTertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(size.width - rightPad, iy(d.scheduledBasal)),
+            colors.textTertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(x(d.now), iy(d.scheduledBasal)),
             strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f))
         )
         measurer.label(this, "sched " + fmt(d.scheduledBasal, 2), leftPad + 3.dp.toPx(), iy(d.scheduledBasal) - 3.dp.toPx(), axisStyle)
@@ -300,4 +357,21 @@ private fun TextMeasurer.label(
     // Clip labels that would spill outside the canvas rather than letting them overlap the edge.
     if (dx < -1f || dx + laid.size.width > scope.size.width + 1f) return
     scope.drawText(laid, topLeft = Offset(dx, y - laid.size.height))
+}
+
+// AAPS prediction colours, kept independent from the measured-glucose range colours.
+private fun PredictionKind.color(): Color = when (this) {
+    PredictionKind.IOB   -> Color(0xFF6495ED)
+    PredictionKind.COB   -> Color(0xFFFFA500)
+    PredictionKind.ZT    -> Color(0xFF00BFFF)
+    PredictionKind.UAM   -> Color(0xFFBDB76B)
+    PredictionKind.A_COB -> Color(0xFFD98C40)
+}
+
+private fun PredictionKind.labelResource(): Int = when (this) {
+    PredictionKind.IOB   -> R.string.overview_prediction_iob
+    PredictionKind.COB   -> R.string.overview_prediction_cob
+    PredictionKind.ZT    -> R.string.overview_prediction_zt
+    PredictionKind.UAM   -> R.string.overview_prediction_uam
+    PredictionKind.A_COB -> R.string.overview_prediction_acob
 }
