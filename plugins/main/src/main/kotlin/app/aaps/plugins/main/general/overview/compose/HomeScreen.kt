@@ -302,7 +302,8 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(220.dp)
+                    // Reserve space for the prediction switch and legend above the plot.
+                    .height(320.dp)
             ) { graph() }
         }
     }

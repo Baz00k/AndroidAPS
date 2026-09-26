@@ -115,6 +115,7 @@ import app.aaps.plugins.main.general.overview.compose.HomeActions
 import app.aaps.plugins.main.general.overview.compose.HomeScreen
 import app.aaps.plugins.main.general.overview.compose.TreatmentKind
 import app.aaps.plugins.main.general.overview.compose.HomeGlucoseChart
+import app.aaps.plugins.main.general.overview.compose.buildHomePredictions
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
 import app.aaps.plugins.main.general.overview.compose.ChartTreatment
@@ -175,6 +176,7 @@ class OverviewFragment : DaggerFragment() {
     private var smallHeight = false
     private var axisWidth: Int = 0
     private var composeHome: ComposeView? = null
+    private val showPredictions = mutableStateOf(false)
     private val chartData = mutableStateOf(HomeChartData())
     private lateinit var refreshLoop: Runnable
     private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
@@ -206,6 +208,7 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // ---- Redesigned Home (Compose) ----
+        showPredictions.value = preferences.get(BooleanNonKey.OverviewShowPredictions)
         val actions = buildHomeActions()
         composeHome?.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         composeHome?.setContent {
@@ -213,7 +216,12 @@ class OverviewFragment : DaggerFragment() {
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = { HomeGlucoseChart(chartData.value, Modifier.fillMaxSize()) }
+                    graph = {
+                        HomeGlucoseChart(chartData.value, Modifier.fillMaxSize(), showPredictions.value) { enabled ->
+                            preferences.put(BooleanNonKey.OverviewShowPredictions, enabled)
+                            showPredictions.value = enabled
+                        }
+                    }
                 )
             }
         }
@@ -651,7 +659,8 @@ class OverviewFragment : DaggerFragment() {
     private fun buildChartData(): HomeChartData {
         val profile = profileFunction.getProfile() ?: return HomeChartData()
         val from = overviewData.fromTime
-        val to = overviewData.toTime
+        val now = dateUtil.now()
+        val to = minOf(overviewData.toTime, now)
         if (to <= from) return HomeChartData()
 
         val readings = overviewData.bgReadingsArray
@@ -695,7 +704,12 @@ class OverviewFragment : DaggerFragment() {
         return HomeChartData(
             from = from,
             to = to,
-            now = dateUtil.now(),
+            now = now,
+            predictions = buildHomePredictions(
+                if (config.APS) loop.lastRun?.constraintsProcessed else processedDeviceStatusData.getAPSResult(),
+                now,
+                { profileUtil.fromMgdlToUnits(it) }
+            ),
             readings = readings,
             bucketed = bucketed,
             basal = basal,
