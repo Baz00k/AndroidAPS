@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.ActionBarButton
@@ -163,7 +164,13 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             // row 2 — BG + inline trend (left) · eventual (right)
             Row(verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.bg, style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
+                    // Keep the glucose range color while marking an outdated reading independently of color.
+                    Text(
+                        state.bg,
+                        style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp),
+                        color = bgColor,
+                        textDecoration = if (state.bgStale) TextDecoration.LineThrough else TextDecoration.None
+                    )
                     if (state.trendArrow.isNotBlank() || state.delta.isNotBlank())
                         Text(
                             "${state.trendArrow} ${state.delta}".trim(),

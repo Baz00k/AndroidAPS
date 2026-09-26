@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.PreviewParameter
+import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 
@@ -18,7 +20,7 @@ import app.aaps.core.compose.theme.AapsTone
  */
 @Preview(name = "Home", widthDp = 412, heightDp = 892, showBackground = true, backgroundColor = 0xFF0E1116)
 @Composable
-private fun HomeScreenPreview() {
+private fun HomeScreenPreview(@PreviewParameter(GlucoseFreshnessPreviewProvider::class) stale: Boolean) {
     AapsTheme {
         HomeScreen(
             state = HomeUiState(
@@ -28,10 +30,11 @@ private fun HomeScreenPreview() {
                 looping = true,
                 bg = "6.4",
                 bgTone = AapsTone.InRange,
+                bgStale = stale,
                 units = "mmol/L",
                 trendArrow = "↗",
                 delta = "+0.2",
-                timeAgo = "2 min ago",
+                timeAgo = if (stale) "15 min ago" else "2 min ago",
                 eventualBg = "5.8",
                 stateLine = "In target range",
                 targetRange = "5.5–7.0 mmol/L",
@@ -59,4 +62,9 @@ private fun HomeScreenPreview() {
             }
         )
     }
+}
+
+class GlucoseFreshnessPreviewProvider : PreviewParameterProvider<Boolean> {
+
+    override val values = sequenceOf(false, true)
 }
