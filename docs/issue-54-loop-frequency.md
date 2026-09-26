@@ -5,23 +5,30 @@ Investigated 2026-09-26 against fork commit `ad9d4bff0dbe86ef8bf8c2a578924343cc3
 
 ## Conclusion
 
-**This is a state-copying bug, not an intentional one-minute dosing cadence.** The reported
-configuration is YpsoPump with the SMB algorithm and microboluses disabled, with TBRs
-changing every minute. The workflow can invoke the loop on every one-minute reading because `AutosensDataStoreObject.clone()` did not copy
-`referenceTime`, and both IOB/COB workers replace the live store with that clone. Each
-subsequent reading therefore starts a new five-minute grid at its own timestamp. The loop's
-already-used-timestamp guard accepts each new minute.
+**Minute-by-minute looping is inherited upstream behavior, not a fork-specific regression.**
+The reported configuration is YpsoPump with the SMB algorithm and microboluses disabled.
+The mechanism is reproducible: the IOB/COB workers replace the live glucose store with a
+clone that drops `referenceTime`, so every new minute can reanchor the bucket grid and pass
+the loop's timestamp gate. The same lifecycle test against the unmodified upstream 3.4.2.6
+data-store source produces 15 distinct timestamps for 15 one-minute arrivals.
 
-The data store explicitly requires bucket timestamps to remain aligned to `referenceTime`
-for correct cache reuse. Discarding that reference during cloning violates this invariant.
-Official AAPS guidance also says one-minute Libre readings should not trigger one-minute
-calculations (linked below). Tests must include clone-and-replace between readings:
-retaining a single store instance hides this bug.
+This establishes how the behavior occurs, not that one-minute dosing is undesirable.
+The earlier classification as an unambiguous dosing-cadence bug was too strong. Upstream
+has already discussed both minute-by-minute operation and the tradeoffs of limiting it.
+The stable-cache invariant and the desired dosing cadence are separate concerns.
 
-The fix copies `referenceTime` into the clone. The regression test
-includes clone-and-replace between readings: it failed before the fix and passes afterward.
-This restores grid continuity without adding a timer to the dosing loop. It has not been
-deployed or verified against a real pump.
+Upstream development commit
+[`17dd2bbd`](https://github.com/nightscout/AndroidAPS/commit/17dd2bbd8e69f96c3b78808e3078d46d3aff2c9f)
+(2026-09-09) preserves the reference to repair cache reuse, but also includes phase-realignment
+changes absent from this one-line proposal. Open upstream
+[issue #5148](https://github.com/nightscout/AndroidAPS/issues/5148) reports the resulting
+five-minute cadence as a regression and proposes separating fresh-input detection from
+bucket timestamps. That issue is reporter analysis, not a maintainer decision.
+
+PR #71 is a draft proposal demonstrating reference preservation, not a validated resolution
+of intended loop cadence. Its tests prove that the proposal changes the cadence; they do
+not establish that five-minute dosing is preferable. No deployment or real-pump validation
+has occurred. Do not automatically close #54 on the strength of the cache invariant alone.
 
 ## Execution path and reproduction
 
@@ -83,18 +90,26 @@ a global five-minute minimum on every loop invocation.
 Official AAPS documentation explicitly distinguishes one-minute Libre readings from the
 less frequent AAPS calculations. [Juggluco settings](https://androidaps.readthedocs.io/en/latest/CompatibleCgms/Juggluco.html#juggluco-to-aaps).
 
-Upstream inspected at commit `598e2eb39c7e15876e4c42876a2162bffcb4fe5f`, app version
-3.4.2.6, has the same bucket-timestamp guard **and the same omission of `referenceTime`
-in `clone()`**. The fork's dense averaging is therefore not sufficient evidence of a
-fork-specific origin. Upstream runtime behavior still requires lifecycle verification;
-the documentation alone should not be treated as proof that this bug cannot occur there.
-[Upstream worker](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/workflow/src/main/kotlin/app/aaps/workflow/InvokeLoopWorker.kt),
-[upstream data store](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/plugins/main/src/main/kotlin/app/aaps/plugins/main/iob/iobCobCalculator/data/AutosensDataStoreObject.kt).
+Upstream stable source inspected at commit `598e2eb39c7e15876e4c42876a2162bffcb4fe5f`,
+app version 3.4.2.6, has the same missing reference in `clone()` and the same clone/replace
+lifecycle. Substituting that unmodified data-store source into the targeted lifecycle test
+reproduced minute-by-minute bucket advancement. This is source-level reproduction, not a
+full upstream app/device test.
+[Upstream data store](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/plugins/main/src/main/kotlin/app/aaps/plugins/main/iob/iobCobCalculator/data/AutosensDataStoreObject.kt),
+[upstream worker](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/workflow/src/main/kotlin/app/aaps/workflow/iob/IobCobOref1Worker.kt).
 
-Official Libre guidance describes five-minute processing and limitations of direct
-one-minute input, with an alternative route through xDrip+ smoothing. This does not
-establish a need to throttle this worker, nor clinically validate this fork's averaging.
-[Libre 3 guidance](https://androidaps.readthedocs.io/en/latest/CompatibleCgms/Libre3.html#method-1-use-1-minute-readings-directly).
+The behavior has been noticed: upstream [issue #4158](https://github.com/nightscout/AndroidAPS/issues/4158)
+describes one-minute Libre-triggered TBR changes in AAPS 3.3.1.3, in the context of an
+Omnipod Dash delivery issue. Its pump-specific findings do not establish a YpsoPump issue.
+[PR #4651](https://github.com/nightscout/AndroidAPS/pull/4651) proposes an optional loop
+frequency limit; contributors discuss existing operation at approximately 1,200 loops/day.
+Both are evidence of known behavior, not proof of a universal cadence requirement.
+
+The official Juggluco documentation's five-minute implication conflicts with this observed
+behavior and discussion. Other documented Libre paths use xDrip+ to convert one-minute
+input into five-minute values, so sensor availability for years does not imply every AAPS
+installation has consumed raw one-minute readings.
+[Libre setup](https://androidaps.readthedocs.io/en/latest/CompatibleCgms/Libre3.html).
 
 ## Verification and follow-up
 
@@ -112,8 +127,8 @@ It mocks the data store and loop and does not verify pump enactment.
 Result: 19 glucose-store tests pass, including existing ordinary five-minute and irregular
 bucketing coverage; the unchanged worker test also passes (Gradle reused its passing result).
 
-Follow-up: review the local fix as a dosing-cadence change and validate against a device
-trace. Correlate raw timestamps, bucket timestamps, `invoke from` initiators, APS results,
+Follow-up: resolve desired dosing cadence separately from cache-key persistence, and
+review upstream #5148 and the phase-realignment changes before advancing this draft. Correlate raw timestamps, bucket timestamps, `invoke from` initiators, APS results,
 and actual TBR enactments before/after. The reproduction explains eligibility for
 minute-by-minute TBR changes, but does not replay this user's specific dosing decisions.
 The clone also omits `lastUsed5minCalculation`; audit that separately for cache invalidation
