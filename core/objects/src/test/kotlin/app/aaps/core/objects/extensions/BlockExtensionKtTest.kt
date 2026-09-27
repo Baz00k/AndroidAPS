@@ -4,7 +4,11 @@ import app.aaps.core.data.model.data.Block
 import app.aaps.core.data.model.data.TargetBlock
 import app.aaps.core.data.model.data.checkSanity
 import app.aaps.core.data.time.T
+import app.aaps.shared.impl.utils.DateUtilImpl
+import android.content.Context
 import com.google.common.truth.Truth.assertThat
+import org.json.JSONArray
+import org.mockito.Mockito
 import org.junit.jupiter.api.Test
 
 class BlockExtensionKtTest {
@@ -123,5 +127,20 @@ class BlockExtensionKtTest {
         assertThat(b.highTargetBlockValueBySeconds(T.hours(3).secs().toInt(), 0)).isWithin(0.01).of(4.0)
         assertThat(b.highTargetBlockValueBySeconds(T.hours(12).secs().toInt(), 0)).isWithin(0.01).of(5.0)
         assertThat(b.highTargetBlockValueBySeconds(T.hours(13).secs().toInt(), 0)).isWithin(0.01).of(5.0)
+    }
+
+    @Test
+    fun blockFromJsonArrayRejectsOutOfOrderTimes() {
+        val dateUtil = DateUtilImpl(Mockito.mock(Context::class.java))
+        val ok = JSONArray("""[{"time":"00:00","value":0.5},{"time":"15:00","value":0.6},{"time":"17:00","value":0.5}]""")
+        val blocks = blockFromJsonArray(ok, dateUtil)!!
+        assertThat(blocks.map { it.duration }).containsExactly(T.hours(15).msecs(), T.hours(2).msecs(), T.hours(7).msecs()).inOrder()
+
+        val corrupted = JSONArray("""[{"time":"00:00","value":0.5},{"time":"15:00","value":0.6},{"time":"00:00","value":0.5}]""")
+        assertThat(blockFromJsonArray(corrupted, dateUtil)).isNull()
+
+        val low = JSONArray("""[{"time":"00:00","value":80},{"time":"10:00","value":90},{"time":"10:00","value":90}]""")
+        val high = JSONArray("""[{"time":"00:00","value":100},{"time":"10:00","value":110},{"time":"10:00","value":110}]""")
+        assertThat(targetBlockFromJsonArray(low, high, dateUtil)).isNull()
     }
 }

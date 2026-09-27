@@ -261,23 +261,7 @@ class TimeListEdit(
         return data1.length()
     }
 
-    private fun secondFromMidnight(index: Int): Int {
-        try {
-            val item = data1[index] as JSONObject
-            if (item.has("timeAsSeconds")) {
-                var time = item.getInt("timeAsSeconds")
-                if (index == 0 && time != 0) {
-                    // fix the bug, every array must start with 0
-                    item.put("timeAsSeconds", 0)
-                    time = 0
-                }
-                return time
-            }
-        } catch (e: JSONException) {
-            aapsLogger.error("Unhandled exception", e)
-        }
-        return 0
-    }
+    private fun secondFromMidnight(index: Int): Int = ProfileBlockOps.secondFromMidnight(data1, index)
 
     private fun value1(index: Int): Double {
         try {

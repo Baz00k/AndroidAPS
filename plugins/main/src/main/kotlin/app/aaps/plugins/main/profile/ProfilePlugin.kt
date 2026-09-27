@@ -29,6 +29,7 @@ import app.aaps.core.keys.LongNonKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.blockFromJsonArray
 import app.aaps.core.objects.extensions.pureProfileFromJson
+import app.aaps.core.objects.extensions.targetBlockFromJsonArray
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
@@ -38,6 +39,7 @@ import app.aaps.plugins.main.profile.keys.ProfileComposedBooleanKey
 import app.aaps.plugins.main.profile.keys.ProfileComposedDoubleKey
 import app.aaps.plugins.main.profile.keys.ProfileComposedStringKey
 import app.aaps.plugins.main.profile.keys.ProfileIntKey
+import app.aaps.plugins.main.profile.ui.ProfileBlockOps
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -108,6 +110,18 @@ class ProfilePlugin @Inject constructor(
             }
             if (name.isEmpty()) {
                 ToastUtils.errorToast(activity, rh.gs(R.string.missing_profile_name))
+                return false
+            }
+            // Block start times must be whole hours, strictly increasing and < 24h.
+            val structuralError = when {
+                blockFromJsonArray(basal, dateUtil) == null                        -> R.string.error_in_basal_values
+                blockFromJsonArray(ic, dateUtil) == null                           -> R.string.error_in_ic_values
+                blockFromJsonArray(isf, dateUtil) == null                          -> R.string.error_in_isf_values
+                targetBlockFromJsonArray(targetLow, targetHigh, dateUtil) == null -> R.string.error_in_target_values
+                else                                                               -> null
+            }
+            if (structuralError != null) {
+                ToastUtils.errorToast(activity, rh.gs(structuralError))
                 return false
             }
             if (blockFromJsonArray(ic, dateUtil)?.all { it.amount < hardLimits.minIC() || it.amount > hardLimits.maxIC() } != false) {
@@ -234,6 +248,7 @@ class ProfilePlugin @Inject constructor(
                 aapsLogger.error("Exception", e)
             }
         }
+        profiles.forEach { it.normalizeTimes() }
         isEdited = false
         createAndStoreConvertedProfile()
     }
@@ -291,7 +306,15 @@ class ProfilePlugin @Inject constructor(
             basal = pureJson.getJSONArray("basal"),
             targetLow = pureJson.getJSONArray("target_low"),
             targetHigh = pureJson.getJSONArray("target_high")
-        )
+        ).also { it.normalizeTimes() }
+    }
+
+    /**
+     * Nightscout's profile editor stores newly added rows with only "time" (no "timeAsSeconds").
+     * The editors key off "timeAsSeconds", so fill it in from "time" wherever it's missing.
+     */
+    private fun ProfileSource.SingleProfile.normalizeTimes() {
+        listOf(ic, isf, basal, targetLow, targetHigh).forEach { ProfileBlockOps.normalizeTimes(it) }
     }
 
     private fun isExistingName(name: String?): Boolean {

@@ -189,8 +189,13 @@ fun ProfileEditor(
                         onTimeShift = { deltaHours ->
                             val prev = if (i > 0) blocks[i - 1].startSeconds else -HOUR
                             val next = if (i + 1 < blocks.size) blocks[i + 1].startSeconds else 24 * HOUR
-                            val target = (b.startSeconds + deltaHours * HOUR).coerceIn(prev + HOUR, next - HOUR)
-                            if (target != b.startSeconds) callbacks.onTime(tab, b.index, target)
+                            val lo = prev + HOUR
+                            val hi = next - HOUR
+                            // Out-of-order data leaves no valid slot.
+                            if (lo <= hi) {
+                                val target = (b.startSeconds + deltaHours * HOUR).coerceIn(lo, hi)
+                                if (target != b.startSeconds) callbacks.onTime(tab, b.index, target)
+                            }
                         },
                         onRemove = { callbacks.onRemoveBlock(tab, b.index) }
                     )

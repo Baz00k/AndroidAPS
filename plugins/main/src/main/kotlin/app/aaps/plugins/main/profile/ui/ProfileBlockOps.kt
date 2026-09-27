@@ -51,23 +51,55 @@ object ProfileBlockOps {
     /**
      * == TimeListEdit.secondFromMidnight() — including the "every array must start with 0" fix:
      * if index 0 has a non-zero timeAsSeconds it is rewritten to 0 in place.
+     *
+     * Entries without "timeAsSeconds" (Nightscout's profile editor omits it for newly added rows)
+     * fall back to parsing "time".
      */
     fun secondFromMidnight(data1: JSONArray, index: Int): Int {
         try {
             val item = data1[index] as JSONObject
-            if (item.has("timeAsSeconds")) {
-                var time = item.getInt("timeAsSeconds")
-                if (index == 0 && time != 0) {
-                    // fix the bug, every array must start with 0
-                    item.put("timeAsSeconds", 0)
-                    time = 0
-                }
-                return time
+            var time = timeAsSecondsOf(item) ?: return 0
+            if (!item.has("timeAsSeconds")) item.put("timeAsSeconds", time)
+            if (index == 0 && time != 0) {
+                // fix the bug, every array must start with 0
+                item.put("timeAsSeconds", 0)
+                time = 0
             }
+            return time
         } catch (_: JSONException) {
         }
         return 0
     }
+
+    /** "timeAsSeconds" if present, otherwise parsed from the "HH:MM" "time" field; null if neither is usable. */
+    fun timeAsSecondsOf(item: JSONObject): Int? {
+        if (item.has("timeAsSeconds")) {
+            try {
+                return item.getInt("timeAsSeconds")
+            } catch (_: JSONException) {
+            }
+        }
+        val match = TIME_REGEX.find(item.optString("time", "")) ?: return null
+        val hours = match.groupValues[1].toInt()
+        val minutes = match.groupValues[2].toInt()
+        if (hours !in 0..23 || minutes !in 0..59) return null
+        return hours * ONE_HOUR_IN_SECONDS + minutes * 60
+    }
+
+    /** Fill in a missing "timeAsSeconds" on every entry from its "time" field. Returns true if anything changed. */
+    fun normalizeTimes(data: JSONArray): Boolean {
+        var changed = false
+        for (i in 0 until data.length()) {
+            val item = data.optJSONObject(i) ?: continue
+            if (item.has("timeAsSeconds")) continue
+            val seconds = timeAsSecondsOf(item) ?: continue
+            item.put("timeAsSeconds", seconds)
+            changed = true
+        }
+        return changed
+    }
+
+    private val TIME_REGEX = Regex("""^\s*(\d{1,2}):(\d{2})""")
 
     /** == TimeListEdit.editItem() — writes both data1 and (if present) data2 with the "HH:00" label. */
     fun editBlock(data1: JSONArray, data2: JSONArray?, index: Int, timeAsSeconds: Int, value1: Double, value2: Double) {

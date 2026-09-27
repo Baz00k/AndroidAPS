@@ -92,10 +92,13 @@ fun blockFromJsonArray(jsonArray: JSONArray?, dateUtil: DateUtil): List<Block>? 
             val value = o.getDouble("value")
             if (tas % 3600 != 0) return null
             if (nextTas % 3600 != 0) return null
+            // Times must be strictly increasing; otherwise the block gets a zero/negative duration.
+            if (nextTas <= tas) return null
             ret.add(index, Block((nextTas - tas) * 1000L, value))
         }
         val last: JSONObject = jsonArray.getJSONObject(jsonArray.length() - 1)
         val lastTas = dateUtil.toSeconds(last.getString("time"))
+        if (lastTas >= T.hours(24).secs()) return null
         val value = last.getDouble("value")
         ret.add(jsonArray.length() - 1, Block((T.hours(24).secs() - lastTas) * 1000L, value))
     } catch (e: Exception) {
@@ -122,10 +125,12 @@ fun targetBlockFromJsonArray(jsonArray1: JSONArray?, jsonArray2: JSONArray?, dat
             if (tas1 != tas2) return null
             if (tas1 % 3600 != 0) return null
             if (nextTas1 % 3600 != 0) return null
+            if (nextTas1 <= tas1) return null
             ret.add(index, TargetBlock((nextTas1 - tas1) * 1000L, value1, value2))
         }
         val last1 = jsonArray1.getJSONObject(jsonArray1.length() - 1)
         val lastTas1 = dateUtil.toSeconds(last1.getString("time"))
+        if (lastTas1 >= T.hours(24).secs()) return null
         val value1 = last1.getDouble("value")
         val last2 = jsonArray2.getJSONObject(jsonArray2.length() - 1)
         val value2 = last2.getDouble("value")
