@@ -27,7 +27,7 @@ Tapping the active inline line opened the existing target dialog. Choosing **Can
 ## Automated checks
 
 - 20 focused tests passed: 8 `TargetChartDataTest`, 7 `TargetDisplayTest`,
-  3 `TemporaryTargetExtensionTest`, and 2 `ActionsTargetStateTest`.
+  3 `TemporaryTargetExtensionKtTest`, and 2 `ActionsTargetStateTest`.
 - `:app:assembleFullDebug` passed for the standard APK shown here.
 - `git diff --check` passed.
 
