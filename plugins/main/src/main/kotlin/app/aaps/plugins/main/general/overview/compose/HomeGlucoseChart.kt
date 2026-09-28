@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.plugins.main.general.overview.TARGET_SAMPLE_INTERVAL_MS
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
@@ -116,7 +117,9 @@ private fun DrawScope.drawChart(
     if (d.targets.isNotEmpty()) {
         val path = Path()
         d.targets.forEachIndexed { index, point ->
-            if (index == 0) path.moveTo(x(point.time), y(point.value))
+            // Missing profile history leaves a gap rather than connecting invented target values.
+            if (index == 0 || point.time - d.targets[index - 1].time > TARGET_SAMPLE_INTERVAL_MS)
+                path.moveTo(x(point.time), y(point.value))
             else {
                 path.lineTo(x(point.time), y(d.targets[index - 1].value))
                 path.lineTo(x(point.time), y(point.value))

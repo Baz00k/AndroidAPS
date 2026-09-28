@@ -37,6 +37,7 @@ Automated regression coverage:
 ```sh
 ./gradlew :plugins:main:testFullDebugUnitTest \
   --tests '*TargetDisplayTest' \
+  --tests '*TargetChartDataTest' \
   --tests '*ActionsTargetStateTest' \
   --tests '*TemporaryTargetExtensionKtTest'
 ```
@@ -45,7 +46,28 @@ Covers target-relative text in both units, single/range formatting, inclusive gl
 start/change/cancel/expiry, invalid/future targets, missing profile/glucose, and Actions visibility
 and creation availability with a stopped/running loop.
 
-Device checks still required (not performed by the unit tests):
+PR #66 review follow-up (2026-09-28): both graph findings were reproduced by regression tests
+against the original sampling loop before fixing it. Historical samples now use the profile that
+was effective then (the timestamped target getters alone only select time-of-day blocks within a
+profile). Targets are fetched in two queries per chart: the target overlapping the window start,
+and valid targets starting within/after the window, filtered to its end in memory. Profile-switch
+boundaries are loaded once, with a profile lookup at the window start and when a sampled boundary
+is crossed. A 24-hour chart no longer performs 289 temporary-target lookups. These queries remain
+on the background chart handler; the review did not establish a measured UI stall.
+
+`TargetChartDataTest` covers the historical profile switch, bounded provider lookups for a 24-hour
+chart, a target starting before the window, starts/replacements/cancellation/expiry, invalid/future
+records, missing profile history, scheduled target blocks, the final partial sample, and mmol/L
+conversion. Missing historical values are omitted and the renderer does not draw across those gaps.
+The changes remain display-only: no dosing, pump commands, target persistence, or protection paths
+are changed.
+
+The follow-up validation passed all 18 focused tests and `:app:assembleFullDebug`.
+[Full-app emulator screenshots and tested steps](review/pr66/README.md) cover starting a target,
+its visibility on both screens with the loop disabled and no active profile/glucose, confirmation,
+and cancellation refresh. They supersede the earlier synthetic UI samples.
+
+Broader device checks remain (not established by the unit tests or these screenshots):
 
 1. In both mg/dL and mmol/L, start a single target and a range target. Check Overview's ribbon,
    details and comparison, and Actions' highlighted value/countdown at normal and large font sizes.

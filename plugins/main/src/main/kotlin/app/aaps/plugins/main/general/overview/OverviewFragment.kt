@@ -682,17 +682,7 @@ class OverviewFragment : DaggerFragment() {
 
         // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
         // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
-        val targets = ArrayList<GlucosePoint>()
-        var targetTime = from
-        while (true) {
-            val target = TargetDisplay.at(
-                targetTime, persistenceLayer.getTemporaryTargetActiveAt(targetTime),
-                profile.getTargetLowMgdl(targetTime), profile.getTargetHighMgdl(targetTime)
-            )
-            targets.add(GlucosePoint(targetTime, profileUtil.fromMgdlToUnits((target.low!! + target.high!!) / 2)))
-            if (targetTime == to) break
-            targetTime = (targetTime + 5 * 60_000L).coerceAtMost(to)
-        }
+        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, to)
 
         val treatments = ArrayList<ChartTreatment>()
         persistenceLayer.getBolusesFromTimeToTime(from, to, true).forEach { b ->
