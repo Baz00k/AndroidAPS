@@ -5,9 +5,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.BS
-import app.aaps.core.data.ue.Action
-import app.aaps.core.data.ue.Sources
-import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -19,15 +16,18 @@ import app.aaps.ui.activities.history.HistoryItem
 import app.aaps.ui.activities.history.HistoryKind
 import app.aaps.ui.activities.history.HistoryScreen
 import app.aaps.ui.activities.history.HistoryUiState
+import app.aaps.ui.activities.history.toHistoryItem
+import app.aaps.ui.activities.history.confirmHistoryRemoval
+import app.aaps.ui.activities.history.invalidateHistoryItems
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 
 /**
- * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped, read-only list
- * of boluses / carbs / therapy events over the last 14 days, merged from the persistence layer off the
- * main thread. (Edit/delete of individual treatments is a later pass — see the redesign notes.)
+ * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped list
+ * of boluses / carbs / temporary basals / therapy events over the last 14 days, merged from the persistence layer off the
+ * main thread. Removal invalidates persisted history; it does not command the pump.
  */
 class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
@@ -64,60 +64,44 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private fun toggle(item: HistoryItem) {
+        if (historyState.value.removing) return
         val sel = historyState.value.selected.toMutableSet()
         if (!sel.add(item.key)) sel.remove(item.key)
         historyState.value = historyState.value.copy(selected = sel)
     }
 
     private fun startSelecting(item: HistoryItem) {
+        if (historyState.value.removing) return
         historyState.value = historyState.value.copy(selecting = true, selected = historyState.value.selected + item.key)
     }
 
-    /**
-     * Remove mis-entered treatments.
-     *
-     * Deliberately a plain tap-to-confirm rather than the press-and-hold used for delivery: nothing is
-     * delivered here. The confirmation does spell out the consequence, because it is not obvious —
-     * removing a bolus makes the loop see LESS insulin on board and dose more, and removing carbs makes
-     * it see less COB. That is the point when the entry was wrong, but it is worth stating.
-     *
-     * Records are invalidated, not deleted, so the row keeps its history and syncs the removal onward —
-     * the same thing upstream's per-type lists did.
-     */
+    /** Correct history through persistence only. Never cancel or otherwise command pump delivery. */
     private fun removeSelected() {
+        if (historyState.value.removing) return
         val keys = historyState.value.selected
         val items = historyState.value.items.filter { it.key in keys }
-        if (items.isEmpty()) return
-
-        // Plain text, not HTML: the only thing the HTML was buying here was line breaks, and
-        // Html.fromHtml collapses runs of whitespace (and ate the breaks), so the summary and the
-        // warning ran together into one paragraph.
-        val summary = items.sortedByDescending { it.timestamp }.joinToString("\n") {
-            it.time + "   " + it.title + (if (it.value.isNotBlank()) "   " + it.value else "")
-        }
-        val affectsDosing = items.any { it.kind != HistoryKind.EVENT }
-        val note = if (affectsDosing)
-            "\n\nThis changes IOB/COB, so the loop will recalculate from the corrected history."
-        else ""
-
-        OKDialog.showConfirmation(
-            this,
-            rh.gs(app.aaps.core.ui.R.string.removerecord),
-            summary + note,
-            {
-                items.forEach { item ->
-                    val ts = listOf(ValueWithUnit.Timestamp(item.timestamp))
-                    disposable += when (item.kind) {
-                        HistoryKind.BOLUS,
-                        HistoryKind.SMB   -> persistenceLayer.invalidateBolus(item.id, Action.BOLUS_REMOVED, Sources.Treatments, null, ts)
-
-                        HistoryKind.CARBS -> persistenceLayer.invalidateCarbs(item.id, Action.CARBS_REMOVED, Sources.Treatments, null, ts)
-
-                        HistoryKind.EVENT -> persistenceLayer.invalidateTherapyEvent(item.id, Action.CAREPORTAL_REMOVED, Sources.Treatments, null, ts)
-                    }.subscribe()
-                }
-                historyState.value = historyState.value.copy(selecting = false, selected = emptySet())
-                reload()
+        confirmHistoryRemoval(
+            items,
+            showConfirmation = { message, confirm ->
+                OKDialog.showConfirmation(this, rh.gs(app.aaps.core.ui.R.string.removerecord), message, confirm)
+            },
+            onConfirmed = { selection ->
+                historyState.value = historyState.value.copy(removing = true)
+                disposable += invalidateHistoryItems(persistenceLayer, selection)
+                    .subscribeOn(aapsSchedulers.io)
+                    .observeOn(aapsSchedulers.main)
+                    .subscribe({ result ->
+                        historyState.value = result.applyTo(historyState.value)
+                        if (result.failures.isEmpty()) reload()
+                        else {
+                            result.failures.forEach { fabricPrivacy.logException(it.second) }
+                            OKDialog.show(this, "Removal failed", "Could not remove ${result.failures.size} record(s). Failed records remain selected; you can retry. Successfully removed records are no longer shown.")
+                        }
+                    }, { error ->
+                        historyState.value = historyState.value.copy(removing = false)
+                        fabricPrivacy.logException(error)
+                        OKDialog.show(this, "Removal failed", "Could not finish removing the selected records. Reopen History to refresh the list before retrying.")
+                    })
             }
         )
     }
@@ -169,6 +153,9 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                 te.id, te.timestamp, dayLabel(te.timestamp, now), dateUtil.timeString(te.timestamp),
                 HistoryKind.EVENT, eventTitle(te.type), te.note ?: "", ""
             )
+        }
+        persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(from, now, false).forEach { basal ->
+            basal.toHistoryItem(from, now, dayLabel(basal.timestamp, now), dateUtil.timeString(basal.timestamp))?.let(items::add)
         }
         items.sortByDescending { it.timestamp }
         return HistoryUiState(loading = false, items = items)

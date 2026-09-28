@@ -1,6 +1,8 @@
 package app.aaps.ui.activities.history
 
 import app.aaps.core.compose.icons.AapsIcons
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,7 +42,7 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Redesigned History timeline (handoff Section 4): filter chips + a chronological, day-grouped list of
- * boluses / carbs / events. Read-only. [onBack] finishes the activity.
+ * boluses / carbs / temporary basals / events. [onBack] finishes the activity.
  */
 @Composable
 fun HistoryScreen(
@@ -54,19 +56,12 @@ fun HistoryScreen(
     val colors = AapsTheme.colors
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
 
-    val filtered = state.items.filter {
-        when (filter) {
-            HistoryFilter.ALL    -> true
-            HistoryFilter.BOLUS  -> it.kind == HistoryKind.BOLUS || it.kind == HistoryKind.SMB
-            HistoryFilter.CARBS  -> it.kind == HistoryKind.CARBS
-            HistoryFilter.EVENTS -> it.kind == HistoryKind.EVENT
-        }
-    }
+    val filtered = state.items.filter { filter.matches(it.kind) }
 
     Column(Modifier.fillMaxSize().background(colors.background)) {
         // header
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.clip(CircleShape).clickable(onClick = if (state.selecting) onCancelSelecting else onBack).padding(8.dp)) {
+            Box(Modifier.clip(CircleShape).clickable(enabled = !state.removing, onClick = if (state.selecting) onCancelSelecting else onBack).padding(8.dp)) {
                 Icon(Icons.Rounded.ArrowBack, contentDescription = if (state.selecting) "Cancel" else "Back", tint = colors.textSecondary)
             }
             Text(
@@ -76,20 +71,21 @@ fun HistoryScreen(
             )
             if (state.selecting)
                 Text(
-                    "Remove",
+                    if (state.removing) "Removing…" else "Remove",
                     style = AapsTheme.type.label,
-                    color = if (state.selected.isEmpty()) colors.textTertiary else colors.low,
+                    color = if (state.selected.isEmpty() || state.removing) colors.textTertiary else colors.low,
                     modifier = Modifier
                         .clip(AapsTheme.shape.button)
-                        .then(if (state.selected.isEmpty()) Modifier else Modifier.clickable(onClick = onDeleteSelected))
+                        .then(if (state.selected.isEmpty() || state.removing) Modifier else Modifier.clickable(onClick = onDeleteSelected))
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 )
         }
         // filter chips
-        Row(Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.screenH, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip("All", filter == HistoryFilter.ALL) { filter = HistoryFilter.ALL }
             FilterChip("Bolus", filter == HistoryFilter.BOLUS) { filter = HistoryFilter.BOLUS }
             FilterChip("Carbs", filter == HistoryFilter.CARBS) { filter = HistoryFilter.CARBS }
+            FilterChip("TBR", filter == HistoryFilter.TBR) { filter = HistoryFilter.TBR }
             FilterChip("Events", filter == HistoryFilter.EVENTS) { filter = HistoryFilter.EVENTS }
         }
 
@@ -109,6 +105,7 @@ fun HistoryScreen(
                         HistoryRow(
                             item = row,
                             selecting = state.selecting,
+                            removing = state.removing,
                             selected = row.key in state.selected,
                             onToggle = { onToggle(row) },
                             onLongPress = { onStartSelecting(row) }
@@ -129,6 +126,7 @@ private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) =
 private fun HistoryRow(
     item: HistoryItem,
     selecting: Boolean,
+    removing: Boolean,
     selected: Boolean,
     onToggle: () -> Unit,
     onLongPress: () -> Unit
@@ -137,12 +135,17 @@ private fun HistoryRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = { if (selecting) onToggle() }, onLongClick = onLongPress)
+            .combinedClickable(
+                enabled = !removing,
+                onClick = { if (selecting) onToggle() },
+                onLongClick = onLongPress
+            )
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (selecting)
             Checkbox(
+                enabled = !removing,
                 checked = selected, onCheckedChange = { onToggle() },
                 colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary),
                 modifier = Modifier.padding(end = 2.dp)
@@ -163,6 +166,7 @@ private fun HistoryRow(
 private fun iconFor(kind: HistoryKind): ImageVector = when (kind) {
     HistoryKind.BOLUS, HistoryKind.SMB -> AapsIcons.WaterDrop
     HistoryKind.CARBS                  -> AapsIcons.Restaurant
+    HistoryKind.TBR                    -> AapsIcons.Timeline
     HistoryKind.EVENT                  -> AapsIcons.EventNote
 }
 
@@ -172,5 +176,6 @@ private fun tintFor(kind: HistoryKind): Color = when (kind) {
     HistoryKind.BOLUS -> AapsTheme.colors.inRange
     HistoryKind.SMB   -> AapsTheme.colors.inRange
     HistoryKind.CARBS -> AapsTheme.colors.high
+    HistoryKind.TBR   -> AapsTheme.colors.accent
     HistoryKind.EVENT -> AapsTheme.colors.accent
 }
