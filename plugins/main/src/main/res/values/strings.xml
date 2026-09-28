@@ -336,4 +336,11 @@
     <string name="steps_shortname">STEPS</string>
     <string name="simple_mode_enabled">Simple mode enabled</string>
 
+    <string name="overview_predictions_unavailable">No current predictions available</string>
+    <string name="overview_predictions_estimates">Dashed lines: estimates, not CGM readings</string>
+    <string name="overview_prediction_iob">IOB</string>
+    <string name="overview_prediction_cob">COB</string>
+    <string name="overview_prediction_zt">Zero-temp</string>
+    <string name="overview_prediction_uam">UAM</string>
+    <string name="overview_prediction_acob">aCOB</string>
 </resources>
