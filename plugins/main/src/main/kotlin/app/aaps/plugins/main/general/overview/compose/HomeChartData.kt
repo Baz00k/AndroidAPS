@@ -50,7 +50,9 @@ data class HomeChartData(
     val highMark: Double = 10.0,
     val decimals: Int = 1,
     /** Effective target midpoint, separate from the glucose warning thresholds. */
-    val targets: List<GlucosePoint> = emptyList()
+    val targets: List<GlucosePoint> = emptyList(),
+    val glucoseUnits: String = "mmol/L",
+    val additional: AdditionalGraphData = AdditionalGraphData()
 ) {
 
     val hasData: Boolean get() = readings.isNotEmpty() && to > from
