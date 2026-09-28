@@ -41,7 +41,7 @@ import kotlin.math.abs
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings, window: ChartWindow, panState: ChartPanState) {
+fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings, window: ChartWindow, panState: ChartPanState, insets: ChartInsets = rememberChartInsets(data, settings)) {
     val colors = AapsTheme.colors
     val labels = AdditionalSeries.entries.associateWith { stringResource(it.legendResource()) }
     val units = mapOf(
@@ -67,17 +67,17 @@ fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings,
     for (graph in 1..4) {
         val selected = AdditionalSeries.entries.filter { settings.graph(it) == graph }
         if (selected.isEmpty()) continue
-        AapsCard {
+        AapsCard(contentPadding = CHART_CARD_PADDING) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // At most two unit scales in one panel. More units get another aligned panel,
                 // never an unlabeled multiplier or a shared axis for incompatible quantities.
-                selected.groupBy { units.getValue(it) }.entries.toList().chunked(2).forEach { axes ->
+                selected.groupBy { it.axisGroup() }.entries.toList().chunked(2).forEach { axes ->
                     val series = axes.map { it.value }
                     val description = buildString {
                         append(series.flatten().joinToString { "${labels.getValue(it)} (${units.getValue(it)})" })
                         series.flatten().mapNotNull { notes[it] }.forEach { append(". ").append(it) }
                     }
-                    AdditionalGraphPanel(data, series, axes.map { it.key }, tints, description, window, panState)
+                    AdditionalGraphPanel(data, series, series.map { units.getValue(it.first()) }, tints, description, window, panState, insets)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         series.flatten().forEach { kind ->
                             val empty = data.additional.points[kind].isNullOrEmpty()
@@ -122,7 +122,8 @@ private fun AdditionalGraphPanel(
     tints: Map<AdditionalSeries, Color>,
     description: String,
     window: ChartWindow,
-    panState: ChartPanState
+    panState: ChartPanState,
+    insets: ChartInsets
 ) {
     val colors = AapsTheme.colors
     val measurer = rememberTextMeasurer(cacheSize = 32)
@@ -140,12 +141,12 @@ private fun AdditionalGraphPanel(
         Modifier
             .fillMaxWidth()
             .height(132.dp)
-            .chartPan(pan, data.hasData)
+            .chartPan(pan, data.hasData, insets)
             .semantics { contentDescription = description }
     ) {
         if (!data.hasData) return@Canvas
         val viewport = panState.viewport(window, data.from, data.now)
-        drawAdditionalPanel(data, viewport, axes, axisUnits, scales, tints, colors, measurer, axisStyle, dayStyle, clock)
+        drawAdditionalPanel(data, viewport, axes, axisUnits, scales, tints, colors, measurer, axisStyle, dayStyle, clock, insets)
     }
 }
 
@@ -160,10 +161,11 @@ private fun DrawScope.drawAdditionalPanel(
     measurer: TextMeasurer,
     axisStyle: TextStyle,
     dayStyle: TextStyle,
-    clock: ChartClock
+    clock: ChartClock,
+    insets: ChartInsets
 ) {
-    val left = CHART_PAD_START.toPx()
-    val right = size.width - CHART_PAD_END.toPx()
+    val left = insets.start.toPx()
+    val right = size.width - insets.end.toPx()
     val top = 14.dp.toPx()
     val bottom = size.height - 16.dp.toPx()
     if (right <= left || bottom <= top) return

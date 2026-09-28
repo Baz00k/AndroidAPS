@@ -48,7 +48,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.plugins.main.R
@@ -60,8 +62,54 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
 
 /** Every panel uses the same side gutters, so their time axes line up. */
-internal val CHART_PAD_START = 40.dp
-internal val CHART_PAD_END = 40.dp
+data class ChartInsets(val start: Dp, val end: Dp)
+
+/** Shared card inset: labels use the canvas gutter rather than another wide layer of padding. */
+internal val CHART_CARD_PADDING = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 16.dp)
+
+/** Measure the labels actually enabled, once per snapshot — never reserve an unused right axis. */
+@Composable
+fun rememberChartInsets(data: HomeChartData, settings: AdditionalGraphSettings): ChartInsets {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer(cacheSize = 32)
+    val style = AapsTheme.type.caption.copy(fontSize = 9.sp)
+    val density = LocalDensity.current
+    val locale = LocalConfiguration.current.locales[0]
+    val basalUnit = stringResource(R.string.overview_graph_units_basal)
+    return remember(data, settings, style, density, locale, basalUnit) {
+        fun width(text: String) = measurer.measure(text, style).size.width.toFloat()
+        fun number(value: Double, decimals: Int) = String.format(locale, "%.${decimals}f", value)
+        val bounds = data.glucoseBounds()
+        var left = listOf(data.lowMark, data.highMark, bounds.second).maxOf { width(number(it, data.decimals)) }
+        if (data.basal.isNotEmpty()) {
+            left = maxOf(left, width(basalUnit), width(formatBasalRate(insulinScaleMax(data.basal))))
+        }
+        var right = 0f
+        for (graph in 1..4) {
+            val selected = AdditionalSeries.entries.filter { settings.graph(it) == graph }
+            selected.groupBy { it.axisGroup() }.values.toList().chunked(2).forEach { axes ->
+                axes.forEachIndexed { index, series ->
+                    val (low, high) = additionalGraphBounds(series.flatMap { data.additional.points[it].orEmpty() }, if (AdditionalSeries.SENSITIVITY in series) 10.0 else 0.2)
+                    val decimals = axisDecimals(high - low)
+                    val w = listOf(low, 0.0, high).maxOf { width(number(it, decimals)) }
+                    if (index == 0) left = maxOf(left, w) else right = maxOf(right, w)
+                }
+            }
+        }
+        with(density) { measuredChartInsets(left.toDp(), right.toDp().takeIf { right > 0f }) }
+    }
+}
+
+/** Only labels consume a gutter; the free edge just leaves room for the latest-point halo. */
+internal fun measuredChartInsets(leftLabelWidth: Dp, rightLabelWidth: Dp?): ChartInsets =
+    ChartInsets(leftLabelWidth + 6.dp, rightLabelWidth?.plus(6.dp) ?: 8.dp)
+
+/** The grouping is shared by layout measurement and rendering. */
+internal fun AdditionalSeries.axisGroup(): Int = when (this) {
+    AdditionalSeries.IOB -> 0
+    AdditionalSeries.COB -> 1
+    AdditionalSeries.SENSITIVITY -> 2
+    AdditionalSeries.DEVIATIONS, AdditionalSeries.BGI -> 3
+}
 
 /** Axis labels follow the phone's 12/24-hour setting and the current time zone. */
 @Composable
@@ -95,7 +143,9 @@ internal class ChartPanController(
     var dataFrom: Long = 0L
     var now: Long = 0L
     var enabled: Boolean = false
-    var plotWidthPx: Float = 0f
+    var canvasWidthPx: Float = 0f
+    var gutterPx: Float = 0f
+    val plotWidthPx: Float get() = canvasWidthPx - gutterPx
     var snapPx: Float = 0f
 
     val draggable = DraggableState { delta -> panBy(delta) }
@@ -168,11 +218,12 @@ internal fun rememberChartPan(state: ChartPanState, window: ChartWindow, data: H
  * vertical swipe that starts on the graph still scrolls the page. Any touch stops a running fling.
  */
 @Composable
-internal fun Modifier.chartPan(controller: ChartPanController, enabled: Boolean): Modifier {
+internal fun Modifier.chartPan(controller: ChartPanController, enabled: Boolean, insets: ChartInsets): Modifier {
     val view = LocalView.current
-    val gutterPx = with(LocalDensity.current) { (CHART_PAD_START + CHART_PAD_END).toPx() }
+    val gutterPx = with(LocalDensity.current) { (insets.start + insets.end).toPx() }
+    SideEffect { controller.gutterPx = gutterPx }
     return this
-        .onSizeChanged { controller.plotWidthPx = it.width - gutterPx }
+        .onSizeChanged { controller.canvasWidthPx = it.width.toFloat() }
         .pointerInput(controller, view) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)

@@ -112,6 +112,7 @@ import app.aaps.plugins.main.general.overview.compose.BASAL_SAMPLE_MS
 import app.aaps.plugins.main.general.overview.compose.CHART_HISTORY_MS
 import app.aaps.plugins.main.general.overview.compose.ChartPanState
 import app.aaps.plugins.main.general.overview.compose.ChartWindow
+import app.aaps.plugins.main.general.overview.compose.rememberChartInsets
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -240,10 +241,11 @@ class OverviewFragment : DaggerFragment() {
                 // Width depends on the chosen range and whether forecasts are switched on — never on
                 // whether a forecast is currently available.
                 val window = ChartWindow.of(chartRangeHours.value, settings.forecasts.isNotEmpty())
+                val insets = rememberChartInsets(displayed, additionalGraphSettings.value)
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = { HomeGlucoseChart(displayed, window, chartPan, Modifier.fillMaxWidth(), settings) },
+                    graph = { HomeGlucoseChart(displayed, window, chartPan, Modifier.fillMaxWidth(), settings, insets) },
                     graphSettings = {
                         HomeGraphSettingsControl(
                             graphSettings.value, additionalGraphSettings.value,
@@ -257,7 +259,7 @@ class OverviewFragment : DaggerFragment() {
                             }
                         )
                     },
-                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value, window, chartPan) }
+                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value, window, chartPan, insets) }
                 )
             }
         }

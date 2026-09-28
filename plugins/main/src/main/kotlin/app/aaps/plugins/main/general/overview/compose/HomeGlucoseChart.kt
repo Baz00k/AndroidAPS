@@ -69,7 +69,8 @@ fun HomeGlucoseChart(
     window: ChartWindow,
     panState: ChartPanState,
     modifier: Modifier = Modifier,
-    settings: HomeGraphSettings = HomeGraphSettings()
+    settings: HomeGraphSettings = HomeGraphSettings(),
+    insets: ChartInsets = rememberChartInsets(data, AdditionalGraphSettings.decode(""))
 ) {
     // Clear the old position, not just ignore it: switching back must not revive an earlier pan.
     LaunchedEffect(window, panState) { panState.returnToLive() }
@@ -98,7 +99,7 @@ fun HomeGlucoseChart(
                 Modifier
                     .fillMaxWidth()
                     .height(240.dp)
-                    .chartPan(pan, data.hasData)
+                    .chartPan(pan, data.hasData, insets)
                     .semantics { contentDescription = description }
             ) {
                 if (!data.hasData) return@Canvas
@@ -106,14 +107,14 @@ fun HomeGlucoseChart(
                 val viewport = panState.viewport(window, data.from, data.now)
                 drawChart(
                     data, viewport, settings, glucoseScale, insulinScale, clock, colors, measurer,
-                    ChartStyles(axisStyle, dayStyle, valueStyle), noForecast, basalUnit
+                    ChartStyles(axisStyle, dayStyle, valueStyle), noForecast, basalUnit, insets
                 )
             }
             // Fully qualified: inside a Box nested in a Column, the bare name would resolve to the
             // ColumnScope overload through the outer receiver and fail to compile.
             androidx.compose.animation.AnimatedVisibility(
                 visible = paused,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = CHART_PAD_END),
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = insets.end),
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
@@ -150,10 +151,11 @@ private fun DrawScope.drawChart(
     measurer: TextMeasurer,
     styles: ChartStyles,
     noForecast: String?,
-    basalUnit: String
+    basalUnit: String,
+    insets: ChartInsets
 ) {
-    val plotLeft = CHART_PAD_START.toPx()
-    val plotRight = size.width - CHART_PAD_END.toPx()
+    val plotLeft = insets.start.toPx()
+    val plotRight = size.width - insets.end.toPx()
     val plotW = plotRight - plotLeft
     val axisH = 16.dp.toPx()
     if (plotW <= 0f || size.height <= axisH) return
@@ -202,8 +204,8 @@ private fun DrawScope.drawChart(
 
     // Insulin scale: the top value and its unit stacked in the gutter, not a label inside the panel.
     if (showBasal) {
-        val rateLabel = measurer.measure(fmtRate(insulinMax), styles.axis).size.height
-        drawAxisValue(measurer, fmtRate(insulinMax), plotLeft - labelGap, iTop + rateLabel / 2f, styles.axis, alignEnd = true)
+        val rateLabel = measurer.measure(formatBasalRate(insulinMax), styles.axis).size.height
+        drawAxisValue(measurer, formatBasalRate(insulinMax), plotLeft - labelGap, iTop + rateLabel / 2f, styles.axis, alignEnd = true)
         drawAxisValue(measurer, basalUnit, plotLeft - labelGap, iTop + rateLabel * 1.5f, styles.axis, alignEnd = true)
         drawLine(colors.divider.copy(alpha = colors.divider.alpha * 0.6f), Offset(plotLeft, iTop), Offset(plotRight, iTop), 1f)
     }
@@ -400,7 +402,7 @@ private fun fmt(v: Double, decimals: Int): String =
     else String.format(Locale.getDefault(), "%.${decimals}f", v)
 
 /** Insulin scale top: "1", "1.5", "0.75" — no trailing zeros on a tiny axis. */
-private fun fmtRate(v: Double): String = when {
+internal fun formatBasalRate(v: Double): String = when {
     kotlin.math.abs(v - Math.round(v)) < 1e-6           -> String.format(Locale.getDefault(), "%.0f", v)
     kotlin.math.abs(v * 2 - Math.round(v * 2)) < 1e-6   -> String.format(Locale.getDefault(), "%.1f", v)
     else                                                -> String.format(Locale.getDefault(), "%.2f", v)

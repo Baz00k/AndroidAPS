@@ -12,6 +12,28 @@ graph: the mandatory graph optionality is in this upper layer, so evaluate the s
 After #66 merges, retarget #89 to main and reconcile the base (especially if #66 is squash-merged).
 Do not independently merge the prototype PRs on top of the combined implementation.
 
+## Compact horizontal layout — current screenshots
+
+The `compact/` captures supersede the earlier horizontal spacing. The previous layout stacked
+16 dp of card padding with a fixed 40 dp plot gutter on **each** side. The new layout uses
+8 dp horizontal card padding and measures the actual enabled axis labels, respecting units,
+locale and font scale. A right axis only takes space when an enabled panel needs one; otherwise
+that edge reserves 8 dp for the endpoint halo. All panels receive the same measured insets,
+including the horizontal gesture's pixel-to-time conversion.
+
+In the 1080 px multi-panel fixture, plot width increased from approximately 702 px to 857 px
+(**22% more plotting width**) without shrinking the labels. Tested mg/dL and mmol/L, two-axis
+panels, 1.3× font scale, panning/vertical scrolling, and the standard APK's normal Overview with
+no right-hand axis. Final standard APK contains no fixture components; font scale restored to 1.0.
+
+![Compact live graph, synthetic display fixture](compact/01-live.png)
+
+![Wider aligned historical panels, synthetic display fixture](compact/02-panels.png)
+
+Additional checks: [large font](compact/03-large-font.png),
+[mmol/L and large font](compact/04-mmol-large-font.png),
+[normal Overview, standard APK with synthetic database history](compact/05-overview-standard.png).
+
 ## Rolling/panning refinement — current review
 
 The `rolling/` captures below supersede the original screenshots farther down this document.
@@ -92,7 +114,7 @@ Standard, non-fixture build:
   :app:assembleFullDebug
 ```
 
-**65 tests, zero failures/errors:** 18 viewport/pan/clock tests, 8 chart-data tests,
+**67 tests, zero failures/errors:** 18 viewport/pan/clock tests, 10 chart-data/layout tests,
 8 graph settings, 6 additional graph data, 5 predictions, 8 historical target chart,
 7 target display, 3 target extensions, 2 Actions target state. Standard full-debug build and
 `git diff --check` passed. Viewport tests include forecast-independent widths, bounds,

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import androidx.compose.ui.unit.dp
 
 class HomeChartDataTest {
 
@@ -66,4 +67,14 @@ class HomeChartDataTest {
         assertEquals(1, axisDecimals(4.0))
         assertEquals(2, axisDecimals(0.4))
     }
+    @Test fun `unused right axis only reserves space for the endpoint halo`() {
+        assertEquals(ChartInsets(26.dp, 8.dp), measuredChartInsets(20.dp, null))
+    }
+
+    @Test fun `gutters grow with measured labels and only matching units share an axis`() {
+        assertEquals(ChartInsets(41.dp, 34.dp), measuredChartInsets(35.dp, 28.dp))
+        assertEquals(AdditionalSeries.DEVIATIONS.axisGroup(), AdditionalSeries.BGI.axisGroup())
+        assertEquals(4, AdditionalSeries.entries.map { it.axisGroup() }.distinct().size)
+    }
+
 }
