@@ -112,7 +112,10 @@ android {
         // native libraries for 7 ABIs; a Pixel 7 uses one of each. Everything else is dead weight
         // in resources.arsc and lib/.
         ndk {
-            abiFilters += "arm64-v8a"
+            // Opt in only for isolated emulator testing; phone builds stay ARM64.
+            val targetAbi = providers.gradleProperty("aapsTargetAbi").getOrElse("arm64-v8a")
+            require(targetAbi in setOf("arm64-v8a", "x86_64")) { "Unsupported aapsTargetAbi: $targetAbi" }
+            abiFilters += targetAbi
         }
     }
 

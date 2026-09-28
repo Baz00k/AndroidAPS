@@ -18,7 +18,10 @@ android {
         // four ABIs; building one keeps the ~600 KB whitebox payload from being
         // multiplied across ABIs we will never run.
         ndk {
-            abiFilters += "arm64-v8a"
+            // Opt in only for isolated emulator testing; phone builds stay ARM64.
+            val targetAbi = providers.gradleProperty("aapsTargetAbi").getOrElse("arm64-v8a")
+            require(targetAbi in setOf("arm64-v8a", "x86_64")) { "Unsupported aapsTargetAbi: $targetAbi" }
+            abiFilters += targetAbi
         }
     }
 
