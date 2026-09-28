@@ -103,8 +103,12 @@ private fun AdditionalGraphPanel(data: HomeChartData, axes: List<List<Additional
             fun y(value: Double) = bottom - ((value - low) / (high - low)).toFloat() * (bottom - top)
             listOf(low, 0.0, high).forEach { value ->
                 val label = measurer.measure(String.format(Locale.getDefault(), "%.1f", value), textStyle)
-                val labelX = if (index == 0) left - label.size.width - 4.dp.toPx() else right + 4.dp.toPx()
-                drawText(label, topLeft = Offset(labelX, (y(value) - label.size.height / 2).coerceAtLeast(0f)))
+                // Zero is useful only if it does not collide with an extreme (e.g. COB near zero).
+                val roomForZero = minOf(kotlin.math.abs(y(0.0) - y(low)), kotlin.math.abs(y(high) - y(0.0))) > label.size.height + 4.dp.toPx()
+                if (value != 0.0 || roomForZero) {
+                    val labelX = if (index == 0) left - label.size.width - 4.dp.toPx() else right + 4.dp.toPx()
+                    drawText(label, topLeft = Offset(labelX, (y(value) - label.size.height / 2).coerceAtLeast(0f)))
+                }
             }
             drawLine(colors.divider, Offset(left, y(0.0)), Offset(right, y(0.0)), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())))
             series.forEach { kind ->

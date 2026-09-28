@@ -130,7 +130,10 @@ private fun DrawScope.drawChart(
         drawLine(colors.inRange.copy(alpha = 0.22f), Offset(leftPad, y(v)), Offset(size.width - rightPad, y(v)), 1f)
         measurer.label(this, fmt(v, d.decimals), leftPad - 4.dp.toPx(), y(v), axisStyle, alignEnd = true)
     }
-    measurer.label(this, fmt(gHi, 0), leftPad - 4.dp.toPx(), y(gHi) + 4.dp.toPx(), axisStyle, alignEnd = true)
+    // Do not print the scale maximum over the high-threshold label when they are close.
+    val axisLabelHeight = measurer.measure(fmt(gHi, d.decimals), axisStyle).size.height
+    if (y(d.highMark) - y(gHi) > axisLabelHeight + 4.dp.toPx())
+        measurer.label(this, fmt(gHi, d.decimals), leftPad - 4.dp.toPx(), y(gHi) + 4.dp.toPx(), axisStyle, alignEnd = true)
 
     // Distinct dashed target midpoint, as in the original Overview target series.
     if (d.targets.isNotEmpty()) {
