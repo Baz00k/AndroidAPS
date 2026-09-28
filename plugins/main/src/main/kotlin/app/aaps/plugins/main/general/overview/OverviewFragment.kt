@@ -491,7 +491,7 @@ class OverviewFragment : DaggerFragment() {
         val rt = loop.lastRun?.constraintsProcessed?.rawData() as? RT
         val eventualMgdl = if (config.APS) rt?.eventualBG else null
 
-        // Read once so the range, comparison and active-target ribbon describe the same target.
+        // Read once so the range, comparison and inline target status describe the same target.
         val now = dateUtil.now()
         val target = TargetDisplay.at(
             now, persistenceLayer.getTemporaryTargetActiveAt(now),

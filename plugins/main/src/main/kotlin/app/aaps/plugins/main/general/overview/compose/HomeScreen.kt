@@ -37,6 +37,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -197,23 +201,30 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                         Text("EVENTUAL", style = AapsTheme.type.label, color = colors.textTertiary)
                     }
             }
-            // row 3 — state line (current reading only): "<n above target> · <range>"
-            if (state.stateLine.isNotBlank())
-                Row {
-                    Text(state.stateLine, style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = bgColor)
-                    if (state.targetRange.isNotBlank())
-                        Text(" · ${state.targetRange}", style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
-                }
-            state.tempTarget?.let { target ->
-                AapsCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = colors.accentTint,
-                    onClick = actions.onTempTarget
+            // One wrapping status line in the existing target position, not a second banner.
+            // tempTarget already contains the effective range and remaining time; do not repeat it.
+            val targetDescription = state.tempTarget?.let { "Temp target · $it" } ?: state.targetRange
+            if (state.stateLine.isNotBlank() || targetDescription.isNotBlank()) {
+                val activeTarget = state.tempTarget != null
+                Box(
+                    modifier = Modifier.fillMaxWidth().then(
+                        if (activeTarget) Modifier.clickable(
+                            role = Role.Button, onClickLabel = "Edit or cancel temporary target", onClick = actions.onTempTarget
+                        )
+                        else Modifier
+                    ),
+                    contentAlignment = Alignment.CenterStart
                 ) {
                     Text(
-                        "Temp target · $target",
-                        style = AapsTheme.type.listTitle,
-                        color = colors.accentOnLight
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = bgColor)) { append(state.stateLine) }
+                            if (state.stateLine.isNotBlank() && targetDescription.isNotBlank()) append(" · ")
+                            withStyle(SpanStyle(color = if (activeTarget) colors.accent else colors.textSecondary)) {
+                                append(targetDescription)
+                            }
+                        },
+                        style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold),
+                        color = colors.textSecondary
                     )
                 }
             }

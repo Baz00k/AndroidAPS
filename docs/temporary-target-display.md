@@ -1,7 +1,7 @@
 # Temporary target display (issue #65)
 
 Overview and Actions read the current temporary glucose target from persistence on each refresh.
-The Overview range, current-glucose comparison, ribbon and details row share one target snapshot.
+The Overview range, current-glucose comparison, inline target status and details row share one target snapshot.
 An active target is visible even without a profile or glucose reading. Actions retains the existing
 protected target dialog for editing/cancellation, including when the loop is stopped.
 
@@ -69,7 +69,7 @@ and cancellation refresh. They supersede the earlier synthetic UI samples.
 
 Broader device checks remain (not established by the unit tests or these screenshots):
 
-1. In both mg/dL and mmol/L, start a single target and a range target. Check Overview's ribbon,
+1. In both mg/dL and mmol/L, start a single target and a range target. Check Overview's inline status,
    details and comparison, and Actions' highlighted value/countdown at normal and large font sizes.
 2. Edit and cancel from each screen; confirm the existing protection/confirmation flow is shown
    and that the other screen refreshes on return.
@@ -78,3 +78,22 @@ Broader device checks remain (not established by the unit tests or these screens
 4. With the loop stopped, confirm the active target remains visible and the dialog remains protected.
 5. Check the dashed midpoint graph line against known historical targets, including an interval
    spanning a target start/end. Glucose colours and the broad warning band should be unchanged.
+
+
+## Compact Overview target status
+
+Following the design feedback, Overview no longer adds a separate active-target card. Its existing
+comparison/range line displays `Temp target`, the effective range and remaining time in the accent
+colour while a target is active. The line is tappable through the same protected edit/cancel action,
+wraps on narrow screens, and still displays the target when glucose is missing. The profile range
+returns in that same location after cancellation or expiry. Actions and the Details row are unchanged.
+
+The comparison and range continue to come from the same `TargetDisplay` snapshot. Explicit regression
+coverage now checks the screenshot example: glucose 136 with profile range 85–110 is 26 above target;
+a temporary target of 140 changes it to 4 below target; a temporary range 120–150 is in range;
+cancellation/expiry returns to 26 above target. A corresponding mmol/L transition test verifies
+conversion and fallback. All 20 focused tests pass, and the full debug app builds.
+
+[Compact inline screenshots and device verification](review/pr66/inline/README.md) supersede the
+older Overview banner screenshots. No glucose-warning colours, dosing logic or protection paths
+were changed.

@@ -50,6 +50,35 @@ class TargetDisplayTest : TestBaseWithProfile() {
         }
     }
 
+    @Test fun `136 reading recalculates the displayed comparison through target transitions`() {
+        val profileLow = 85.0
+        val profileHigh = 110.0
+        fun at(tt: TT?, now: Long = start) = TargetDisplay.at(now, tt, profileLow, profileHigh)
+        val single = temporary(140.0, 140.0)
+        val range = temporary(120.0, 150.0)
+        val stages = listOf(at(null), at(single), at(range), at(null), at(single, single.end))
+
+        assertThat(stages.map { it.range(GlucoseUnit.MGDL, profileUtil) }).containsExactly(
+            "85 - 110 mg/dL", "140 mg/dL", "120 - 150 mg/dL", "85 - 110 mg/dL", "85 - 110 mg/dL"
+        ).inOrder()
+        assertThat(stages.map { it.stateLine(136.0, GlucoseUnit.MGDL, profileUtil) }).containsExactly(
+            "26 above target", "4 below target", "In target range", "26 above target", "26 above target"
+        ).inOrder()
+    }
+
+    @Test fun `mmol comparison returns to profile after cancellation or expiry`() {
+        val tt = temporary(126.0, 144.0)
+        fun at(target: TT?, now: Long = start) = TargetDisplay.at(now, target, 90.0, 108.0)
+        val stages = listOf(at(null), at(tt), at(null), at(tt, tt.end))
+
+        assertThat(stages.map { it.range(GlucoseUnit.MMOL, profileUtil) }).containsExactly(
+            "5.0 - 6.0 mmol/L", "7.0 - 8.0 mmol/L", "5.0 - 6.0 mmol/L", "5.0 - 6.0 mmol/L"
+        ).inOrder()
+        assertThat(stages.map { it.stateLine(117.0, GlucoseUnit.MMOL, profileUtil) }).containsExactly(
+            "0.5 above target", "0.5 below target", "0.5 above target", "0.5 above target"
+        ).inOrder()
+    }
+
     @Test fun `active status remains available without profile or glucose`() {
         val target = TargetDisplay.at(start, temporary(), null, null)
         assertThat(target.range(GlucoseUnit.MGDL, profileUtil)).isEqualTo("140 - 160 mg/dL")

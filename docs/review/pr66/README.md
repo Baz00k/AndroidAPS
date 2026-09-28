@@ -1,5 +1,8 @@
 # PR #66 emulator evidence — September 28, 2026
 
+**Overview design updated:** see the [compact inline target screenshots](inline/README.md).
+The screenshots below record the earlier banner design and are retained as historical evidence.
+
 Captured from the full `:app:assembleFullDebug` APK with the review fixes, running on the
 isolated `AAPS_PR66_Review` Android 15 emulator. These are **actual app screenshots**, not
 the earlier synthetic Compose preview harness. The pump is virtual, the loop is disabled,
