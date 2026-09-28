@@ -34,6 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -143,7 +146,7 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 @Composable
 private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
-    val bgColor = state.bgTone?.color() ?: colors.textPrimary
+    val bgColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
     AapsCard(shape = AapsTheme.shape.hero) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // row 1 — loop pill (tap → Loop mode chooser) + time
@@ -163,7 +166,23 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             // row 2 — BG + inline trend (left) · eventual (right)
             Row(verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.bg, style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
+                    Text(
+                        state.bg,
+                        style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp),
+                        color = bgColor,
+                        modifier = Modifier.drawWithContent {
+                            drawContent()
+                            if (state.bgStale) {
+                                drawLine(
+                                    color = colors.textPrimary,
+                                    start = Offset(size.width * 0.05f, size.height * 0.8f),
+                                    end = Offset(size.width * 0.95f, size.height * 0.2f),
+                                    strokeWidth = 3.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                        }
+                    )
                     if (state.trendArrow.isNotBlank() || state.delta.isNotBlank())
                         Text(
                             "${state.trendArrow} ${state.delta}".trim(),
