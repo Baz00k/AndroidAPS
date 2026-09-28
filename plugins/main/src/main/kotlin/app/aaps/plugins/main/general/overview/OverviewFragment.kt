@@ -106,6 +106,12 @@ import app.aaps.plugins.main.R
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import app.aaps.core.interfaces.profile.Profile
+import app.aaps.plugins.main.general.overview.compose.BASAL_SAMPLE_MS
+import app.aaps.plugins.main.general.overview.compose.CHART_HISTORY_MS
+import app.aaps.plugins.main.general.overview.compose.ChartPanState
+import app.aaps.plugins.main.general.overview.compose.ChartWindow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -188,6 +194,10 @@ class OverviewFragment : DaggerFragment() {
     private val graphSettings = mutableStateOf(HomeGraphSettings())
     private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
+    // The visible range is UI state: switching it re-windows the loaded snapshot immediately, with
+    // no rebuild. The horizontal position is shared by every graph panel and never read off-thread.
+    private val chartRangeHours = mutableStateOf(6)
+    private val chartPan = ChartPanState()
     private lateinit var refreshLoop: Runnable
     private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
 
@@ -220,15 +230,20 @@ class OverviewFragment : DaggerFragment() {
         // ---- Redesigned Home (Compose) ----
         graphSettings.value = HomeGraphSettings.decode(preferences.get(StringNonKey.OverviewGlucoseGraphSettings))
         additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
+        chartRangeHours.value = overviewData.rangeToDisplay
         val actions = buildHomeActions()
         composeHome?.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         composeHome?.setContent {
             AapsTheme {
-                val displayed = chartData.value.forDisplay(graphSettings.value)
+                val settings = graphSettings.value
+                val displayed = remember(chartData.value, settings) { chartData.value.forDisplay(settings) }
+                // Width depends on the chosen range and whether forecasts are switched on — never on
+                // whether a forecast is currently available.
+                val window = ChartWindow.of(chartRangeHours.value, settings.forecasts.isNotEmpty())
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = { HomeGlucoseChart(displayed, Modifier.fillMaxWidth(), graphSettings.value) },
+                    graph = { HomeGlucoseChart(displayed, window, chartPan, Modifier.fillMaxWidth(), settings) },
                     graphSettings = {
                         HomeGraphSettingsControl(
                             graphSettings.value, additionalGraphSettings.value,
@@ -242,7 +257,7 @@ class OverviewFragment : DaggerFragment() {
                             }
                         )
                     },
-                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value) }
+                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value, window, chartPan) }
                 )
             }
         }
@@ -284,6 +299,10 @@ class OverviewFragment : DaggerFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe({
                            overviewData.rangeToDisplay = it.hours
+                           // Re-window now and move the selector with it, instead of waiting for
+                           // the next rebuild of the home state.
+                           chartRangeHours.value = it.hours
+                           homeState.value = homeState.value.copy(graphRangeHours = it.hours)
                            preferences.put(IntNonKey.RangeToDisplay, it.hours)
                            rxBus.send(EventPreferenceChange(IntNonKey.RangeToDisplay.key))
                            preferences.put(BooleanNonKey.ObjectivesScaleUsed, true)
@@ -339,6 +358,9 @@ class OverviewFragment : DaggerFragment() {
             .toObservable(EventRunningModeChange::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ scheduleUpdateGUI() }, fabricPrivacy::logException)
+
+        // Coming back to Home shows the present, not wherever the graph was left paused.
+        chartPan.returnToLive()
 
         refreshLoop = Runnable {
             refreshAll()
@@ -662,14 +684,13 @@ class OverviewFragment : DaggerFragment() {
     }
 
     /**
-     * Assemble the home chart series. Same sources the GraphView pipeline used — readings from
-     * [overviewData], delivered rate from [iobCobCalculator], treatments from the persistence layer —
-     * so this is a rendering change, not a data change.
-     *
-     * Runs off the UI thread (see [refreshAll]); the effective-rate sampling below is the expensive
-     * part and must not land on the main thread.
+     * Rebuild the chart series on the background handler, then publish to Compose. Same sources the
+     * GraphView pipeline used — readings from the persistence layer, delivered rate from
+     * [iobCobCalculator], treatments from the persistence layer — so this is a rendering change, not a
+     * data change. Scheduled by the existing refresh paths only (60 s loop, graph/data events); the
+     * effective-rate sampling is the expensive part and must not land on the main thread. Dragging
+     * the graph never calls this.
      */
-    /** Rebuild the chart series on the background handler, then publish to Compose. */
     private fun refreshChart() {
         handler.post {
             val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); HomeChartData() }
@@ -677,74 +698,98 @@ class OverviewFragment : DaggerFragment() {
         }
     }
 
+    /**
+     * One snapshot covering the whole pan budget ([CHART_HISTORY_MS] ending at "now"), independent of
+     * the selected range: the visible window is resolved at draw time, so changing the range or
+     * dragging sideways never needs a new query. History is cut off at the build clock, never at the
+     * legacy hour-aligned graph range (which could end in the past and freeze the chart, or start
+     * after the window's left edge).
+     */
     private fun buildChartData(): HomeChartData {
-        val profile = profileFunction.getProfile() ?: return HomeChartData()
+        profileFunction.getProfile() ?: return HomeChartData()
         val units = profileFunction.getUnits()
-        val from = overviewData.fromTime
         val now = dateUtil.now()
-        val to = minOf(overviewData.toTime, now)
-        if (to <= from) return HomeChartData()
+        val from = now - CHART_HISTORY_MS
 
-        val readings = overviewData.bgReadingsArray
-            .filter { it.timestamp in from..to }
+        // Straight from the database rather than the legacy graph worker's array, whose span follows
+        // the old hour-aligned range. Invalidated and nonsensical values are not drawn; a reading
+        // stamped in the future (phone/sensor clock skew) waits until its time has come.
+        val readings = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true)
+            .filter { it.isValid && it.value.isFinite() && it.value > 0.0 && it.timestamp in from..now }
             .sortedBy { it.timestamp }
             .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value, units)) }
         if (readings.isEmpty()) return HomeChartData()
 
         // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
         // statistics are computed from; on a 5-minute source it is effectively the readings again.
-        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy()
-            ?.filter { it.timestamp in from..to }
-            ?.sortedBy { it.timestamp }
-            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated, units)) }
-            ?: emptyList()
+        // Interpolated gap fills are left out so a sensor dropout stays a gap on the graph.
+        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy().orEmpty()
+            .filter { !it.filledGap && it.timestamp in from..now && it.recalculated.isFinite() && it.recalculated > 0.0 }
+            .sortedBy { it.timestamp }
+            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated, units)) }
+
+        // Historical profiles, re-resolved only where the effective profile changed.
+        val switches = persistenceLayer.getEffectiveProfileSwitchesFromTimeToTime(from, now, ascending = true)
+            .filter { it.isValid && it.timestamp > from && it.timestamp <= now }
+            .map { it.timestamp }.distinct().sorted()
 
         // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
-        // rather than drawing one step per record — a per-record path doubles back on itself.
-        val samples = 240
-        val stepMs = ((to - from) / samples).coerceAtLeast(60_000L)
-        val basal = ArrayList<BasalStep>(samples + 1)
-        var t = from
-        while (t <= to) {
-            val bd = iobCobCalculator.getBasalData(profile, t)
-            basal.add(BasalStep(t, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal))
-            t += stepMs
+        // rather than drawing one step per record — a per-record path doubles back on itself. The grid
+        // is epoch-aligned, so a sample keeps its time from one refresh to the next and the steps do
+        // not shimmer as "now" advances; the last sample is exactly "now".
+        val basalProfiles = ProfileCursor(from, switches) { profileFunction.getProfile(it) }
+        val basal = ArrayList<BasalStep>((CHART_HISTORY_MS / BASAL_SAMPLE_MS).toInt() + 2)
+        var t = (from / BASAL_SAMPLE_MS + 1) * BASAL_SAMPLE_MS
+        while (true) {
+            val sampleTime = minOf(t, now)
+            // No profile, no step: a gap, rather than today's schedule projected backwards.
+            basalProfiles.at(sampleTime)?.let { historical ->
+                val bd = iobCobCalculator.getBasalData(historical, sampleTime)
+                basal.add(BasalStep(sampleTime, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal, bd.basal))
+            }
+            if (sampleTime == now) break
+            t += BASAL_SAMPLE_MS
         }
 
         // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
         // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
-        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, to, units)
+        // Independent of the temporary-target hero, which reads the active target itself.
+        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, now, units)
 
         val treatments = ArrayList<ChartTreatment>()
-        persistenceLayer.getBolusesFromTimeToTime(from, to, true).forEach { b ->
+        persistenceLayer.getBolusesFromTimeToTime(from, now, true).forEach { b ->
             if (b.isValid && b.type != BS.Type.PRIMING && b.amount > 0.0)
                 treatments.add(ChartTreatment(b.timestamp, b.amount, if (b.type == BS.Type.SMB) TreatmentKind.SMB else TreatmentKind.BOLUS))
         }
         // NOT the expanded query: that splits one meal into an absorption series, which would draw a
         // 90 g meal as a row of identical dots instead of a single mark sized by the meal.
         persistenceLayer.getCarbsFromTimeNotExpanded(from, true).blockingGet().forEach { c ->
-            if (c.isValid && c.timestamp <= to && c.amount > 0.0)
+            if (c.isValid && c.timestamp <= now && c.amount > 0.0)
                 treatments.add(ChartTreatment(c.timestamp, c.amount, TreatmentKind.CARBS))
         }
+        treatments.sortBy { it.time }
 
         val ads = iobCobCalculator.ads.clone()
         val autosensSamples = (0 until ads.autosensDataTable.size()).map { ads.autosensDataTable.valueAt(it) }
-        val additional = AdditionalGraphData.fromAutosens(autosensSamples, from, to, now) { profileUtil.fromMgdlToUnits(it, units) }
+        val additional = AdditionalGraphData.fromAutosens(autosensSamples, from, now, now) { profileUtil.fromMgdlToUnits(it, units) }
         val iob = ArrayList<GlucosePoint>()
-        var iobTime = from
-        while (iobTime <= minOf(to, now)) {
+        val iobProfiles = ProfileCursor(from, switches) { profileFunction.getProfile(it) }
+        val iobStep = 5 * 60_000L
+        var iobTime = (from / iobStep + 1) * iobStep
+        while (true) {
+            val sampleTime = minOf(iobTime, now)
             // Resolve historical profiles just as the original AAPS graph worker does.
-            profileFunction.getProfile(iobTime)?.let { historicalProfile ->
-                val value = iobCobCalculator.calculateFromTreatmentsAndTemps(iobTime, historicalProfile).iob
-                if (value.isFinite()) iob.add(GlucosePoint(iobTime, value))
+            iobProfiles.at(sampleTime)?.let { historicalProfile ->
+                val value = iobCobCalculator.calculateFromTreatmentsAndTemps(sampleTime, historicalProfile).iob
+                if (value.isFinite()) iob.add(GlucosePoint(sampleTime, value))
             }
-            iobTime += 5 * 60_000L
+            if (sampleTime == now) break
+            iobTime += iobStep
         }
 
         return HomeChartData(
             additional = additional.copy(points = additional.points + (AdditionalSeries.IOB to iob)),
             from = from,
-            to = to,
             now = now,
             predictions = buildHomePredictions(
                 if (config.APS) loop.lastRun?.constraintsProcessed else processedDeviceStatusData.getAPSResult(),
@@ -754,7 +799,6 @@ class OverviewFragment : DaggerFragment() {
             readings = readings,
             bucketed = bucketed,
             basal = basal,
-            scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,
             targets = targets,
             // The SAME thresholds that colour the hero BG, so band and headline can never disagree.
@@ -861,5 +905,22 @@ class OverviewFragment : DaggerFragment() {
                 }
             }
         }
+    }
+}
+
+/**
+ * The effective profile for increasing sample times, re-resolved only at effective-profile-switch
+ * boundaries (the same rule as [TargetChartData]) instead of once per graph sample.
+ */
+private class ProfileCursor(from: Long, private val switches: List<Long>, private val resolve: (Long) -> Profile?) {
+
+    private var next = 0
+    private var profile: Profile? = resolve(from)
+
+    fun at(time: Long): Profile? {
+        var latest: Long? = null
+        while (next < switches.size && switches[next] <= time) latest = switches[next++]
+        latest?.let { profile = resolve(it) }
+        return profile
     }
 }

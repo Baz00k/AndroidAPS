@@ -67,7 +67,7 @@ class HomePredictionsTest {
     @Test
     fun `forecasts never become historical trace or make an empty chart measured data`() {
         val forecasts = buildHomePredictions(result(), now) { it }
-        val empty = HomeChartData(from = now - 60_000L, to = now, predictions = forecasts)
+        val empty = HomeChartData(from = now - 60_000L, now = now, predictions = forecasts)
         assertThat(empty.hasData).isFalse()
         assertThat(empty.trace).isEmpty()
         val readings = listOf(GlucosePoint(now, 100.0))

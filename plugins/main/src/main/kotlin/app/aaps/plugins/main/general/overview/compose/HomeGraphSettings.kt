@@ -29,22 +29,23 @@ data class HomeGraphSettings(
     }
 }
 
-/** Apply display choices once, so every panel receives exactly the same time window.
- * Extending the viewport does not extend historical samples, targets or insulin delivery.
+/**
+ * Apply display choices once, so every panel receives the same filtered snapshot. This only hides
+ * series: the time window never depends on which forecasts exist (see [ChartWindow]), so the graph
+ * does not jump when the loop starts or stops producing predictions.
  */
-internal fun HomeChartData.forDisplay(settings: HomeGraphSettings): HomeChartData {
-    val visiblePredictions = predictions.filter { it.kind in settings.forecasts }
-    return copy(
-        to = maxOf(to, visiblePredictions.flatMap { it.points }.maxOfOrNull { it.time } ?: to),
-        predictions = visiblePredictions,
-        targets = if (settings.visible(GlucoseOverlay.TARGET)) targets else emptyList(),
-        basal = if (settings.visible(GlucoseOverlay.BASAL)) basal else emptyList(),
-        scheduledBasal = if (settings.visible(GlucoseOverlay.BASAL)) scheduledBasal else 0.0,
-        treatments = if (settings.visible(GlucoseOverlay.TREATMENTS)) treatments else emptyList()
-    )
-}
+internal fun HomeChartData.forDisplay(settings: HomeGraphSettings): HomeChartData = copy(
+    predictions = predictions.filter { it.kind in settings.forecasts },
+    targets = if (settings.visible(GlucoseOverlay.TARGET)) targets else emptyList(),
+    basal = if (settings.visible(GlucoseOverlay.BASAL)) basal else emptyList(),
+    treatments = if (settings.visible(GlucoseOverlay.TREATMENTS)) treatments else emptyList()
+)
 
-/** Visible series only: a hidden forecast/target must not keep the glucose axis zoomed out. */
+/**
+ * Visible series only: a hidden forecast/target must not keep the glucose axis zoomed out.
+ * Computed over the whole loaded sample rather than the visible window, so the vertical scale holds
+ * still while the graph is dragged sideways.
+ */
 internal fun HomeChartData.glucoseBounds(): Pair<Double, Double> {
     val values = (readings + trace + targets + predictions.flatMap { it.points }).map { it.value }.filter { it.isFinite() }
     val high = maxOf(highMark + 2.0, kotlin.math.ceil((values.maxOrNull() ?: highMark) + 0.5))

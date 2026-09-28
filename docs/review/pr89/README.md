@@ -12,6 +12,51 @@ graph: the mandatory graph optionality is in this upper layer, so evaluate the s
 After #66 merges, retarget #89 to main and reconcile the base (especially if #66 is squash-merged).
 Do not independently merge the prototype PRs on top of the combined implementation.
 
+## Rolling/panning refinement — current review
+
+The `rolling/` captures below supersede the original screenshots farther down this document.
+Implementation was delegated to Claude with the requested `claude-opus-5.5` model identifier;
+the parent reviewed the diff, fixed integration issues, and ran the builds/emulator checks.
+
+- **6/12/24 h means history.** Any forecast enabled adds a fixed **3 h** future area, whether
+  predictions are available or not. Forecast lengths/expiry never change the horizontal scale.
+- **Horizontal drag/fling** shares one timestamp across every panel, with a small **Now** control.
+  History is loaded for the last 24 h on the existing background refresh, not on each gesture.
+  The 24 h selection already shows all loaded history; use History for older records.
+  Forecast mode allows peeking up to 4 h ahead; with forecasts off the right bound is now.
+- A panned window stays on its absolute time across refreshes, except when the oldest loaded boundary
+  catches up. Range changes, forecast mode changes, returning to Home, or **Now** resume live-follow.
+- Actual-now line and latest-reading marker are independent. Historical series stop at now.
+  The trace combines available bucketed coverage with raw readings at either edge; sensor gaps
+  remain gaps. Basal uses a fixed 3-minute grid and the historical scheduled profile.
+- Compact **bottom legends**, coloured unit axes, shared phone-format clock ticks, and deviations
+  as positive/negative bars with optional −BGI. BGI/sensitivity conventions remain available to
+  accessibility without permanent explanatory paragraphs.
+- Parent integration fixes: clear obsolete pan state on window changes; equal card insets for exact
+  plot alignment; reserve chart touch streams from the host ViewPager2 so panning does not switch
+  tabs. Compose vertical page scrolling remains available.
+
+### Current evidence
+
+Android 15, isolated `AAPS_PR66_Review`, virtual pump, loop and remote sync disabled. Display
+fixtures are synthetic, not clinical or end-to-end APS validation. The temporary review activity
+and seeder are not committed and are absent from the final standard APK.
+
+![Live rolling viewport, selected forecasts and compact bottom legends](rolling/02-live-forecasts.png)
+
+![Deviation bars and optional BGI, with aligned historical panels](rolling/03-deviations.png)
+
+![Shared horizontal pan at the same scale](rolling/04-shared-pan.png)
+
+![Peek farther into available forecasts](rolling/05-future-pan.png)
+
+![Stale reading at its timestamp; future area retained without forecasts](rolling/08-stale-no-forecast.png)
+
+Additional captures: [settings](rolling/01-settings.png), [12 h](rolling/06-12h.png),
+[24 h](rolling/07-24h.png), [mmol/L](rolling/09-mmol.png),
+[normal Overview](rolling/10-overview-standard.png),
+[normal Overview panned](rolling/11-overview-pan.png).
+
 ## Controls and defaults
 
 One **Graph settings** dialog is accessible from the glucose card, including when no additional
@@ -25,11 +70,11 @@ panels are visible. Changes save immediately; **Reset defaults** restores:
 | IOB, COB, zero-temp, UAM, aCOB forecasts | Off | Each independently on/off |
 | IOB, COB, sensitivity, deviations, BGI history | Hidden | Each: Hide or graph 1–4 |
 
-Hiding basals/treatments gives their space back to glucose. Hiding a forecast also removes it from
-the legend, vertical scaling and shared future time window. The graph target toggle does **not**
+Hiding basals/treatments gives their space back to glucose. Hiding a forecast removes it from
+the legend and vertical scaling; only turning off all forecasts removes the fixed future area. The graph target toggle does **not**
 hide the active temporary-target status beneath the glucose reading or change therapy targets.
 
-The shared display window extends only for selected, available forecasts. Target history, basal
+The shared display window reserves three future hours whenever any forecast is enabled. Target history, basal
 history and additional series remain historical; their samples are not extrapolated. The combined
 scale includes visible targets, measured/trace glucose and visible forecasts. All converted series
 use the chart build's captured glucose units. Legends wrap outside the plotting canvas. Close axis
@@ -43,17 +88,25 @@ Standard, non-fixture build:
 ./gradlew --no-daemon --max-workers=2 \
   -Dorg.gradle.jvmargs='-Xmx3g -XX:+UseParallelGC -Xss1024m' \
   :plugins:main:testFullDebugUnitTest \
-  --tests '*Home*Graph*Test' --tests '*HomePredictionsTest' --tests '*Target*Test' \
+  --tests '*Home*Test' --tests '*Target*Test' \
   :app:assembleFullDebug
 ```
 
-**37 tests, zero failures/errors:** 6 graph settings, 6 additional graph data, 5 predictions,
-8 historical target chart, 7 target display, 3 target extensions, 2 Actions target state.
-Includes defaults/serialization/invalid settings, independent forecast selection, shared viewport,
-unchanged historical cutoff/data, visible-only bounds, negative values, gaps, units and stale or
-missing predictions. `git diff --check` passed.
+**65 tests, zero failures/errors:** 18 viewport/pan/clock tests, 8 chart-data tests,
+8 graph settings, 6 additional graph data, 5 predictions, 8 historical target chart,
+7 target display, 3 target extensions, 2 Actions target state. Standard full-debug build and
+`git diff --check` passed. Viewport tests include forecast-independent widths, bounds,
+paused refreshes, live reset, midnight, 12/24 h and spring/fall DST transitions.
 
-## Emulator verification — September 28, 2026
+Current emulator checks: selected forecast toggles/assignments; shared past/future pan and Now;
+vertical scrolling starting on a graph; 6/12/24 h; mmol/L; stale marker/no forecasts;
+normal Overview database-backed history and pan in the standard APK, including both swipe
+directions without changing tabs, paused state surviving a refresh, and 6→12→6 range changes
+returning to live rather than reviving the old pan. Synthetic glucose/profile
+records remain in the isolated emulator database. Real APS/autosens transitions and physical-device
+performance still require acceptance testing.
+
+## Earlier baseline verification — September 28, 2026 (superseded visuals)
 
 Android 15, isolated `AAPS_PR66_Review` emulator, no physical pump, virtual pump configured, loop
 and Nightscout sync disabled. Captures below are unmodified device screenshots.

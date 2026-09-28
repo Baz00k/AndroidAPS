@@ -6,14 +6,14 @@ import org.junit.jupiter.api.Test
 class HomeGraphSettingsTest {
     private val now = 1_000_000L
     private val data = HomeChartData(
-        from = 0, to = now, now = now,
+        from = 0, now = now,
         readings = listOf(GlucosePoint(now, 100.0)),
         targets = listOf(GlucosePoint(0, 140.0), GlucosePoint(now, 140.0)),
         predictions = listOf(
             ChartPrediction(PredictionKind.IOB, listOf(GlucosePoint(now + 300_000, 80.0))),
             ChartPrediction(PredictionKind.COB, listOf(GlucosePoint(now + 900_000, 300.0)))
         ),
-        basal = listOf(BasalStep(0, 0.5), BasalStep(now, 0.5)), scheduledBasal = 0.5,
+        basal = listOf(BasalStep(0, 0.5, 0.5), BasalStep(now, 0.5, 0.5)),
         treatments = listOf(ChartTreatment(now, 10.0, TreatmentKind.CARBS)),
         lowMark = 72.0, highMark = 180.0,
         additional = AdditionalGraphData(mapOf(AdditionalSeries.IOB to listOf(GlucosePoint(now, 1.0))))
@@ -45,19 +45,35 @@ class HomeGraphSettingsTest {
         assertTrue(settings.forecasts.isEmpty())
     }
 
-    @Test fun `only selected forecasts extend the shared viewport without extending history`() {
+    @Test fun `only selected forecasts are drawn and toggling never moves the sample or history cutoff`() {
         val settings = HomeGraphSettings().withForecast(PredictionKind.IOB, true).withOverlay(GlucoseOverlay.TARGET, true)
         val plotted = data.forDisplay(settings)
-        assertEquals(now + 300_000, plotted.to)
-        assertEquals(now, plotted.historyTo)
         assertEquals(listOf(PredictionKind.IOB), plotted.predictions.map { it.kind })
         assertEquals(data.targets, plotted.targets)
         assertEquals(data.basal, plotted.basal)
         assertEquals(data.additional, plotted.additional)
         assertEquals(now, plotted.targets.last().time)
         assertEquals(now, plotted.basal.last().time)
-        assertEquals(now, data.to) // Original snapshot is never mutated by toggling.
-        assertEquals(now, data.forDisplay(HomeGraphSettings()).to)
+        // The visible window comes from ChartWindow, never from the forecasts in the snapshot.
+        assertEquals(data.from, plotted.from)
+        assertEquals(now, plotted.now)
+        assertEquals(now, data.forDisplay(HomeGraphSettings()).now)
+        assertEquals(2, data.predictions.size) // Original snapshot is never mutated by toggling.
+    }
+
+    @Test fun `forecast gaps and timestamps survive filtering untouched`() {
+        val gappy = ChartPrediction(
+            PredictionKind.UAM,
+            listOf(GlucosePoint(now + 300_000, 100.0), GlucosePoint(now + 900_000, 110.0), GlucosePoint(now + 1_200_000, 120.0))
+        )
+        val plotted = data.copy(predictions = listOf(gappy)).forDisplay(HomeGraphSettings().withForecast(PredictionKind.UAM, true))
+        assertEquals(gappy.points, plotted.predictions.single().points)
+    }
+
+    @Test fun `hiding basal also hides the scheduled reference, which lives in the same samples`() {
+        val plotted = data.forDisplay(HomeGraphSettings().withOverlay(GlucoseOverlay.BASAL, false))
+        assertTrue(plotted.basal.isEmpty())
+        assertEquals(data.basal, data.forDisplay(HomeGraphSettings()).basal)
     }
 
     @Test fun `hidden layers cannot change glucose data thresholds or axis scale`() {
@@ -68,7 +84,6 @@ class HomeGraphSettingsTest {
         assertTrue(plotted.predictions.isEmpty())
         assertTrue(plotted.basal.isEmpty())
         assertTrue(plotted.treatments.isEmpty())
-        assertEquals(0.0, plotted.scheduledBasal)
         assertEquals(data.readings, plotted.readings)
         assertEquals(data.trace, plotted.trace)
         assertEquals(data.lowMark, plotted.lowMark)
@@ -82,6 +97,7 @@ class HomeGraphSettingsTest {
         val (low, high) = source.forDisplay(HomeGraphSettings().withOverlay(GlucoseOverlay.TARGET, true).withForecast(PredictionKind.COB, true)).glucoseBounds()
         assertTrue(low < 40.0)
         assertTrue(high > 350.0)
-        assertEquals(data.copy(predictions = emptyList()).to, data.copy(predictions = emptyList()).forDisplay(HomeGraphSettings().withForecast(PredictionKind.IOB, true)).to)
+        val noForecasts = data.copy(predictions = emptyList())
+        assertEquals(noForecasts.now, noForecasts.forDisplay(HomeGraphSettings().withForecast(PredictionKind.IOB, true)).now)
     }
 }

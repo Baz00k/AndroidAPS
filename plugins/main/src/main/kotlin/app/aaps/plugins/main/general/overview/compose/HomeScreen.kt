@@ -335,7 +335,8 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
     val colors = AapsTheme.colors
     val ranges = listOf(6, 12, 24)
     val selected = ranges.indexOfFirst { it >= rangeHours }.let { if (it < 0) ranges.lastIndex else it }
-    AapsCard(contentPadding = androidx.compose.foundation.layout.PaddingValues(AapsSpacing.cardPadSmall)) {
+    // Match the additional cards so all plots share exactly the same horizontal time mapping.
+    AapsCard {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Glucose", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))

@@ -345,7 +345,7 @@
     <string name="overview_prediction_acob">aCOB</string>
     <string name="overview_additional_graphs">Additional graphs</string>
     <string name="overview_graph_number">Graph %1$d</string>
-    <string name="overview_graph_choose">Choose a graph for each series. All graphs use the glucose graph’s time range.</string>
+    <string name="overview_graph_choose">Choose a graph for each series.</string>
     <string name="overview_graph_hidden">Hide</string>
     <string name="overview_graph_left">left axis</string>
     <string name="overview_graph_right">right axis</string>
@@ -356,9 +356,15 @@
     <string name="overview_graph_bgi_sign">BGI uses the AAPS graph convention: positive values indicate a glucose-lowering insulin effect (−BGI).</string>
     <string name="overview_graph_sensitivity_zero">Autosens change: 0% is a ratio of 1.0. This estimate may be shown even when autosens is disabled.</string>
     <string name="overview_graph_settings">Graph settings</string>
-    <string name="overview_graph_settings_hint">Changes are saved immediately. Glucose and warning thresholds stay visible. Extra graphs and forecasts are off by default.</string>
+    <string name="overview_graph_settings_hint">Changes are saved automatically.</string>
     <string name="overview_graph_overlays">Glucose overlays</string>
     <string name="overview_graph_target">Target (midpoint)</string>
     <string name="overview_graph_raw_readings">Raw sensor dots</string>
     <string name="overview_graph_reset">Reset defaults</string>
+    <string name="overview_graph_now">Now</string>
+    <string name="overview_graph_return_to_now">Return to now</string>
+    <string name="overview_graph_no_forecast">No forecast</string>
+    <string name="overview_graph_scheduled_basal">Scheduled basal</string>
+    <string name="overview_graph_units_basal">U/h</string>
+    <string name="overview_graph_a11y">Glucose graph, last %1$d hours. Drag sideways to see earlier data.</string>
 </resources>
