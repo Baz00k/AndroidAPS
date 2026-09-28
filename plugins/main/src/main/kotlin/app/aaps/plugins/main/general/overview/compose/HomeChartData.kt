@@ -33,6 +33,8 @@ data class ChartTreatment(val time: Long, val amount: Double, val kind: Treatmen
 data class HomeChartData(
     val from: Long = 0L,
     val to: Long = 0L,
+    /** Historical cutoff, unchanged when visible forecasts extend the shared viewport. */
+    val historyTo: Long = to,
     val now: Long = 0L,
     /** Raw sensor readings — every one, drawn as a faint scatter. */
     val readings: List<GlucosePoint> = emptyList(),

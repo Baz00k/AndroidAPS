@@ -68,7 +68,8 @@ fun HomeScreen(
     state: HomeUiState,
     actions: HomeActions,
     graph: @Composable () -> Unit,
-    additionalGraphs: @Composable () -> Unit = {}
+    additionalGraphs: @Composable () -> Unit = {},
+    graphSettings: @Composable () -> Unit = {}
 ) {
     val colors = AapsTheme.colors
     var showDetails by remember { mutableStateOf(false) }
@@ -92,7 +93,7 @@ fun HomeScreen(
                 if (state.notifications.isNotEmpty()) AlertsCard(state.notifications, actions.onDismissAlert)
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
-                GraphCard(state.graphRangeHours, actions.onRange, graph)
+                GraphCard(state.graphRangeHours, actions.onRange, graph, graphSettings)
                 additionalGraphs()
                 DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
@@ -330,7 +331,7 @@ private fun CountdownRing(fraction: Float, color: androidx.compose.ui.graphics.C
 }
 
 @Composable
-private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composable () -> Unit) {
+private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composable () -> Unit, graphSettings: @Composable () -> Unit) {
     val colors = AapsTheme.colors
     val ranges = listOf(6, 12, 24)
     val selected = ranges.indexOfFirst { it >= rangeHours }.let { if (it < 0) ranges.lastIndex else it }
@@ -344,12 +345,8 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
                     onSelect = { onRange(ranges[it]) }
                 )
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    // Reserve space for the prediction switch and legend above the plot.
-                    .height(320.dp)
-            ) { graph() }
+            graphSettings()
+            graph()
         }
     }
 }

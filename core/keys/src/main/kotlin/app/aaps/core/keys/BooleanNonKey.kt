@@ -9,7 +9,6 @@ enum class BooleanNonKey(
     override val exportable: Boolean = true
 ) : BooleanNonPreferenceKey {
 
-    OverviewShowPredictions("overview_show_predictions", false),
     SetupWizardIUnderstand("I_understand", false),
     ObjectivesLoopUsed("ObjectivesLoopUsed", false),
     ObjectivesActionsUsed("ObjectivesActionsUsed", false),

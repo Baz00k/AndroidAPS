@@ -103,6 +103,7 @@ import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
 import app.aaps.core.utils.compactDurationLabel
 import app.aaps.plugins.main.R
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -120,6 +121,9 @@ import app.aaps.plugins.main.general.overview.compose.buildHomePredictions
 import app.aaps.plugins.main.general.overview.compose.AdditionalGraphData
 import app.aaps.plugins.main.general.overview.compose.AdditionalGraphSettings
 import app.aaps.plugins.main.general.overview.compose.AdditionalSeries
+import app.aaps.plugins.main.general.overview.compose.HomeGraphSettings
+import app.aaps.plugins.main.general.overview.compose.HomeGraphSettingsControl
+import app.aaps.plugins.main.general.overview.compose.forDisplay
 import app.aaps.plugins.main.general.overview.compose.HomeAdditionalGraphs
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
@@ -181,7 +185,7 @@ class OverviewFragment : DaggerFragment() {
     private var smallHeight = false
     private var axisWidth: Int = 0
     private var composeHome: ComposeView? = null
-    private val showPredictions = mutableStateOf(false)
+    private val graphSettings = mutableStateOf(HomeGraphSettings())
     private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
     private lateinit var refreshLoop: Runnable
@@ -214,27 +218,31 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // ---- Redesigned Home (Compose) ----
-        showPredictions.value = preferences.get(BooleanNonKey.OverviewShowPredictions)
+        graphSettings.value = HomeGraphSettings.decode(preferences.get(StringNonKey.OverviewGlucoseGraphSettings))
         additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
         val actions = buildHomeActions()
         composeHome?.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         composeHome?.setContent {
             AapsTheme {
+                val displayed = chartData.value.forDisplay(graphSettings.value)
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = {
-                        HomeGlucoseChart(chartData.value, Modifier.fillMaxSize(), showPredictions.value) { enabled ->
-                            preferences.put(BooleanNonKey.OverviewShowPredictions, enabled)
-                            showPredictions.value = enabled
-                        }
+                    graph = { HomeGlucoseChart(displayed, Modifier.fillMaxWidth(), graphSettings.value) },
+                    graphSettings = {
+                        HomeGraphSettingsControl(
+                            graphSettings.value, additionalGraphSettings.value,
+                            onSettings = { settings ->
+                                preferences.put(StringNonKey.OverviewGlucoseGraphSettings, settings.encode())
+                                graphSettings.value = settings
+                            },
+                            onAdditional = { settings ->
+                                preferences.put(StringNonKey.OverviewAdditionalGraphs, settings.encode())
+                                additionalGraphSettings.value = settings
+                            }
+                        )
                     },
-                    additionalGraphs = {
-                        HomeAdditionalGraphs(chartData.value, additionalGraphSettings.value) { settings ->
-                            preferences.put(StringNonKey.OverviewAdditionalGraphs, settings.encode())
-                            additionalGraphSettings.value = settings
-                        }
-                    }
+                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value) }
                 )
             }
         }
@@ -705,7 +713,7 @@ class OverviewFragment : DaggerFragment() {
 
         // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
         // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
-        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, to)
+        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, to, units)
 
         val treatments = ArrayList<ChartTreatment>()
         persistenceLayer.getBolusesFromTimeToTime(from, to, true).forEach { b ->

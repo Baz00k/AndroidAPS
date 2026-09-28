@@ -5,16 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -27,7 +19,6 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.plugins.main.R
 import java.text.DateFormat
@@ -35,9 +26,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings, onSettings: (AdditionalGraphSettings) -> Unit) {
-    var configure by remember { mutableStateOf(false) }
-    val title = stringResource(R.string.overview_additional_graphs)
+fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings) {
     val colors = AapsTheme.colors
     val labels = AdditionalSeries.entries.associateWith { stringResource(it.labelResource()) }
     val units = mapOf(
@@ -54,7 +43,6 @@ fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings,
         AdditionalSeries.DEVIATIONS to colors.inRange,
         AdditionalSeries.BGI to colors.textPrimary
     )
-    TextButton(onClick = { configure = true }) { Text(title) }
     for (graph in 1..4) {
         val selected = AdditionalSeries.entries.filter { settings.graph(it) == graph }
         if (selected.isEmpty()) continue
@@ -84,29 +72,9 @@ fun HomeAdditionalGraphs(data: HomeChartData, settings: AdditionalGraphSettings,
             }
         }
     }
-    if (configure) {
-        AlertDialog(
-            onDismissRequest = { configure = false },
-            title = { Text(title) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(R.string.overview_graph_choose))
-                    AdditionalSeries.entries.forEach { kind ->
-                        Text(labels.getValue(kind))
-                        SegmentedControl(
-                            options = listOf(stringResource(R.string.overview_graph_hidden), "1", "2", "3", "4"),
-                            selectedIndex = settings.graph(kind),
-                            onSelect = { onSettings(settings.withGraph(kind, it)) }
-                        )
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { configure = false }) { Text(stringResource(android.R.string.ok)) } }
-        )
-    }
 }
 
-private fun AdditionalSeries.labelResource(): Int = when (this) {
+internal fun AdditionalSeries.labelResource(): Int = when (this) {
     AdditionalSeries.IOB         -> R.string.overview_show_iob
     AdditionalSeries.COB         -> R.string.overview_show_cob
     AdditionalSeries.SENSITIVITY -> R.string.overview_show_sensitivity

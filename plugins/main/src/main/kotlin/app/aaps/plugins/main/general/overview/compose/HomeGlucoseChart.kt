@@ -5,12 +5,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.Switch
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -21,8 +19,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -36,7 +32,6 @@ import app.aaps.plugins.main.R
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -59,8 +54,7 @@ import kotlin.math.sqrt
 fun HomeGlucoseChart(
     data: HomeChartData,
     modifier: Modifier = Modifier,
-    showPredictions: Boolean = false,
-    onShowPredictionsChange: (Boolean) -> Unit = {}
+    settings: HomeGraphSettings = HomeGraphSettings()
 ) {
     val colors = AapsTheme.colors
     val measurer = rememberTextMeasurer()
@@ -70,72 +64,58 @@ fun HomeGlucoseChart(
     val axisStyle = caption.copy(fontSize = 9.sp, color = colors.textTertiary)
     val valueStyle = caption.copy(fontSize = 13.sp)
 
-    val predictionLabel = stringResource(R.string.overview_show_predictions)
-    val predictions = if (showPredictions) data.predictions else emptyList()
-    val plotted = data.copy(
-        predictions = predictions,
-        to = maxOf(data.to, predictions.flatMap { it.points }.maxOfOrNull { it.time } ?: data.to)
-    )
-    Column(modifier) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(predictionLabel, style = caption, color = colors.textTertiary)
-            Switch(checked = showPredictions, onCheckedChange = onShowPredictionsChange, modifier = Modifier.semantics { contentDescription = predictionLabel })
-        }
-        if (showPredictions) {
-            Text(
-                stringResource(if (predictions.isEmpty()) R.string.overview_predictions_unavailable else R.string.overview_predictions_estimates),
-                style = caption, color = colors.textTertiary
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                predictions.forEach { series ->
-                    Text(
-                        stringResource(series.kind.labelResource()),
-                        style = caption, color = series.kind.color()
-                    )
-                }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (data.targets.isNotEmpty())
+                Text("┄ " + stringResource(R.string.overview_graph_target), style = caption, color = colors.accent)
+            data.predictions.forEach { series ->
+                Text("┄ " + stringResource(series.kind.labelResource()), style = caption, color = series.kind.color())
             }
         }
-        Canvas(Modifier.fillMaxWidth().weight(1f)) {
+        if (settings.forecasts.isNotEmpty())
+            Text(
+                stringResource(if (data.predictions.isEmpty()) R.string.overview_predictions_unavailable else R.string.overview_predictions_estimates),
+                style = caption, color = colors.textSecondary
+            )
+        Canvas(Modifier.fillMaxWidth().height(240.dp)) {
             if (!data.hasData) return@Canvas
-            drawChart(plotted, colors, measurer, axisStyle, valueStyle)
+            drawChart(data, settings, colors, measurer, axisStyle, valueStyle)
         }
-        if (data.hasData && data.targets.isNotEmpty())
-            Text("┄ Target (midpoint)", modifier = Modifier.align(Alignment.TopEnd), style = caption, color = colors.accent)
     }
 }
 
-private const val GLUCOSE_WEIGHT = 0.60f   // share of height for the glucose panel
 private const val RAIL_WEIGHT = 0.10f      // treatment rail
 private const val INSULIN_WEIGHT = 0.30f   // delivered insulin
 
 private fun DrawScope.drawChart(
     d: HomeChartData,
+    settings: HomeGraphSettings,
     colors: AapsColors,
     measurer: TextMeasurer,
     axisStyle: TextStyle,
     valueStyle: TextStyle
 ) {
-    val leftPad = 26.dp.toPx()
-    val rightPad = 6.dp.toPx()
+    val leftPad = 48.dp.toPx()
+    val rightPad = 48.dp.toPx()
     val axisH = 14.dp.toPx()
     val plotW = size.width - leftPad - rightPad
     if (plotW <= 0f || size.height <= axisH) return
 
-    val gTop = if (d.targets.isEmpty()) 2.dp.toPx() else 20.dp.toPx()
+    val gTop = 2.dp.toPx()
     val bodyH = size.height - axisH - gTop
-    val gH = bodyH * GLUCOSE_WEIGHT
-    val railY = gTop + gH + bodyH * RAIL_WEIGHT * 0.30f   // sits above the panel label, not on it
-    val iTop = gTop + gH + bodyH * RAIL_WEIGHT
-    val iH = bodyH * INSULIN_WEIGHT
+    val showBasal = settings.visible(GlucoseOverlay.BASAL)
+    val showTreatments = settings.visible(GlucoseOverlay.TREATMENTS)
+    val iH = if (showBasal) bodyH * INSULIN_WEIGHT else 0f
+    val railH = if (showTreatments) bodyH * RAIL_WEIGHT else 0f
+    val gH = bodyH - iH - railH
+    val railY = gTop + gH + railH * 0.30f
+    val iTop = gTop + gH + railH
 
     val span = (d.to - d.from).toFloat().coerceAtLeast(1f)
     fun x(t: Long): Float = leftPad + (t - d.from) / span * plotW
 
     // Glucose scale: always show the band plus a little headroom, and grow for excursions.
-    val glucoseValues = (d.readings + d.trace + d.predictions.flatMap { it.points } + d.targets).map { it.value }
-    val maxReading = glucoseValues.max()
-    val gHi = max(d.highMark + 2.0, kotlin.math.ceil(maxReading + 0.5))
-    val gLo = min(d.lowMark - 1.0, glucoseValues.min() - 0.5).coerceAtLeast(0.0)
+    val (gLo, gHi) = d.glucoseBounds()
     fun y(v: Double): Float = gTop + ((gHi - v.coerceIn(gLo, gHi)) / (gHi - gLo)).toFloat() * gH
 
     // ---- display threshold band (behind everything) ----
@@ -172,7 +152,7 @@ private fun DrawScope.drawChart(
     // trace: the real spread stays visible — compression lows, early-wear instability, a failing
     // sensor all show up here — while the line stays readable. Smoothing the trace itself would
     // hide exactly the signal you want when something is wrong.
-    if (d.hasDenseScatter) {
+    if (settings.visible(GlucoseOverlay.RAW_READINGS) && d.hasDenseScatter) {
         val r = 1.dp.toPx()
         d.readings.forEach { p ->
             drawCircle(
@@ -235,7 +215,7 @@ private fun DrawScope.drawChart(
     }
 
     // ---- treatment rail ----
-    drawLine(colors.divider, Offset(leftPad, railY), Offset(size.width - rightPad, railY), 1f)
+    if (showTreatments) drawLine(colors.divider, Offset(leftPad, railY), Offset(size.width - rightPad, railY), 1f)
     d.treatments.forEach { t ->
         when (t.kind) {
             TreatmentKind.CARBS      -> drawCircle(
@@ -258,52 +238,54 @@ private fun DrawScope.drawChart(
         }
     }
 
-    // ---- delivered insulin ----
-    val iMax = max(d.basal.maxOfOrNull { it.rate } ?: 0.0, d.scheduledBasal).coerceAtLeast(0.1) * 1.15
-    fun iy(r: Double): Float = iTop + iH - (r.coerceIn(0.0, iMax) / iMax).toFloat() * iH
+    if (showBasal) {
+        // ---- delivered insulin ----
+        val iMax = max(d.basal.maxOfOrNull { it.rate } ?: 0.0, d.scheduledBasal).coerceAtLeast(0.1) * 1.15
+        fun iy(r: Double): Float = iTop + iH - (r.coerceIn(0.0, iMax) / iMax).toFloat() * iH
 
-    if (d.basal.size > 1) {
-        val step = Path().apply {
-            moveTo(leftPad, iy(d.basal.first().rate))
-            for (i in 1 until d.basal.size) {
-                val px = x(d.basal[i].time)
-                lineTo(px, iy(d.basal[i - 1].rate))
-                lineTo(px, iy(d.basal[i].rate))
+        if (d.basal.size > 1) {
+            val step = Path().apply {
+                moveTo(leftPad, iy(d.basal.first().rate))
+                for (i in 1 until d.basal.size) {
+                    val px = x(d.basal[i].time)
+                    lineTo(px, iy(d.basal[i - 1].rate))
+                    lineTo(px, iy(d.basal[i].rate))
+                }
+                lineTo(x(d.basal.last().time), iy(d.basal.last().rate))
+                lineTo(x(d.basal.last().time), iTop + iH)
+                lineTo(leftPad, iTop + iH)
+                close()
             }
-            lineTo(x(d.basal.last().time), iy(d.basal.last().rate))
-            lineTo(x(d.basal.last().time), iTop + iH)
-            lineTo(leftPad, iTop + iH)
-            close()
-        }
-        drawPath(
-            step,
-            Brush.verticalGradient(
-                0f to colors.accent.copy(alpha = 0.38f),
-                1f to colors.accent.copy(alpha = 0.06f),
-                startY = iTop, endY = iTop + iH
+            drawPath(
+                step,
+                Brush.verticalGradient(
+                    0f to colors.accent.copy(alpha = 0.38f),
+                    1f to colors.accent.copy(alpha = 0.06f),
+                    startY = iTop, endY = iTop + iH
+                )
             )
-        )
-        drawPath(step, colors.accent, style = Stroke(width = 1.4.dp.toPx()))
-    }
-    // Panel label sits INSIDE the panel on its own ground: in the rail band above, it collided with
-    // whichever treatment happened to fall near the left edge.
-    run {
-        val laid = measurer.measure("INSULIN U/HR", axisStyle)
-        drawRoundRect(
-            colors.surface.copy(alpha = 0.85f),
-            topLeft = Offset(leftPad, iTop + 2.dp.toPx()),
-            size = Size(laid.size.width + 6.dp.toPx(), laid.size.height + 2.dp.toPx()),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
-        )
-        drawText(laid, topLeft = Offset(leftPad + 3.dp.toPx(), iTop + 3.dp.toPx()))
-    }
+            drawPath(step, colors.accent, style = Stroke(width = 1.4.dp.toPx()))
+        }
+        // Panel label sits INSIDE the panel on its own ground: in the rail band above, it collided with
+        // whichever treatment happened to fall near the left edge.
+        run {
+            val laid = measurer.measure("INSULIN U/HR", axisStyle)
+            drawRoundRect(
+                colors.surface.copy(alpha = 0.85f),
+                topLeft = Offset(leftPad, iTop + 2.dp.toPx()),
+                size = Size(laid.size.width + 6.dp.toPx(), laid.size.height + 2.dp.toPx()),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+            )
+            drawText(laid, topLeft = Offset(leftPad + 3.dp.toPx(), iTop + 3.dp.toPx()))
+        }
 
-    if (d.scheduledBasal > 0) {
-        drawLine(
-            colors.textTertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(x(d.now), iy(d.scheduledBasal)),
-            strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f))
-        )
-        measurer.label(this, "sched " + fmt(d.scheduledBasal, 2), leftPad + 3.dp.toPx(), iy(d.scheduledBasal) - 3.dp.toPx(), axisStyle)
+        if (d.scheduledBasal > 0) {
+            drawLine(
+                colors.textTertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(x(minOf(d.now, d.historyTo)), iy(d.scheduledBasal)),
+                strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f))
+            )
+            measurer.label(this, "sched " + fmt(d.scheduledBasal, 2), leftPad + 3.dp.toPx(), iy(d.scheduledBasal) - 3.dp.toPx(), axisStyle)
+        }
     }
 
     // ---- time axis ----
@@ -386,7 +368,7 @@ private fun PredictionKind.color(): Color = when (this) {
     PredictionKind.A_COB -> Color(0xFFD98C40)
 }
 
-private fun PredictionKind.labelResource(): Int = when (this) {
+internal fun PredictionKind.labelResource(): Int = when (this) {
     PredictionKind.IOB   -> R.string.overview_prediction_iob
     PredictionKind.COB   -> R.string.overview_prediction_cob
     PredictionKind.ZT    -> R.string.overview_prediction_zt

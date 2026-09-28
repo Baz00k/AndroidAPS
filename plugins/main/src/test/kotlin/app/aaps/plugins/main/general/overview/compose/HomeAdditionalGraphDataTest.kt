@@ -27,15 +27,15 @@ class HomeAdditionalGraphDataTest {
         AdditionalSeries.entries.forEach { assertEquals(settings.graph(it), restored.graph(it)) }
         assertEquals(0, restored.graph(AdditionalSeries.IOB))
         assertEquals(4, restored.graph(AdditionalSeries.BGI))
-        assertEquals(1, restored.graph(AdditionalSeries.COB))
+        assertEquals(0, restored.graph(AdditionalSeries.COB))
     }
 
     @Test
-    fun `corrupt or future preference entries do not hide known series`() {
+    fun `corrupt or future preference entries leave optional series hidden`() {
         val settings = AdditionalGraphSettings.decode("IOB=99,COB=-1,SENSITIVITY=oops,UNKNOWN=2,BGI=4")
-        assertEquals(1, settings.graph(AdditionalSeries.IOB))
-        assertEquals(1, settings.graph(AdditionalSeries.COB))
-        assertEquals(3, settings.graph(AdditionalSeries.SENSITIVITY))
+        assertEquals(0, settings.graph(AdditionalSeries.IOB))
+        assertEquals(0, settings.graph(AdditionalSeries.COB))
+        assertEquals(0, settings.graph(AdditionalSeries.SENSITIVITY))
         assertEquals(4, settings.graph(AdditionalSeries.BGI))
     }
 

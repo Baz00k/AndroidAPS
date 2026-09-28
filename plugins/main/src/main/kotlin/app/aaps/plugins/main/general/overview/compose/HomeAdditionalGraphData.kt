@@ -4,7 +4,7 @@ import app.aaps.core.interfaces.aps.AutosensData
 
 /** Stable names are persisted; enum ordinals must never become preference values. */
 enum class AdditionalSeries(val defaultGraph: Int) {
-    IOB(1), COB(1), SENSITIVITY(3), DEVIATIONS(2), BGI(2)
+    IOB(0), COB(0), SENSITIVITY(0), DEVIATIONS(0), BGI(0)
 }
 
 data class AdditionalGraphSettings(val assignments: Map<AdditionalSeries, Int>) {
