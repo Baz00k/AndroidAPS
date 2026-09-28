@@ -1,6 +1,7 @@
 package app.aaps.ui.activities.history
 
 import app.aaps.core.data.model.TB
+import app.aaps.core.data.ue.ValueWithUnit
 import java.math.BigDecimal
 
 /** Use the persisted rate and duration, including early stops, without interpreting delivery or IOB. */
@@ -21,6 +22,11 @@ internal fun TB.toHistoryItem(from: Long, now: Long, dayLabel: String, time: Str
     return HistoryItem(
         id, timestamp, dayLabel, time, HistoryKind.TBR,
         "Temporary basal", "Recorded duration: $durationText$typeText",
-        if (isAbsolute) "$rateText U/h" else "$rateText%"
+        if (isAbsolute) "$rateText U/h" else "$rateText%",
+        auditValues = listOf(
+            ValueWithUnit.Timestamp(timestamp),
+            if (isAbsolute) ValueWithUnit.UnitPerHour(rate) else ValueWithUnit.Percent(rate.toInt()),
+            ValueWithUnit.Minute(minutes.toInt())
+        )
     )
 }

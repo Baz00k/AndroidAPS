@@ -1,6 +1,7 @@
 package app.aaps.ui.activities.history
 
 import app.aaps.core.data.model.TB
+import app.aaps.core.data.ue.ValueWithUnit
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 
@@ -17,19 +18,22 @@ class TemporaryBasalHistoryTest {
     fun `absolute basal preserves rate precision and identity without implying bolus units`() {
         val item = row(basal())
         assertThat(item.value).isEqualTo("0.125 U/h")
+        assertThat(item.auditValues).containsExactly(ValueWithUnit.Timestamp(1_000), ValueWithUnit.UnitPerHour(0.125), ValueWithUnit.Minute(30)).inOrder()
         assertThat(item.sub).isEqualTo("Recorded duration: 30 min")
         assertThat(item.timestamp).isEqualTo(1_000L)
         assertThat(item.time).isEqualTo("12:30")
         assertThat(item.dayLabel).isEqualTo("Today")
         assertThat(item.key).isEqualTo("TBR7")
         assertThat(item.key).isNotEqualTo(item.copy(kind = HistoryKind.BOLUS).key)
-        assertThat(item.removable).isFalse()
+        assertThat(item.auditValues).contains(ValueWithUnit.Timestamp(item.timestamp))
     }
 
     @Test
     fun `relative rates stay percentages including zero and above one hundred`() {
         for (rate in listOf(0.0, 100.0, 150.0)) {
-            assertThat(row(basal().copy(isAbsolute = false, rate = rate)).value).isEqualTo("${rate.toInt()}%")
+            val item = row(basal().copy(isAbsolute = false, rate = rate))
+            assertThat(item.value).isEqualTo("${rate.toInt()}%")
+            assertThat(item.auditValues).contains(ValueWithUnit.Percent(rate.toInt()))
         }
     }
 
@@ -44,7 +48,7 @@ class TemporaryBasalHistoryTest {
         val item = row(basal().copy(type = TB.Type.PUMP_SUSPEND, rate = 0.0))
         assertThat(item.value).isEqualTo("0 U/h")
         assertThat(item.sub).contains("Pump suspend")
-        assertThat(item.removable).isFalse()
+        assertThat(item.auditValues).contains(ValueWithUnit.Timestamp(item.timestamp))
     }
 
     @Test
@@ -65,7 +69,6 @@ class TemporaryBasalHistoryTest {
         }
         for (kind in HistoryKind.entries.filter { it != HistoryKind.TBR }) {
             assertThat(HistoryFilter.TBR.matches(kind)).isFalse()
-            assertThat(row(basal()).copy(kind = kind).removable).isTrue()
         }
     }
 }

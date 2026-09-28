@@ -1,6 +1,7 @@
 package app.aaps.ui.activities.history
 
 import androidx.compose.runtime.Immutable
+import app.aaps.core.data.ue.ValueWithUnit
 
 enum class HistoryKind { BOLUS, SMB, CARBS, TBR, EVENT }
 
@@ -16,14 +17,13 @@ data class HistoryItem(
     val kind: HistoryKind,
     val title: String,
     val sub: String,
-    val value: String
+    val value: String,
+    /** Original persisted values for the removal audit; never parsed from display text. */
+    val auditValues: List<ValueWithUnit> = listOf(ValueWithUnit.Timestamp(timestamp))
 ) {
 
     /** Unique across kinds — two kinds can share an id, since each table numbers its own rows. */
     val key: String get() = kind.name + id
-
-    /** Basal history affects insulin accounting and is display-only here. */
-    val removable: Boolean get() = kind != HistoryKind.TBR
 }
 
 @Immutable
@@ -31,6 +31,7 @@ data class HistoryUiState(
     val loading: Boolean = true,
     val items: List<HistoryItem> = emptyList(),
     val selecting: Boolean = false,
+    val removing: Boolean = false,
     val selected: Set<String> = emptySet()   // HistoryItem.key
 )
 
