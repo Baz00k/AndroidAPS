@@ -51,9 +51,10 @@ import app.aaps.core.keys.interfaces.StringPreferenceKey
  * actions, list pickers with custom bodies — working exactly as before instead of silently doing nothing.
  */
 
-/** One rendered line: either a section heading or a leaf preference. */
+/** Preference content plus explicit card boundaries from the native hierarchy. */
 sealed interface PrefRow {
     data class Section(val title: String) : PrefRow
+    data object CardBreak : PrefRow
     data class Leaf(
         val preference: Preference,
         val summary: String? = preference.summary?.toString(),
@@ -64,30 +65,34 @@ sealed interface PrefRow {
 /** Flatten a built [PreferenceScreen] into rows, honouring `isVisible` exactly as the legacy list does. */
 fun flattenPreferences(group: PreferenceGroup): List<PrefRow> {
     val out = mutableListOf<PrefRow>()
-    fun walk(g: PreferenceGroup, emitHeading: Boolean) {
-        if (emitHeading && g is PreferenceCategory && g.isVisible) {
-            val t = g.title?.toString().orEmpty()
-            if (t.isNotBlank()) out += PrefRow.Section(t)
-        }
+    fun walk(g: PreferenceGroup) {
+        var inLeafRun = false
+        var headingUsed = false
+        var childGroupSeen = false
         for (i in 0 until g.preferenceCount) {
             val p = g.getPreference(i)
             if (!p.isVisible) continue
-            when (p) {
-                is PreferenceCategory -> walk(p, emitHeading = true)
-                // A nested PreferenceScreen is a navigation target in the legacy UI. Render its contents
-                // inline under its own heading: these screens are short, and one flat scroll beats a
-                // hierarchy the user has to remember the shape of.
-                is PreferenceScreen   -> {
-                    val t = p.title?.toString().orEmpty()
-                    if (t.isNotBlank()) out += PrefRow.Section(t)
-                    walk(p, emitHeading = false)
+            if (p is PreferenceGroup) {
+                walk(p)
+                childGroupSeen = true
+                inLeafRun = false
+            } else {
+                if (!inLeafRun) {
+                    // Headings describe a card, not every ancestor in the tree. Returning from a
+                    // child must also end its card: reset actions and parent switches are siblings,
+                    // not members of the last child category.
+                    val hasHeading = g is PreferenceCategory || (g is PreferenceScreen && g !== group && !childGroupSeen)
+                    val title = if (!headingUsed && hasHeading) g.title?.toString().orEmpty() else ""
+                    if (title.isNotBlank()) out += PrefRow.Section(title)
+                    else if (out.isNotEmpty()) out += PrefRow.CardBreak
+                    headingUsed = true
+                    inLeafRun = true
                 }
-                is PreferenceGroup    -> walk(p, emitHeading = false)
-                else                  -> out += PrefRow.Leaf(p)
+                out += PrefRow.Leaf(p)
             }
         }
     }
-    walk(group, emitHeading = true)
+    walk(group)
     return out
 }
 
@@ -114,7 +119,9 @@ fun PreferenceScreenCompose(
         var i = 0
         while (i < rows.size) {
             val row = rows[i]
-            if (row is PrefRow.Section) {
+            if (row is PrefRow.CardBreak) {
+                i++
+            } else if (row is PrefRow.Section) {
                 val leaves = mutableListOf<PrefRow.Leaf>()
                 var j = i + 1
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {

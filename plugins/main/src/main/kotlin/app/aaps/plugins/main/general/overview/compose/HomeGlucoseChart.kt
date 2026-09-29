@@ -215,7 +215,10 @@ private fun DrawScope.drawChart(
     clipRect(plotLeft, 0f, plotRight, bodyBottom) {
 
         // Distinct dashed target midpoint, as in the original Overview target series.
-        val targets = d.targets.visibleSlice(vp.start, vp.end) { it.time }
+        // Keep a stable path origin while panning. Slicing at the viewport predecessor resets
+        // dash phase at every sample boundary, making dashes appear pinned to the screen.
+        // This bounded (~337 point) path is clipped above, not rebuilt from a moving origin.
+        val targets = d.targets
         if (targets.isNotEmpty()) {
             val path = Path()
             targets.forEachIndexed { index, point ->

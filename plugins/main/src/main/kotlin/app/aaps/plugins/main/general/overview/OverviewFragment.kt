@@ -110,6 +110,7 @@ import androidx.compose.runtime.remember
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.plugins.main.general.overview.compose.BASAL_SAMPLE_MS
 import app.aaps.plugins.main.general.overview.compose.CHART_HISTORY_MS
+import app.aaps.plugins.main.general.overview.compose.CHART_MAX_FUTURE_MS
 import app.aaps.plugins.main.general.overview.compose.ChartPanState
 import app.aaps.plugins.main.general.overview.compose.ChartWindow
 import app.aaps.plugins.main.general.overview.compose.rememberChartInsets
@@ -745,7 +746,9 @@ class OverviewFragment : DaggerFragment() {
         // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
         // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
         // Independent of the temporary-target hero, which reads the active target itself.
-        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, now, units)
+        // The target is a planned reference, not extrapolated glucose: evaluate the known profile
+        // schedule into the forecast window, reverting to it when a temporary target expires.
+        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, now + CHART_MAX_FUTURE_MS, units)
 
         val treatments = ArrayList<ChartTreatment>()
         persistenceLayer.getBolusesFromTimeToTime(from, now, true).forEach { b ->

@@ -10,12 +10,12 @@ import org.mockito.kotlin.mock
 
 class HomeAdditionalGraphDataTest {
 
-    private fun sample(time: Long, deviation: Double = -18.0, bgi: Double = -9.0): AutosensData = mock {
+    private fun sample(time: Long, deviation: Double = -18.0, bgi: Double = -9.0, result: AutosensResult = AutosensResult(ratio = 1.2, sensResult = "computed")): AutosensData = mock {
         on { this.time } doReturn time
         on { cob } doReturn 23.5
         on { this.deviation } doReturn deviation
         on { this.bgi } doReturn bgi
-        on { autosensResult } doReturn AutosensResult(ratio = 1.2)
+        on { autosensResult } doReturn result
     }
 
     @Test
@@ -69,6 +69,20 @@ class HomeAdditionalGraphDataTest {
         assertTrue(data.points.getValue(AdditionalSeries.DEVIATIONS).isEmpty())
         assertTrue(data.points.getValue(AdditionalSeries.BGI).isEmpty())
         assertEquals(1, data.points.getValue(AdditionalSeries.COB).size)
+    }
+
+    @Test
+    fun `unavailable autosens is a gap but computed neutral sensitivity is a real zero`() {
+        val data = AdditionalGraphData.fromAutosens(
+            listOf(sample(0), sample(300_000, result = AutosensResult()), sample(600_000),
+                   sample(900_000, result = AutosensResult(ratio = 1.0, sensResult = "Sensitivity normal"))),
+            0, 900_000, 900_000
+        ) { it }
+        val points = data.points.getValue(AdditionalSeries.SENSITIVITY)
+        assertEquals(listOf(0L, 600_000L, 900_000L), points.map { it.time })
+        assertEquals(0.0, points.last().value)
+        assertTrue(points[1].time - points[0].time > ADDITIONAL_GRAPH_GAP_MS)
+        assertEquals(4, data.points.getValue(AdditionalSeries.COB).size)
     }
 
     @Test

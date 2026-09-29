@@ -12,6 +12,63 @@ graph: the mandatory graph optionality is in this upper layer, so evaluate the s
 After #66 merges, retarget #89 to main and reconcile the base (especially if #66 is squash-merged).
 Do not independently merge the prototype PRs on top of the combined implementation.
 
+## Review fixes — September 29, 2026
+
+These captures supersede the stacked headings and mixed card boundaries in `preferences/`.
+
+- Preference headings now label actual content cards, rather than every ancestor of a nested
+  group. Returning from a child group ends its card. Additional graph pickers, the reset action,
+  and Overview's Keep screen on switch no longer share a card. Simple nested screens retain
+  their labels; hidden groups stay hidden. This fixes the renderer rather than reordering one
+  offending setting. Storage and therapy preference handlers are unchanged.
+- Target midpoint data extends through the four-hour future pan budget. The existing provider
+  evaluates the known profile's time-of-day targets and temporary-target expiry, rather than
+  indefinitely carrying the current temporary target forward. It is a planned reference, not
+  a prediction of future profile edits. Missing profile information is not invented.
+- The target dashed path now starts at the beginning of the bounded data snapshot and is clipped
+  to the plot. Previously, slicing it at the viewport's moving predecessor reset dash phase.
+  Emulator pan recording confirms the dash pattern moves instead of staying screen-anchored.
+- `AutosensResult()` explicitly means unavailable and defaults to ratio 1. Sensitivity plugins
+  return it when computation inputs are missing. The old mapper graphed that fallback as 0%,
+  indistinguishable from a computed neutral ratio. The display now omits unavailable results,
+  retains computed ratio 1, and preserves the existing gap threshold. No smoothing, carry-forward,
+  worker, sensitivity algorithm, dosing, or pump changes.
+
+### Sensitivity evidence and limits
+
+A local synthetic replay feeds the production mapper one-minute samples with a computed result
+at five-minute intervals and unavailable defaults between them. The old mapping reproduces the
+sawtooth; the corrected mapping removes those artificial zeroes. A deliberate 20-minute missing
+interval remains a gap, and a final computed ratio of 1 remains a real 0% line. This demonstrates
+an actual display bug and a plausible explanation of the user's screenshot, **not proof that all
+spikes in their real history are unavailable defaults**. Their underlying autosens records/logs
+are still needed to establish that. Genuine rapid changes are intentionally not removed.
+
+### Verification
+
+- 78 focused JVM tests passed (74 plugins/main + 4 app), including regressions for preference
+  ancestry/sibling boundaries, hidden groups, neutral vs unavailable sensitivity, and future
+  profile schedule/temporary-target expiry. Standard `assembleFullDebug` passed.
+- Android 15 `AAPS_PR66_Review`: checked headings and separate cards, Reset defaults immediately
+  updating picker summaries, native panel pickers, overlay/forecast toggles and serialized storage.
+  Re-enabled target + IOB prediction, IOB panel 1 and sensitivity panel 3 after resetting.
+- Production chart composables exercised in an uncommitted, emulator-only fixture activity:
+  synthetic before/after sensitivity, future target return to profile, synchronized horizontal pan.
+  The chart captures below are **synthetic**, not the user's history or an end-to-end APS run.
+- Rebuilt and reinstalled the standard APK after fixture verification. Manifest checked with aapt:
+  no GraphReviewActivity or SeedReceiver. Emulator notification-heads-up setting restored.
+
+![Preference headings without redundant ancestors](refinements/01-preference-headings.png)
+
+![Separate graph selection, reset, and Overview cards](refinements/02-preference-boundaries.png)
+
+![Synthetic sensitivity before filtering unavailable results](refinements/03-sensitivity-before-synthetic.png)
+
+![Future target reference and corrected synthetic sensitivity](refinements/04-target-future-sensitivity-after.png)
+
+[Horizontal pan recording](refinements/06-target-pan.mp4) ·
+[Panned screenshot](refinements/05-target-panned.png)
+
 ## Graph controls in Preferences — current placement
 
 Graph configuration now lives in the existing **Overview Preferences → Graph settings** preference

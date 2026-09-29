@@ -1,6 +1,7 @@
 package app.aaps.plugins.main.general.overview.compose
 
 import app.aaps.core.interfaces.aps.AutosensData
+import app.aaps.core.interfaces.aps.AutosensResult
 
 /** Stable names are persisted; enum ordinals must never become preference values. */
 enum class AdditionalSeries(val defaultGraph: Int) {
@@ -30,6 +31,8 @@ data class AdditionalGraphSettings(val assignments: Map<AdditionalSeries, Int>) 
 /** Display-only snapshots. No prediction, carry-forward, or replacement of missing data with zero. */
 data class AdditionalGraphData(val points: Map<AdditionalSeries, List<GlucosePoint>> = emptyMap()) {
     companion object {
+        private val unavailableSensitivity = AutosensResult().sensResult
+
         fun fromAutosens(samples: List<AutosensData>, from: Long, to: Long, now: Long, fromMgdl: (Double) -> Double): AdditionalGraphData {
             val history = samples.filter { it.time in from..minOf(to, now) }.sortedBy { it.time }
             fun points(value: (AutosensData) -> Double) = history.mapNotNull {
@@ -39,7 +42,14 @@ data class AdditionalGraphData(val points: Map<AdditionalSeries, List<GlucosePoi
             return AdditionalGraphData(
                 mapOf(
                     AdditionalSeries.COB to points { it.cob },
-                    AdditionalSeries.SENSITIVITY to points { 100.0 * (it.autosensResult.ratio - 1.0) },
+                    AdditionalSeries.SENSITIVITY to points {
+                        // The algorithm uses ratio=1 as its unavailable fallback too. It is not a
+                        // measured 0% change. Preserve computed neutral results and genuine jumps;
+                        // missing results remain gaps, never smooth or carry them forward.
+                        val result = it.autosensResult
+                        if (result.sensResult == unavailableSensitivity) Double.NaN
+                        else 100.0 * (result.ratio - 1.0)
+                    },
                     AdditionalSeries.DEVIATIONS to points { fromMgdl(it.deviation) },
                     // AAPS additional graphs show insulin lowering impact as positive. The stored
                     // loop BGI has the opposite sign; converting here never alters the loop value.
