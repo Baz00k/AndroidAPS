@@ -375,6 +375,8 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     }
 
     fun setFilter(filter: String) {
+        // SearchView replays its empty text after a dialog closes; applying it would reveal every hidden preference.
+        if (filter == this.filter) return
         this.filter = filter
         preferenceManager?.preferenceScreen?.let { updateFilterVisibility(filter, it) }
         refreshComposeRows()
