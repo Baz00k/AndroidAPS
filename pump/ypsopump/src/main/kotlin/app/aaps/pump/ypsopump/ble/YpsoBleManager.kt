@@ -186,7 +186,10 @@ class YpsoBleManager @Inject constructor(
         }
         val key = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         synchronized(opLock) {
-            if (!key.contentEquals(configuredKey)) disconnect()
+            if (!key.contentEquals(configuredKey)) {
+                disconnect()
+                pumpState.invalidateStatus()
+            }
             configuredKey?.fill(0)
             configuredKey = key
             configuredGeneration = session?.activeRecord()?.generation
@@ -199,7 +202,11 @@ class YpsoBleManager @Inject constructor(
         val installed = provisioning.connectionSession() ?: return false
         val key = installed.key
         synchronized(opLock) {
-            if (!key.contentEquals(configuredKey)) disconnect()
+            if (configuredGeneration != installed.generation) pumpState.invalidateStatus()
+            if (!key.contentEquals(configuredKey)) {
+                disconnect()
+                pumpState.invalidateStatus()
+            }
             configuredKey?.fill(0)
             configuredKey = key
             configuredGeneration = installed.generation
@@ -302,7 +309,7 @@ class YpsoBleManager @Inject constructor(
                 importDebugBaseline(owner, macAddress, key)
                 sessionToken = owner.openGeneration(generation, macAddress.uppercase(java.util.Locale.ROOT), key)
             } catch (e: Exception) {
-                pumpState.invalidateStatus()
+                pumpState.invalidateStatus(preserveDisplay = true)
                 reportConnectionFailure(configured, setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), operation = "session-open")
                 aapsLogger.error(LTag.PUMP, "YpsoPump session unavailable: ${e.message}")
                 return
@@ -324,13 +331,13 @@ class YpsoBleManager @Inject constructor(
             val openedGatt = runCatching { device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE) }
                 .getOrElse {
                     pumpState.connectionState = ConnectionState.DISCONNECTED
-                    pumpState.invalidateStatus()
+                    pumpState.invalidateStatus(preserveDisplay = true)
                     aapsLogger.error(LTag.PUMP, "YpsoPump connect failed: ${it.message}")
                     null
                 }
             if (openedGatt == null) {
                 pumpState.connectionState = ConnectionState.DISCONNECTED
-                pumpState.invalidateStatus()
+                pumpState.invalidateStatus(preserveDisplay = true)
                 reportConnectionFailure(configured, setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "connect-gatt")
             } else if (pumpState.connectionState != ConnectionState.DISCONNECTED) {
                 bluetoothGatt = openedGatt
@@ -350,7 +357,7 @@ class YpsoBleManager @Inject constructor(
             return attempt
         }
         val ownership = synchronized(opLock) {
-            pumpState.invalidateStatus()
+            pumpState.invalidateStatus(preserveDisplay = true)
             ReadOwnership(bluetoothGatt, sessionToken?.generation, configuredAttemptId)
         }
         val originGatt = ownership.gatt
@@ -524,7 +531,7 @@ class YpsoBleManager @Inject constructor(
             bolusWriteActive.set(false)
             tbrWriteActive.set(false)
             controlNotificationsEnabled = false
-            if (!preserveStatus) pumpState.invalidateStatus()
+            if (!preserveStatus) pumpState.invalidateStatus(preserveDisplay = true)
             ownedGatt to drainPendingOperationsLocked()
         }
         // A deliberate local teardown is not a pump failure: suppress callback reports while draining.
@@ -2183,7 +2190,7 @@ class YpsoBleManager @Inject constructor(
                         val owned = ReadOwnership(g, sessionToken?.generation, configuredAttemptId)
                         bluetoothGatt = null
                         pumpState.connectionState = ConnectionState.DISCONNECTED
-                        pumpState.invalidateStatus()
+                        pumpState.invalidateStatus(preserveDisplay = true)
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         historySelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         bolusWriteCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
@@ -2373,7 +2380,7 @@ class YpsoBleManager @Inject constructor(
             val captured = ownership ?: ReadOwnership(g, sessionToken?.generation ?: configuredGeneration, configuredAttemptId)
             bluetoothGatt = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
-            pumpState.invalidateStatus()
+            pumpState.invalidateStatus(preserveDisplay = cause != PumpSession.AvailabilityCause.IDENTITY_MISMATCH)
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
             bolusWriteCoordinatorInstance?.ownerDisconnected(g, message)

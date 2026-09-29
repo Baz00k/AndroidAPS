@@ -14,7 +14,6 @@ import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.utils.compactDurationLabel
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.compose.PumpStatusRow
 import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
@@ -80,7 +79,8 @@ internal fun buildPumpStatusState(
     dateUtil: DateUtil,
     rh: ResourceHelper
 ): PumpStatusState {
-    val snapshot = pumpState.statusSnapshot
+    val status = pumpStatusPresentation(pumpState, rh)
+    val snapshot = status.snapshot
     // Ordered by how much the value can change what the user does next: what the pump is currently
     // delivering, then how well that is known, then unchanging identity.
     val rows = buildList {
@@ -105,27 +105,22 @@ internal fun buildPumpStatusState(
         hasSavedDetails = pumpState.claimedSerialNumber.isNotBlank(),
         verified = pumpState.serialNumber.isNotBlank(),
     )
-    val connectionSummary = when {
-        pumpState.connectionState == ConnectionState.CONNECTED -> rh.gs(R.string.ypsopump_connected)
-        pumpState.connectionState == ConnectionState.DISCONNECTED -> rh.gs(R.string.ypsopump_disconnected)
-        else -> rh.gs(R.string.ypsopump_connecting)
-    }
     return PumpStatusState(
         title = "YpsoPump",
-        connectionSummary = connectionSummary,
+        connectionSummary = status.connectionSummary,
+        readingsNotice = status.readingsNotice,
         alert = when (pumpState.profileComparison) {
             YpsoPumpState.ProfileComparison.MISMATCH -> rh.gs(R.string.ypsopump_profile_mismatch_notification, pumpState.lastReadProgram)
             else                                     -> null
         },
         connectionAction = when {
             presentation != PumpSetupPresentation.READY -> rh.gs(presentation.message)
-            pumpState.connectionState == ConnectionState.CONNECTED && snapshot == null -> rh.gs(R.string.ypsopump_authenticated_no_status)
             else -> null
         },
-        connectionHealthy = pumpState.isConnected && snapshot != null,
+        connectionHealthy = status.connectionHealthy,
         reservoir = snapshot?.reservoirUnits,
         // Bars are the internal wire representation; the UI only ever shows the mapped percent.
-        battery = pumpState.mappedBatteryPercent,
+        battery = status.battery,
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,
