@@ -76,9 +76,12 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(false)
             YpsoBleManager.StatusReadAttempt()
         }
-        val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        val profile: Profile = mock {
+            on { getBasal() } doReturn 0.5
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5))
+        }
         val results = listOf(
-            plugin.deliverTreatment(DetailedBolusInfo().apply { insulin = 1.25 }),
+            plugin.deliverTreatment(DetailedBolusInfo().apply { insulin = 1.2 }),
             plugin.setNewBasalProfile(profile),
             plugin.setTempBasalAbsolute(1.2, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
             plugin.setTempBasalPercent(150, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
@@ -88,7 +91,9 @@ class YpsoPumpPluginTest {
         assertEquals(0.0, plugin.baseBasalRate)
         assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isTempBasalCapable)
         verifyNoInteractions(sync)
-        if (YpsoPumpConst.READ_ONLY_MODE) verifyNoInteractions(manager)
+        if (!YpsoPumpConst.READ_ONLY_MODE) verify(manager, atLeastOnce()).readStatus(any())
+        verify(manager, never()).startBolus(any(), any(), any(), any(), any())
+        verify(manager, never()).writeTbr(any(), any(), any(), any(), any())
     }
 
     @Test
