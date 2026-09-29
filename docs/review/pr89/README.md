@@ -12,6 +12,39 @@ graph: the mandatory graph optionality is in this upper layer, so evaluate the s
 After #66 merges, retarget #89 to main and reconcile the base (especially if #66 is squash-merged).
 Do not independently merge the prototype PRs on top of the combined implementation.
 
+## Graph controls in Preferences — current placement
+
+Graph configuration now lives in the existing **Overview Preferences → Graph settings** preference
+tree (also included in general Preferences). Open it through the existing overflow menu; there is
+no new settings button or gear on the glucose card. The card retains its 6/12/24 h selector.
+
+The native preference tree contains overlay/forecast switches, additional-series panel pickers
+(Hide / Graph 1–4), and Reset defaults. It uses the same two serialized storage keys as before,
+so existing choices and defaults survive the move. Overview reloads them on resume, not only
+when its view is recreated. The old graph-settings Compose dialog is removed.
+
+The preference renderer now handles non-typed native switches and snapshots mutable summaries/
+checked states; this lets picker results and reset defaults update immediately without closing
+Preferences. Existing typed preference handlers and their validation remain unchanged.
+
+Verified on the isolated Android 15 emulator using the standard APK:
+- Enter Overview Preferences through the overflow menu.
+- Enable target/IOB forecasts; assign IOB history to Graph 1; verify saved codec values.
+- Verify the native picker and updated Graph 1 summary; reset and verify both stored defaults
+  and the visible Hide summary, then select Graph 1 again.
+- Return to the existing Overview, confirm changes apply and no Graph settings row remains.
+- Reopen Preferences and confirm saved choices. No therapy actions were invoked.
+
+![Graph settings in Overview Preferences](preferences/01-overview-preferences.png)
+
+![Native graph assignment picker](preferences/02-panel-picker.png)
+
+![Overview after returning from Preferences, without a settings row](preferences/05-overview-after-preference-change.png)
+
+The screenshots use the standard app with earlier synthetic database records. Those glucose
+records are now stale, so the line stops at its actual last timestamp; the blank history is not
+caused by moving settings. No fixture activity or receiver is present in this APK.
+
 ## Compact horizontal layout — current screenshots
 
 The `compact/` captures supersede the earlier horizontal spacing. The previous layout stacked
@@ -81,7 +114,7 @@ Additional captures: [settings](rolling/01-settings.png), [12 h](rolling/06-12h.
 
 ## Controls and defaults
 
-One **Graph settings** dialog is accessible from the glucose card, including when no additional
+The **Graph settings** section is in **Overview Preferences**, including when no additional
 panels are visible. Changes save immediately; **Reset defaults** restores:
 
 | Display element | Default | Control |
@@ -110,13 +143,15 @@ Standard, non-fixture build:
 ./gradlew --no-daemon --max-workers=2 \
   -Dorg.gradle.jvmargs='-Xmx3g -XX:+UseParallelGC -Xss1024m' \
   :plugins:main:testFullDebugUnitTest \
-  --tests '*Home*Test' --tests '*Target*Test' \
+  --tests '*Home*Test' --tests '*Target*Test' --tests '*OverviewPluginTest' \
+  :app:testFullDebugUnitTest --tests '*PreferenceScreenComposeTest' \
   :app:assembleFullDebug
 ```
 
-**67 tests, zero failures/errors:** 18 viewport/pan/clock tests, 10 chart-data/layout tests,
+**74 tests, zero failures/errors:** 18 viewport/pan/clock tests, 10 chart-data/layout tests,
 8 graph settings, 6 additional graph data, 5 predictions, 8 historical target chart,
-7 target display, 3 target extensions, 2 Actions target state. Standard full-debug build and
+7 target display, 3 target extensions, 2 Actions target state, 5 Overview preference-tree tests
+and 2 app preference-renderer snapshot tests. Standard full-debug build and
 `git diff --check` passed. Viewport tests include forecast-independent widths, bounds,
 paused refreshes, live reset, midnight, 12/24 h and spring/fall DST transitions.
 

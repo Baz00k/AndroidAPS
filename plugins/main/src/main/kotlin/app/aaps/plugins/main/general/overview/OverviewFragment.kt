@@ -129,7 +129,6 @@ import app.aaps.plugins.main.general.overview.compose.AdditionalGraphData
 import app.aaps.plugins.main.general.overview.compose.AdditionalGraphSettings
 import app.aaps.plugins.main.general.overview.compose.AdditionalSeries
 import app.aaps.plugins.main.general.overview.compose.HomeGraphSettings
-import app.aaps.plugins.main.general.overview.compose.HomeGraphSettingsControl
 import app.aaps.plugins.main.general.overview.compose.forDisplay
 import app.aaps.plugins.main.general.overview.compose.HomeAdditionalGraphs
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
@@ -246,19 +245,6 @@ class OverviewFragment : DaggerFragment() {
                     state = homeState.value,
                     actions = actions,
                     graph = { HomeGlucoseChart(displayed, window, chartPan, Modifier.fillMaxWidth(), settings, insets) },
-                    graphSettings = {
-                        HomeGraphSettingsControl(
-                            graphSettings.value, additionalGraphSettings.value,
-                            onSettings = { settings ->
-                                preferences.put(StringNonKey.OverviewGlucoseGraphSettings, settings.encode())
-                                graphSettings.value = settings
-                            },
-                            onAdditional = { settings ->
-                                preferences.put(StringNonKey.OverviewAdditionalGraphs, settings.encode())
-                                additionalGraphSettings.value = settings
-                            }
-                        )
-                    },
                     additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value, window, chartPan, insets) }
                 )
             }
@@ -273,6 +259,9 @@ class OverviewFragment : DaggerFragment() {
 
     override fun onResume() {
         super.onResume()
+        // Preferences is a separate activity; this fragment can resume without recreating its view.
+        graphSettings.value = HomeGraphSettings.decode(preferences.get(StringNonKey.OverviewGlucoseGraphSettings))
+        additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
         disposable += activePlugin.activeOverview.overviewBus
             .toObservable(EventUpdateOverviewCalcProgress::class.java)
             .observeOn(aapsSchedulers.main)

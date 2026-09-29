@@ -223,13 +223,14 @@ class OverviewPlugin @Inject constructor(
     }
 
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
-        if (requiredKey != null && requiredKey != "overview_buttons_settings" && requiredKey != "default_temp_targets_settings" && requiredKey != "prime_fill_settings" && requiredKey != "range_settings" && requiredKey != "statuslights_overview_advanced" && requiredKey != "overview_advanced_settings") return
+        if (requiredKey != null && requiredKey != OVERVIEW_GRAPH_SETTINGS && requiredKey != "overview_buttons_settings" && requiredKey != "default_temp_targets_settings" && requiredKey != "prime_fill_settings" && requiredKey != "range_settings" && requiredKey != "statuslights_overview_advanced" && requiredKey != "overview_advanced_settings") return
         val category = PreferenceCategory(context)
         parent.addPreference(category)
         category.apply {
             key = "overview_settings"
             title = rh.gs(R.string.overview)
             initialExpandedChildrenCount = 0
+            addPreference(overviewGraphPreferences(preferenceManager, context, preferences))
             addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.OverviewKeepScreenOn, summary = R.string.keep_screen_on_summary, title = R.string.keep_screen_on_title))
             addPreference(preferenceManager.createPreferenceScreen(context).apply {
                 key = "overview_buttons_settings"

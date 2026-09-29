@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.preference.Preference
+import androidx.preference.TwoStatePreference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceGroup
 import androidx.preference.PreferenceScreen
@@ -53,7 +54,11 @@ import app.aaps.core.keys.interfaces.StringPreferenceKey
 /** One rendered line: either a section heading or a leaf preference. */
 sealed interface PrefRow {
     data class Section(val title: String) : PrefRow
-    data class Leaf(val preference: Preference) : PrefRow
+    data class Leaf(
+        val preference: Preference,
+        val summary: String? = preference.summary?.toString(),
+        val checked: Boolean? = (preference as? TwoStatePreference)?.isChecked
+    ) : PrefRow
 }
 
 /** Flatten a built [PreferenceScreen] into rows, honouring `isVisible` exactly as the legacy list does. */
@@ -110,10 +115,10 @@ fun PreferenceScreenCompose(
         while (i < rows.size) {
             val row = rows[i]
             if (row is PrefRow.Section) {
-                val leaves = mutableListOf<Preference>()
+                val leaves = mutableListOf<PrefRow.Leaf>()
                 var j = i + 1
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
-                    leaves += (rows[j] as PrefRow.Leaf).preference; j++
+                    leaves += rows[j] as PrefRow.Leaf; j++
                 }
                 Text(row.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
                 if (leaves.isNotEmpty()) AapsCard {
@@ -123,10 +128,10 @@ fun PreferenceScreenCompose(
                 }
                 i = j
             } else {
-                val leaves = mutableListOf<Preference>()
+                val leaves = mutableListOf<PrefRow.Leaf>()
                 var j = i
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
-                    leaves += (rows[j] as PrefRow.Leaf).preference; j++
+                    leaves += rows[j] as PrefRow.Leaf; j++
                 }
                 if (leaves.isNotEmpty()) AapsCard {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -140,7 +145,8 @@ fun PreferenceScreenCompose(
 }
 
 @Composable
-private fun PreferenceRow(pref: Preference, preferences: Preferences) {
+private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
+    val pref = row.preference
     // A preference need not have a key: AndroidX allows keyless rows that only open something, and
     // returning early on one drew NOTHING while leaving it in the tree — an entry point that exists,
     // is clickable in the legacy hierarchy, and is simply invisible here. Treat a missing key as
@@ -148,7 +154,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
     val keyString = pref.key
     val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
-    val sub = pref.summary?.toString()?.takeIf { it.isNotBlank() }
+    val sub = row.summary?.takeIf { it.isNotBlank() }
     // `isEnabled` is how the tree expresses dependency and mode gating, so a disabled row must not
     // write. On a screen that sets max basal and max IOB, accepting an edit the tree refused is a
     // safety bug, not a cosmetic one.
@@ -204,9 +210,19 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
             ListRow(title = title, sub = sub ?: preferences.get(typed), onClick = clickHandler(pref))
         }
 
-        else                    ->
-            // Unrecognised: click actions, intents, list pickers. The legacy dialog is still correct.
+        else -> if (pref is TwoStatePreference) {
+            // Codec-backed display options need not create a second set of typed storage keys.
+            var on by remember(pref, row.checked) { mutableStateOf(pref.isChecked) }
+            ToggleRow(title = title, sub = sub, checked = on, onCheckedChange = {
+                if (editable && pref.isSelectable && pref.callChangeListener(it)) {
+                    pref.isChecked = it
+                    on = it
+                }
+            })
+        } else {
+            // Unrecognised click actions/list pickers retain their native dialogs.
             ListRow(title = title, sub = sub, onClick = clickHandler(pref))
+        }
     }
 }
 
