@@ -1,6 +1,5 @@
 package app.aaps.plugins.main.general.overview
 
-import android.app.Activity
 import androidx.preference.SwitchPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
@@ -13,7 +12,6 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import app.aaps.core.interfaces.nsclient.NSSettingsStatus
 import app.aaps.core.interfaces.overview.OverviewData
-import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.shared.tests.TestBaseWithProfile

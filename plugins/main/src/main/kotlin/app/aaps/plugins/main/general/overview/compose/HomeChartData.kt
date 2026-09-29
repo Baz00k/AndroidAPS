@@ -6,13 +6,7 @@ import androidx.compose.runtime.Immutable
 @Immutable
 data class GlucosePoint(val time: Long, val value: Double)
 
-/**
- * Effective delivery rate (U/hr) from [time] until the next step, plus the profile's [scheduled] rate
- * at that moment. Sampled rather than taken record-by-record: temp basals overlap and supersede each
- * other, so drawing one step per record doubles back on itself. Scheduled basal is sampled with the
- * historical profile, so a profile switch shows up where it happened instead of today's value being
- * back-projected over the whole window.
- */
+/** Effective and scheduled basal rates (U/h), sampled using the historical profile. */
 @Immutable
 data class BasalStep(val time: Long, val rate: Double, val scheduled: Double = rate)
 
@@ -33,16 +27,8 @@ enum class TreatmentKind { BOLUS, SMB, CARBS }
 data class ChartTreatment(val time: Long, val amount: Double, val kind: TreatmentKind)
 
 /**
- * Everything the home graphs draw. Built off the same sources the legacy GraphView pipeline used —
- * CGM readings from the persistence layer, `iobCobCalculator.getBasalData` for delivery, the
- * persistence layer for treatments — so this changes the rendering surface, not the data.
- *
- * This is a SAMPLE, not a viewport: it always covers [from]..[now] (the whole pan budget), and the
- * visible window is resolved at draw time from [ChartWindow] + [ChartPanState]. Nothing historical
- * is ever later than [now]; only forecasts are.
- *
- * Values are in display units; [lowMark] / [highMark] are the same Overview thresholds that colour the
- * hero BG, so the band and the big number can never disagree.
+ * Display-unit snapshot of the full pan budget, independent of the viewport.
+ * History ends at [now]; predictions and planned targets may extend beyond it.
  */
 @Immutable
 data class HomeChartData(
@@ -52,12 +38,7 @@ data class HomeChartData(
     val now: Long = 0L,
     /** Raw sensor readings — every one, drawn as a faint scatter. Sorted by time. */
     val readings: List<GlucosePoint> = emptyList(),
-    /**
-     * The 5-minute bucketed series — what the loop's own statistics are computed from. Drawn as
-     * the trace so the line and the decisions cannot disagree. Empty on a 5-minute source, where
-     * bucketing is a no-op and [readings] is already the right thing to draw. Sorted by time,
-     * without interpolated gap fills.
-     */
+    /** Loop-bucketed readings, sorted by time and excluding interpolated gap fills. */
     val bucketed: List<GlucosePoint> = emptyList(),
     val predictions: List<ChartPrediction> = emptyList(),
     val basal: List<BasalStep> = emptyList(),
@@ -74,16 +55,8 @@ data class HomeChartData(
     val hasData: Boolean get() = readings.isNotEmpty() && now > from
 
     /**
-     * The series the trace is drawn from: bucketed where it exists, raw readings elsewhere.
-     *
-     * Only meaningfully different on a dense (1-minute) source. Never a cosmetic filter — it is
-     * the same averaging the loop uses, so a surprising decision can be read off the graph. The
-     * bucketed table and the readings are refreshed by different workers, so either can cover a
-     * slightly different span; raw readings fill whichever edge the bucketed series does not reach
-     * (typically a reading that arrived after the last bucketing run), instead of the line stopping
-     * short of the newest value.
-     *
-     * Computed once per snapshot (not per frame) because panning redraws continuously.
+     * Use bucketed history, with raw readings covering edges not yet processed by the worker.
+     * Computed once per snapshot, not per frame.
      */
     val trace: List<GlucosePoint> = mergeTrace(readings, bucketed)
 
@@ -95,10 +68,7 @@ data class HomeChartData(
         readings.count { it.time in bucketed.first().time..bucketed.last().time } > bucketed.size
 }
 
-/**
- * Top of the insulin panel: a round number just above the highest delivered or scheduled rate in the
- * loaded sample, fixed for the snapshot so the panel does not rescale while panning.
- */
+/** Round insulin-axis maximum, fixed for the loaded snapshot while panning. */
 internal fun insulinScaleMax(basal: List<BasalStep>): Double {
     val peak = basal.maxOfOrNull { maxOf(it.rate, it.scheduled) }?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
     val step = when {

@@ -20,7 +20,6 @@ import androidx.preference.PreferenceScreen
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.ListRow
 import app.aaps.core.compose.components.NumberField
-import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -31,24 +30,8 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.interfaces.StringPreferenceKey
 
 /**
- * Renders a plugin's preference screen with the app's design system, driven by the SAME AndroidX
- * `PreferenceScreen` the legacy fragment builds.
- *
- * WHY IT WALKS THE EXISTING TREE INSTEAD OF DECLARING ITS OWN. Every plugin builds its preferences
- * imperatively in `addPreferenceScreen()`, and that build applies the rules that decide what a user may
- * even see: simple mode, APS / NSClient / pump-control mode, and per-key `dependency`. Those are applied in
- * each `Adaptive*Preference` constructor as `isVisible` / `isEnabled`. Re-declaring the screens in Compose
- * would duplicate all of it and let the two drift — on a screen that sets max basal and max IOB, a drifted
- * visibility rule is a safety bug, not a cosmetic one. So the tree stays the source of truth for STRUCTURE
- * and VISIBILITY, and this file only decides how a row is drawn.
- *
- * Values are read and written through [Preferences] with the typed key looked up by
- * `preferences.get(keyString)`, so bounds (`min`/`max` on the numeric keys) come from the same declaration
- * the legacy validator used rather than being restated here.
- *
- * Anything this renderer does not recognise falls back to a row that hands the tap back to the underlying
- * `Preference` (`performClick()`), which runs its own dialog. That keeps exotic entries — intents, click
- * actions, list pickers with custom bodies — working exactly as before instead of silently doing nothing.
+ * Renders the native preference tree, preserving visibility, dependencies and typed bounds.
+ * Unsupported controls use the native preference click handler and dialog.
  */
 
 /** Preference content plus explicit card boundaries from the native hierarchy. */
@@ -78,9 +61,7 @@ fun flattenPreferences(group: PreferenceGroup): List<PrefRow> {
                 inLeafRun = false
             } else {
                 if (!inLeafRun) {
-                    // Headings describe a card, not every ancestor in the tree. Returning from a
-                    // child must also end its card: reset actions and parent switches are siblings,
-                    // not members of the last child category.
+                    // A child group ends its card; parent siblings must not join the last child category.
                     val hasHeading = g is PreferenceCategory || (g is PreferenceScreen && g !== group && !childGroupSeen)
                     val title = if (!headingUsed && hasHeading) g.title?.toString().orEmpty() else ""
                     if (title.isNotBlank()) out += PrefRow.Section(title)
@@ -103,12 +84,7 @@ fun PreferenceScreenCompose(
     modifier: Modifier = Modifier
 ) {
     val colors = AapsTheme.colors
-    // Height is deliberately NOT filled and NOT scrolled here. This composable is hosted in a
-    // ComposeView inside `activity_preferences.xml`, whose frame sits in a `ScrollView` — so it is
-    // measured with an unbounded height, and a scroll container measured that way throws
-    // ("Vertically scrollable component was measured with an infinity maximum height"). The
-    // ScrollView already scrolls (fillViewport=true); this reports its natural height into it, the
-    // same contract the AndroidX RecyclerView had before the rows were redrawn in Compose.
+    // The host ScrollView supplies scrolling and unbounded height; do not add a nested scroll container.
     Column(
         modifier
             .fillMaxWidth()
@@ -154,17 +130,12 @@ fun PreferenceScreenCompose(
 @Composable
 private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
     val pref = row.preference
-    // A preference need not have a key: AndroidX allows keyless rows that only open something, and
-    // returning early on one drew NOTHING while leaving it in the tree — an entry point that exists,
-    // is clickable in the legacy hierarchy, and is simply invisible here. Treat a missing key as
-    // "no stored value", which lands on the click-through row at the bottom of the `when`.
+    // Keyless preferences may still open dialogs or invoke actions.
     val keyString = pref.key
     val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
     val sub = row.summary?.takeIf { it.isNotBlank() }
-    // `isEnabled` is how the tree expresses dependency and mode gating, so a disabled row must not
-    // write. On a screen that sets max basal and max IOB, accepting an edit the tree refused is a
-    // safety bug, not a cosmetic one.
+    // Respect dependency and mode gating before writing.
     val editable = pref.isEnabled
 
     when (typed) {
@@ -173,9 +144,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
             ToggleRow(
                 title = title, sub = sub, checked = on,
                 onCheckedChange = {
-                    // Route through the Preference's own change listener first: that is where AAPS hangs
-                    // cross-key consequences (a toggle that reveals or hides others). Refusing the change is
-                    // meaningful — respect it rather than writing anyway.
+                    // Preserve native change listeners and their cross-preference validation.
                     if (editable && pref.callChangeListener(it)) { preferences.put(typed, it); on = it }
                 }
             )
@@ -212,8 +181,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
         }
 
         is StringPreferenceKey  -> {
-            // Strings are free-form and some are secrets (URLs, API tokens) with their own masked dialogs.
-            // Show the row and hand the tap to the existing preference rather than inventing an editor.
+            // Keep native string dialogs, including masked editors.
             ListRow(title = title, sub = sub ?: preferences.get(typed), onClick = clickHandler(pref))
         }
 
@@ -233,12 +201,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
     }
 }
 
-/**
- * A disabled or non-selectable preference must not react to taps. The tree already applies those
- * flags — simple mode, APS/pump-control mode, `dependency` — and read-only rows use `isSelectable` to
- * present a value rather than an action. Returning null also stops the row from advertising itself as
- * clickable, instead of accepting a tap and doing nothing.
- */
+/** Disabled and non-selectable preferences must not expose click actions. */
 private fun clickHandler(pref: Preference): (() -> Unit)? =
     if (pref.isEnabled && pref.isSelectable) ({ pref.performClick() }) else null
 

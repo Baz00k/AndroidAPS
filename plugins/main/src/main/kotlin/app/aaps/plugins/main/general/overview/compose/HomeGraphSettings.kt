@@ -1,5 +1,7 @@
 package app.aaps.plugins.main.general.overview.compose
 
+import app.aaps.plugins.main.R
+
 /** Stable names, never enum ordinals, are persisted. New overlays must be opt-in. */
 enum class GlucoseOverlay(val defaultVisible: Boolean) {
     TARGET(false), BASAL(true), TREATMENTS(true), RAW_READINGS(true)
@@ -29,11 +31,7 @@ data class HomeGraphSettings(
     }
 }
 
-/**
- * Apply display choices once, so every panel receives the same filtered snapshot. This only hides
- * series: the time window never depends on which forecasts exist (see [ChartWindow]), so the graph
- * does not jump when the loop starts or stops producing predictions.
- */
+/** Filter visible series without changing the fixed viewport. */
 internal fun HomeChartData.forDisplay(settings: HomeGraphSettings): HomeChartData = copy(
     predictions = predictions.filter { it.kind in settings.forecasts },
     targets = if (settings.visible(GlucoseOverlay.TARGET)) targets else emptyList(),
@@ -41,14 +39,17 @@ internal fun HomeChartData.forDisplay(settings: HomeGraphSettings): HomeChartDat
     treatments = if (settings.visible(GlucoseOverlay.TREATMENTS)) treatments else emptyList()
 )
 
-/**
- * Visible series only: a hidden forecast/target must not keep the glucose axis zoomed out.
- * Computed over the whole loaded sample rather than the visible window, so the vertical scale holds
- * still while the graph is dragged sideways.
- */
+/** Scale enabled series over the full snapshot to keep vertical bounds stable while panning. */
 internal fun HomeChartData.glucoseBounds(): Pair<Double, Double> {
     val values = (readings + trace + targets + predictions.flatMap { it.points }).map { it.value }.filter { it.isFinite() }
     val high = maxOf(highMark + 2.0, kotlin.math.ceil((values.maxOrNull() ?: highMark) + 0.5))
     val low = minOf(lowMark - 1.0, (values.minOrNull() ?: lowMark) - 0.5).coerceAtLeast(0.0)
     return low to high
+}
+
+internal fun GlucoseOverlay.labelResource(): Int = when (this) {
+    GlucoseOverlay.TARGET -> R.string.overview_graph_target
+    GlucoseOverlay.BASAL -> R.string.overview_show_basals
+    GlucoseOverlay.TREATMENTS -> R.string.overview_show_treatments
+    GlucoseOverlay.RAW_READINGS -> R.string.overview_graph_raw_readings
 }

@@ -15,10 +15,7 @@ import kotlin.math.abs
 
 internal const val HOUR_MS = 3_600_000L
 
-/**
- * The pan budget: how much history is loaded per refresh. Loaded once on the background handler and
- * never re-queried while dragging. Older data lives in the History screen.
- */
+/** History loaded per background refresh; dragging never queries providers. */
 internal const val CHART_HISTORY_MS = 24 * HOUR_MS
 
 /** Fixed future area shown when any forecast is enabled — never fitted to the forecast's length. */
@@ -32,11 +29,7 @@ internal val CHART_RANGES_HOURS = listOf(6, 12, 24)
 /** Same rule as the range selector: the first offered range that covers the stored value. */
 internal fun normalizeRangeHours(hours: Int): Int = CHART_RANGES_HOURS.firstOrNull { it >= hours } ?: CHART_RANGES_HOURS.last()
 
-/**
- * A fixed-width window: [historyMs] of history ending at "now", plus [futureMs] of future. Its width
- * depends only on the chosen range and whether forecasts are switched on — never on whether the loop
- * currently has predictions, so the graph does not rescale when a forecast appears or goes stale.
- */
+/** Fixed history/future widths determined by settings, not prediction availability. */
 @Immutable
 data class ChartWindow(val historyMs: Long, val futureMs: Long, val maxFutureMs: Long) {
 
@@ -49,11 +42,7 @@ data class ChartWindow(val historyMs: Long, val futureMs: Long, val maxFutureMs:
     /** Right edge while following the present. */
     fun liveEnd(now: Long): Long = now + futureMs
 
-    /**
-     * Where the right edge may go. Past: until the oldest loaded sample reaches the left edge (or not
-     * at all, when the window already shows everything). Future: the forecast horizon, or exactly "now"
-     * when forecasts are off — there is never an endless empty future to drag into.
-     */
+    /** Clamp inspection to loaded history and the enabled forecast horizon. */
     fun endBounds(dataFrom: Long, now: Long): LongRange =
         minOf(dataFrom + widthMs, liveEnd(now))..(now + maxFutureMs)
 
@@ -93,11 +82,7 @@ internal data class PanPosition(val window: ChartWindow, val end: Long)
 
 internal fun PanPosition?.endFor(window: ChartWindow): Long? = this?.takeIf { it.window == window }?.end
 
-/**
- * Shared horizontal position of every home graph panel. UI-thread state: it is read only while
- * drawing or handling gestures, never by the background chart build, and holds nothing but an
- * absolute timestamp — so a paused window stays on the same moment while new data arrives.
- */
+/** UI-thread pan state shared by all panels. An absolute timestamp keeps inspection stable across refreshes. */
 @Stable
 class ChartPanState {
 
@@ -145,12 +130,7 @@ internal fun tickStepHours(spanMs: Long, plotWidthPx: Float, minLabelSpacingPx: 
     return TICK_STEPS_HOURS.firstOrNull { it * pxPerHour >= minLabelSpacingPx } ?: TICK_STEPS_HOURS.last()
 }
 
-/**
- * Ticks on local whole hours divisible by [stepHours], so labels read 00/03/06… regardless of where
- * the window starts, and stay attached to their moment while panning. Midnight is labelled with the
- * day instead of an hour. Walks the instant timeline, so DST days have 23 or 25 hours: a repeated
- * wall-clock hour is dropped when it would crowd a coarse step, a skipped one simply has no tick.
- */
+/** Local-hour ticks with weekday labels at midnight. Walk instants to handle DST gaps and repeats. */
 internal fun chartTicks(start: Long, end: Long, stepHours: Int, clock: ChartClock): List<ChartTick> {
     if (end <= start) return emptyList()
     val step = stepHours.coerceAtLeast(1)
@@ -174,11 +154,7 @@ internal fun chartTicks(start: Long, end: Long, stepHours: Int, clock: ChartCloc
 
 // ---- slicing ----
 
-/**
- * The points inside [start]..[end] plus one neighbour on each side, so lines run to the clipped edge
- * instead of starting at the first visible point. [time] must be non-decreasing. O(log n): panning
- * redraws every frame and must not walk 24 h of 1-minute data each time.
- */
+/** Sorted points within [start]..[end], plus one neighbour on each side for clipping. O(log n) lookup. */
 internal fun <T> List<T>.visibleSlice(start: Long, end: Long, time: (T) -> Long): List<T> {
     if (isEmpty()) return this
     var lo = 0

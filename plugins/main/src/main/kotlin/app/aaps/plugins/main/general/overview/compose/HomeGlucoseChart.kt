@@ -45,23 +45,7 @@ import app.aaps.plugins.main.R
 import java.util.Locale
 import kotlin.math.sqrt
 
-/**
- * The home glucose graph.
- *
- * Replaces the GraphView rendering, which drew glucose and basal into ONE plot on two different
- * vertical scales. Here they are two panels sharing a time axis, so neither has to be read against an
- * invented scale:
- *
- *  - glucose on top: a continuous trace tinted only where it leaves the display threshold band, over a band drawn
- *    at low opacity so it sits behind the line instead of swallowing it;
- *  - a treatment rail between them — boluses as ticks, carbs as dots, sized by amount, which retires
- *    the rotated overlapping value labels;
- *  - delivered insulin below as a step area, with scheduled basal as a dashed reference.
- *
- * The visible time range is a fixed-width [ChartWindow] ending at "now" (plus a fixed future area when
- * forecasts are on). It can be dragged sideways at the same scale; every panel follows [panState].
- * History stops at [HomeChartData.now]; only forecasts are drawn to its right.
- */
+/** Glucose, treatments and basal panels sharing a fixed-width, pannable time axis. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeGlucoseChart(
@@ -76,8 +60,6 @@ fun HomeGlucoseChart(
     LaunchedEffect(window, panState) { panState.returnToLive() }
     val colors = AapsTheme.colors
     val measurer = rememberTextMeasurer(cacheSize = 32)
-    // Derived from the skin's own caption style rather than a hardcoded family, so the axis labels
-    // change font with everything else instead of staying on the built-in one.
     val caption = AapsTheme.type.caption
     val axisStyle = caption.copy(fontSize = 9.sp, color = colors.textTertiary)
     val dayStyle = axisStyle.copy(color = colors.textSecondary)
@@ -88,7 +70,6 @@ fun HomeGlucoseChart(
     val insulinScale = remember(data) { insulinScaleMax(data.basal) }
     val pan = rememberChartPan(panState, window, data)
     val paused by remember(panState, window) { derivedStateOf { panState.isPaused(window) } }
-    // Only an unobtrusive hint in the (still reserved) future area; the window itself never changes.
     val noForecast = if (settings.forecasts.isNotEmpty() && data.predictions.isEmpty()) stringResource(R.string.overview_graph_no_forecast) else null
     val basalUnit = stringResource(R.string.overview_graph_units_basal)
     val description = stringResource(R.string.overview_graph_a11y, (window.historyMs / HOUR_MS).toInt())
@@ -110,8 +91,6 @@ fun HomeGlucoseChart(
                     ChartStyles(axisStyle, dayStyle, valueStyle), noForecast, basalUnit, insets
                 )
             }
-            // Fully qualified: inside a Box nested in a Column, the bare name would resolve to the
-            // ColumnScope overload through the outer receiver and fail to compile.
             androidx.compose.animation.AnimatedVisibility(
                 visible = paused,
                 modifier = Modifier.align(Alignment.TopEnd).padding(end = insets.end),
@@ -214,10 +193,7 @@ private fun DrawScope.drawChart(
     // Everything with a timestamp is clipped to the plot, so a panned window never paints into the gutters.
     clipRect(plotLeft, 0f, plotRight, bodyBottom) {
 
-        // Distinct dashed target midpoint, as in the original Overview target series.
-        // Keep a stable path origin while panning. Slicing at the viewport predecessor resets
-        // dash phase at every sample boundary, making dashes appear pinned to the screen.
-        // This bounded (~337 point) path is clipped above, not rebuilt from a moving origin.
+        // Keep the full path origin: viewport slicing resets dash phase during pan.
         val targets = d.targets
         if (targets.isNotEmpty()) {
             val path = Path()
@@ -233,10 +209,7 @@ private fun DrawScope.drawChart(
             drawPath(path, colors.accent, style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 3.dp.toPx()))))
         }
 
-        // ---- raw scatter: every sensor reading, under the trace ----
-        // Only present on a dense (1-minute) source. Kept deliberately faint and drawn UNDER the
-        // trace: the real spread stays visible — compression lows, early-wear instability, a failing
-        // sensor all show up here — while the line stays readable.
+        // Raw dots remain visible beneath the loop-bucketed trace.
         if (settings.visible(GlucoseOverlay.RAW_READINGS) && d.hasDenseScatter) {
             val r = 1.dp.toPx()
             d.readings.visibleSlice(vp.start, vp.end) { it.time }.forEach { p ->
@@ -284,8 +257,7 @@ private fun DrawScope.drawChart(
 
         // Dashed forecasts have no fill, measured-value marker or connection to the historical trace.
         d.predictions.forEach { series ->
-            // Like the target reference, forecasts need a stable dash origin even when panned
-            // far enough that their first samples leave the viewport. clipRect handles visibility.
+            // Keep forecast dash origins stable when their first samples leave the viewport.
             val path = Path()
             series.points.forEachIndexed { index, point ->
                 val previous = series.points.getOrNull(index - 1)
@@ -341,8 +313,7 @@ private fun DrawScope.drawChart(
                 startY = iTop, endY = iBottom
             )
             val scheduledEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))
-            // Segment the bounded history before clipping, not a viewport-dependent slice. Each
-            // scheduled-basal run then keeps its dash origin as it moves through the viewport.
+            // Clip full basal runs to preserve their dash origins while panning.
             d.basal.segments(BASAL_GAP_MS) { it.time }.forEach { run ->
                 if (run.size < 2) return@forEach
                 val line = stepPath(run) { it.rate }

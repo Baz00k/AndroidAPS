@@ -43,9 +43,7 @@ data class AdditionalGraphData(val points: Map<AdditionalSeries, List<GlucosePoi
                 mapOf(
                     AdditionalSeries.COB to points { it.cob },
                     AdditionalSeries.SENSITIVITY to points {
-                        // The algorithm uses ratio=1 as its unavailable fallback too. It is not a
-                        // measured 0% change. Preserve computed neutral results and genuine jumps;
-                        // missing results remain gaps, never smooth or carry them forward.
+                        // Unavailable autosens defaults to ratio 1; omit it without dropping computed neutral results.
                         val result = it.autosensResult
                         if (result.sensResult == unavailableSensitivity) Double.NaN
                         else 100.0 * (result.ratio - 1.0)

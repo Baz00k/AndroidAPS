@@ -336,8 +336,6 @@
     <string name="steps_shortname">STEPS</string>
     <string name="simple_mode_enabled">Simple mode enabled</string>
 
-    <string name="overview_predictions_unavailable">No current predictions available</string>
-    <string name="overview_predictions_estimates">Predictions are estimates, not CGM readings</string>
     <string name="overview_prediction_iob">IOB</string>
     <string name="overview_prediction_cob">COB</string>
     <string name="overview_prediction_zt">Zero-temp</string>
@@ -345,10 +343,7 @@
     <string name="overview_prediction_acob">aCOB</string>
     <string name="overview_additional_graphs">Additional graphs</string>
     <string name="overview_graph_number">Graph %1$d</string>
-    <string name="overview_graph_choose">Choose a graph for each series.</string>
     <string name="overview_graph_hidden">Hide</string>
-    <string name="overview_graph_left">left axis</string>
-    <string name="overview_graph_right">right axis</string>
     <string name="overview_graph_no_data">No data</string>
     <string name="overview_graph_units_insulin">U</string>
     <string name="overview_graph_units_carbs">g</string>
@@ -356,7 +351,6 @@
     <string name="overview_graph_bgi_sign">BGI uses the AAPS graph convention: positive values indicate a glucose-lowering insulin effect (−BGI).</string>
     <string name="overview_graph_sensitivity_zero">Autosens change: 0% is a ratio of 1.0. This estimate may be shown even when autosens is disabled.</string>
     <string name="overview_graph_settings">Graph settings</string>
-    <string name="overview_graph_settings_hint">Changes are saved automatically.</string>
     <string name="overview_graph_overlays">Glucose overlays</string>
     <string name="overview_graph_target">Target (midpoint)</string>
     <string name="overview_graph_raw_readings">Raw sensor dots</string>

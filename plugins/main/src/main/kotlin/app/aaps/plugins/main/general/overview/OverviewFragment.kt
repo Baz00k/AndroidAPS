@@ -1,32 +1,14 @@
 package app.aaps.plugins.main.general.overview
 
 import android.annotation.SuppressLint
-import android.app.NotificationManager
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
-import android.graphics.drawable.AnimationDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
-import android.view.View.OnLongClickListener
 import android.view.ViewGroup
-import android.widget.LinearLayout
-import android.widget.RelativeLayout
-import android.widget.TextView
-import androidx.core.text.toSpanned
-import androidx.recyclerview.widget.LinearLayoutManager
-import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.RM
-import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -40,7 +22,6 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
-import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.nsclient.NSSettingsStatus
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
@@ -53,7 +34,6 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.pump.BolusProgressData
-import app.aaps.core.interfaces.pump.defs.determineCorrectBolusStepSize
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -62,7 +42,6 @@ import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.rx.events.EventBucketedDataCreated
 import app.aaps.core.interfaces.rx.events.EventEffectiveProfileSwitchChanged
 import app.aaps.core.interfaces.rx.events.EventExtendedBolusChange
-import app.aaps.core.interfaces.rx.events.EventInitializationChanged
 import app.aaps.core.interfaces.rx.events.EventNewOpenLoopNotification
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
@@ -83,28 +62,19 @@ import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.StringNonKey
-import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.BooleanNonKey
-import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.constraints.ConstraintObject
-import app.aaps.core.objects.extensions.directionToIcon
 import app.aaps.core.objects.extensions.displayText
 import app.aaps.core.objects.extensions.round
-import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
-import app.aaps.core.ui.elements.SingleClickButton
 import app.aaps.core.ui.extensions.runOnUiThread
-import app.aaps.core.ui.extensions.toVisibility
-import app.aaps.core.ui.extensions.toVisibilityKeepSpace
 import app.aaps.core.utils.compactDurationLabel
 import app.aaps.plugins.main.R
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import app.aaps.core.interfaces.profile.Profile
@@ -147,8 +117,6 @@ import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 class OverviewFragment : DaggerFragment() {
@@ -675,14 +643,7 @@ class OverviewFragment : DaggerFragment() {
         )
     }
 
-    /**
-     * Rebuild the chart series on the background handler, then publish to Compose. Same sources the
-     * GraphView pipeline used — readings from the persistence layer, delivered rate from
-     * [iobCobCalculator], treatments from the persistence layer — so this is a rendering change, not a
-     * data change. Scheduled by the existing refresh paths only (60 s loop, graph/data events); the
-     * effective-rate sampling is the expensive part and must not land on the main thread. Dragging
-     * the graph never calls this.
-     */
+    /** Refresh providers off the UI thread; panning only reuses the published snapshot. */
     private fun refreshChart() {
         handler.post {
             val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); HomeChartData() }
@@ -690,13 +651,7 @@ class OverviewFragment : DaggerFragment() {
         }
     }
 
-    /**
-     * One snapshot covering the whole pan budget ([CHART_HISTORY_MS] ending at "now"), independent of
-     * the selected range: the visible window is resolved at draw time, so changing the range or
-     * dragging sideways never needs a new query. History is cut off at the build clock, never at the
-     * legacy hour-aligned graph range (which could end in the past and freeze the chart, or start
-     * after the window's left edge).
-     */
+    /** Load the full pan budget off the UI thread; viewport changes reuse this snapshot. */
     private fun buildChartData(): HomeChartData {
         profileFunction.getProfile() ?: return HomeChartData()
         val units = profileFunction.getUnits()
@@ -712,9 +667,7 @@ class OverviewFragment : DaggerFragment() {
             .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value, units)) }
         if (readings.isEmpty()) return HomeChartData()
 
-        // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
-        // statistics are computed from; on a 5-minute source it is effectively the readings again.
-        // Interpolated gap fills are left out so a sensor dropout stays a gap on the graph.
+        // Use loop-bucketed readings without interpolated gap fills.
         val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy().orEmpty()
             .filter { !it.filledGap && it.timestamp in from..now && it.recalculated.isFinite() && it.recalculated > 0.0 }
             .sortedBy { it.timestamp }
@@ -725,10 +678,7 @@ class OverviewFragment : DaggerFragment() {
             .filter { it.isValid && it.timestamp > from && it.timestamp <= now }
             .map { it.timestamp }.distinct().sorted()
 
-        // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
-        // rather than drawing one step per record — a per-record path doubles back on itself. The grid
-        // is epoch-aligned, so a sample keeps its time from one refresh to the next and the steps do
-        // not shimmer as "now" advances; the last sample is exactly "now".
+        // Sample effective rates on an epoch-aligned grid to avoid overlapping records and refresh jitter.
         val basalProfiles = ProfileCursor(from, switches) { profileFunction.getProfile(it) }
         val basal = ArrayList<BasalStep>((CHART_HISTORY_MS / BASAL_SAMPLE_MS).toInt() + 2)
         var t = (from / BASAL_SAMPLE_MS + 1) * BASAL_SAMPLE_MS
@@ -743,11 +693,7 @@ class OverviewFragment : DaggerFragment() {
             t += BASAL_SAMPLE_MS
         }
 
-        // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
-        // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
-        // Independent of the temporary-target hero, which reads the active target itself.
-        // The target is a planned reference, not extrapolated glucose: evaluate the known profile
-        // schedule into the forecast window, reverting to it when a temporary target expires.
+        // Extend the planned profile target through forecasts, honoring temporary-target expiry.
         val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, now + CHART_MAX_FUTURE_MS, units)
 
         val treatments = ArrayList<ChartTreatment>()
@@ -755,8 +701,7 @@ class OverviewFragment : DaggerFragment() {
             if (b.isValid && b.type != BS.Type.PRIMING && b.amount > 0.0)
                 treatments.add(ChartTreatment(b.timestamp, b.amount, if (b.type == BS.Type.SMB) TreatmentKind.SMB else TreatmentKind.BOLUS))
         }
-        // NOT the expanded query: that splits one meal into an absorption series, which would draw a
-        // 90 g meal as a row of identical dots instead of a single mark sized by the meal.
+        // Use unexpanded carbs so each meal has one marker.
         persistenceLayer.getCarbsFromTimeNotExpanded(from, true).blockingGet().forEach { c ->
             if (c.isValid && c.timestamp <= now && c.amount > 0.0)
                 treatments.add(ChartTreatment(c.timestamp, c.amount, TreatmentKind.CARBS))
@@ -795,9 +740,7 @@ class OverviewFragment : DaggerFragment() {
             basal = basal,
             treatments = treatments,
             targets = targets,
-            // The SAME thresholds that colour the hero BG, so band and headline can never disagree.
-            // UnitDoubleKey values are stored in the user's DISPLAY units already — converting them
-            // from mg/dL here would divide 10.0 mmol down to 0.55 and collapse the band.
+            // Overview thresholds are already in display units; do not convert them again.
             lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
             highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
             decimals = if (units == GlucoseUnit.MGDL) 0 else 1,

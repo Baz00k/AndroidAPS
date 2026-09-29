@@ -126,12 +126,7 @@ internal fun rememberChartClock(now: Long): ChartClock {
 
 // ---- horizontal panning ----
 
-/**
- * Turns horizontal drags on one panel into moves of the shared [ChartPanState]. Each panel owns one,
- * because each converts pixels to time with its own plot width; they all move the same timestamp,
- * so every panel stays aligned. Plain fields are refreshed after each composition and read only by
- * gesture callbacks on the UI thread.
- */
+/** Converts panel pixels to a shared timestamp; fields are updated and read on the UI thread. */
 @Stable
 internal class ChartPanController(
     private val state: ChartPanState,
@@ -213,10 +208,7 @@ internal fun rememberChartPan(state: ChartPanState, window: ChartWindow, data: H
     return controller
 }
 
-/**
- * Horizontal drag + fling at the same scale. Only claims the gesture after horizontal touch slop, so a
- * vertical swipe that starts on the graph still scrolls the page. Any touch stops a running fling.
- */
+/** Horizontal drag/fling after touch slop; vertical gestures still scroll the page. */
 @Composable
 internal fun Modifier.chartPan(controller: ChartPanController, enabled: Boolean, insets: ChartInsets): Modifier {
     val view = LocalView.current
@@ -228,9 +220,7 @@ internal fun Modifier.chartPan(controller: ChartPanController, enabled: Boolean,
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
                 controller.stop()
-                // Overview is hosted inside ViewPager2. Reserve this touch stream before its
-                // RecyclerView can intercept horizontal slop; Compose's own vertical scroll
-                // still participates normally. The fixture activity has no such View parent.
+                // Prevent ViewPager2 from intercepting horizontal drags; Compose still handles vertical scrolling.
                 view.parent?.requestDisallowInterceptTouchEvent(true)
                 try {
                     do {
