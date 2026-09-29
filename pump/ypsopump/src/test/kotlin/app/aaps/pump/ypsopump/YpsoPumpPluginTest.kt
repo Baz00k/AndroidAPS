@@ -134,6 +134,23 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `overview and pump tab agree while connected before first reading`() {
+        state.connectionState = YpsoBleManager.ConnectionState.CONNECTED
+        state.claimedSerialNumber = "10000001"
+        state.serialNumber = "10000001"
+        state.availability = PumpSession.Availability(emptySet())
+        whenever(rh.gs(R.string.ypsopump_awaiting_readings)).thenReturn("Connected · awaiting readings")
+
+        val display = buildPumpStatusState(state, commandQueue, mock(), rh)
+        assertEquals("Connected · awaiting readings", display.connectionSummary)
+        assertEquals(display.connectionSummary, plugin.pumpSpecificShortStatus(false))
+        assertEquals(display.connectionSummary, plugin.pumpSpecificShortStatus(true))
+        assertNull(display.connectionAction)
+        assertFalse(display.connectionHealthy)
+        verify(rh, never()).gs(R.string.ypsopump_status_unavailable)
+    }
+
+    @Test
     fun `Pump values follow acquisition and monotonic expiry together`() {
         var elapsed = 0L
         state.elapsedRealtime = { elapsed }

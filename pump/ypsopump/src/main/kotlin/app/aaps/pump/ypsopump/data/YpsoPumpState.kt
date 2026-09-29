@@ -40,9 +40,20 @@ class YpsoPumpState @Inject constructor() {
     /** Zone used to interpret the pump's local history timestamps; independent of profile reads. */
     internal val historyZone: ZoneId get() = currentZone()
     @Volatile private var sample: StatusSnapshot? = null
+    private var lastDisplaySample: StatusSnapshot? = null
     @Volatile private var verifiedProfile: YpsoProfileReadback.VerifiedReadback? = null
     val statusSnapshot: StatusSnapshot?
         get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
+
+    /** Display only: never use retained readings for dosing, alarms or command success. */
+    internal data class DisplayStatus(val snapshot: StatusSnapshot?, val isCurrent: Boolean, val ageMs: Long?)
+
+    @Synchronized
+    internal fun displayStatus(): DisplayStatus {
+        val snapshot = lastDisplaySample
+        val age = snapshot?.let { elapsedRealtime() - it.elapsedAt }
+        return DisplayStatus(snapshot, snapshot != null && sample === snapshot && age != null && age in 0 until STATUS_MAX_AGE_MS, age)
+    }
 
     // -- Connection State --
     @Volatile var connectionState: ConnectionState = ConnectionState.DISCONNECTED
@@ -152,6 +163,7 @@ class YpsoPumpState @Inject constructor() {
                 elapsedRealtime(),
             )
         lastConnectionTime = timestamp
+        lastDisplaySample = sample
     }
 
     @Synchronized
@@ -214,9 +226,10 @@ class YpsoPumpState @Inject constructor() {
     }
 
     @Synchronized
-    fun invalidateStatus() {
+    fun invalidateStatus(preserveDisplay: Boolean = false) {
         // Freshness is cleared first; coherent consumers also read these fields under this monitor.
         sample = null
+        if (!preserveDisplay) lastDisplaySample = null
         lastConnectionTime = 0L
         isSuspended = false
         isBolusingInProgress = false

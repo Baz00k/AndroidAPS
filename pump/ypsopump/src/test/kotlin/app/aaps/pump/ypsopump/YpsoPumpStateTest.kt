@@ -15,6 +15,56 @@ import org.junit.jupiter.api.Test
 class YpsoPumpStateTest {
 
     @Test
+    fun `display cache survives read invalidation without satisfying freshness checks`() {
+        var elapsed = 1000L
+        val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
+        state.publishStatus(42.5, 75, false, 100, 1234L, activeBasalRate = 0.5)
+        elapsed += 100
+        state.invalidateStatus(preserveDisplay = true)
+        assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
+        assertEquals(1234L, state.displayStatus().snapshot?.acquiredAt)
+        assertEquals(100L, state.displayStatus().ageMs)
+        assertFalse(state.displayStatus().isCurrent)
+        assertNull(state.statusSnapshot)
+        assertNull(state.reservoirUnitsIfFresh())
+        assertNull(state.baseBasalRateIfFresh())
+        assertNull(state.mappedBatteryPercent)
+        assertEquals(0L, state.lastStatusTime)
+        assertEquals(0L, state.lastConnectionTime)
+        state.connectionState = ConnectionState.CONNECTED
+        assertFalse(state.hasVerifiedStatus)
+        state.publishStatus(40.0, 70, false, 100, 2345L)
+        assertEquals(40.0, state.displayStatus().snapshot?.reservoirUnits)
+        assertTrue(state.displayStatus().isCurrent)
+    }
+
+    @Test
+    fun `reset and full invalidation remove retained display readings`() {
+        val state = YpsoPumpState().apply { elapsedRealtime = { 1000L } }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        state.invalidateStatus()
+        assertNull(state.displayStatus().snapshot)
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        state.reset()
+        assertNull(state.displayStatus().snapshot)
+    }
+
+    @Test
+    fun `display age uses monotonic time and reconnect cannot rejuvenate expired values`() {
+        var elapsed = 1000L
+        val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
+        state.connectionState = ConnectionState.CONNECTED
+        assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
+        assertEquals(YpsoPumpState.STATUS_MAX_AGE_MS, state.displayStatus().ageMs)
+        assertFalse(state.displayStatus().isCurrent)
+        assertFalse(state.hasVerifiedStatus)
+        elapsed = 0
+        assertFalse(state.displayStatus().isCurrent)
+    }
+
+    @Test
     fun `disconnect preserves last read configuration`() {
         val state = YpsoPumpState().apply {
             elapsedRealtime = { 2001L }
