@@ -42,7 +42,7 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Redesigned History timeline (handoff Section 4): filter chips + a chronological, day-grouped list of
- * boluses / carbs / temporary basals / events. [onBack] finishes the activity.
+ * boluses / extended boluses / carbs / temporary basals / events. [onBack] finishes the activity.
  */
 @Composable
 fun HistoryScreen(
@@ -137,7 +137,7 @@ private fun HistoryRow(
             .fillMaxWidth()
             .combinedClickable(
                 enabled = !removing,
-                onClick = { if (selecting) onToggle() },
+                onClick = { if (selecting && item.removable) onToggle() },
                 onLongClick = onLongPress
             )
             .padding(vertical = 8.dp),
@@ -145,7 +145,7 @@ private fun HistoryRow(
     ) {
         if (selecting)
             Checkbox(
-                enabled = !removing,
+                enabled = !removing && item.removable,
                 checked = selected, onCheckedChange = { onToggle() },
                 colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary),
                 modifier = Modifier.padding(end = 2.dp)
@@ -165,6 +165,7 @@ private fun HistoryRow(
 
 private fun iconFor(kind: HistoryKind): ImageVector = when (kind) {
     HistoryKind.BOLUS, HistoryKind.SMB -> AapsIcons.WaterDrop
+    HistoryKind.EXTENDED               -> AapsIcons.Timelapse
     HistoryKind.CARBS                  -> AapsIcons.Restaurant
     HistoryKind.TBR                    -> AapsIcons.Timeline
     HistoryKind.EVENT                  -> AapsIcons.EventNote
@@ -175,6 +176,7 @@ private fun iconFor(kind: HistoryKind): ImageVector = when (kind) {
 private fun tintFor(kind: HistoryKind): Color = when (kind) {
     HistoryKind.BOLUS -> AapsTheme.colors.inRange
     HistoryKind.SMB   -> AapsTheme.colors.inRange
+    HistoryKind.EXTENDED -> AapsTheme.colors.inRange
     HistoryKind.CARBS -> AapsTheme.colors.high
     HistoryKind.TBR   -> AapsTheme.colors.accent
     HistoryKind.EVENT -> AapsTheme.colors.accent

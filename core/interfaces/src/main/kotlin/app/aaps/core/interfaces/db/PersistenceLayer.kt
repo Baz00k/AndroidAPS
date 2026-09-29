@@ -865,6 +865,13 @@ interface PersistenceLayer {
     fun invalidateTemporaryBasal(id: Long, action: Action, source: Sources, note: String? = null, listValues: List<ValueWithUnit>): Single<TransactionResult<TB>>
 
     /**
+     * User-initiated removal: like [invalidateTemporaryBasal], but a record that has not ended when the
+     * transaction runs is left valid and returned in [TransactionResult.refusedActive]. Removing a
+     * running record would hide delivery the pump is still performing.
+     */
+    fun invalidateEndedTemporaryBasal(id: Long, action: Action, source: Sources, note: String? = null, listValues: List<ValueWithUnit>): Single<TransactionResult<TB>>
+
+    /**
      * Store records coming from NS to database
      *
      * @param temporaryBasals list of records
@@ -1014,6 +1021,13 @@ interface PersistenceLayer {
      * @return List of changed records
      */
     fun invalidateExtendedBolus(id: Long, action: Action, source: Sources, note: String? = null, listValues: List<ValueWithUnit>): Single<TransactionResult<EB>>
+
+    /**
+     * User-initiated removal: like [invalidateExtendedBolus], but a record that has not ended when the
+     * transaction runs is left valid and returned in [TransactionResult.refusedActive]. A running extended
+     * bolus blocks closed loop and offers cancellation; hiding it would lift both while the pump delivers.
+     */
+    fun invalidateEndedExtendedBolus(id: Long, action: Action, source: Sources, note: String? = null, listValues: List<ValueWithUnit>): Single<TransactionResult<EB>>
 
     /**
      * Store records coming from NS to database
@@ -1419,6 +1433,7 @@ interface PersistenceLayer {
         val updatedNsId = mutableListOf<T>()
         val ended = mutableListOf<T>()
         val updatedDuration = mutableListOf<T>()
+        val refusedActive = mutableListOf<T>()
 
         val calibrationsInserted = mutableListOf<TE>()
         val sensorInsertionsInserted = mutableListOf<TE>()

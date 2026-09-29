@@ -1135,7 +1135,15 @@ class PersistenceLayerImpl @Inject constructor(
             .map { pair -> Pair(pair.first.fromDb(), pair.second.fromDb()) }
 
     override fun invalidateTemporaryBasal(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<TB>> =
-        repository.runTransactionForResult(InvalidateTemporaryBasalTransaction(id))
+        invalidateTemporaryBasal(InvalidateTemporaryBasalTransaction(id), action, source, note, listValues)
+
+    override fun invalidateEndedTemporaryBasal(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<TB>> =
+        invalidateTemporaryBasal(InvalidateTemporaryBasalTransaction(id, refuseIfActiveAt = dateUtil::now), action, source, note, listValues)
+
+    private fun invalidateTemporaryBasal(
+        transaction: InvalidateTemporaryBasalTransaction, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>
+    ): Single<PersistenceLayer.TransactionResult<TB>> =
+        repository.runTransactionForResult(transaction)
             .doOnError { aapsLogger.error(LTag.DATABASE, "Error while invalidating TemporaryBasal", it) }
             .map { result ->
                 val transactionResult = PersistenceLayer.TransactionResult<TB>()
@@ -1144,6 +1152,10 @@ class PersistenceLayerImpl @Inject constructor(
                     aapsLogger.debug(LTag.DATABASE, "Invalidated TemporaryBasal from ${source.name} $it")
                     transactionResult.invalidated.add(it.fromDb())
                     ueValues.add(UE(timestamp = dateUtil.now(), action = action, source = source, note = note ?: "", values = listValues))
+                }
+                result.refusedActive.forEach {
+                    aapsLogger.debug(LTag.DATABASE, "Refused to invalidate running TemporaryBasal from ${source.name} $it")
+                    transactionResult.refusedActive.add(it.fromDb())
                 }
                 log(ueValues)
                 transactionResult
@@ -1336,7 +1348,15 @@ class PersistenceLayerImpl @Inject constructor(
             .map { pair -> Pair(pair.first.fromDb(), pair.second.fromDb()) }
 
     override fun invalidateExtendedBolus(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<EB>> =
-        repository.runTransactionForResult(InvalidateExtendedBolusTransaction(id))
+        invalidateExtendedBolus(InvalidateExtendedBolusTransaction(id), action, source, note, listValues)
+
+    override fun invalidateEndedExtendedBolus(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<EB>> =
+        invalidateExtendedBolus(InvalidateExtendedBolusTransaction(id, refuseIfActiveAt = dateUtil::now), action, source, note, listValues)
+
+    private fun invalidateExtendedBolus(
+        transaction: InvalidateExtendedBolusTransaction, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>
+    ): Single<PersistenceLayer.TransactionResult<EB>> =
+        repository.runTransactionForResult(transaction)
             .doOnError { aapsLogger.error(LTag.DATABASE, "Error while invalidating ExtendedBolus", it) }
             .map { result ->
                 val transactionResult = PersistenceLayer.TransactionResult<EB>()
@@ -1345,6 +1365,10 @@ class PersistenceLayerImpl @Inject constructor(
                     aapsLogger.debug(LTag.DATABASE, "Invalidated ExtendedBolus from ${source.name} $it")
                     transactionResult.invalidated.add(it.fromDb())
                     ueValues.add(UE(timestamp = dateUtil.now(), action = action, source = source, note = note ?: "", values = listValues))
+                }
+                result.refusedActive.forEach {
+                    aapsLogger.debug(LTag.DATABASE, "Refused to invalidate running ExtendedBolus from ${source.name} $it")
+                    transactionResult.refusedActive.add(it.fromDb())
                 }
                 log(ueValues)
                 transactionResult

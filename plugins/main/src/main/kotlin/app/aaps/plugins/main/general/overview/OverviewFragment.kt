@@ -108,6 +108,7 @@ import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
+import app.aaps.plugins.main.general.overview.compose.recentInsulinEntries
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
 import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
@@ -411,29 +412,51 @@ class OverviewFragment : DaggerFragment() {
     }
 
     /**
-     * Undo a recent bolus from the IOB-tap sheet. Confirms first, then reuses the SAME
-     * `persistenceLayer.invalidateBolus` path (with UEL audit log) the legacy Treatments screen used —
-     * no bypass. This is the repair path for insulin the pump never delivered: an unconfirmed dose is
-     * recorded on purpose so IOB is not under-counted, and when the pump turns out to have been
-     * stopped or empty that record has to be removable.
+     * Undo a recent bolus or extended bolus from the IOB-tap sheet. Confirms first, then reuses the SAME
+     * persistence invalidation paths (with UEL audit log) the legacy Treatments screen used — no bypass.
+     * This is the repair path for insulin the pump never delivered: an unconfirmed dose is recorded on
+     * purpose so IOB is not under-counted, and when the pump turns out to have been stopped or empty that
+     * record has to be removable. Removal never commands the pump, so a running extended bolus is refused
+     * (here and again inside the database transaction) until it has been cancelled or has finished.
      */
     private fun removeInsulinEntry(entry: HomeUiState.InsulinEntry) {
         val activity = activity ?: return
+        if (!entry.removable) return
+        val extended = entry.type == HomeUiState.InsulinType.EXTENDED
         OKDialog.showConfirmation(
             activity,
             rh.gs(app.aaps.core.ui.R.string.removerecord),
-            rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + entry.units + "\n" +
-                rh.gs(app.aaps.core.ui.R.string.date) + ": " + dateUtil.dateAndTimeString(entry.timestamp),
+            rh.gs(if (extended) app.aaps.core.ui.R.string.extended_bolus else app.aaps.core.ui.R.string.bolus) + ": " + entry.units + "\n" +
+                rh.gs(app.aaps.core.ui.R.string.date) + ": " + dateUtil.dateAndTimeString(entry.timestamp) +
+                if (extended) "\n\nThis removes the record only. It does not change anything on the pump." else "",
             Runnable {
-                disposable += persistenceLayer.invalidateBolus(
-                    entry.id,
-                    action = Action.BOLUS_REMOVED,
-                    source = Sources.Overview,
-                    listValues = listOf(
-                        ValueWithUnit.Timestamp(entry.timestamp),
-                        ValueWithUnit.Insulin(entry.amount)
-                    )
-                ).subscribe()
+                disposable += if (extended)
+                    persistenceLayer.invalidateEndedExtendedBolus(
+                        entry.id,
+                        action = Action.EXTENDED_BOLUS_REMOVED,
+                        source = Sources.Overview,
+                        listValues = listOf(
+                            ValueWithUnit.Timestamp(entry.timestamp),
+                            ValueWithUnit.Insulin(entry.amount),
+                            ValueWithUnit.UnitPerHour(entry.amount * 3_600_000.0 / entry.durationMs),
+                            ValueWithUnit.Minute((entry.durationMs / 60_000).toInt())
+                        )
+                    ).observeOn(aapsSchedulers.main).subscribe({ result ->
+                        if (result.refusedActive.isNotEmpty())
+                            this.activity?.let {
+                                OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.removerecord), "The extended bolus is still running. Cancel it before removing the record.")
+                            }
+                    }, fabricPrivacy::logException)
+                else
+                    persistenceLayer.invalidateBolus(
+                        entry.id,
+                        action = Action.BOLUS_REMOVED,
+                        source = Sources.Overview,
+                        listValues = listOf(
+                            ValueWithUnit.Timestamp(entry.timestamp),
+                            ValueWithUnit.Insulin(entry.amount)
+                        )
+                    ).subscribe()
             }
         )
     }
@@ -784,24 +807,21 @@ class OverviewFragment : DaggerFragment() {
         rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob)
 
     private fun updateIobCob() {
-        // Recent boluses for the IOB-tap undo sheet (newest first). The 6h window is the point: it is
-        // longer than any sane DIA, so every dose that still contributes to the IOB on screen is in this
-        // list and can be taken back out. Primes are excluded — they never enter IOB, so listing them
-        // would only invite removing the wrong record.
-        recentInsulin = persistenceLayer.getBolusesFromTime(dateUtil.now() - 6 * 60 * 60 * 1000L, false)
-            .blockingGet()
-            .filter { it.amount > 0 && it.type != BS.Type.PRIMING }
-            .take(10)
-            .map { b ->
-                HomeUiState.InsulinEntry(
-                    id = b.id,
-                    time = dateUtil.timeString(b.timestamp),
-                    units = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, b.amount),
-                    kind = if (b.type == BS.Type.SMB) "SMB" else "",
-                    timestamp = b.timestamp,
-                    amount = b.amount
-                )
-            }
+        // Recent boluses and extended boluses for the IOB-tap undo sheet (newest first). The 6h window is
+        // the point: it is longer than any sane DIA, so every dose that still contributes to the IOB on
+        // screen is in this list and can be taken back out. Extended boluses are looked up a day back so
+        // a long one that started earlier but delivered inside the window is not missed.
+        val now = dateUtil.now()
+        val insulinWindowStart = now - 6 * 60 * 60 * 1000L
+        recentInsulin = recentInsulinEntries(
+            boluses = persistenceLayer.getBolusesFromTime(insulinWindowStart, false).blockingGet(),
+            extendedBoluses = persistenceLayer.getExtendedBolusesStartingFromTimeToTime(now - 24 * 60 * 60 * 1000L, now, false),
+            windowStart = insulinWindowStart,
+            now = now,
+            limit = 10,
+            timeString = dateUtil::timeString,
+            unitsString = { rh.gs(app.aaps.core.ui.R.string.format_insulin_units, it) }
+        )
         // Recent carb entries for the COB-tap undo sheet (last 6h, newest first). Off the UI thread here.
         recentCarbs = persistenceLayer.getCarbsFromTimeNotExpanded(dateUtil.now() - 6 * 60 * 60 * 1000L, false)
             .blockingGet()
