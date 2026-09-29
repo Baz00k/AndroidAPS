@@ -18,6 +18,8 @@ class YpsoPumpState @Inject constructor() {
     companion object {
         /** Status viewer budget; this is not a therapy-readiness guarantee. */
         const val STATUS_MAX_AGE_MS = 5 * 60 * 1000L
+        /** How long the last reading stays visible, labelled with its age, before the display goes blank. */
+        const val DISPLAY_MAX_AGE_MS = 60 * 60 * 1000L
         /** Legacy test interval; configuration itself does not expire on a timer. */
         const val PROFILE_MAX_AGE_MS = 5 * 60 * 1000L
     }
@@ -32,7 +34,11 @@ class YpsoPumpState @Inject constructor() {
         val isSuspended: Boolean,
         val acquiredAt: Long,
         val elapsedAt: Long
-    )
+    ) {
+        // Single canonical mapping: the wire reports bars, consumers expect percent.
+        val mappedBatteryPercent: Int?
+            get() = batteryPercent ?: batteryBars?.let { (it * 20).coerceIn(0, 100) }
+    }
 
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     internal var currentInstant: () -> Instant = { Instant.now() }
@@ -50,9 +56,10 @@ class YpsoPumpState @Inject constructor() {
 
     @Synchronized
     internal fun displayStatus(): DisplayStatus {
-        val snapshot = lastDisplaySample
-        val age = snapshot?.let { elapsedRealtime() - it.elapsedAt }
-        return DisplayStatus(snapshot, snapshot != null && sample === snapshot && age != null && age in 0 until STATUS_MAX_AGE_MS, age)
+        val retained = lastDisplaySample
+        val age = retained?.let { elapsedRealtime() - it.elapsedAt }
+        if (retained == null || age == null || age !in 0 until DISPLAY_MAX_AGE_MS) return DisplayStatus(null, false, null)
+        return DisplayStatus(retained, sample === retained && age < STATUS_MAX_AGE_MS, age)
     }
 
     // -- Connection State --
@@ -65,10 +72,7 @@ class YpsoPumpState @Inject constructor() {
     // -- Pump Status --
     val batteryPercent: Int get() = statusSnapshot?.batteryPercent ?: 0
     val reservoirUnits: Double get() = statusSnapshot?.reservoirUnits ?: 0.0
-    // Single canonical mapping: the wire reports bars, consumers expect percent.
-    val mappedBatteryPercent: Int?
-        get() = statusSnapshot?.batteryPercent
-            ?: statusSnapshot?.batteryBars?.let { (it * 20).coerceIn(0, 100) }
+    val mappedBatteryPercent: Int? get() = statusSnapshot?.mappedBatteryPercent
     @Volatile var isSuspended: Boolean = false
     @Volatile var isBolusingInProgress: Boolean = false
     @Volatile var isTbrActive: Boolean = false
@@ -242,6 +246,8 @@ class YpsoPumpState @Inject constructor() {
 
     fun updateAvailability(value: PumpSession.Availability) {
         availability = value
+        // Readings from a pump that is not the configured one must not stay on screen as "last known".
+        if (PumpSession.AvailabilityCause.IDENTITY_MISMATCH in value.causes) invalidateStatus()
     }
 
     fun reset() {

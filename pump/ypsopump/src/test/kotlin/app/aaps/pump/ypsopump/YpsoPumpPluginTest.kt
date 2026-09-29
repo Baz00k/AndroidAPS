@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
+import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
@@ -152,7 +153,31 @@ class YpsoPumpPluginTest {
         assertEquals(display.connectionSummary, plugin.pumpSpecificShortStatus(true))
         assertNull(display.connectionAction)
         assertFalse(display.connectionHealthy)
-        verify(rh, never()).gs(R.string.ypsopump_status_unavailable)
+    }
+
+    @Test
+    fun `last known levels outlive the fresh window but automation levels do not`() {
+        var elapsed = 0L
+        state.elapsedRealtime = { elapsed }
+        state.publishStatus(0.0, 12, false, 100, 2000L)
+        assertEquals(Pump.LastKnownLevels(0.0, 12, stale = false), plugin.lastKnownLevels)
+        elapsed = YpsoPumpState.STATUS_MAX_AGE_MS
+        assertTrue(plugin.reservoirLevel.isNaN())
+        assertNull(plugin.batteryLevel)
+        assertEquals(Pump.LastKnownLevels(0.0, 12, stale = true), plugin.lastKnownLevels)
+        elapsed = YpsoPumpState.DISPLAY_MAX_AGE_MS
+        assertTrue(plugin.lastKnownLevels.reservoir.isNaN())
+        assertNull(plugin.lastKnownLevels.battery)
+    }
+
+    @Test
+    fun `last known levels are read with a single clock reading`() {
+        var elapsed = 0L
+        state.elapsedRealtime = { elapsed++ }
+        state.publishStatus(42.0, 50, false, 100, 2000L)
+        // One millisecond before expiry, and the clock advances on every read: a second read would see it stale.
+        elapsed = YpsoPumpState.STATUS_MAX_AGE_MS - 1
+        assertEquals(Pump.LastKnownLevels(42.0, 50, stale = false), plugin.lastKnownLevels)
     }
 
     @Test

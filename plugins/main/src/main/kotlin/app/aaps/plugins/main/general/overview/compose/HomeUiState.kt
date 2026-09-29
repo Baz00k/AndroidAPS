@@ -92,7 +92,9 @@ data class HomeUiState(
         val dotTone: AapsTone,
         // When set (0f..1f) the pill draws a depleting countdown RING instead of a plain dot — used by
         // the sensor to show life remaining at a glance. null = plain dot (cannula/reservoir/battery).
-        val fraction: Float? = null
+        val fraction: Float? = null,
+        // A last-known value that is no longer current; drawn dimmed like a stale glucose reading.
+        val stale: Boolean = false
     )
 
     /**

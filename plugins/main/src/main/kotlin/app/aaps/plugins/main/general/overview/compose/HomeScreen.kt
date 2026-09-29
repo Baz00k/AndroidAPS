@@ -309,7 +309,7 @@ private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
             if (s.fraction != null) CountdownRing(s.fraction, dot, size = 12.dp) else Dot(dot, size = 8.dp)
             FittedText(s.label, AapsTheme.type.caption, colors.textSecondary)
         }
-        MeasurementText(s.value, AapsTheme.type.listTitle, colors.textPrimary)
+        MeasurementText(s.value, AapsTheme.type.listTitle, if (s.stale) colors.textSecondary else colors.textPrimary)
     }
 }
 

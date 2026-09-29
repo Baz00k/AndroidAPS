@@ -2380,7 +2380,7 @@ class YpsoBleManager @Inject constructor(
             val captured = ownership ?: ReadOwnership(g, sessionToken?.generation ?: configuredGeneration, configuredAttemptId)
             bluetoothGatt = null
             pumpState.connectionState = ConnectionState.DISCONNECTED
-            pumpState.invalidateStatus(preserveDisplay = cause != PumpSession.AvailabilityCause.IDENTITY_MISMATCH)
+            pumpState.invalidateStatus(preserveDisplay = true)
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
             bolusWriteCoordinatorInstance?.ownerDisconnected(g, message)

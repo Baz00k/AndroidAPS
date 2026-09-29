@@ -129,6 +129,16 @@ interface Pump {
     val batteryLevel: Int?
 
     /**
+     * Retained levels, possibly older than [reservoirLevel] and [batteryLevel] allow, read as one
+     * snapshot so values and [LastKnownLevels.stale] always belong together.
+     * For display only: never use it for automation, alerts, uploads or dosing.
+     */
+    val lastKnownLevels: LastKnownLevels get() = LastKnownLevels(reservoirLevel, batteryLevel, stale = false)
+
+    /** [reservoir] is NaN when there is nothing to show; [stale] means older than the current levels allow. */
+    data class LastKnownLevels(val reservoir: Double, val battery: Int?, val stale: Boolean)
+
+    /**
      * Request a bolus to be delivered, carbs to be stored on pump or both.
      *
      * @param detailedBolusInfo it's the caller's responsibility to ensure the request can be satisfied by the pump,

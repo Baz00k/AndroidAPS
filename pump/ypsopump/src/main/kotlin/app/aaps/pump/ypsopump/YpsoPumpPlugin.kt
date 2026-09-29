@@ -548,8 +548,13 @@ class YpsoPumpPlugin @Inject constructor(
     override val baseBasalRate: Double get() = pumpState.scheduledBaseBasalRateIfFresh() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
     // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
-    // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
+    // see the single canonical mapping at [YpsoPumpState.StatusSnapshot.mappedBatteryPercent].
     override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
+    // Display only: automation, alerts and uploads keep reading the fresh-gated levels above.
+    override val lastKnownLevels: Pump.LastKnownLevels
+        get() = pumpState.displayStatus().let {
+            Pump.LastKnownLevels(it.snapshot?.reservoirUnits ?: Double.NaN, it.snapshot?.mappedBatteryPercent, stale = !it.isCurrent)
+        }
 
     /** Presentation boundary: driver situations become translated operator text only here. */
     private fun message(reason: YpsoBolusMessage): String = rh.gs(

@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.history.YpsoHistoryKind
@@ -62,6 +63,38 @@ class YpsoPumpStateTest {
         assertFalse(state.hasVerifiedStatus)
         elapsed = 0
         assertFalse(state.displayStatus().isCurrent)
+    }
+
+    @Test
+    fun `identity mismatch removes retained readings but other failures keep them`() {
+        val state = YpsoPumpState().apply { elapsedRealtime = { 1000L } }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        state.updateAvailability(PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT)))
+        assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
+        state.updateAvailability(PumpSession.Availability(setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH)))
+        assertNull(state.displayStatus().snapshot)
+    }
+
+    @Test
+    fun `a reading dated in the future is not displayed`() {
+        var elapsed = 1000L
+        val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        elapsed = 0
+        assertNull(state.displayStatus().snapshot)
+    }
+
+    @Test
+    fun `retained readings are shown for the display window and then dropped`() {
+        var elapsed = 1000L
+        val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        elapsed += YpsoPumpState.DISPLAY_MAX_AGE_MS - 1
+        assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
+        assertFalse(state.displayStatus().isCurrent)
+        elapsed += 1
+        assertNull(state.displayStatus().snapshot)
+        assertNull(state.displayStatus().ageMs)
     }
 
     @Test

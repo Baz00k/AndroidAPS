@@ -24,7 +24,7 @@ internal fun pumpStatusPresentation(state: YpsoPumpState, rh: ResourceHelper): P
         ConnectionState.DISCONNECTED -> R.string.ypsopump_disconnected
         else -> R.string.ypsopump_connecting
     })
-    val battery = snapshot?.batteryPercent ?: snapshot?.batteryBars?.let { (it * 20).coerceIn(0, 100) }
+    val battery = snapshot?.mappedBatteryPercent
     val notice = snapshot?.let {
         val age = display.ageMs?.takeIf { it >= 0 }?.let(::compactDurationLabel) ?: rh.gs(R.string.ypsopump_value_unavailable)
         when {
