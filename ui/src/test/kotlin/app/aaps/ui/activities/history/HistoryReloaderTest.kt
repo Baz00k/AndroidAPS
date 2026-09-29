@@ -7,19 +7,25 @@ import java.util.concurrent.TimeUnit
 
 class HistoryReloaderTest {
 
-    private val scheduler = TestScheduler()
+    private val io = TestScheduler()
+    private val main = TestScheduler()
     private var clock = 0L
     private val applied = mutableListOf<List<HistoryItem>>()
     private var loads = 0
     private var source: () -> List<HistoryItem> = { emptyList() }
 
     private val reloader = HistoryReloader(
-        load = { loads++; source() }, io = scheduler, main = scheduler, now = { clock },
+        load = { loads++; source() }, io = io, main = main, now = { clock },
         onLoaded = { applied += it }, onError = { throw it }
     )
 
-    private fun run(ms: Long) {
-        scheduler.advanceTimeBy(ms, TimeUnit.MILLISECONDS)
+    private fun ioRuns(ms: Long = 0) = io.advanceTimeBy(ms, TimeUnit.MILLISECONDS)
+    private fun mainRuns(ms: Long = 0) = main.advanceTimeBy(ms, TimeUnit.MILLISECONDS)
+
+    /** Advance both schedulers, letting a load run on io and deliver on main, in either order of arrival. */
+    private fun advance(ms: Long) {
+        repeat(3) { ioRuns(ms / 3); mainRuns(ms / 3) }
+        ioRuns(ms % 3); mainRuns(ms % 3)
     }
 
     private fun item(id: Long, end: Long? = null) = HistoryItem(
@@ -31,38 +37,39 @@ class HistoryReloaderTest {
     fun `a record that ends while History is open triggers one reload after its end`() {
         clock = 10_000
         source = { listOf(item(1, end = 70_000)) }
-        reloader.reload()
-        run(0)
+        reloader.resume(); advance(0)
         assertThat(loads).isEqualTo(1)
 
         clock = 70_000
         source = { listOf(item(1)) }
-        run(59_999)
+        advance(59_999)
         assertThat(loads).isEqualTo(1)
-        run(1_001)
+        advance(1_002)
         assertThat(loads).isEqualTo(2)
         assertThat(applied.last().single().removable).isTrue()
 
-        run(3_600_000)
+        advance(3_600_000)
         assertThat(loads).isEqualTo(2)
     }
 
     @Test
     fun `nothing running schedules no further reload`() {
         source = { listOf(item(1)) }
-        reloader.reload()
-        run(3_600_000)
+        reloader.resume()
+        advance(3_600_000)
         assertThat(loads).isEqualTo(1)
     }
 
     @Test
-    fun `an older load finishing after a newer one cannot replace it`() {
+    fun `an older snapshot already captured cannot replace a newer one`() {
         var snapshot = listOf(item(1), item(2))
         source = { snapshot }
-        reloader.reload()              // starts on io, not yet delivered
-        snapshot = listOf(item(2))     // row 1 was removed meanwhile
+        reloader.resume()
+        ioRuns()                        // the old load has read [1, 2] and is waiting to be delivered
+        snapshot = listOf(item(2))      // row 1 is removed
         reloader.reload()
-        run(0)
+        ioRuns()
+        mainRuns()
         assertThat(applied).hasSize(1)
         assertThat(applied.single().map { it.id }).containsExactly(2L)
     }
@@ -70,34 +77,62 @@ class HistoryReloaderTest {
     @Test
     fun `stop cancels a pending load and the timer so nothing refreshes while paused`() {
         source = { listOf(item(1, end = 5_000)) }
-        reloader.reload()
+        reloader.resume()
         reloader.stop()
-        run(3_600_000)
+        advance(3_600_000)
         assertThat(applied).isEmpty()
+        assertThat(loads).isEqualTo(0)
 
-        reloader.reload()
-        run(0)
+        reloader.resume(); advance(0)
         assertThat(applied).hasSize(1)
         reloader.stop()
-        run(3_600_000)
-        assertThat(loads).isEqualTo(1)   // the cancelled first load never ran
+        advance(3_600_000)
+        assertThat(loads).isEqualTo(1)
     }
 
     @Test
-    fun `reloading replaces the running timer instead of stacking timers`() {
+    fun `a removal finishing while paused does not restart refreshing until resume`() {
+        source = { listOf(item(1, end = 5_000)) }
+        reloader.resume(); advance(0)
+        reloader.cancel()               // removal confirmed
+        reloader.stop()                 // screen paused before it finishes
+        reloader.reload()               // removal outcome asks for a reload
+        advance(3_600_000)
+        assertThat(loads).isEqualTo(1)
+
+        reloader.resume(); advance(0)
+        assertThat(loads).isEqualTo(2)
+    }
+
+    @Test
+    fun `a reload after a removal completes while active`() {
+        source = { listOf(item(1)) }
+        reloader.resume(); advance(0)
+        reloader.cancel()
+        reloader.reload(); advance(0)
+        assertThat(loads).isEqualTo(2)
+    }
+
+    @Test
+    fun `reloading replaces the running timer so only the latest deadline fires`() {
         clock = 0
         source = { listOf(item(1, end = 10_000)) }
-        reloader.reload(); run(0)
-        reloader.reload(); run(0)
-        clock = 10_000
+        reloader.resume(); advance(0)
+        clock = 5_000
+        source = { listOf(item(1, end = 60_000)) }
+        reloader.reload(); advance(0)
+        assertThat(loads).isEqualTo(2)
+
+        advance(11_001)                 // the superseded 10 s deadline passes
+        assertThat(loads).isEqualTo(2)
+        clock = 60_000
         source = { listOf(item(1)) }
-        val before = loads
-        run(11_001)
-        assertThat(loads - before).isEqualTo(1)
+        advance(55_000 + 1_001)
+        assertThat(loads).isEqualTo(3)
     }
 
     @Test
-    fun `history item ends drive the next refresh time`() {
+    fun `earliest running end drives the next refresh time`() {
         val items = listOf(item(1, end = 9_000), item(2, end = 4_000), item(3))
         assertThat(items.nextRunningEnd()).isEqualTo(4_000L)
         assertThat(listOf(item(3)).nextRunningEnd()).isNull()

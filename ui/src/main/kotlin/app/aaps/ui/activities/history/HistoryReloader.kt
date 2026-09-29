@@ -11,8 +11,9 @@ import java.util.concurrent.TimeUnit
  * when the earliest one ends: a record that finished or was cancelled becomes removable with its final values.
  *
  * At most one load and one timer exist. Starting a load cancels the previous one, so an older snapshot can never
- * replace a newer one (for example restoring a row that was just removed), and [stop] cancels both so nothing
- * refreshes while the screen is paused.
+ * replace a newer one (for example restoring a row that was just removed). Nothing loads or ticks unless the screen
+ * is active: [resume] activates it and loads, [stop] deactivates it and cancels everything, so a removal finishing
+ * while the screen is paused cannot restart refreshing. [cancel] only drops pending work.
  */
 internal class HistoryReloader(
     private val load: () -> List<HistoryItem>,
@@ -25,8 +26,15 @@ internal class HistoryReloader(
 
     private val loading = SerialDisposable()
     private val timer = SerialDisposable()
+    private var active = false
+
+    fun resume() {
+        active = true
+        reload()
+    }
 
     fun reload() {
+        if (!active) return
         timer.set(null)
         loading.set(
             Single.fromCallable { load() }
@@ -44,8 +52,13 @@ internal class HistoryReloader(
         )
     }
 
-    fun stop() {
+    fun cancel() {
         timer.set(null)
         loading.set(null)
+    }
+
+    fun stop() {
+        active = false
+        cancel()
     }
 }

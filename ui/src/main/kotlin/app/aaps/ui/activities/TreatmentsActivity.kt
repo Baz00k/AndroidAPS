@@ -78,7 +78,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        reloader.reload()
+        reloader.resume()
     }
 
     override fun onPause() {
@@ -105,7 +105,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                 OKDialog.showConfirmation(this, rh.gs(app.aaps.core.ui.R.string.removerecord), message, confirm)
             },
             onConfirmed = { selection ->
-                reloader.stop()
+                reloader.cancel()
                 historyState.value = historyState.value.copy(removing = true)
                 disposable += invalidateHistoryItems(persistenceLayer, selection)
                     .subscribeOn(aapsSchedulers.io)
