@@ -4,6 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -21,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.plugins.main.general.overview.TARGET_SAMPLE_INTERVAL_MS
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
@@ -34,7 +37,7 @@ import kotlin.math.sqrt
  * vertical scales. Here they are two panels sharing a time axis, so neither has to be read against an
  * invented scale:
  *
- *  - glucose on top: a continuous trace tinted only where it leaves the target band, over a band drawn
+ *  - glucose on top: a continuous trace tinted only where it leaves the display threshold band, over a band drawn
  *    at low opacity so it sits behind the line instead of swallowing it;
  *  - a treatment rail between them — boluses as ticks, carbs as dots, sized by amount, which retires
  *    the rotated overlapping value labels;
@@ -58,6 +61,8 @@ fun HomeGlucoseChart(data: HomeChartData, modifier: Modifier = Modifier) {
             if (!data.hasData) return@Canvas
             drawChart(data, colors, measurer, axisStyle, valueStyle)
         }
+        if (data.hasData && data.targets.isNotEmpty())
+            Text("┄ Target (midpoint)", modifier = Modifier.align(Alignment.TopEnd), style = caption, color = colors.accent)
     }
 }
 
@@ -78,8 +83,8 @@ private fun DrawScope.drawChart(
     val plotW = size.width - leftPad - rightPad
     if (plotW <= 0f) return
 
-    val bodyH = size.height - axisH
-    val gTop = 2.dp.toPx()
+    val gTop = if (d.targets.isEmpty()) 2.dp.toPx() else 20.dp.toPx()
+    val bodyH = size.height - axisH - gTop
     val gH = bodyH * GLUCOSE_WEIGHT
     val railY = gTop + gH + bodyH * RAIL_WEIGHT * 0.30f   // sits above the panel label, not on it
     val iTop = gTop + gH + bodyH * RAIL_WEIGHT
@@ -89,12 +94,12 @@ private fun DrawScope.drawChart(
     fun x(t: Long): Float = leftPad + (t - d.from) / span * plotW
 
     // Glucose scale: always show the band plus a little headroom, and grow for excursions.
-    val maxReading = d.readings.maxOf { it.value }
+    val maxReading = max(d.readings.maxOf { it.value }, d.targets.maxOfOrNull { it.value } ?: 0.0)
     val gHi = max(d.highMark + 2.0, kotlin.math.ceil(maxReading + 0.5))
-    val gLo = min(d.lowMark - 1.0, d.readings.minOf { it.value } - 0.5).coerceAtLeast(0.0)
+    val gLo = min(d.lowMark - 1.0, min(d.readings.minOf { it.value }, d.targets.minOfOrNull { it.value } ?: d.lowMark) - 0.5).coerceAtLeast(0.0)
     fun y(v: Double): Float = gTop + ((gHi - v.coerceIn(gLo, gHi)) / (gHi - gLo)).toFloat() * gH
 
-    // ---- target band (behind everything) ----
+    // ---- display threshold band (behind everything) ----
     drawRect(
         color = colors.inRange.copy(alpha = 0.08f),
         topLeft = Offset(leftPad, y(d.highMark)),
@@ -107,6 +112,21 @@ private fun DrawScope.drawChart(
         measurer.label(this, fmt(v, d.decimals), leftPad - 4.dp.toPx(), y(v), axisStyle, alignEnd = true)
     }
     measurer.label(this, fmt(gHi, 0), leftPad - 4.dp.toPx(), y(gHi) + 4.dp.toPx(), axisStyle, alignEnd = true)
+
+    // Distinct dashed target midpoint, as in the original Overview target series.
+    if (d.targets.isNotEmpty()) {
+        val path = Path()
+        d.targets.forEachIndexed { index, point ->
+            // Missing profile history leaves a gap rather than connecting invented target values.
+            if (index == 0 || point.time - d.targets[index - 1].time > TARGET_SAMPLE_INTERVAL_MS)
+                path.moveTo(x(point.time), y(point.value))
+            else {
+                path.lineTo(x(point.time), y(d.targets[index - 1].value))
+                path.lineTo(x(point.time), y(point.value))
+            }
+        }
+        drawPath(path, colors.accent, style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 3.dp.toPx()))))
+    }
 
     // ---- raw scatter: every sensor reading, under the trace ----
     // Only present on a dense (1-minute) source. Kept deliberately faint and drawn UNDER the
