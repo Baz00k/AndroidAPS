@@ -336,4 +336,29 @@
     <string name="steps_shortname">STEPS</string>
     <string name="simple_mode_enabled">Simple mode enabled</string>
 
+    <string name="overview_prediction_iob">IOB</string>
+    <string name="overview_prediction_cob">COB</string>
+    <string name="overview_prediction_zt">Zero-temp</string>
+    <string name="overview_prediction_uam">UAM</string>
+    <string name="overview_prediction_acob">aCOB</string>
+    <string name="overview_additional_graphs">Additional graphs</string>
+    <string name="overview_graph_number">Graph %1$d</string>
+    <string name="overview_graph_hidden">Hide</string>
+    <string name="overview_graph_no_data">No data</string>
+    <string name="overview_graph_units_insulin">U</string>
+    <string name="overview_graph_units_carbs">g</string>
+    <string name="overview_graph_units_impact">%1$s/5 min</string>
+    <string name="overview_graph_bgi_sign">BGI uses the AAPS graph convention: positive values indicate a glucose-lowering insulin effect (−BGI).</string>
+    <string name="overview_graph_sensitivity_zero">Autosens change: 0% is a ratio of 1.0. This estimate may be shown even when autosens is disabled.</string>
+    <string name="overview_graph_settings">Graph settings</string>
+    <string name="overview_graph_overlays">Glucose overlays</string>
+    <string name="overview_graph_target">Target (midpoint)</string>
+    <string name="overview_graph_raw_readings">Raw sensor dots</string>
+    <string name="overview_graph_reset">Reset defaults</string>
+    <string name="overview_graph_now">Now</string>
+    <string name="overview_graph_return_to_now">Return to now</string>
+    <string name="overview_graph_no_forecast">No forecast</string>
+    <string name="overview_graph_scheduled_basal">Scheduled basal</string>
+    <string name="overview_graph_units_basal">U/h</string>
+    <string name="overview_graph_a11y">Glucose graph, last %1$d hours. Drag sideways to see earlier data.</string>
 </resources>

@@ -67,7 +67,8 @@ import app.aaps.core.compose.theme.color
 fun HomeScreen(
     state: HomeUiState,
     actions: HomeActions,
-    graph: @Composable () -> Unit
+    graph: @Composable () -> Unit,
+    additionalGraphs: @Composable () -> Unit = {}
 ) {
     val colors = AapsTheme.colors
     var showDetails by remember { mutableStateOf(false) }
@@ -92,6 +93,7 @@ fun HomeScreen(
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
+                additionalGraphs()
                 DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }
@@ -332,7 +334,8 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
     val colors = AapsTheme.colors
     val ranges = listOf(6, 12, 24)
     val selected = ranges.indexOfFirst { it >= rangeHours }.let { if (it < 0) ranges.lastIndex else it }
-    AapsCard(contentPadding = androidx.compose.foundation.layout.PaddingValues(AapsSpacing.cardPadSmall)) {
+    // Match the additional cards so all plots share exactly the same horizontal time mapping.
+    AapsCard(contentPadding = CHART_CARD_PADDING) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Glucose", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
@@ -342,11 +345,7 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
                     onSelect = { onRange(ranges[it]) }
                 )
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(220.dp)
-            ) { graph() }
+            graph()
         }
     }
 }

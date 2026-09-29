@@ -1,32 +1,14 @@
 package app.aaps.plugins.main.general.overview
 
 import android.annotation.SuppressLint
-import android.app.NotificationManager
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
-import android.graphics.drawable.AnimationDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
-import android.view.View.OnLongClickListener
 import android.view.ViewGroup
-import android.widget.LinearLayout
-import android.widget.RelativeLayout
-import android.widget.TextView
-import androidx.core.text.toSpanned
-import androidx.recyclerview.widget.LinearLayoutManager
-import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.RM
-import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -40,7 +22,6 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
-import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.nsclient.NSSettingsStatus
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
@@ -53,7 +34,6 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.pump.BolusProgressData
-import app.aaps.core.interfaces.pump.defs.determineCorrectBolusStepSize
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -62,7 +42,6 @@ import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.rx.events.EventBucketedDataCreated
 import app.aaps.core.interfaces.rx.events.EventEffectiveProfileSwitchChanged
 import app.aaps.core.interfaces.rx.events.EventExtendedBolusChange
-import app.aaps.core.interfaces.rx.events.EventInitializationChanged
 import app.aaps.core.interfaces.rx.events.EventNewOpenLoopNotification
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
@@ -82,28 +61,29 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
-import app.aaps.core.keys.BooleanKey
+import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.BooleanNonKey
-import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.constraints.ConstraintObject
-import app.aaps.core.objects.extensions.directionToIcon
 import app.aaps.core.objects.extensions.displayText
 import app.aaps.core.objects.extensions.round
-import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
-import app.aaps.core.ui.elements.SingleClickButton
 import app.aaps.core.ui.extensions.runOnUiThread
-import app.aaps.core.ui.extensions.toVisibility
-import app.aaps.core.ui.extensions.toVisibilityKeepSpace
 import app.aaps.core.utils.compactDurationLabel
 import app.aaps.plugins.main.R
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import app.aaps.core.interfaces.profile.Profile
+import app.aaps.plugins.main.general.overview.compose.BASAL_SAMPLE_MS
+import app.aaps.plugins.main.general.overview.compose.CHART_HISTORY_MS
+import app.aaps.plugins.main.general.overview.compose.CHART_MAX_FUTURE_MS
+import app.aaps.plugins.main.general.overview.compose.ChartPanState
+import app.aaps.plugins.main.general.overview.compose.ChartWindow
+import app.aaps.plugins.main.general.overview.compose.rememberChartInsets
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -115,6 +95,13 @@ import app.aaps.plugins.main.general.overview.compose.HomeActions
 import app.aaps.plugins.main.general.overview.compose.HomeScreen
 import app.aaps.plugins.main.general.overview.compose.TreatmentKind
 import app.aaps.plugins.main.general.overview.compose.HomeGlucoseChart
+import app.aaps.plugins.main.general.overview.compose.buildHomePredictions
+import app.aaps.plugins.main.general.overview.compose.AdditionalGraphData
+import app.aaps.plugins.main.general.overview.compose.AdditionalGraphSettings
+import app.aaps.plugins.main.general.overview.compose.AdditionalSeries
+import app.aaps.plugins.main.general.overview.compose.HomeGraphSettings
+import app.aaps.plugins.main.general.overview.compose.forDisplay
+import app.aaps.plugins.main.general.overview.compose.HomeAdditionalGraphs
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
 import app.aaps.plugins.main.general.overview.compose.ChartTreatment
@@ -130,8 +117,6 @@ import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 class OverviewFragment : DaggerFragment() {
@@ -175,7 +160,13 @@ class OverviewFragment : DaggerFragment() {
     private var smallHeight = false
     private var axisWidth: Int = 0
     private var composeHome: ComposeView? = null
+    private val graphSettings = mutableStateOf(HomeGraphSettings())
+    private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
+    // The visible range is UI state: switching it re-windows the loaded snapshot immediately, with
+    // no rebuild. The horizontal position is shared by every graph panel and never read off-thread.
+    private val chartRangeHours = mutableStateOf(6)
+    private val chartPan = ChartPanState()
     private lateinit var refreshLoop: Runnable
     private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
 
@@ -206,14 +197,24 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // ---- Redesigned Home (Compose) ----
+        graphSettings.value = HomeGraphSettings.decode(preferences.get(StringNonKey.OverviewGlucoseGraphSettings))
+        additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
+        chartRangeHours.value = overviewData.rangeToDisplay
         val actions = buildHomeActions()
         composeHome?.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         composeHome?.setContent {
             AapsTheme {
+                val settings = graphSettings.value
+                val displayed = remember(chartData.value, settings) { chartData.value.forDisplay(settings) }
+                // Width depends on the chosen range and whether forecasts are switched on — never on
+                // whether a forecast is currently available.
+                val window = ChartWindow.of(chartRangeHours.value, settings.forecasts.isNotEmpty())
+                val insets = rememberChartInsets(displayed, additionalGraphSettings.value)
                 HomeScreen(
                     state = homeState.value,
                     actions = actions,
-                    graph = { HomeGlucoseChart(chartData.value, Modifier.fillMaxSize()) }
+                    graph = { HomeGlucoseChart(displayed, window, chartPan, Modifier.fillMaxWidth(), settings, insets) },
+                    additionalGraphs = { HomeAdditionalGraphs(displayed, additionalGraphSettings.value, window, chartPan, insets) }
                 )
             }
         }
@@ -227,6 +228,9 @@ class OverviewFragment : DaggerFragment() {
 
     override fun onResume() {
         super.onResume()
+        // Preferences is a separate activity; this fragment can resume without recreating its view.
+        graphSettings.value = HomeGraphSettings.decode(preferences.get(StringNonKey.OverviewGlucoseGraphSettings))
+        additionalGraphSettings.value = AdditionalGraphSettings.decode(preferences.get(StringNonKey.OverviewAdditionalGraphs))
         disposable += activePlugin.activeOverview.overviewBus
             .toObservable(EventUpdateOverviewCalcProgress::class.java)
             .observeOn(aapsSchedulers.main)
@@ -255,6 +259,10 @@ class OverviewFragment : DaggerFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe({
                            overviewData.rangeToDisplay = it.hours
+                           // Re-window now and move the selector with it, instead of waiting for
+                           // the next rebuild of the home state.
+                           chartRangeHours.value = it.hours
+                           homeState.value = homeState.value.copy(graphRangeHours = it.hours)
                            preferences.put(IntNonKey.RangeToDisplay, it.hours)
                            rxBus.send(EventPreferenceChange(IntNonKey.RangeToDisplay.key))
                            preferences.put(BooleanNonKey.ObjectivesScaleUsed, true)
@@ -310,6 +318,9 @@ class OverviewFragment : DaggerFragment() {
             .toObservable(EventRunningModeChange::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ scheduleUpdateGUI() }, fabricPrivacy::logException)
+
+        // Coming back to Home shows the present, not wherever the graph was left paused.
+        chartPan.returnToLive()
 
         refreshLoop = Runnable {
             refreshAll()
@@ -632,86 +643,108 @@ class OverviewFragment : DaggerFragment() {
         )
     }
 
-    /**
-     * Assemble the home chart series. Same sources the GraphView pipeline used — readings from
-     * [overviewData], delivered rate from [iobCobCalculator], treatments from the persistence layer —
-     * so this is a rendering change, not a data change.
-     *
-     * Runs off the UI thread (see [refreshAll]); the effective-rate sampling below is the expensive
-     * part and must not land on the main thread.
-     */
-    /** Rebuild the chart series on the background handler, then publish to Compose. */
+    /** Refresh providers off the UI thread; panning only reuses the published snapshot. */
     private fun refreshChart() {
         handler.post {
-            val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); null }
-            d?.let { runOnUiThread { chartData.value = it } }
+            val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); HomeChartData() }
+            runOnUiThread { if (composeHome != null) chartData.value = d }
         }
     }
 
+    /** Load the full pan budget off the UI thread; viewport changes reuse this snapshot. */
     private fun buildChartData(): HomeChartData {
-        val profile = profileFunction.getProfile() ?: return HomeChartData()
-        val from = overviewData.fromTime
-        val to = overviewData.toTime
-        if (to <= from) return HomeChartData()
+        profileFunction.getProfile() ?: return HomeChartData()
+        val units = profileFunction.getUnits()
+        val now = dateUtil.now()
+        val from = now - CHART_HISTORY_MS
 
-        val readings = overviewData.bgReadingsArray
-            .filter { it.timestamp in from..to }
+        // Straight from the database rather than the legacy graph worker's array, whose span follows
+        // the old hour-aligned range. Invalidated and nonsensical values are not drawn; a reading
+        // stamped in the future (phone/sensor clock skew) waits until its time has come.
+        val readings = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true)
+            .filter { it.isValid && it.value.isFinite() && it.value > 0.0 && it.timestamp in from..now }
             .sortedBy { it.timestamp }
-            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
+            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value, units)) }
         if (readings.isEmpty()) return HomeChartData()
 
-        // The loop's own view of glucose. On a 1-minute source this is the 5-minute average the
-        // statistics are computed from; on a 5-minute source it is effectively the readings again.
-        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy()
-            ?.filter { it.timestamp in from..to }
-            ?.sortedBy { it.timestamp }
-            ?.map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated)) }
-            ?: emptyList()
+        // Use loop-bucketed readings without interpolated gap fills.
+        val bucketed = iobCobCalculator.ads.getBucketedDataTableCopy().orEmpty()
+            .filter { !it.filledGap && it.timestamp in from..now && it.recalculated.isFinite() && it.recalculated > 0.0 }
+            .sortedBy { it.timestamp }
+            .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.recalculated, units)) }
 
-        // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
-        // rather than drawing one step per record — a per-record path doubles back on itself.
-        val samples = 240
-        val stepMs = ((to - from) / samples).coerceAtLeast(60_000L)
-        val basal = ArrayList<BasalStep>(samples + 1)
-        var t = from
-        while (t <= to) {
-            val bd = iobCobCalculator.getBasalData(profile, t)
-            basal.add(BasalStep(t, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal))
-            t += stepMs
+        // Historical profiles, re-resolved only where the effective profile changed.
+        val switches = persistenceLayer.getEffectiveProfileSwitchesFromTimeToTime(from, now, ascending = true)
+            .filter { it.isValid && it.timestamp > from && it.timestamp <= now }
+            .map { it.timestamp }.distinct().sorted()
+
+        // Sample effective rates on an epoch-aligned grid to avoid overlapping records and refresh jitter.
+        val basalProfiles = ProfileCursor(from, switches) { profileFunction.getProfile(it) }
+        val basal = ArrayList<BasalStep>((CHART_HISTORY_MS / BASAL_SAMPLE_MS).toInt() + 2)
+        var t = (from / BASAL_SAMPLE_MS + 1) * BASAL_SAMPLE_MS
+        while (true) {
+            val sampleTime = minOf(t, now)
+            // No profile, no step: a gap, rather than today's schedule projected backwards.
+            basalProfiles.at(sampleTime)?.let { historical ->
+                val bd = iobCobCalculator.getBasalData(historical, sampleTime)
+                basal.add(BasalStep(sampleTime, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal, bd.basal))
+            }
+            if (sampleTime == now) break
+            t += BASAL_SAMPLE_MS
         }
 
-        // Match upstream's target graph: a distinct stepped midpoint line, sampled every five
-        // minutes. Do not substitute targets for the display hypo/hyper marks or recolour glucose.
-        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, to)
+        // Extend the planned profile target through forecasts, honoring temporary-target expiry.
+        val targets = TargetChartData(persistenceLayer, profileFunction, profileUtil).build(from, now + CHART_MAX_FUTURE_MS, units)
 
         val treatments = ArrayList<ChartTreatment>()
-        persistenceLayer.getBolusesFromTimeToTime(from, to, true).forEach { b ->
+        persistenceLayer.getBolusesFromTimeToTime(from, now, true).forEach { b ->
             if (b.isValid && b.type != BS.Type.PRIMING && b.amount > 0.0)
                 treatments.add(ChartTreatment(b.timestamp, b.amount, if (b.type == BS.Type.SMB) TreatmentKind.SMB else TreatmentKind.BOLUS))
         }
-        // NOT the expanded query: that splits one meal into an absorption series, which would draw a
-        // 90 g meal as a row of identical dots instead of a single mark sized by the meal.
+        // Use unexpanded carbs so each meal has one marker.
         persistenceLayer.getCarbsFromTimeNotExpanded(from, true).blockingGet().forEach { c ->
-            if (c.isValid && c.timestamp <= to && c.amount > 0.0)
+            if (c.isValid && c.timestamp <= now && c.amount > 0.0)
                 treatments.add(ChartTreatment(c.timestamp, c.amount, TreatmentKind.CARBS))
+        }
+        treatments.sortBy { it.time }
+
+        val ads = iobCobCalculator.ads.clone()
+        val autosensSamples = (0 until ads.autosensDataTable.size()).map { ads.autosensDataTable.valueAt(it) }
+        val additional = AdditionalGraphData.fromAutosens(autosensSamples, from, now, now) { profileUtil.fromMgdlToUnits(it, units) }
+        val iob = ArrayList<GlucosePoint>()
+        val iobProfiles = ProfileCursor(from, switches) { profileFunction.getProfile(it) }
+        val iobStep = 5 * 60_000L
+        var iobTime = (from / iobStep + 1) * iobStep
+        while (true) {
+            val sampleTime = minOf(iobTime, now)
+            // Resolve historical profiles just as the original AAPS graph worker does.
+            iobProfiles.at(sampleTime)?.let { historicalProfile ->
+                val value = iobCobCalculator.calculateFromTreatmentsAndTemps(sampleTime, historicalProfile).iob
+                if (value.isFinite()) iob.add(GlucosePoint(sampleTime, value))
+            }
+            if (sampleTime == now) break
+            iobTime += iobStep
         }
 
         return HomeChartData(
+            additional = additional.copy(points = additional.points + (AdditionalSeries.IOB to iob)),
             from = from,
-            to = to,
-            now = dateUtil.now(),
+            now = now,
+            predictions = buildHomePredictions(
+                if (config.APS) loop.lastRun?.constraintsProcessed else processedDeviceStatusData.getAPSResult(),
+                now,
+                { profileUtil.fromMgdlToUnits(it) }
+            ),
             readings = readings,
             bucketed = bucketed,
             basal = basal,
-            scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,
             targets = targets,
-            // The SAME thresholds that colour the hero BG, so band and headline can never disagree.
-            // UnitDoubleKey values are stored in the user's DISPLAY units already — converting them
-            // from mg/dL here would divide 10.0 mmol down to 0.55 and collapse the band.
+            // Overview thresholds are already in display units; do not convert them again.
             lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
             highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
-            decimals = if (profileFunction.getUnits() == GlucoseUnit.MGDL) 0 else 1
+            decimals = if (units == GlucoseUnit.MGDL) 0 else 1,
+            glucoseUnits = if (units == GlucoseUnit.MGDL) "mg/dL" else "mmol/L"
         )
     }
 
@@ -809,5 +842,22 @@ class OverviewFragment : DaggerFragment() {
                 }
             }
         }
+    }
+}
+
+/**
+ * The effective profile for increasing sample times, re-resolved only at effective-profile-switch
+ * boundaries (the same rule as [TargetChartData]) instead of once per graph sample.
+ */
+private class ProfileCursor(from: Long, private val switches: List<Long>, private val resolve: (Long) -> Profile?) {
+
+    private var next = 0
+    private var profile: Profile? = resolve(from)
+
+    fun at(time: Long): Profile? {
+        var latest: Long? = null
+        while (next < switches.size && switches[next] <= time) latest = switches[next++]
+        latest?.let { profile = resolve(it) }
+        return profile
     }
 }

@@ -8,6 +8,8 @@ enum class StringNonKey(
     override val exportable: Boolean = true
 ) : StringNonPreferenceKey {
 
+    OverviewGlucoseGraphSettings("overview_glucose_graph_settings", defaultValue = ""),
+    OverviewAdditionalGraphs("overview_additional_graphs", defaultValue = ""),
     QuickWizard(key = "QuickWizard", defaultValue = "[]"),
     WearCwfWatchfaceName(key = "wear_cwf_watchface_name", defaultValue = ""),
     WearCwfAuthorVersion(key = "wear_cwf_author_version", defaultValue = ""),

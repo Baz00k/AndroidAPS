@@ -2,9 +2,7 @@ package app.aaps.plugins.main.general.overview
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Typeface
 import android.os.Build
 import android.widget.TextView
 import androidx.preference.PreferenceCategory
@@ -35,7 +33,6 @@ import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntKey
-import app.aaps.core.keys.IntentKey
 import app.aaps.core.keys.LongComposedKey
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.StringNonKey
@@ -46,7 +43,6 @@ import app.aaps.core.objects.extensions.store
 import app.aaps.core.validators.preferences.AdaptiveClickPreference
 import app.aaps.core.validators.preferences.AdaptiveDoublePreference
 import app.aaps.core.validators.preferences.AdaptiveIntPreference
-import app.aaps.core.validators.preferences.AdaptiveIntentPreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
 import app.aaps.core.validators.preferences.AdaptiveUnitPreference
 import app.aaps.plugins.main.R
@@ -223,13 +219,14 @@ class OverviewPlugin @Inject constructor(
     }
 
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
-        if (requiredKey != null && requiredKey != "overview_buttons_settings" && requiredKey != "default_temp_targets_settings" && requiredKey != "prime_fill_settings" && requiredKey != "range_settings" && requiredKey != "statuslights_overview_advanced" && requiredKey != "overview_advanced_settings") return
+        if (requiredKey != null && requiredKey != OVERVIEW_GRAPH_SETTINGS && requiredKey != "overview_buttons_settings" && requiredKey != "default_temp_targets_settings" && requiredKey != "prime_fill_settings" && requiredKey != "range_settings" && requiredKey != "statuslights_overview_advanced" && requiredKey != "overview_advanced_settings") return
         val category = PreferenceCategory(context)
         parent.addPreference(category)
         category.apply {
             key = "overview_settings"
             title = rh.gs(R.string.overview)
             initialExpandedChildrenCount = 0
+            addPreference(overviewGraphPreferences(preferenceManager, context, preferences))
             addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.OverviewKeepScreenOn, summary = R.string.keep_screen_on_summary, title = R.string.keep_screen_on_title))
             addPreference(preferenceManager.createPreferenceScreen(context).apply {
                 key = "overview_buttons_settings"

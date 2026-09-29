@@ -118,6 +118,19 @@ class TargetChartDataTest : TestBaseWithProfile() {
         assertThat(chart.build(from, from + step).map { it.value }).containsExactly(7.0, 7.0)
     }
 
+    @Test fun `future reference follows profile schedule after active temporary target expires`() {
+        val now = from + step
+        val scheduled = profile(90.0, 110.0)
+        whenever(scheduled.getTargetLowMgdl(any())).thenAnswer { if (it.getArgument<Long>(0) < now + 2 * step) 90.0 else 110.0 }
+        whenever(scheduled.getTargetHighMgdl(any())).thenAnswer { if (it.getArgument<Long>(0) < now + 2 * step) 110.0 else 130.0 }
+        whenever(profileFunction.getProfile(from)).thenReturn(scheduled)
+        whenever(persistence.getTemporaryTargetActiveAt(from)).thenReturn(target(from, 2 * step))
+
+        val points = chart.build(from, now + 4 * step)
+        assertThat(points.filter { it.time >= now }.map { it.value })
+            .containsExactly(150.0, 100.0, 120.0, 120.0, 120.0).inOrder()
+    }
+
     @Test fun `empty or reversed window performs no provider queries`() {
         assertThat(chart.build(from, from)).isEmpty()
         assertThat(chart.build(from, from - 1)).isEmpty()

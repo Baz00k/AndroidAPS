@@ -1,5 +1,6 @@
 package app.aaps.plugins.main.general.overview
 
+import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
@@ -13,7 +14,7 @@ internal class TargetChartData(
     private val profileFunction: ProfileFunction,
     private val profileUtil: ProfileUtil
 ) {
-    fun build(from: Long, to: Long): List<GlucosePoint> {
+    fun build(from: Long, to: Long, units: GlucoseUnit = profileUtil.units): List<GlucosePoint> {
         if (to <= from) return emptyList()
 
         // The range query includes starts, not overlaps: retain a target that began before `from`.
@@ -30,7 +31,6 @@ internal class TargetChartData(
             .map { it.timestamp }.distinct().sorted()
         var nextSwitch = 0
         var profile = profileFunction.getProfile(from)
-        val units = profileUtil.units
         val targets = ArrayList<GlucosePoint>()
         var time = from
         while (true) {
