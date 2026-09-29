@@ -155,6 +155,9 @@ open class Notification {
         // programs manually, so nothing reconciles this automatically and it must not stay silent.
         const val YPSOPUMP_PROFILE_MISMATCH = 98
         const val YPSOPUMP_BOLUS_UNCERTAIN = 99
+        const val YPSOPUMP_TBR_UNCERTAIN = 100
+        const val YPSOPUMP_TBR_UNMATCHED = 101
+        const val YPSOPUMP_HISTORY_INCOMPLETE = 102
 
         const val USER_MESSAGE = 1000
 

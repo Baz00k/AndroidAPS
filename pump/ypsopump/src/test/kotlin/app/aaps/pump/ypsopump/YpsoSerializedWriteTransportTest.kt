@@ -253,6 +253,19 @@ class YpsoSerializedWriteTransportTest {
     }
 
     @Test
+    fun `final frame acknowledgement stops the transport deadline during semantic readback`() {
+        start(frames = 2)
+        repeat(2) { transport.onCharacteristicWrite(gatt, characteristic, 0) }
+
+        // Read-back after a transport ACK may legitimately outlast the frame deadline.
+        assertEquals(null, deadline)
+        transport.reconcile("write-1", YpsoSemanticEvidence.ACCEPTED, "status matched")
+
+        assertEquals(2, callbacks.size)
+        assertTrue(callbacks.last() is YpsoWriteOutcome.Verified)
+    }
+
+    @Test
     fun `disconnect after any dispatch is uncertain while idle cancellation is not sent`() {
         start()
         transport.cancelOwner(gatt, "link closed")

@@ -34,7 +34,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         return loadAll().lastOrNull()
     }
 
-    internal fun loadAll(): List<YpsoBolusAttempt> {
+    override fun loadAll(): List<YpsoBolusAttempt> {
         if (!file.exists()) return emptyList()
         return decodeAll(JSONObject(file.readText()))
     }
@@ -46,7 +46,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         val matching = prior.indexOfFirst { it.requestId == attempt.requestId }
         val attempts = if (matching >= 0) prior.toMutableList().also { it[matching] = attempt } else prior + attempt
         val bytes = JSONObject()
-            .put("version", 7)
+            .put("version", 8)
             .put("attempts", JSONArray().also { array -> attempts.forEach { array.put(encode(it)) } })
             .toString()
             .toByteArray(Charsets.UTF_8)
@@ -65,7 +65,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
     }
 
     private fun encode(value: YpsoBolusAttempt): JSONObject = JSONObject()
-        .put("version", 7)
+        .put("version", 8)
         .put("requestId", value.requestId)
         .put("pumpSerial", value.pumpSerial)
         .put("sessionGeneration", value.sessionGeneration)
@@ -92,6 +92,11 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         .putNullable("cancelStoppedAt", value.cancelStoppedAt)
         .putNullable("cancelDispatchedAt", value.cancelDispatchedAt)
         .putNullable("blockTerminalAt", value.blockTerminalAt)
+        .putNullable("notifiedFastSequence", value.notifiedFastSequence)
+        .putNullable("notifiedDispatchCounter", value.notifiedDispatchCounter)
+        .putNullable("notifiedTerminalAt", value.notifiedTerminalAt)
+        .put("notifiedConflict", value.notifiedConflict)
+        .putNullable("historyDeadline", value.historyDeadline)
         .putNullable("detail", value.detail)
         .put(
             "baseline",
@@ -107,7 +112,7 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
 
     private fun decode(json: JSONObject): YpsoBolusAttempt {
         val version = json.getInt("version")
-        require(version in 2..7) { "unsupported bolus journal version" }
+        require(version in 2..8) { "unsupported bolus journal version" }
         require(json.keys().asSequence().toSet() == rootFields(version)) { "unexpected bolus journal fields" }
         val baseline = json.getJSONObject("baseline")
         require(baseline.keys().asSequence().toSet() == BASELINE_FIELDS)
@@ -151,12 +156,17 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             cancelStoppedAt = if (version >= 5) json.longOrNull("cancelStoppedAt") else null,
             cancelDispatchedAt = if (version >= 6) json.longOrNull("cancelDispatchedAt") else null,
             blockTerminalAt = if (version >= 7) json.longOrNull("blockTerminalAt") else null,
+            notifiedFastSequence = if (version >= 8) json.longOrNull("notifiedFastSequence") else null,
+            notifiedDispatchCounter = if (version >= 8) json.longOrNull("notifiedDispatchCounter") else null,
+            notifiedTerminalAt = if (version >= 8) json.longOrNull("notifiedTerminalAt") else null,
+            notifiedConflict = if (version >= 8) json.getBoolean("notifiedConflict") else false,
+            historyDeadline = if (version >= 8) json.longOrNull("historyDeadline") else null,
             detail = json.stringOrNull("detail"),
         )
     }
 
     private fun decodeAll(json: JSONObject): List<YpsoBolusAttempt> {
-        if (json.optInt("version", -1) !in 5..7 || !json.has("attempts")) return listOf(decode(json))
+        if (json.optInt("version", -1) !in 5..8 || !json.has("attempts")) return listOf(decode(json))
         require(json.keys().asSequence().toSet() == setOf("version", "attempts")) { "unexpected bolus journal fields" }
         val attempts = json.getJSONArray("attempts")
         require(attempts.length() > 0) { "bolus journal is empty" }
@@ -187,6 +197,9 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         private val VERSION_5_FIELDS = VERSION_4_FIELDS + "cancelStoppedAt"
         private val VERSION_6_FIELDS = VERSION_5_FIELDS + "cancelDispatchedAt"
         private val VERSION_7_FIELDS = VERSION_6_FIELDS + "blockTerminalAt"
+        private val VERSION_8_FIELDS = VERSION_7_FIELDS + setOf(
+            "notifiedFastSequence", "notifiedDispatchCounter", "notifiedTerminalAt", "notifiedConflict", "historyDeadline",
+        )
         private val BASELINE_FIELDS = setOf(
             "fastSequence", "slowSequence", "historyPumpId", "historyFingerprintHigh", "historyFingerprintLow",
             "pumpReboot", "observedAt",
@@ -198,7 +211,8 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
             4 -> VERSION_4_FIELDS
             5 -> VERSION_5_FIELDS
             6 -> VERSION_6_FIELDS
-            else -> VERSION_7_FIELDS
+            7 -> VERSION_7_FIELDS
+            else -> VERSION_8_FIELDS
         }
     }
 }

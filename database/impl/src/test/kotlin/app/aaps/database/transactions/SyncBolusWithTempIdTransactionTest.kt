@@ -118,6 +118,67 @@ class SyncBolusWithTempIdTransactionTest {
     }
 
     @Test
+    fun `an inferred link binds nothing when either record was removed`() {
+        for (removed in listOf("provisional", "imported")) {
+            val provisional = createBolus(500L, null, 0.4, 1000L).also { it.id = 1; it.isValid = removed != "provisional" }
+            val imported = createBolus(900L, 100L, 0.1, 1000L).also {
+                it.id = 2
+                it.interfaceIDs.temporaryId = null
+                it.isValid = removed != "imported"
+            }
+            whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(provisional)
+            whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+
+            val result = SyncBolusWithTempIdTransaction(createBolus(500L, 100L, 0.1, 1000L), null, requireValid = true)
+                .also { it.database = database }.run()
+
+            assertThat(result.refused).isTrue()
+            assertThat(result.updated).isEmpty()
+            assertThat(provisional.interfaceIDs.pumpId).isNull()
+            assertThat(imported.interfaceIDs.temporaryId).isNull()
+        }
+        verify(bolusDao, never()).updateExistingEntry(any())
+    }
+
+    @Test
+    fun `an inferred link merges two valid records into one and reports a missing provisional record`() {
+        val provisional = createBolus(500L, null, 0.4, 1000L).also { it.id = 1 }
+        val imported = createBolus(900L, 100L, 0.4, 1000L).also { it.id = 2; it.interfaceIDs.temporaryId = null }
+        whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(provisional)
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+
+        val bound = SyncBolusWithTempIdTransaction(createBolus(500L, 100L, 0.4, 1000L), null, requireValid = true)
+            .also { it.database = database }.run()
+
+        assertThat(bound.refused).isFalse()
+        assertThat(bound.found).isTrue()
+        assertThat(listOf(provisional, imported).filter { it.isValid }.sumOf { it.amount }).isEqualTo(0.4)
+
+    }
+
+    @Test
+    fun `without a provisional record an inferred link reports whether the pump record stands alone`() {
+        whenever(bolusDao.findByPumpTempIds(501L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(null)
+        fun run() = SyncBolusWithTempIdTransaction(createBolus(501L, 100L, 0.4, 1000L), null, requireValid = true)
+            .also { it.database = database }.run()
+
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(null)
+        run().let { assertThat(it.found || it.pumpRecordOnly || it.refused).isFalse() }
+
+        val imported = createBolus(900L, 100L, 0.4, 1000L).also { it.id = 2; it.interfaceIDs.temporaryId = null }
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(imported)
+        assertThat(run().pumpRecordOnly).isTrue()
+
+        imported.isValid = false
+        run().let { assertThat(it.refused).isTrue(); assertThat(it.pumpRecordOnly).isFalse() }
+
+        imported.isValid = true
+        imported.interfaceIDs.temporaryId = 777L
+        assertThat(run().refused).isTrue()
+        verify(bolusDao, never()).updateExistingEntry(any())
+    }
+
+    @Test
     fun `does not update when not found by temp id`() {
         val bolus = createBolus(tempId = 500L, pumpId = 100L, amount = 7.0, timestamp = 2000L)
 

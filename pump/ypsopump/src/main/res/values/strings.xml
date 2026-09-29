@@ -61,6 +61,7 @@
     <string name="ypsopump_bolus_stopped_amount_unknown">The bolus was stopped. Check the pump for the amount actually given.</string>
     <string name="ypsopump_bolus_stopped_not_saved">The bolus was stopped, but the delivered amount could not be saved. Check the pump.</string>
     <string name="ypsopump_bolus_not_confirmed_finished">The pump did not confirm this bolus finished.</string>
+    <string name="ypsopump_bolus_awaiting_history">Pump reported a bolus stopping. Amount awaiting history confirmation. Do not repeat this dose.</string>
     <string name="ypsopump_bolus_extended_not_saved">The extended bolus could not be saved. Check the pump.</string>
     <string name="ypsopump_bolus_extended_stop_unconfirmed">The pump did not confirm that the extended bolus stopped; it may still be delivering.</string>
     <string name="ypsopump_bolus_extended_cancel_unconfirmed">The extended bolus cancellation was not confirmed by the pump.</string>
@@ -69,6 +70,19 @@
     <string name="ypsopump_reservoir_low_notification">Pump reservoir low: %1$.0f U left. Change the cartridge soon.</string>
     <string name="ypsopump_read_only_tbr_blocked">Insulin delivery is disabled: temporary basal blocked</string>
     <string name="ypsopump_read_only_tbr_cancel_blocked">Insulin delivery is disabled: temporary basal cancellation not sent</string>
+    <string name="ypsopump_tbr_invalid">Temporary basal not sent: %1$s</string>
+    <string name="ypsopump_tbr_failed">Temporary basal not changed: %1$s</string>
+    <string name="ypsopump_tbr_uncertain">Temporary basal state is uncertain: %1$s</string>
+    <string name="ypsopump_tbr_started">Temporary basal %1$d%% for %2$d min started</string>
+    <string name="ypsopump_tbr_cancelled">Temporary basal cancelled</string>
+    <string name="ypsopump_tbr_pump_stopped">The pump is stopped.</string>
+    <string name="ypsopump_tbr_not_sent">The command was not sent to the pump.</string>
+    <string name="ypsopump_tbr_stop_unconfirmed">The pump did not confirm that the running temporary basal stopped.</string>
+    <string name="ypsopump_tbr_start_rejected">The pump did not start the new temporary basal. The scheduled basal is running.</string>
+    <string name="ypsopump_tbr_start_unconfirmed">The pump did not confirm the new temporary basal.</string>
+    <string name="ypsopump_tbr_not_saved">AAPS could not save the temporary basal record.</string>
+    <string name="ypsopump_tbr_unmatched_notification">%1$d temporary basal(s) set by AAPS could not be matched to pump history because the pump clock could not be read or was changed. Their AAPS records are kept as is. Check the pump clock.</string>
+    <string name="ypsopump_tbr_uncertain_notification">A temporary basal change could not be confirmed. Check the pump before relying on the loop.</string>
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
     <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>
     <string name="ypsopump_status_unavailable">Pump status unavailable</string>
@@ -121,4 +135,5 @@
     <string name="ypsopump_cause_rekey">The saved pump key is wrong or expired. Enter the current key.</string>
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>
     <string name="ypsopump_rekey_new_key_required">Enter the pump’s new key. The old one won’t work.</string>
+    <string name="ypsopump_history_incomplete_notification">YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.</string>
 </resources>

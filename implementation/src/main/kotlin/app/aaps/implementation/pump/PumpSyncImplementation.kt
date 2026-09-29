@@ -486,6 +486,15 @@ class PumpSyncImplementation @Inject constructor(
             .blockingGet()
     }
 
+    override fun isHistoryRecordBeforeActivePump(timestamp: Long, pumpType: PumpType, pumpSerial: String): Boolean {
+        val active = activePlugin.activePump
+        if (active is VirtualPump || pumpSerial.isBlank() || active.model() != pumpType || active.serialNumber() != pumpSerial) return false
+        if (preferences.get(StringNonKey.ActivePumpType) != pumpType.description ||
+            preferences.get(StringNonKey.ActivePumpSerialNumber) != pumpSerial) return false
+        val activation = preferences.get(LongNonKey.ActivePumpChangeTimestamp)
+        return activation > 0L && timestamp < activation
+    }
+
     override fun getExtendedBolusWithPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): EB? =
         persistenceLayer.getExtendedBolusByPumpId(pumpId, pumpType, pumpSerial)
 

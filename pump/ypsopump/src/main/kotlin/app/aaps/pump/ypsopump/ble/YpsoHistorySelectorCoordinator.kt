@@ -11,7 +11,9 @@ internal class YpsoHistorySelectorCoordinator(
     private val transport: YpsoSerializedWriteTransport,
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
-    private val accounting = YpsoWriteAccounting(session, crypto, transport)
+    // Resolved only by same-link selector read-back, from POSSIBLY_SENT; the recovery probe below
+    // keeps every phase.
+    private val accounting = YpsoWriteAccounting(session, crypto, transport, persistTransportAck = false)
     private val recoveryAccounting = YpsoWriteAccounting(
         session,
         crypto,

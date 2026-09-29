@@ -23,6 +23,7 @@ internal object YpsoWritePolicy {
     val SETTING_ID_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb3147bc5")
     val CONTROL_NOTIFY_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
     val BOLUS_START_STOP_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
+    val TBR_START_STOP_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     fun allowsCharacteristic(

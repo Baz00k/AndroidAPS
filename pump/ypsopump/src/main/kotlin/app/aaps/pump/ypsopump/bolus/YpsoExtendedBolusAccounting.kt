@@ -20,6 +20,29 @@ object YpsoExtendedBolusAccounting {
         return if (kotlin.math.abs(recordedDuration - historyDuration) < 60_000L) recordedDuration else historyDuration
     }
 
+    data class SquarePart(val start: Long, val amount: Double, val duration: Long)
+
+    /**
+     * The part of a pump-started square bolus that AAPS accounts: all of it, or, when it was already
+     * running at [registeredAt], only what it delivered from then on. AAPS accepts no record from
+     * before a pump's registration, like any other earlier delivery. A square bolus delivers evenly,
+     * so that part is the amount's share of the window after registration. The pump reports elapsed
+     * whole minutes, so the real end is up to a minute later; that latest end gives the largest
+     * share, rounded up to the pump's 0.01 U, so the error stays on the side of more insulin.
+     * The caller skips a bolus that ended before registration even at its latest end.
+     */
+    fun squareFrom(registeredAt: Long, start: Long, elapsedMinutes: Int, amount: Double): SquarePart {
+        val duration = (elapsedMinutes * MINUTE).coerceAtLeast(1L)
+        if (start >= registeredAt) return SquarePart(start, amount, duration)
+        val latestEnd = start + (elapsedMinutes + 1L) * MINUTE
+        require(latestEnd > registeredAt) { "square bolus ended before registration" }
+        val centiUnits = Math.round(amount * 100)
+        val after = (centiUnits * (latestEnd - registeredAt) + (latestEnd - start) - 1) / (latestEnd - start)
+        return SquarePart(registeredAt, after / 100.0, (start + duration - registeredAt).coerceAtLeast(1L))
+    }
+
+    private const val MINUTE = 60_000L
+
     data class TerminalWindow(val start: Long, val duration: Long) {
         val end: Long get() = start + duration
     }

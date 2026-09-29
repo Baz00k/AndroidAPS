@@ -33,6 +33,7 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
+import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -69,7 +70,11 @@ class YpsoBleManager @Inject constructor(
 
     /** Receives every decoded bolus state change the pump pushes on CONTROL_NOTIFY. */
     @Volatile
-    var onBolusNotification: ((YpsoBolusNotification) -> Unit)? = null
+    /**
+     * Receives each bolus notification with the connection key it arrived on (see [currentBolusConnectionKey])
+     * and its [System.nanoTime] receipt time.
+     */
+    var onBolusNotification: ((YpsoBolusNotification, String?, Long) -> Unit)? = null
     /**
      * A verified session with an authenticated read floor can acquire selectors. An unknown write
      * floor is normal: the first write reconciles it from zero through the pump-confirmed search.
@@ -100,6 +105,7 @@ class YpsoBleManager @Inject constructor(
             profileWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "another pump setting is still being written"
             historyWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "pump history is still being read"
             bolusWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "a previous bolus command is still being sent"
+            tbrWriteTransportInstance?.hasUnresolvedWriteOn(gatt) == true -> "a previous temporary basal command is still being sent"
             else -> null
         }
     }
@@ -132,10 +138,11 @@ class YpsoBleManager @Inject constructor(
     private val profileReadActive = AtomicBoolean(false)
     private val historyReadActive = AtomicBoolean(false)
     private val bolusWriteActive = AtomicBoolean(false)
+    private val tbrWriteActive = AtomicBoolean(false)
 
     /** Claim one whole logical pump operation before it can enqueue anything on Android's GATT lane. */
     private fun acquirePumpOperation(claim: AtomicBoolean): Boolean = synchronized(opLock) {
-        if (statusReadActive.get() || profileReadActive.get() || historyReadActive.get() || bolusWriteActive.get()) {
+        if (statusReadActive.get() || profileReadActive.get() || historyReadActive.get() || bolusWriteActive.get() || tbrWriteActive.get()) {
             false
         } else {
             claim.set(true)
@@ -506,6 +513,7 @@ class YpsoBleManager @Inject constructor(
             ownedGatt?.let { profileSelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             ownedGatt?.let { historySelectorCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             ownedGatt?.let { bolusWriteCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
+            ownedGatt?.let { tbrWriteCoordinatorInstance?.ownerDisconnected(it, "local disconnect") }
             bluetoothGatt = null
             session?.quiesce()
             sessionToken = null
@@ -514,6 +522,7 @@ class YpsoBleManager @Inject constructor(
             profileReadActive.set(false)
             historyReadActive.set(false)
             bolusWriteActive.set(false)
+            tbrWriteActive.set(false)
             controlNotificationsEnabled = false
             if (!preserveStatus) pumpState.invalidateStatus()
             ownedGatt to drainPendingOperationsLocked()
@@ -609,6 +618,22 @@ class YpsoBleManager @Inject constructor(
         get() = bolusWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
             bolusWriteTransportInstance = it
         }
+    private var tbrWriteTransportInstance: YpsoSerializedWriteTransport? = null
+    private var tbrWriteCoordinatorInstance: YpsoTbrWriteCoordinator? = null
+    private var tbrWriteSession: PumpSession? = null
+    private val tbrWriteTransport: YpsoSerializedWriteTransport
+        get() = tbrWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleOpTimeout, cancelOpTimeout).also {
+            tbrWriteTransportInstance = it
+        }
+    private val tbrWriteCoordinator: YpsoTbrWriteCoordinator
+        get() {
+            val owner = checkNotNull(session)
+            if (tbrWriteCoordinatorInstance == null || tbrWriteSession !== owner) {
+                tbrWriteSession = owner
+                tbrWriteCoordinatorInstance = YpsoTbrWriteCoordinator(owner, sessionCrypto, tbrWriteTransport)
+            }
+            return checkNotNull(tbrWriteCoordinatorInstance)
+        }
     private val bolusWriteCoordinator: YpsoBolusWriteCoordinator
         get() {
             val owner = checkNotNull(session)
@@ -635,7 +660,7 @@ class YpsoBleManager @Inject constructor(
     private fun pumpOps() {
         val start = synchronized(opLock) {
             if (current != null) return
-            val op = if (bolusWriteActive.get()) {
+            val op = if (bolusWriteActive.get() || tbrWriteActive.get()) {
                 val index = queue.indexOfFirst { it.bolusOwner }
                 if (index < 0) return
                 queue.removeAt(index)
@@ -722,6 +747,7 @@ class YpsoBleManager @Inject constructor(
     private var authorizedProfileFrame: ByteArray? = null
     private var authorizedHistoryFrame: ByteArray? = null
     private var authorizedBolusFrame: ByteArray? = null
+    private var authorizedTbrFrame: ByteArray? = null
 
     private fun writeProfileFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
         if (bluetoothGatt !== gatt || current != null || !profileReadActive.get()) return@synchronized false
@@ -756,6 +782,22 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    private fun writeTbrFrame(gatt: BluetoothGatt, value: ByteArray): Boolean = synchronized(opLock) {
+        if (bluetoothGatt !== gatt || current != null || !tbrWriteActive.get()) return@synchronized false
+        val characteristic = findChar(gatt, YpsoWritePolicy.TBR_START_STOP_UUID) ?: return@synchronized false
+        authorizedTbrFrame = value
+        try {
+            writeCharacteristic(gatt, characteristic, value, YpsoRemoteWrite.THERAPY_COMMAND)
+        } finally {
+            authorizedTbrFrame = null
+        }
+    }
+
+    private fun releaseTbrWrite() {
+        tbrWriteActive.set(false)
+        pumpOps()
+    }
+
     private fun releaseBolusWrite() {
         bolusWriteActive.set(false)
         pumpOps()
@@ -777,7 +819,7 @@ class YpsoBleManager @Inject constructor(
             Op(
                 gatt,
                 descriptor.uuid,
-                bolusOwner = bolusWriteActive.get(),
+                bolusOwner = bolusWriteActive.get() || tbrWriteActive.get(),
                 { owner, op ->
                     if (!writeDescriptor(owner, descriptor, byteArrayOf(1, 0), YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR)) {
                         complete(op, owner, descriptor.uuid, null, -1)
@@ -981,15 +1023,7 @@ class YpsoBleManager @Inject constructor(
                         checkNotNull(ownership.generation), ownership.attemptId,
                         pumpState.observedIdentitySerial.takeIf(String::isNotBlank)
                     )
-                    pumpState.publishStatus(
-                        reservoirUnits = status.reservoirUnits,
-                        batteryPercent = status.batteryPercent,
-                        isSuspended = status.isSuspended,
-                        activeTbrPercent = status.activeTbrPercent,
-                        timestamp = System.currentTimeMillis(),
-                        batteryBars = status.batteryBars,
-                        activeBasalRate = status.basalRate,
-                    )
+                    publishDecodedStatus(status)
                     aapsLogger.info(LTag.PUMP, "YpsoPump encrypted status accepted")
                     if (diagnosticLoggingEnabled()) {
                         // Explicit local protocol capture only: decrypted values and bytes stay out of normal logs.
@@ -1036,6 +1070,19 @@ class YpsoBleManager @Inject constructor(
     }
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+    private fun publishDecodedStatus(status: StatusCommand) {
+        pumpState.publishStatus(
+            reservoirUnits = status.reservoirUnits,
+            batteryPercent = status.batteryPercent,
+            isSuspended = status.isSuspended,
+            activeTbrPercent = status.activeTbrPercent,
+            timestamp = System.currentTimeMillis(),
+            batteryBars = status.batteryBars,
+            activeBasalRate = status.basalRate,
+            activeTbrRemainingMinutes = status.tbrRemainingMinutes,
+        )
+    }
 
     /**
      * Acquire active-before, all A/B rows, active-after and pump clock on one authenticated GATT.
@@ -1341,6 +1388,11 @@ class YpsoBleManager @Inject constructor(
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
+        /**
+         * Positions in [rows] copied from an earlier scan's checkpoint. Only these can hold a stale
+         * copy of a running event; every other row was read from the pump during this scan.
+         */
+        val reusedPositions = mutableSetOf<Int>()
         val cached = partialScan?.takeIf { it.generation == token.generation && it.reboot == reboot.toLong() }
         var overlapPending = cached != null
         var cursorMismatchReported = false
@@ -1498,6 +1550,32 @@ class YpsoBleManager @Inject constructor(
                 readSelected(index, done)
             }
         }
+        /**
+         * Pump clock offset from two plain reads (no selector write). A date change between the
+         * reads, or any read failure, leaves the offset unknown rather than failing the scan.
+         */
+        fun readPumpClockOffset(done: (Long?) -> Unit) {
+            if (!attempt.isActive || !owned()) return done(null)
+            fun plain(uuid: UUID, next: (ByteArray?) -> Unit) =
+                readMultiframe(uuid, expectedGatt = gatt, onFailure = { next(null) }) { ownerGatt, frames ->
+                    next(if (ownerGatt === gatt && owned()) runCatching { decryptOwned(frames) }.getOrNull() else null)
+                }
+            plain(CHAR_SYSTEM_DATE) { date ->
+                val before = System.currentTimeMillis()
+                plain(CHAR_SYSTEM_TIME) { time ->
+                    val after = System.currentTimeMillis()
+                    val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
+                    val offset = local?.let {
+                        val phone = (before + after) / 2
+                        val pumpAsPhoneLocal = it.atZone(pumpState.historyZone).toInstant().toEpochMilli()
+                        pumpAsPhoneLocal - phone
+                    }
+                    // The time is read after the date; near midnight the pair may straddle two days.
+                    val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
+                    done(offset?.takeIf { !nearMidnight })
+                }
+            }
+        }
         fun finishScan() {
             if (yieldAtSafeBoundary()) return
             readCount { countAfter ->
@@ -1507,18 +1585,21 @@ class YpsoBleManager @Inject constructor(
                     return@readCount
                 }
                 select(0) { headAfter ->
-                    finish(
-                        YpsoHistorySnapshot(
-                            countBefore,
-                            countAfter,
-                            reboot.toLong(),
-                            reboot.toLong(),
-                            headBefore,
-                            headAfter,
-                            rows.toList(),
-                            fullCoverage = rows.size == countBefore,
-                        ),
-                    )
+                    readPumpClockOffset { offset ->
+                        finish(
+                            YpsoHistorySnapshot(
+                                countBefore,
+                                countAfter,
+                                reboot.toLong(),
+                                reboot.toLong(),
+                                headBefore,
+                                headAfter,
+                                rows.toList(),
+                                fullCoverage = rows.size == countBefore,
+                                pumpClockOffsetMs = offset,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -1548,10 +1629,12 @@ class YpsoBleManager @Inject constructor(
             })
 
         // Cached running events can have been rewritten even if the ring's head did not change.
-        // Refresh these rows before handing a snapshot to accounting.
+        // Refresh those rows before handing a snapshot to accounting. Rows read in this scan are
+        // already current: re-selecting them only repeated a selector move, its read-backs, and the
+        // session commits each one costs.
         fun refreshMutableRows(position: Int = 0) {
             if (yieldAtSafeBoundary()) return
-            val next = (position until rows.size).firstOrNull { rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
+            val next = (position until rows.size).firstOrNull { it in reusedPositions && rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
                 ?: return finishScan()
             select(next) { fresh ->
                 if (fresh.sequence != rows[next].sequence || fresh.factorySeconds != rows[next].factorySeconds) {
@@ -1587,7 +1670,10 @@ class YpsoBleManager @Inject constructor(
                     select(shift + available.lastIndex) { freshTail ->
                         overlapPending = false
                         if (freshTail.sequence == tail.sequence && freshTail.fingerprint() == tail.fingerprint()) {
+                            val firstReused = rows.size
                             rows += available.drop(1).map { it.copy(index = it.index + shift) }
+                            // The boundary row was just re-read; the rows between came from the checkpoint.
+                            reusedPositions += firstReused until rows.lastIndex
                             rows[rows.lastIndex] = freshTail
                             aapsLogger.debug(LTag.PUMP, "YpsoPump history scan resumed with ${rows.size} cached rows (head shifted $shift)")
                         } else {
@@ -1942,6 +2028,124 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    /** TBR state from the current fresh status sample, or null when there is none. */
+    /** TBR state of the current fresh status sample, stamped with the time that sample was read. */
+    internal fun observedTbr(): YpsoTbrObservation? {
+        val sample = pumpState.statusSnapshot ?: return null
+        return YpsoTbrObservation(!sample.isSuspended, sample.activeTbrPercent, pumpState.activeTbrRemainingMinutes, sample.acquiredAt)
+    }
+
+    /** Owner of one dispatched TBR write, valid only on the connection that sent it. */
+    class TbrCommandOwner internal constructor(internal val owner: YpsoTbrWriteCoordinator.Owner)
+
+    /**
+     * Dispatch one START_STOP_TBR command on the current authenticated connection. [beforeDispatch]
+     * runs after the counter is reserved and before the first frame can leave the phone.
+     */
+    internal fun writeTbr(
+        writeId: String,
+        percent: Int,
+        durationMinutes: Int,
+        beforeDispatch: (PumpSession.Reservation) -> Unit,
+        onOutcome: (YpsoWriteOutcome, TbrCommandOwner?) -> Unit,
+    ) {
+        fun notSent(layer: YpsoWriteFailure.Layer, detail: String) = onOutcome(
+            YpsoWriteOutcome.NotSent(
+                writeId,
+                null,
+                YpsoWriteFailure(layer, YpsoWritePolicy.TBR_START_STOP_UUID, pumpState.masterVersion.takeIf(String::isNotBlank), detail = detail),
+            ),
+            null,
+        )
+        if (YpsoPumpConst.READ_ONLY_MODE) return notSent(YpsoWriteFailure.Layer.POLICY, "therapy is disabled by READ_ONLY_MODE")
+        val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
+        writeReadinessFailure()?.let { return notSent(YpsoWriteFailure.Layer.READINESS, it) }
+        val gatt = checkNotNull(captured.first)
+        val token = checkNotNull(captured.second)
+        val characteristic = findChar(gatt, YpsoWritePolicy.TBR_START_STOP_UUID)
+        if (characteristic == null || characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0) {
+            return notSent(YpsoWriteFailure.Layer.CAPABILITY, "This pump does not accept temporary basal commands.")
+        }
+        if (!acquirePumpOperation(tbrWriteActive)) return notSent(YpsoWriteFailure.Layer.READINESS, "The pump is busy. Please try again in a moment.")
+        val owner = YpsoTbrWriteCoordinator.Owner(gatt, captured.third, token)
+        val publicOwner = TbrCommandOwner(owner)
+        enableProfileSetup(gatt) { setup ->
+            if (!setup || bluetoothGatt !== gatt || sessionToken?.generation != token.generation) {
+                releaseTbrWrite()
+                return@enableProfileSetup notSent(YpsoWriteFailure.Layer.READINESS, "Could not prepare the pump. Please try again.")
+            }
+            // Reconciliation republishes a terminal outcome; the caller acts on the transport one only.
+            val delivered = AtomicBoolean(false)
+            val started = tbrWriteCoordinator.write(
+                writeId,
+                owner,
+                percent,
+                durationMinutes,
+                pumpState.masterVersion.takeIf(String::isNotBlank),
+                OP_TIMEOUT_MS,
+                beforeDispatch,
+                { frame -> writeTbrFrame(gatt, frame) },
+            ) { outcome ->
+                if (!delivered.compareAndSet(false, true)) return@write
+                // Every sent command is followed by a same-link status read, so its owner keeps the
+                // link until reconciliation releases it. Only an unsent command owns nothing.
+                if (outcome is YpsoWriteOutcome.NotSent || outcome is YpsoWriteOutcome.ProvenRejected) {
+                    releaseTbrWrite()
+                    onOutcome(outcome, null)
+                } else {
+                    onOutcome(outcome, publicOwner)
+                }
+            }
+            if (!started) releaseTbrWrite()
+        }
+    }
+
+    /** Fresh system status on the TBR owner's connection; also publishes it like a routine read. */
+    internal fun readTbrStatus(owner: TbrCommandOwner, onResult: (StatusCommand?, ByteArray?) -> Unit) {
+        val expected = owner.owner
+        val valid = synchronized(opLock) { bluetoothGatt === expected.gatt && sessionToken?.generation == expected.token.generation }
+        if (!valid || !hasCompatibleStatusProtocol()) return onResult(null, null)
+        readMultiframe(
+            CHAR_STATUS,
+            expectedGatt = expected.gatt as BluetoothGatt,
+            bolusOwner = true,
+            onFailure = { onResult(null, null) },
+        ) { gatt, frames ->
+            val decoded = runCatching {
+                check(gatt === expected.gatt && sessionToken?.generation == expected.token.generation) { "stale TBR status" }
+                val body = decryptOwned(frames)
+                val payload = YpsoCrc.validatedPayload(body) ?: error("invalid status CRC")
+                StatusCommand().apply { decode(payload); require(success) { "status decode failed" } } to body
+            }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump TBR status read failed: ${it.message}") }.getOrNull()
+            decoded?.first?.let { publishDecodedStatus(it) }
+            onResult(decoded?.first, decoded?.second)
+        }
+    }
+
+    /** Status proved the effect of the TBR command; its counter is accepted by the pump. */
+    /** Status proved the effect of the TBR command. False leaves the write for [recordTbrUnresolved]. */
+    internal fun verifyTbrAccepted(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
+        runCatching { tbrWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
+            .also { if (it) releaseTbrWrite() }
+
+    /** A measured rejection code with an unchanged status. False leaves the write for [recordTbrUnresolved]. */
+    internal fun verifyTbrRejected(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
+        runCatching { tbrWriteCoordinator.reconcileRejected(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
+            .also { if (it) releaseTbrWrite() }
+
+    /**
+     * No evidence resolves the command. Its counter is kept as the high-water mark and the reservation
+     * retired, so later therapy can proceed; the TBR journal owns the therapy decision.
+     */
+    internal fun recordTbrUnresolved(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String) {
+        runCatching { tbrWriteCoordinator.recordUnresolved(writeId, owner.owner, evidenceHash, detail) }
+        tbrWriteCoordinatorInstance?.ownerDisconnected(owner.owner.gatt, detail)
+        // Keep the allocated counter as the high-water mark; the outcome itself stays unknown here.
+        runCatching { session?.let { owned -> sessionToken?.let { owned.recoverInterruptedWrite(it) } } }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire unresolved TBR write: ${it.message}") }
+        releaseTbrWrite()
+    }
+
     internal fun verifyBolusAccepted(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean {
         val verified = bolusWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail)
         if (verified) releaseBolusWrite()
@@ -1983,10 +2187,12 @@ class YpsoBleManager @Inject constructor(
                         profileSelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         historySelectorCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         bolusWriteCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
+                        tbrWriteCoordinatorInstance?.ownerDisconnected(g, "remote disconnect")
                         statusReadActive.set(false)
                         profileReadActive.set(false)
                         historyReadActive.set(false)
                         bolusWriteActive.set(false)
+                        tbrWriteActive.set(false)
                         controlNotificationsEnabled = false
                         drainPendingOperationsLocked() to owned
                     }
@@ -2049,6 +2255,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
                     markConnected(controlNotificationsEnabled = false)
+                    retireAbandonedHistorySelector()
                     aapsLogger.info(
                         LTag.PUMP,
                         if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
@@ -2076,13 +2283,20 @@ class YpsoBleManager @Inject constructor(
                 scheduleProfileContinuation(Runnable { historyWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
             } else if (ch.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID && bolusWriteActive.get()) {
                 scheduleProfileContinuation(Runnable { bolusWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
+            } else if (ch.uuid == YpsoWritePolicy.TBR_START_STOP_UUID && tbrWriteActive.get()) {
+                scheduleProfileContinuation(Runnable { tbrWriteTransport.onCharacteristicWrite(g, ch.uuid, status) })
             } else completeCurrent(g, ch.uuid, null, status)
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
+            // Receipt order, taken before any lock, is compared with the moment a dispatch was armed.
+            val receivedAt = System.nanoTime()
+            var connectionKey: String? = null
             val notification = synchronized(opLock) {
                 if (!ownsGattLocked(g)) return
                 aapsLogger.debug(LTag.PUMP, "YpsoPump notify ${ch.uuid}: ${value.joinToString("") { "%02x".format(it) }}")
+                // Captured with the payload so the observer can tell which connection it belongs to.
+                connectionKey = sessionToken?.let { "${System.identityHashCode(g)}:${it.generation}" }
                 if (ch.uuid != YpsoWritePolicy.CONTROL_NOTIFY_UUID) null
                 else YpsoBolusNotification.decode(value)
             } ?: return
@@ -2092,7 +2306,7 @@ class YpsoBleManager @Inject constructor(
                 "YpsoPump bolus notification fast=${notification.fastStatusCode}/${notification.fastSequence} " +
                     "slow=${notification.slowStatusCode}/${notification.slowSequence}",
             )
-            runCatching { onBolusNotification?.invoke(notification) }
+            runCatching { onBolusNotification?.invoke(notification, connectionKey, receivedAt) }
                 .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus notification observer failed: ${it.message}") }
         }
 
@@ -2163,8 +2377,10 @@ class YpsoBleManager @Inject constructor(
             profileSelectorCoordinatorInstance?.ownerDisconnected(g, message)
             historySelectorCoordinatorInstance?.ownerDisconnected(g, message)
             bolusWriteCoordinatorInstance?.ownerDisconnected(g, message)
+            tbrWriteCoordinatorInstance?.ownerDisconnected(g, message)
             statusReadActive.set(false)
             bolusWriteActive.set(false)
+            tbrWriteActive.set(false)
             profileReadActive.set(false)
             historyReadActive.set(false)
             controlNotificationsEnabled = false
@@ -2235,8 +2451,10 @@ class YpsoBleManager @Inject constructor(
             } else if (remoteWrite == YpsoRemoteWrite.HISTORY_SELECTOR) {
                 characteristic.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && authorizedHistoryFrame === value
             } else if (remoteWrite == YpsoRemoteWrite.THERAPY_COMMAND) {
-                !YpsoPumpConst.READ_ONLY_MODE && characteristic.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID &&
-                    authorizedBolusFrame === value
+                !YpsoPumpConst.READ_ONLY_MODE && (
+                    characteristic.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID && authorizedBolusFrame === value ||
+                        characteristic.uuid == YpsoWritePolicy.TBR_START_STOP_UUID && authorizedTbrFrame === value
+                    )
             } else YpsoWritePolicy.allowsCharacteristic(
                 remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),
@@ -2286,6 +2504,25 @@ class YpsoBleManager @Inject constructor(
             descriptor.value = value
             g.writeDescriptor(descriptor)
         }
+    }
+
+    /**
+     * A history selector write interrupted by a lost connection stays reserved in the session journal,
+     * and every therapy write refuses to start while it is. The scan that owned it is gone and a
+     * selector move has no therapy effect, so it is retired here, on the new authenticated session,
+     * rather than left to block the next command until some later history scan clears it. Called with
+     * [opLock] held; no operation can use the new connection before it returns.
+     */
+    private fun retireAbandonedHistorySelector() {
+        val owner = session ?: return
+        val token = sessionToken ?: return
+        val reservation = owner.snapshot()?.reservation ?: return
+        if (reservation.phase == PumpSession.Phase.VERIFIED || !owner.isAbandonableHistorySelector(reservation)) return
+        // Only a selector no transport still holds: the old connection's scan was released on disconnect.
+        if (historyWriteTransportInstance?.isIdle() == false || historyReadActive.get()) return
+        runCatching { owner.retireAbandonedHistorySelector(token, reservation.id) }
+            .onSuccess { if (it) aapsLogger.info(LTag.PUMP, "YpsoPump retired history selector write ${reservation.id} left by a lost connection") }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire abandoned history selector write: ${it.message}") }
     }
 
     private fun markConnected(controlNotificationsEnabled: Boolean) {

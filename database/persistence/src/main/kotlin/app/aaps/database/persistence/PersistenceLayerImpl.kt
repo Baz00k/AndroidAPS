@@ -155,6 +155,8 @@ class PersistenceLayerImpl @Inject constructor(
 
     override fun getLastBolusId(): Long? = repository.getLastBolusId()
     override fun getBolusByNSId(nsId: String): BS? = repository.getBolusByNSId(nsId)?.fromDb()
+    override fun getBolusByPumpId(pumpId: Long, pumpType: PumpType, pumpSerial: String): BS? =
+        repository.findBolusByPumpId(pumpId, pumpType.toDb(), pumpSerial)?.fromDb()
 
     override fun getBolusesFromTime(startTime: Long, ascending: Boolean): Single<List<BS>> =
         repository.getBolusesDataFromTime(startTime, ascending)
@@ -262,6 +264,19 @@ class PersistenceLayerImpl @Inject constructor(
                     transactionResult.updated.add(it.fromDb())
                 }
                 transactionResult
+            }
+
+    override fun bindPumpBolusToTempIdIfValid(bolus: BS, type: BS.Type?): Single<PersistenceLayer.TempIdBinding> =
+        repository.runTransactionForResult(SyncBolusWithTempIdTransaction(bolus.toDb(), type?.toDb(), requireValid = true))
+            .doOnError { aapsLogger.error(LTag.DATABASE, "Error while binding Bolus", it) }
+            .map { result ->
+                result.updated.forEach { aapsLogger.debug(LTag.DATABASE, "Updated Bolus $it") }
+                when {
+                    result.refused         -> PersistenceLayer.TempIdBinding.REFUSED
+                    result.pumpRecordOnly  -> PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY
+                    !result.found          -> PersistenceLayer.TempIdBinding.NO_RECORD
+                    else           -> PersistenceLayer.TempIdBinding.BOUND
+                }
             }
 
     override fun syncNsBolus(boluses: List<BS>, doLog: Boolean): Single<PersistenceLayer.TransactionResult<BS>> =

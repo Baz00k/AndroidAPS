@@ -13,6 +13,8 @@ internal data class YpsoWriteFailure(
     val code: Int? = null,
     val frame: Int? = null,
     val detail: String,
+    /** True when [frame] is the command's last frame, where the pump reports its command result. */
+    val finalFrame: Boolean = false,
 ) {
     enum class Layer { POLICY, READINESS, CAPABILITY, SESSION, ENCRYPTION, DISPATCH, GATT_CALLBACK, PUMP_COUNTER, DEADLINE, RECONCILIATION }
 }
@@ -303,7 +305,8 @@ internal class YpsoSerializedWriteTransport(
                     } else {
                         current.successfulCallbacks++
                         if (current.frame + 1 == request.frames.size) {
-                            current.awaitingReconciliation = true
+                            // Every frame is acknowledged; semantic read-back owns the outcome from here.
+                            holdForReconciliationLocked(current)
                             outcome = YpsoWriteOutcome.AcceptedUnverified(request.writeId, request.counter)
                         } else {
                             current.frame++
@@ -465,6 +468,9 @@ internal class YpsoSerializedWriteTransport(
             gatt != null && current.request.owner.gatt === gatt
         }
 
+    /** Whether any write, on any connection, still occupies this transport. */
+    internal fun isIdle(): Boolean = synchronized(lock) { active == null }
+
     internal fun ownsGatt(gatt: Any): Boolean =
         synchronized(lock) {
             active?.request?.owner?.gatt === gatt
@@ -573,6 +579,7 @@ internal class YpsoSerializedWriteTransport(
         code = code,
         frame = active.frame + 1,
         detail = detail,
+        finalFrame = active.frame + 1 == active.request.frames.size,
     )
 
     private fun possiblyApplied(
