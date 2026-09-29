@@ -19,6 +19,7 @@ Development is fast-moving, with no legacy-support commitment. Prefer removing o
 - Follow local conventions where they support the fork's direction; improve obsolete patterns rather than copying them into new code.
 - Keep the native UI minimal and understandable, with therapy state, dose units, and consequential actions unambiguous.
 - Discover build tasks and setup requirements from the Gradle configuration and project tooling.
+- Use Conventional Commits: `type: brief summary`, with an optional scope. Use the basic types `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `ci`, `perf`, `style`, and `chore`; keep commit messages brief.
 
 ## Verification
 
