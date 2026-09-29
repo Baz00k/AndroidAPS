@@ -75,6 +75,7 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     private var pluginName: String? = null
     private var customPreference: UiInteraction.Preferences? = null
     private var filter = ""
+    private val visibilityFilter = PreferenceVisibilityFilter()
 
     @Inject lateinit var rxBus: RxBus
     @Inject lateinit var rh: ResourceHelper
@@ -202,7 +203,7 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             throw Exception("Error in onCreatePreferences pluginName=$pluginName customPreference=$customPreference rootKey=$rootKey filter=$filter", e)
         }
         preprocessPreferences()
-        if (filter != "") updateFilterVisibility(filter, preferenceScreen)
+        visibilityFilter.apply(filter, preferenceScreen)
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -235,9 +236,11 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         if (preferences.get(key) is PreferenceKey?)
             checkForBiometricFallback(preferences.get(key) as PreferenceKey?)
 
+        visibilityFilter.restore()
         preprocessCustomVisibility(preferenceScreen)
         updatePrefSummary(findPreference(key))
         preprocessPreferences()
+        visibilityFilter.apply(filter, preferenceScreen)
     }
 
     // Update preferences with calculated visibility
@@ -314,25 +317,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         }
     }
 
-    private fun updateFilterVisibility(filter: String, p: Preference): Boolean {
-
-        var visible = false
-
-        if (p is PreferenceGroup) {
-            for (i in 0 until p.preferenceCount)
-                visible = updateFilterVisibility(filter, p.getPreference(i)) || visible
-            if (visible && p is PreferenceCategory) p.initialExpandedChildrenCount = Int.MAX_VALUE
-        } else {
-            @Suppress("KotlinConstantConditions")
-            visible = visible || p.key?.contains(filter, true) == true
-            visible = visible || p.title?.contains(filter, true) == true
-            visible = visible || p.summary?.contains(filter, true) == true
-        }
-
-        p.isVisible = visible
-        return visible
-    }
-
     private fun updatePrefSummary(pref: Preference?) {
         pref ?: return
         val keyDefinition = pref.key?.let { preferences.getIfExists(it) }
@@ -375,8 +359,13 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     }
 
     fun setFilter(filter: String) {
+        // SearchView can replay its query after a dialog closes.
+        if (filter == this.filter) return
         this.filter = filter
-        preferenceManager?.preferenceScreen?.let { updateFilterVisibility(filter, it) }
+        preferenceManager?.preferenceScreen?.let {
+            visibilityFilter.restore()
+            visibilityFilter.apply(filter, it)
+        }
         refreshComposeRows()
     }
 

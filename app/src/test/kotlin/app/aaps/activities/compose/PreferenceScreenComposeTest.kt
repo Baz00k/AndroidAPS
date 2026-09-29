@@ -1,14 +1,46 @@
 package app.aaps.activities.compose
 
+import android.text.TextUtils
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
-import androidx.preference.ListPreference
 import androidx.preference.SwitchPreference
+import app.aaps.core.keys.IntKey
+import app.aaps.core.validators.preferences.AdaptiveListIntPreference
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.MockedStatic
+import org.mockito.Mockito
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.whenever
+import java.util.Objects
 
 class PreferenceScreenComposeTest : TestBaseWithProfile() {
+
+    private lateinit var textUtils: MockedStatic<TextUtils>
+
+    // Android stubs return false from TextUtils.equals, so ListPreference could never resolve a selected entry.
+    @BeforeEach fun stubTextUtils() {
+        textUtils = Mockito.mockStatic(TextUtils::class.java)
+        textUtils.`when`<Boolean> { TextUtils.equals(anyOrNull(), anyOrNull()) }
+            .thenAnswer { Objects.equals(it.getArgument<CharSequence?>(0)?.toString(), it.getArgument<CharSequence?>(1)?.toString()) }
+    }
+
+    @AfterEach fun closeTextUtils() = textUtils.close()
+
+    // Adding a preference to a screen applies its default value, so tests select a choice after attaching it.
+    private fun protectionChoice(): AdaptiveListIntPreference {
+        whenever(preferences.get(IntKey.ProtectionTypeApplication.key)).thenReturn(IntKey.ProtectionTypeApplication)
+        return AdaptiveListIntPreference(
+            ctx = context,
+            intKey = IntKey.ProtectionTypeApplication,
+            title = null,
+            entries = arrayOf("No protection", "Biometric"),
+            entryValues = arrayOf("0", "1")
+        ).apply { isPersistent = false; isVisible = true }
+    }
 
     @Test fun `nested graph groups have no stacked headings and cannot absorb parent siblings`() {
         fun leaf(title: String) = Preference(context).apply { this.title = title; isVisible = true }
@@ -64,24 +96,52 @@ class PreferenceScreenComposeTest : TestBaseWithProfile() {
         assertThat((after.single() as PrefRow.Leaf).checked).isFalse()
     }
 
-    @Test fun `flattening snapshots updated picker summaries`() {
+    @Test fun `protection modes keep their choice dialog while the protection timeout stays numeric`() {
+        val timeout = Preference(context).apply { key = IntKey.ProtectionTimeout.key }
+        whenever(preferences.get(IntKey.ProtectionTimeout.key)).thenReturn(IntKey.ProtectionTimeout)
+
+        assertThat(inlinePreferenceKey(protectionChoice(), preferences)).isNull()
+        assertThat(inlinePreferenceKey(timeout, preferences)).isEqualTo(IntKey.ProtectionTimeout)
+    }
+
+    @Test fun `flattening shows the selected choice label and refreshes it after a new choice`() {
         val screen = preferenceManager.createPreferenceScreen(context)
-        val picker = ListPreference(context).apply {
-            key = "graph_panel"
-            isPersistent = false
-            isVisible = true
-            entries = arrayOf("Hide", "Graph 1")
-            entryValues = arrayOf("0", "1")
-            value = "0"
-            summary = "Hide"
-        }
+        val picker = protectionChoice().apply { summary = "stale description" }
         screen.addPreference(picker)
-        val before = flattenPreferences(screen)
         picker.value = "1"
-        picker.summary = "Graph 1"
+        val before = flattenPreferences(screen)
+        picker.value = "0"
         val after = flattenPreferences(screen)
+
+        assertThat((before.single() as PrefRow.Leaf).summary).isEqualTo("Biometric")
+        assertThat((after.single() as PrefRow.Leaf).summary).isEqualTo("No protection")
         assertThat(before).isNotEqualTo(after)
-        assertThat((before.single() as PrefRow.Leaf).summary).isEqualTo("Hide")
-        assertThat((after.single() as PrefRow.Leaf).summary).isEqualTo("Graph 1")
+    }
+
+    @Test fun `an unrecognised stored choice is not shown as a valid label`() {
+        val screen = preferenceManager.createPreferenceScreen(context)
+        val picker = protectionChoice().apply { summary = "No protection" }
+        screen.addPreference(picker)
+        picker.value = "9"
+
+        assertThat((flattenPreferences(screen).single() as PrefRow.Leaf).summary).isNull()
+    }
+
+    @Test fun `only enabled and selectable rows hand taps to the native preference`() {
+        var clicks = 0
+        val pref = Preference(context).apply {
+            isEnabled = true
+            isSelectable = true
+            setOnPreferenceClickListener { clicks++; true }
+        }
+
+        clickHandler(pref)!!.invoke()
+        assertThat(clicks).isEqualTo(1)
+
+        for ((enabled, selectable) in listOf(false to true, true to false, false to false)) {
+            pref.isEnabled = enabled
+            pref.isSelectable = selectable
+            assertThat(clickHandler(pref)).isNull()
+        }
     }
 }
