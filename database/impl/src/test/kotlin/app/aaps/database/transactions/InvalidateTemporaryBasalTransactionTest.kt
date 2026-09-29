@@ -61,7 +61,7 @@ class InvalidateTemporaryBasalTransactionTest {
         val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
         whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
 
-        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = 60_999L)
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = { 60_999L })
         transaction.database = database
         val result = transaction.run()
 
@@ -76,7 +76,7 @@ class InvalidateTemporaryBasalTransactionTest {
         val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
         whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
 
-        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = 61_000L)
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = { 61_000L })
         transaction.database = database
         val result = transaction.run()
 
@@ -97,6 +97,22 @@ class InvalidateTemporaryBasalTransactionTest {
 
         assertThat(tb.isValid).isFalse()
         assertThat(result.invalidated).containsExactly(tb)
+    }
+
+    @Test
+    fun `guard reads the clock when the transaction runs so a clock moved backwards cannot remove a running temporary basal`() {
+        val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
+        whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
+        var now = 61_001L
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = { now })
+        transaction.database = database
+
+        now = 60_999L
+        val result = transaction.run()
+
+        assertThat(tb.isValid).isTrue()
+        assertThat(result.refusedActive).containsExactly(tb)
+        verify(temporaryBasalDao, never()).updateExistingEntry(any())
     }
 
     @Test

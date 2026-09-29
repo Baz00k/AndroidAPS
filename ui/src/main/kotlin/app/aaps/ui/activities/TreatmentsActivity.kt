@@ -17,14 +17,18 @@ import app.aaps.ui.activities.history.HistoryKind
 import app.aaps.ui.activities.history.HistoryScreen
 import app.aaps.ui.activities.history.HistoryUiState
 import app.aaps.ui.activities.history.StillRunningException
+import app.aaps.ui.activities.history.nextRunningEnd
+import app.aaps.ui.activities.history.refreshedWith
 import app.aaps.ui.activities.history.startedSelecting
 import app.aaps.ui.activities.history.toggled
 import app.aaps.ui.activities.history.toHistoryItem
 import app.aaps.ui.activities.history.confirmHistoryRemoval
 import app.aaps.ui.activities.history.invalidateHistoryItems
+import io.reactivex.rxjava3.core.Completable
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 /**
@@ -42,6 +46,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var fabricPrivacy: FabricPrivacy
 
     private val disposable = CompositeDisposable()
+    private val refreshAtRunningEnd = CompositeDisposable()
     private val historyState = mutableStateOf(HistoryUiState())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,10 +66,16 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                 }
             }
         })
-        disposable += Single.fromCallable { buildHistory() }
-            .subscribeOn(aapsSchedulers.io)
-            .observeOn(aapsSchedulers.main)
-            .subscribe({ historyState.value = it }, fabricPrivacy::logException)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        reload()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        refreshAtRunningEnd.clear()
     }
 
     private fun toggle(item: HistoryItem) {
@@ -95,6 +106,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                         if (result.failures.isEmpty()) reload()
                         else {
                             result.failures.map { it.second }.filterNot { it is StillRunningException }.forEach(fabricPrivacy::logException)
+                            if (result.failures.any { it.second is StillRunningException }) reload()
                             OKDialog.show(this, "Removal failed", result.failureMessage())
                         }
                     }, { error ->
@@ -106,11 +118,25 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
         )
     }
 
+    /**
+     * Reload from persistence. Running rows are snapshots, so this also runs when the earliest one ends: a
+     * row that finished or was cancelled must become removable with its final amount and duration, not stay
+     * locked until History is reopened.
+     */
     private fun reload() {
+        refreshAtRunningEnd.clear()
         disposable += Single.fromCallable { buildHistory() }
             .subscribeOn(aapsSchedulers.io)
             .observeOn(aapsSchedulers.main)
-            .subscribe({ historyState.value = it }, fabricPrivacy::logException)
+            .subscribe({ fresh ->
+                           historyState.value = historyState.value.refreshedWith(fresh.items)
+                           historyState.value.nextRunningEnd()?.let { end ->
+                               refreshAtRunningEnd.add(
+                                   Completable.timer((end - dateUtil.now()).coerceAtLeast(0L) + 1_000L, TimeUnit.MILLISECONDS, aapsSchedulers.main)
+                                       .subscribe({ reload() }, fabricPrivacy::logException)
+                               )
+                           }
+                       }, fabricPrivacy::logException)
     }
 
     private fun dayLabel(ts: Long, now: Long): String = when (dateUtil.dateString(ts)) {
@@ -166,6 +192,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        refreshAtRunningEnd.clear()
         disposable.clear()
     }
 }

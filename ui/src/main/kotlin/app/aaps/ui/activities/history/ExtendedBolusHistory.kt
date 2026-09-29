@@ -25,6 +25,7 @@ internal fun EB.toHistoryItem(from: Long, now: Long, dayLabel: String, time: Str
             ValueWithUnit.UnitPerHour(rate),
             ValueWithUnit.Minute((duration / 60_000).toInt())
         ),
-        removable = !running
+        removable = !running,
+        runningUntil = if (running) end else null
     )
 }

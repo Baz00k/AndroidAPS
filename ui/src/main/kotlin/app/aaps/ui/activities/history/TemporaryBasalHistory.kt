@@ -26,7 +26,8 @@ internal fun TB.toHistoryItem(from: Long, now: Long, dayLabel: String, time: Str
             if (isAbsolute) ValueWithUnit.UnitPerHour(rate) else ValueWithUnit.Percent(rate.toInt()),
             ValueWithUnit.Minute((duration / 60_000).toInt())
         ),
-        removable = !running
+        removable = !running,
+        runningUntil = if (running) end else null
     )
 }
 

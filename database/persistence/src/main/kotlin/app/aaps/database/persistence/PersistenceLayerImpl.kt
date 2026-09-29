@@ -1138,7 +1138,7 @@ class PersistenceLayerImpl @Inject constructor(
         invalidateTemporaryBasal(InvalidateTemporaryBasalTransaction(id), action, source, note, listValues)
 
     override fun invalidateEndedTemporaryBasal(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<TB>> =
-        invalidateTemporaryBasal(InvalidateTemporaryBasalTransaction(id, refuseIfActiveAt = dateUtil.now()), action, source, note, listValues)
+        invalidateTemporaryBasal(InvalidateTemporaryBasalTransaction(id, refuseIfActiveAt = dateUtil::now), action, source, note, listValues)
 
     private fun invalidateTemporaryBasal(
         transaction: InvalidateTemporaryBasalTransaction, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>
@@ -1351,7 +1351,7 @@ class PersistenceLayerImpl @Inject constructor(
         invalidateExtendedBolus(InvalidateExtendedBolusTransaction(id), action, source, note, listValues)
 
     override fun invalidateEndedExtendedBolus(id: Long, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>): Single<PersistenceLayer.TransactionResult<EB>> =
-        invalidateExtendedBolus(InvalidateExtendedBolusTransaction(id, refuseIfActiveAt = dateUtil.now()), action, source, note, listValues)
+        invalidateExtendedBolus(InvalidateExtendedBolusTransaction(id, refuseIfActiveAt = dateUtil::now), action, source, note, listValues)
 
     private fun invalidateExtendedBolus(
         transaction: InvalidateExtendedBolusTransaction, action: Action, source: Sources, note: String?, listValues: List<ValueWithUnit>

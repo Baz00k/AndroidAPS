@@ -59,4 +59,26 @@ class ExtendedBolusHistoryTest {
             assertThat(filter.matches(HistoryKind.EXTENDED)).isEqualTo(filter == HistoryFilter.ALL || filter == HistoryFilter.BOLUS)
         }
     }
+
+    @Test
+    fun `refresh unlocks a record that finished and keeps only still removable rows selected`() {
+        val running = row(extended(), now = start + duration - 1)
+        val other = row(extended().copy(id = 12, timestamp = start + 1, duration = 60_000L))
+        val state = HistoryUiState(loading = false, items = listOf(running, other), selecting = true, selected = setOf(other.key))
+        assertThat(state.nextRunningEnd()).isEqualTo(start + duration)
+
+        val finished = row(extended(), now = start + duration)
+        val refreshed = state.refreshedWith(listOf(finished, other))
+        assertThat(refreshed.items.first { it.id == 11L }.removable).isTrue()
+        assertThat(refreshed.nextRunningEnd()).isNull()
+        assertThat(refreshed.selected).containsExactly(other.key)
+    }
+
+    @Test
+    fun `refresh drops a selected row that is running again`() {
+        val ended = row(extended())
+        val state = HistoryUiState(loading = false, items = listOf(ended), selecting = true, selected = setOf(ended.key))
+        val nowRunning = row(extended().copy(duration = duration + 60_000L), now = start + duration)
+        assertThat(state.refreshedWith(listOf(nowRunning)).selected).isEmpty()
+    }
 }

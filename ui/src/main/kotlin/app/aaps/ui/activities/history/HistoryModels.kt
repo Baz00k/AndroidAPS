@@ -24,7 +24,9 @@ data class HistoryItem(
      * False while the record still describes delivery in progress (a running temporary basal or extended
      * bolus). Such a record cannot be selected; persistence re-checks this when removing.
      */
-    val removable: Boolean = true
+    val removable: Boolean = true,
+    /** End time of a running record, so History can refresh when it stops being one. */
+    val runningUntil: Long? = null
 ) {
 
     /** Unique across kinds — two kinds can share an id, since each table numbers its own rows. */
@@ -59,3 +61,13 @@ internal fun HistoryUiState.startedSelecting(item: HistoryItem): HistoryUiState 
     if (removing) return this
     return copy(selecting = true, selected = if (item.removable) selected + item.key else selected)
 }
+
+/**
+ * Replace the list with freshly loaded [fresh] items. A selection survives only for rows that are still
+ * removable, so a refresh can never leave a running record selected.
+ */
+internal fun HistoryUiState.refreshedWith(fresh: List<HistoryItem>): HistoryUiState =
+    copy(loading = false, items = fresh, selected = selected intersect fresh.filter { it.removable }.map { it.key }.toSet())
+
+/** When the earliest running record ends, or null if nothing is running. */
+internal fun HistoryUiState.nextRunningEnd(): Long? = items.mapNotNull { it.runningUntil }.minOrNull()
