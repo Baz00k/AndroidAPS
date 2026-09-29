@@ -103,6 +103,15 @@ class GuardedInvalidationTest {
     }
 
     @Test
+    fun `temporary basal clock is read when the transaction runs not when it is requested`() {
+        stubBasalTransaction()
+        whenever(dateUtil.now()).thenReturn(61_001)
+        val pending = persistence.invalidateEndedTemporaryBasal(6, Action.TEMP_BASAL_REMOVED, Sources.Treatments, null, audit)
+        whenever(dateUtil.now()).thenReturn(60_999)
+        assertThat(pending.blockingGet().refusedActive).hasSize(1)
+    }
+
+    @Test
     fun `unguarded removal still invalidates a running record for sync and pump drivers`() {
         stubExtendedTransaction()
         whenever(dateUtil.now()).thenReturn(1_500)

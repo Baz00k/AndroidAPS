@@ -70,4 +70,6 @@ internal fun HistoryUiState.refreshedWith(fresh: List<HistoryItem>): HistoryUiSt
     copy(loading = false, items = fresh, selected = selected intersect fresh.filter { it.removable }.map { it.key }.toSet())
 
 /** When the earliest running record ends, or null if nothing is running. */
-internal fun HistoryUiState.nextRunningEnd(): Long? = items.mapNotNull { it.runningUntil }.minOrNull()
+internal fun List<HistoryItem>.nextRunningEnd(): Long? = mapNotNull { it.runningUntil }.minOrNull()
+
+internal fun HistoryUiState.nextRunningEnd(): Long? = items.nextRunningEnd()
