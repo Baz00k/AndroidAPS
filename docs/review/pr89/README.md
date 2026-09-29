@@ -12,6 +12,27 @@ graph: the mandatory graph optionality is in this upper layer, so evaluate the s
 After #66 merges, retarget #89 to main and reconcile the base (especially if #66 is squash-merged).
 Do not independently merge the prototype PRs on top of the combined implementation.
 
+## Scheduled basal dash follow-up
+
+The scheduled basal reference had the same viewport-slicing bug as the target. Its bounded
+history is now segmented before clipping, retaining each run's path origin during pan. Delivered
+basal geometry and real gaps are unchanged. Forecast paths also retain their origin so they do
+not acquire the same problem when panned past their first samples. Screen-fixed grid lines remain
+screen-fixed intentionally.
+
+Verified on the Android 15 emulator with the same local synthetic fixture and slow horizontal
+pans in both directions. In the before/after captures, the raised delivered-basal edge moves from
+x=506 to x=566; the first following scheduled dash moves from x=519 to x=579, retaining its 13px
+offset rather than staying anchored to the screen (pixel rounding applies to subsequent dashes).
+
+- 78 focused JVM tests passed; standard full-debug APK built.
+- Reinstalled standard APK and checked its manifest has no fixture activity/receiver.
+- No therapy, settings, timing, or data-provider changes.
+
+![Scheduled basal after a small horizontal pan, synthetic data](basal-dashes/02-after-pan.png)
+
+[Before pan](basal-dashes/01-before-pan.png) · [Slow pan recording](basal-dashes/03-pan.mp4)
+
 ## Review fixes — September 29, 2026
 
 These captures supersede the stacked headings and mixed card boundaries in `preferences/`.

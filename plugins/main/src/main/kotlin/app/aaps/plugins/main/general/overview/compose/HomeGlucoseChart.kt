@@ -284,10 +284,11 @@ private fun DrawScope.drawChart(
 
         // Dashed forecasts have no fill, measured-value marker or connection to the historical trace.
         d.predictions.forEach { series ->
-            val visible = series.points.visibleSlice(vp.start, vp.end) { it.time }
+            // Like the target reference, forecasts need a stable dash origin even when panned
+            // far enough that their first samples leave the viewport. clipRect handles visibility.
             val path = Path()
-            visible.forEachIndexed { index, point ->
-                val previous = visible.getOrNull(index - 1)
+            series.points.forEachIndexed { index, point ->
+                val previous = series.points.getOrNull(index - 1)
                 if (previous == null || point.time - previous.time != 5 * 60_000L) path.moveTo(x(point.time), y(point.value))
                 else path.lineTo(x(point.time), y(point.value))
             }
@@ -340,7 +341,9 @@ private fun DrawScope.drawChart(
                 startY = iTop, endY = iBottom
             )
             val scheduledEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))
-            d.basal.visibleSlice(vp.start, vp.end) { it.time }.segments(BASAL_GAP_MS) { it.time }.forEach { run ->
+            // Segment the bounded history before clipping, not a viewport-dependent slice. Each
+            // scheduled-basal run then keeps its dash origin as it moves through the viewport.
+            d.basal.segments(BASAL_GAP_MS) { it.time }.forEach { run ->
                 if (run.size < 2) return@forEach
                 val line = stepPath(run) { it.rate }
                 val area = stepPath(run) { it.rate }.apply {
