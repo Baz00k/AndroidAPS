@@ -57,6 +57,49 @@ class InvalidateTemporaryBasalTransactionTest {
     }
 
     @Test
+    fun `refuses a temporary basal still running at the guard time`() {
+        val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
+        whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
+
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = 60_999L)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(tb.isValid).isTrue()
+        assertThat(result.invalidated).isEmpty()
+        assertThat(result.refusedActive).containsExactly(tb)
+        verify(temporaryBasalDao, never()).updateExistingEntry(any())
+    }
+
+    @Test
+    fun `invalidates a temporary basal that ended at the guard time`() {
+        val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
+        whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
+
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1, refuseIfActiveAt = 61_000L)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(tb.isValid).isFalse()
+        assertThat(result.invalidated).containsExactly(tb)
+        assertThat(result.refusedActive).isEmpty()
+        verify(temporaryBasalDao).updateExistingEntry(tb)
+    }
+
+    @Test
+    fun `invalidates a running temporary basal when no guard is requested`() {
+        val tb = createTemporaryBasal(id = 1, isValid = true).also { it.timestamp = System.currentTimeMillis(); it.duration = 3_600_000L }
+        whenever(temporaryBasalDao.findById(1)).thenReturn(tb)
+
+        val transaction = InvalidateTemporaryBasalTransaction(id = 1)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(tb.isValid).isFalse()
+        assertThat(result.invalidated).containsExactly(tb)
+    }
+
+    @Test
     fun `throws exception when temporary basal not found`() {
         whenever(temporaryBasalDao.findById(999)).thenReturn(null)
 

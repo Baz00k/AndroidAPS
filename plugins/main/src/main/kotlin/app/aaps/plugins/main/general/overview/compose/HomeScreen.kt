@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -516,7 +517,13 @@ private fun InsulinUndoSheet(
                                                 style = AapsTheme.type.caption, color = colors.textTertiary
                                             )
                                         }
-                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
+                                        if (e.removable)
+                                            RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
+                                        else
+                                            Text(
+                                                "Cancel first", style = AapsTheme.type.caption, color = colors.textTertiary,
+                                                modifier = Modifier.widthIn(max = 72.dp)
+                                            )
                                     }
                                 }
                             }

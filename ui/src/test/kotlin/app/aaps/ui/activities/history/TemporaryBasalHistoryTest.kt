@@ -12,7 +12,7 @@ class TemporaryBasalHistoryTest {
         isAbsolute = true, rate = 0.125, duration = 30 * 60_000L
     )
 
-    private fun row(basal: TB) = basal.toHistoryItem(1_000, 2_000, "Today", "12:30")!!
+    private fun row(basal: TB) = basal.toHistoryItem(1_000, 10_000_000, "Today", "12:30")!!
 
     @Test
     fun `absolute basal preserves rate precision and identity without implying bolus units`() {
@@ -20,6 +20,7 @@ class TemporaryBasalHistoryTest {
         assertThat(item.value).isEqualTo("0.125 U/h")
         assertThat(item.auditValues).containsExactly(ValueWithUnit.Timestamp(1_000), ValueWithUnit.UnitPerHour(0.125), ValueWithUnit.Minute(30)).inOrder()
         assertThat(item.sub).isEqualTo("Recorded duration: 30 min")
+        assertThat(item.removable).isTrue()
         assertThat(item.timestamp).isEqualTo(1_000L)
         assertThat(item.time).isEqualTo("12:30")
         assertThat(item.dayLabel).isEqualTo("Today")
@@ -55,9 +56,9 @@ class TemporaryBasalHistoryTest {
     fun `invalid future old and synthetic records are excluded`() {
         for (basal in listOf(
             basal().copy(isValid = false), basal().copy(timestamp = 999),
-            basal().copy(timestamp = 2_001), basal().copy(type = TB.Type.FAKE_EXTENDED)
+            basal().copy(timestamp = 10_000_001), basal().copy(type = TB.Type.FAKE_EXTENDED)
         )) {
-            assertThat(basal.toHistoryItem(1_000, 2_000, "Today", "12:30")).isNull()
+            assertThat(basal.toHistoryItem(1_000, 10_000_000, "Today", "12:30")).isNull()
         }
         assertThat(row(basal().copy(timestamp = 2_000)).timestamp).isEqualTo(2_000L)
     }
@@ -70,5 +71,15 @@ class TemporaryBasalHistoryTest {
         for (kind in HistoryKind.entries.filter { it != HistoryKind.TBR }) {
             assertThat(HistoryFilter.TBR.matches(kind)).isFalse()
         }
+    }
+
+    @Test
+    fun `running basal is listed but not removable until it has ended`() {
+        val running = basal().toHistoryItem(1_000, 1_000 + 30 * 60_000L - 1, "Today", "12:30")!!
+        assertThat(running.removable).isFalse()
+        assertThat(running.sub).contains("Running, cancel before removing")
+        val ended = basal().toHistoryItem(1_000, 1_000 + 30 * 60_000L, "Today", "12:30")!!
+        assertThat(ended.removable).isTrue()
+        assertThat(ended.sub).doesNotContain("Running")
     }
 }

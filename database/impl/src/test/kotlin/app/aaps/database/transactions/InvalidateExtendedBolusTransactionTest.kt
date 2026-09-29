@@ -57,6 +57,49 @@ class InvalidateExtendedBolusTransactionTest {
     }
 
     @Test
+    fun `refuses a extended bolus still running at the guard time`() {
+        val eb = createExtendedBolus(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
+        whenever(extendedBolusDao.findById(1)).thenReturn(eb)
+
+        val transaction = InvalidateExtendedBolusTransaction(id = 1, refuseIfActiveAt = 60_999L)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(eb.isValid).isTrue()
+        assertThat(result.invalidated).isEmpty()
+        assertThat(result.refusedActive).containsExactly(eb)
+        verify(extendedBolusDao, never()).updateExistingEntry(any())
+    }
+
+    @Test
+    fun `invalidates a extended bolus that ended at the guard time`() {
+        val eb = createExtendedBolus(id = 1, isValid = true).also { it.timestamp = 1_000L; it.duration = 60_000L }
+        whenever(extendedBolusDao.findById(1)).thenReturn(eb)
+
+        val transaction = InvalidateExtendedBolusTransaction(id = 1, refuseIfActiveAt = 61_000L)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(eb.isValid).isFalse()
+        assertThat(result.invalidated).containsExactly(eb)
+        assertThat(result.refusedActive).isEmpty()
+        verify(extendedBolusDao).updateExistingEntry(eb)
+    }
+
+    @Test
+    fun `invalidates a running extended bolus when no guard is requested`() {
+        val eb = createExtendedBolus(id = 1, isValid = true).also { it.timestamp = System.currentTimeMillis(); it.duration = 3_600_000L }
+        whenever(extendedBolusDao.findById(1)).thenReturn(eb)
+
+        val transaction = InvalidateExtendedBolusTransaction(id = 1)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(eb.isValid).isFalse()
+        assertThat(result.invalidated).containsExactly(eb)
+    }
+
+    @Test
     fun `throws exception when extended bolus not found`() {
         whenever(extendedBolusDao.findById(999)).thenReturn(null)
 

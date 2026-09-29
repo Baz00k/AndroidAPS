@@ -3,7 +3,7 @@ package app.aaps.ui.activities.history
 import androidx.compose.runtime.Immutable
 import app.aaps.core.data.ue.ValueWithUnit
 
-enum class HistoryKind { BOLUS, SMB, CARBS, TBR, EVENT }
+enum class HistoryKind { BOLUS, SMB, EXTENDED, CARBS, TBR, EVENT }
 
 enum class HistoryFilter { ALL, BOLUS, CARBS, TBR, EVENTS }
 
@@ -19,7 +19,12 @@ data class HistoryItem(
     val sub: String,
     val value: String,
     /** Original persisted values for the removal audit; never parsed from display text. */
-    val auditValues: List<ValueWithUnit> = listOf(ValueWithUnit.Timestamp(timestamp))
+    val auditValues: List<ValueWithUnit> = listOf(ValueWithUnit.Timestamp(timestamp)),
+    /**
+     * False while the record still describes delivery in progress (a running temporary basal or extended
+     * bolus). Such a record cannot be selected; persistence re-checks this when removing.
+     */
+    val removable: Boolean = true
 ) {
 
     /** Unique across kinds — two kinds can share an id, since each table numbers its own rows. */
@@ -37,8 +42,20 @@ data class HistoryUiState(
 
 fun HistoryFilter.matches(kind: HistoryKind): Boolean = when (this) {
     HistoryFilter.ALL    -> true
-    HistoryFilter.BOLUS  -> kind == HistoryKind.BOLUS || kind == HistoryKind.SMB
+    HistoryFilter.BOLUS  -> kind == HistoryKind.BOLUS || kind == HistoryKind.SMB || kind == HistoryKind.EXTENDED
     HistoryFilter.CARBS  -> kind == HistoryKind.CARBS
     HistoryFilter.TBR    -> kind == HistoryKind.TBR
     HistoryFilter.EVENTS -> kind == HistoryKind.EVENT
+}
+
+/** Toggle [item] in the selection. Records that are not removable never enter it. */
+internal fun HistoryUiState.toggled(item: HistoryItem): HistoryUiState {
+    if (removing || !item.removable) return this
+    return copy(selected = if (item.key in selected) selected - item.key else selected + item.key)
+}
+
+/** Enter selection mode from a long press, selecting [item] only if it can be removed. */
+internal fun HistoryUiState.startedSelecting(item: HistoryItem): HistoryUiState {
+    if (removing) return this
+    return copy(selecting = true, selected = if (item.removable) selected + item.key else selected)
 }

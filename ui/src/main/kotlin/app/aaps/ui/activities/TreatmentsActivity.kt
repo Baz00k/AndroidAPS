@@ -16,6 +16,9 @@ import app.aaps.ui.activities.history.HistoryItem
 import app.aaps.ui.activities.history.HistoryKind
 import app.aaps.ui.activities.history.HistoryScreen
 import app.aaps.ui.activities.history.HistoryUiState
+import app.aaps.ui.activities.history.StillRunningException
+import app.aaps.ui.activities.history.startedSelecting
+import app.aaps.ui.activities.history.toggled
 import app.aaps.ui.activities.history.toHistoryItem
 import app.aaps.ui.activities.history.confirmHistoryRemoval
 import app.aaps.ui.activities.history.invalidateHistoryItems
@@ -26,8 +29,9 @@ import javax.inject.Inject
 
 /**
  * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped list
- * of boluses / carbs / temporary basals / therapy events over the last 14 days, merged from the persistence layer off the
- * main thread. Removal invalidates persisted history; it does not command the pump.
+ * of boluses / extended boluses / carbs / temporary basals / therapy events over the last 14 days, merged from the
+ * persistence layer off the main thread. Removal invalidates persisted history; it does not command the pump, so records
+ * of delivery still in progress (running temporary basal or extended bolus) cannot be removed.
  */
 class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
@@ -64,15 +68,11 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private fun toggle(item: HistoryItem) {
-        if (historyState.value.removing) return
-        val sel = historyState.value.selected.toMutableSet()
-        if (!sel.add(item.key)) sel.remove(item.key)
-        historyState.value = historyState.value.copy(selected = sel)
+        historyState.value = historyState.value.toggled(item)
     }
 
     private fun startSelecting(item: HistoryItem) {
-        if (historyState.value.removing) return
-        historyState.value = historyState.value.copy(selecting = true, selected = historyState.value.selected + item.key)
+        historyState.value = historyState.value.startedSelecting(item)
     }
 
     /** Correct history through persistence only. Never cancel or otherwise command pump delivery. */
@@ -94,8 +94,8 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                         historyState.value = result.applyTo(historyState.value)
                         if (result.failures.isEmpty()) reload()
                         else {
-                            result.failures.forEach { fabricPrivacy.logException(it.second) }
-                            OKDialog.show(this, "Removal failed", "Could not remove ${result.failures.size} record(s). Failed records remain selected; you can retry. Successfully removed records are no longer shown.")
+                            result.failures.map { it.second }.filterNot { it is StillRunningException }.forEach(fabricPrivacy::logException)
+                            OKDialog.show(this, "Removal failed", result.failureMessage())
                         }
                     }, { error ->
                         historyState.value = historyState.value.copy(removing = false)
@@ -153,6 +153,9 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
                 te.id, te.timestamp, dayLabel(te.timestamp, now), dateUtil.timeString(te.timestamp),
                 HistoryKind.EVENT, eventTitle(te.type), te.note ?: "", ""
             )
+        }
+        persistenceLayer.getExtendedBolusesStartingFromTimeToTime(from, now, false).forEach { eb ->
+            eb.toHistoryItem(from, now, dayLabel(eb.timestamp, now), dateUtil.timeString(eb.timestamp))?.let(items::add)
         }
         persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(from, now, false).forEach { basal ->
             basal.toHistoryItem(from, now, dayLabel(basal.timestamp, now), dateUtil.timeString(basal.timestamp))?.let(items::add)

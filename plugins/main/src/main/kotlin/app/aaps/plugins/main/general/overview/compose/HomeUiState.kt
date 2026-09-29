@@ -96,7 +96,7 @@ data class HomeUiState(
     )
 
     /**
-     * One recent bolus — presentation strings plus the id/timestamp/amount the undo needs.
+     * One recent bolus or extended bolus — presentation strings plus the id/timestamp/amount the undo needs.
      *
      * The undo exists because a dose the pump never delivered still lands in the database (a dropped
      * BLE ack is recorded as delivered on purpose, so IOB is over- rather than under-stated). When the
@@ -107,10 +107,20 @@ data class HomeUiState(
         val id: Long,
         val time: String,      // "10:32"
         val units: String,     // "1.20 U"
-        val kind: String,      // "" for a normal bolus, "SMB" otherwise
+        val kind: String,      // "" for a normal bolus, "SMB" / "Extended · 60 min" otherwise
         val timestamp: Long,   // for the removal confirmation + audit log
-        val amount: Double     // units, for the audit log
+        val amount: Double,    // units, for the audit log
+        val type: InsulinType = InsulinType.BOLUS,
+        /** Extended bolus only: recorded duration in ms, for the audit log. */
+        val durationMs: Long = 0L,
+        /**
+         * False while an extended bolus is still running. Removing its record would not stop the pump
+         * but would hide the delivery from IOB, lift the closed-loop block and drop the cancel action.
+         */
+        val removable: Boolean = true
     )
+
+    enum class InsulinType { BOLUS, EXTENDED }
 
     /** One recent carb record — presentation strings plus the id/timestamp/amount the undo needs. */
     @Immutable
