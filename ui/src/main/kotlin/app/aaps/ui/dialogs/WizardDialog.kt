@@ -75,7 +75,13 @@ class WizardDialog : DaggerDialogFragment() {
 
     override fun onStart() {
         super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        dialog?.window?.apply {
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            // A plain background drops the platform dialog's inset frame: the Calculator is a full screen.
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            // Enter and leave like the app's sheets, from the bottom edge, instead of fading.
+            setWindowAnimations(com.google.android.material.R.style.Animation_Design_BottomSheetDialog)
+        }
         aapsLogger.debug(LTag.APS, "Dialog opened: ${this.javaClass.simpleName}")
     }
 
@@ -270,7 +276,8 @@ class WizardDialog : DaggerDialogFragment() {
             useTT = true,
             // Trend is a property of a live sensor trace; not of a typed-in, stale or missing value.
             useTrend = inputs.useTrend && glucose is CalculatorGlucose.Sensor,
-            useAlarm = false
+            // Eat reminder for a pre-bolus: scheduled by BolusWizard once the bolus has gone through.
+            useAlarm = inputs.remindToEat && inputs.carbTime > 0 && !inputs.eatLater
         )
 
     private fun signed(v: Double): String {

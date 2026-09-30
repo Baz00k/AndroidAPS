@@ -1,16 +1,11 @@
 package app.aaps.ui.dialogs
 
+import io.reactivex.rxjava3.kotlin.plusAssign
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -44,19 +39,18 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
 import app.aaps.ui.dialogs.compose.CarbReminders
-import app.aaps.ui.dialogs.compose.CarbTt
+import app.aaps.ui.dialogs.compose.TargetPreset
 import app.aaps.ui.dialogs.compose.CarbsInputs
 import app.aaps.ui.dialogs.compose.CarbsSheet
 import app.aaps.ui.dialogs.compose.CarbsSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -68,7 +62,7 @@ import kotlin.math.ceil
  * the legacy dialog. Event time is expressed as the minutes offset (as before); the notes + duration
  * (extended carbs) + TT presets + eat/bolus reminders are all preserved.
  */
-class CarbsDialog : DaggerDialogFragment() {
+class CarbsDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
@@ -86,30 +80,19 @@ class CarbsDialog : DaggerDialogFragment() {
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var automation: Automation
+    @Inject lateinit var targetPresets: TargetPresets
 
     private var queryingProtection = false
     private lateinit var sheetState: CarbsSheetState
     private val disposable = CompositeDisposable()
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         // Built once so submit() sees exactly what the sheet offered (e.g. whether the bolus reminder toggle was shown).
         sheetState = buildState()
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { CarbsSheet(state = sheetState, onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { CarbsSheet(state = sheetState, onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     override fun onDestroyView() {
@@ -143,7 +126,8 @@ class CarbsDialog : DaggerDialogFragment() {
                 preferences.get(IntKey.OverviewCarbsButtonIncrement3)
             ),
             maxDurationHours = HardLimits.MAX_CARBS_DURATION_HOURS.toInt(),
-            autoHypoTt = autoHypo,
+            targets = targetPresets.options(),
+            initialTarget = if (autoHypo) TargetPreset.HYPO else TargetPreset.NONE,
             showBolusReminder = showBolusReminder,
             showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs)
         )
@@ -154,14 +138,7 @@ class CarbsDialog : DaggerDialogFragment() {
         var carbsAfterConstraints = constraintChecker.applyCarbsConstraints(ConstraintObject(carbs, aapsLogger)).value()
         val units = profileUtil.units
         val cob = iobCobCalculator.ads.getLastAutosensData("carbsDialog", aapsLogger, dateUtil)?.cob ?: 0.0
-        val activityTTDuration = preferences.get(IntKey.OverviewActivityDuration)
-        val activityTT = preferences.get(UnitDoubleKey.OverviewActivityTarget)
-        val eatingSoonTTDuration = preferences.get(IntKey.OverviewEatingSoonDuration)
-        val eatingSoonTT = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)
-        val hypoTTDuration = preferences.get(IntKey.OverviewHypoDuration)
-        val hypoTT = preferences.get(UnitDoubleKey.OverviewHypoTarget)
         val actions: LinkedList<String?> = LinkedList()
-        val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
 
         val eventTimeOriginal = dateUtil.nowWithoutMilliseconds()
         val timeOffset = inputs.timeOffsetMin
@@ -177,15 +154,8 @@ class CarbsDialog : DaggerDialogFragment() {
             bolusReminderOffered = sheetState.showBolusReminder
         )
 
-        val activitySelected = inputs.tt == CarbTt.ACTIVITY
-        if (activitySelected)
-            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(activityTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, activityTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
-        val eatingSoonSelected = inputs.tt == CarbTt.EATING_SOON
-        if (eatingSoonSelected)
-            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(eatingSoonTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, eatingSoonTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
-        val hypoSelected = inputs.tt == CarbTt.HYPO
-        if (hypoSelected)
-            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(hypoTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, hypoTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
+        val target = inputs.target
+        if (target != TargetPreset.NONE) actions.add(targetPresets.confirmationLine(context, target))
 
         if (reminders.eatReminderSeconds != null)
             actions.add(rh.gs(app.aaps.core.ui.R.string.alarminxmin, timeOffset).formatColor(context, rh, app.aaps.core.ui.R.attr.infoColor))
@@ -208,45 +178,10 @@ class CarbsDialog : DaggerDialogFragment() {
         if (eventTimeChanged)
             actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
 
-        if (carbsAfterConstraints != 0 || activitySelected || eatingSoonSelected || hypoSelected) {
+        if (carbsAfterConstraints != 0 || target != TargetPreset.NONE) {
             activity?.let { activity ->
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.carbs), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
-                    val selectedTTDuration = when {
-                        activitySelected   -> activityTTDuration
-                        eatingSoonSelected -> eatingSoonTTDuration
-                        hypoSelected       -> hypoTTDuration
-                        else               -> 0
-                    }
-                    val selectedTT = when {
-                        activitySelected   -> activityTT
-                        eatingSoonSelected -> eatingSoonTT
-                        hypoSelected       -> hypoTT
-                        else               -> 0.0
-                    }
-                    val reason = when {
-                        activitySelected   -> TT.Reason.ACTIVITY
-                        eatingSoonSelected -> TT.Reason.EATING_SOON
-                        hypoSelected       -> TT.Reason.HYPOGLYCEMIA
-                        else               -> TT.Reason.CUSTOM
-                    }
-                    if (reason != TT.Reason.CUSTOM)
-                        disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
-                            temporaryTarget = TT(
-                                timestamp = System.currentTimeMillis(),
-                                duration = TimeUnit.MINUTES.toMillis(selectedTTDuration.toLong()),
-                                reason = reason,
-                                lowTarget = profileUtil.convertToMgdl(selectedTT, profileUtil.units),
-                                highTarget = profileUtil.convertToMgdl(selectedTT, profileUtil.units)
-                            ),
-                            action = Action.TT,
-                            source = Sources.CarbDialog,
-                            note = null,
-                            listValues = listOf(
-                                ValueWithUnit.TETTReason(reason),
-                                ValueWithUnit.fromGlucoseUnit(selectedTT, units),
-                                ValueWithUnit.Minute(selectedTTDuration)
-                            )
-                        ).subscribe()
+                    targetPresets.start(target, Sources.CarbDialog, note = null)?.let { disposable += it }
                     if (carbsAfterConstraints != 0) {
                         val detailedBolusInfo = DetailedBolusInfo().also {
                             it.eventType = TE.Type.CORRECTION_BOLUS

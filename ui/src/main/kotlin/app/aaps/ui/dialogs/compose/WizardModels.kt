@@ -38,7 +38,9 @@ data class WizardInputs(
      * Bolus advisor: glucose is high, so bolus now and eat once it has come down. The carbs are not
      * logged yet; an eat reminder is scheduled instead. Only offered while the advisor applies.
      */
-    val eatLater: Boolean = false
+    val eatLater: Boolean = false,
+    /** Alarm when the pre-bolused meal is due; only meaningful while [carbTime] is in the future. */
+    val remindToEat: Boolean = false
 )
 
 /** How the Calculator's glucose is shown: where it came from and whether it counts. */

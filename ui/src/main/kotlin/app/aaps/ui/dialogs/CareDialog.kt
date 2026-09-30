@@ -1,17 +1,12 @@
 package app.aaps.ui.dialogs
 
+import io.reactivex.rxjava3.kotlin.plusAssign
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
 import androidx.annotation.StringRes
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -29,6 +24,7 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -37,9 +33,7 @@ import app.aaps.ui.dialogs.compose.CareMeter
 import app.aaps.ui.dialogs.compose.CareSheet
 import app.aaps.ui.dialogs.compose.CareSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import javax.inject.Inject
 
@@ -49,7 +43,7 @@ import javax.inject.Inject
  * `OKDialog` confirmation path as the legacy dialog. Which fields are shown (glucose + source /
  * duration / notes) is derived from the [UiInteraction.EventType] arg, exactly as before.
  */
-class CareDialog(val fm: FragmentManager) : DaggerDialogFragment() {
+class CareDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
 
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var profileFunction: ProfileFunction
@@ -75,28 +69,16 @@ class CareDialog(val fm: FragmentManager) : DaggerDialogFragment() {
         savedInstanceState.putInt("options", options.ordinal)
     }
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         (savedInstanceState ?: arguments)?.let {
             event = it.getInt("event", app.aaps.core.ui.R.string.error)
             options = UiInteraction.EventType.entries.toTypedArray()[it.getInt("options", 0)]
         }
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { CareSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { CareSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     override fun onDestroyView() {

@@ -50,6 +50,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.EntryCard
+import app.aaps.core.compose.components.EntryTime
+import app.aaps.core.compose.components.StepperRow
+import app.aaps.core.compose.components.StepperValue
+import app.aaps.core.compose.components.TimeStepper
+import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.components.HoldToConfirmButton
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
@@ -162,10 +171,10 @@ private fun InputStep(
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
             GlucoseCard(inputs, result, colors, onInputs)
-            CarbsCard(inputs, carbControls, colors, onInputs)
+            CarbsCard(inputs, carbControls, onInputs)
             if (inputs.carbs > 0) {
-                EatingCard(inputs, result.advisorAvailable, colors, onInputs)
-                AbsorptionCard(inputs, colors, onInputs)
+                EatingCard(inputs, result.advisorAvailable, onInputs)
+                AbsorptionCard(inputs, onInputs)
             }
             AapsCard {
                 Column {
@@ -302,25 +311,20 @@ private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: Aaps
 }
 
 @Composable
-private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, colors: AapsColors, onInputs: (WizardInputs) -> Unit) {
-    AapsCard {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionLabel("CARBS", colors)
-            Stepper(
-                value = "${inputs.carbs}", unit = "g", colors = colors,
-                decreaseLabel = "Subtract ${carbControls.step} grams of carbs", onDecrease = { onInputs(inputs.copy(carbs = carbControls.decrease(inputs.carbs))) },
-                increaseLabel = "Add ${carbControls.step} grams of carbs", onIncrease = { onInputs(inputs.copy(carbs = carbControls.increase(inputs.carbs))) }
-            )
-            ChoiceRow {
-                carbControls.quickIncrements.forEach { increment ->
-                    Choice(
-                        if (increment > 0) "+$increment g" else "$increment g", selected = false, colors = colors,
-                        clickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs"
-                    ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
-                }
+private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, onInputs: (WizardInputs) -> Unit) {
+    EntryCard("Carbs") {
+        AmountStepper(
+            value = inputs.carbs.toDouble(),
+            onValue = { onInputs(inputs.copy(carbs = carbControls.clamp(it.toInt()))) },
+            step = carbControls.step.toDouble(), min = 0.0, max = carbControls.maxCarbs.toDouble(), decimals = 0, unit = "g", name = "of carbs"
+        )
+        ChoiceRow {
+            carbControls.quickIncrements.forEach { increment ->
+                Choice(
+                    if (increment > 0) "+$increment g" else "$increment g", selected = false,
+                    clickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs"
+                ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
             }
-            if (inputs.carbs == carbControls.maxCarbs)
-                Tag("Max ${carbControls.maxCarbs} g", colors.textSecondary)
         }
     }
 }
@@ -331,60 +335,34 @@ private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, co
  * log nothing yet, and be reminded to eat.
  */
 @Composable
-private fun EatingCard(inputs: WizardInputs, advisorAvailable: Boolean, colors: AapsColors, onInputs: (WizardInputs) -> Unit) {
-    fun at(minutes: Int) = onInputs(inputs.copy(carbTime = minutes.coerceIn(-60, 60), eatLater = false))
-    AapsCard {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionLabel("EATING", colors)
-            Stepper(
-                value = when {
-                    inputs.eatLater      -> "later"
-                    inputs.carbTime > 0  -> "in ${inputs.carbTime}"
-                    inputs.carbTime < 0  -> "${-inputs.carbTime}"
-                    else                 -> "now"
-                },
-                unit = when {
-                    inputs.eatLater      -> ""
-                    inputs.carbTime > 0  -> "min"
-                    inputs.carbTime < 0  -> "min ago"
-                    else                 -> ""
-                },
-                colors = colors,
-                decreaseLabel = "Eating 5 minutes earlier", onDecrease = { at(inputs.carbTime - 5) },
-                increaseLabel = "Eating 5 minutes later", onIncrease = { at(inputs.carbTime + 5) }
-            )
-            ChoiceRow {
-                listOf(0, 15, 30).forEach { m ->
-                    Choice(if (m == 0) "Now" else "$m min", selected = !inputs.eatLater && inputs.carbTime == m, colors = colors) { at(m) }
-                }
-                if (advisorAvailable)
-                    Choice("Later", selected = inputs.eatLater, colors = colors, icon = Icons.Rounded.Notifications) {
-                        onInputs(inputs.copy(eatLater = true, carbTime = 0))
-                    }
-            }
+private fun EatingCard(inputs: WizardInputs, advisorAvailable: Boolean, onInputs: (WizardInputs) -> Unit) {
+    EntryCard("When") {
+        TimeStepper(
+            offsetMin = inputs.carbTime,
+            onOffset = { onInputs(inputs.copy(carbTime = it, eatLater = false)) },
+            minOffsetMin = -60, maxOffsetMin = 60,
+            presets = listOf(0, 15, 30),
+            selected = !inputs.eatLater
+        ) {
+            if (advisorAvailable)
+                Choice("Later", selected = inputs.eatLater, icon = Icons.Rounded.Notifications) { onInputs(inputs.copy(eatLater = true, carbTime = 0)) }
         }
+        if (inputs.carbTime > 0 && !inputs.eatLater)
+            ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })
     }
 }
 
 /** Extended carbs: a slow meal declared per-meal, which the loop's single absorption constant cannot describe. */
 @Composable
-private fun AbsorptionCard(inputs: WizardInputs, colors: AapsColors, onInputs: (WizardInputs) -> Unit) {
+private fun AbsorptionCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
     fun over(hours: Int) = onInputs(inputs.copy(carbDurationHours = hours.coerceIn(0, 8)))
-    AapsCard {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionLabel("ABSORPTION", colors)
-            Stepper(
-                value = if (inputs.carbDurationHours == 0) "fast" else "${inputs.carbDurationHours}",
-                unit = if (inputs.carbDurationHours == 0) "" else "h",
-                colors = colors,
-                decreaseLabel = "Shorten carb absorption by 1 hour", onDecrease = { over(inputs.carbDurationHours - 1) },
-                increaseLabel = "Lengthen carb absorption by 1 hour", onIncrease = { over(inputs.carbDurationHours + 1) }
-            )
-            ChoiceRow {
-                listOf(0, 2, 3, 4).forEach { h ->
-                    Choice(if (h == 0) "Fast" else "$h h", selected = inputs.carbDurationHours == h, colors = colors) { over(h) }
-                }
-            }
+    EntryCard("Absorption") {
+        StepperRow(
+            decreaseLabel = "Shorten carb absorption by 1 hour", onDecrease = { over(inputs.carbDurationHours - 1) },
+            increaseLabel = "Lengthen carb absorption by 1 hour", onIncrease = { over(inputs.carbDurationHours + 1) }
+        ) { StepperValue(if (inputs.carbDurationHours == 0) "fast" else "${inputs.carbDurationHours}", if (inputs.carbDurationHours == 0) "" else "h") }
+        ChoiceRow {
+            listOf(0, 2, 3, 4).forEach { h -> Choice(if (h == 0) "Fast" else "$h h", selected = inputs.carbDurationHours == h) { over(h) } }
         }
     }
 }
@@ -469,12 +447,12 @@ private fun ReviewStep(
 
         if (outcome.carbs > 0 && !inputs.eatLater) {
             val timing = when {
-                inputs.carbTime > 0 -> "Eating in ${inputs.carbTime} min"
-                inputs.carbTime < 0 -> "Eaten ${-inputs.carbTime} min ago"
+                inputs.carbTime != 0 -> "Eating ${EntryTime.relative(inputs.carbTime)}"
                 else                -> null
             }
             val absorption = if (inputs.carbDurationHours > 0) "Absorbing over ${inputs.carbDurationHours} h" else null
-            listOfNotNull(timing, absorption).takeIf { it.isNotEmpty() }?.let {
+            val reminder = if (inputs.remindToEat && inputs.carbTime > 0) "Reminder" else null
+            listOfNotNull(timing, absorption, reminder).takeIf { it.isNotEmpty() }?.let {
                 Text(it.joinToString(" · "), style = AapsTheme.type.body, color = colors.textSecondary, textAlign = TextAlign.Center)
             }
         }
@@ -525,59 +503,6 @@ private fun IconLine(icon: ImageVector, text: String, tint: Color) =
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
         Text(text, style = AapsTheme.type.listTitle, color = tint)
     }
-
-@Composable
-private fun Stepper(
-    value: String,
-    unit: String,
-    colors: AapsColors,
-    decreaseLabel: String,
-    onDecrease: () -> Unit,
-    increaseLabel: String,
-    onIncrease: () -> Unit
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        StepperButton(AapsIcons.Remove, decreaseLabel, colors.controlFill, colors.textPrimary, onDecrease)
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
-            Text(value, style = AapsTheme.type.bigValue, color = colors.textPrimary)
-            if (unit.isNotEmpty()) Text(" $unit", style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp))
-        }
-        StepperButton(Icons.Rounded.Add, increaseLabel, colors.accentTint, colors.accentOnLight, onIncrease)
-    }
-}
-
-@Composable
-private fun ChoiceRow(content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) =
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth(), content = content)
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.Choice(
-    label: String,
-    selected: Boolean,
-    colors: AapsColors,
-    clickLabel: String? = null,
-    icon: ImageVector? = null,
-    onClick: () -> Unit
-) {
-    val fg = if (selected) colors.accentOnLight else colors.textSecondary
-    Row(
-        Modifier
-            .weight(1f)
-            .heightIn(min = 48.dp)
-            .clip(AapsTheme.shape.pill)
-            .background(if (selected) colors.accentTintStrong else colors.controlFill)
-            .clickable(role = Role.Button, onClickLabel = clickLabel, onClick = onClick)
-            .wrapContentHeight(Alignment.CenterVertically)
-            .padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) Icon(icon, contentDescription = null, tint = fg, modifier = Modifier
-            .size(16.dp)
-            .padding(end = 2.dp))
-        Text(label, style = AapsTheme.type.listTitle, color = fg, textAlign = TextAlign.Center)
-    }
-}
 
 @Composable
 private fun FactorRow(
@@ -639,18 +564,6 @@ private fun BreakdownRow(name: String, value: String, colors: AapsColors, iob: B
         Text(name, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
         Text(value, style = AapsTheme.type.body, color = if (iob) colors.iob else colors.textPrimary)
     }
-}
-
-@Composable
-private fun StepperButton(icon: ImageVector, cd: String, bg: Color, fg: Color, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(bg)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { Icon(icon, contentDescription = cd, tint = fg, modifier = Modifier.size(24.dp)) }
 }
 
 @Composable

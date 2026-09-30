@@ -2,15 +2,9 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -26,6 +20,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.core.ui.toast.ToastUtils
@@ -35,7 +30,6 @@ import app.aaps.ui.dialogs.compose.ExtendedBolusInputs
 import app.aaps.ui.dialogs.compose.ExtendedBolusSheet
 import app.aaps.ui.dialogs.compose.ExtendedBolusSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
@@ -44,7 +38,7 @@ import kotlin.math.abs
  * Redesigned Extended Bolus dialog. UI is Compose ([ExtendedBolusSheet]); [submit] runs the SAME
  * constraint + `OKDialog` confirmation + `commandQueue.extendedBolus` path as before.
  */
-class ExtendedBolusDialog : DaggerDialogFragment() {
+class ExtendedBolusDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
@@ -58,18 +52,9 @@ class ExtendedBolusDialog : DaggerDialogFragment() {
 
     private var queryingProtection = false
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         val pumpDescription = activePlugin.activePump.pumpDescription
         val extendedStep = pumpDescription.extendedBolusStep
@@ -80,10 +65,7 @@ class ExtendedBolusDialog : DaggerDialogFragment() {
             durationStep = pumpDescription.extendedBolusDurationStep,
             maxDuration = pumpDescription.extendedBolusMaxDuration
         )
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { ExtendedBolusSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { ExtendedBolusSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     private fun submit(inputs: ExtendedBolusInputs) {

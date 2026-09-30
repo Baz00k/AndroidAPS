@@ -1,9 +1,5 @@
 package app.aaps.ui.dialogs.compose
 
-import java.time.Instant
-import java.time.LocalTime
-import java.time.ZoneId
-import java.util.concurrent.TimeUnit
 
 /** Whether an insulin entry asks the pump for a bolus or records one given some other way. */
 enum class InsulinIntent { DELIVER, LOG }
@@ -21,7 +17,7 @@ enum class DeliveryUnavailable(val label: String) {
  */
 object InsulinEntryPolicy {
 
-    val MAX_LOG_AGE_MS: Long = TimeUnit.HOURS.toMillis(12)
+    const val MAX_LOG_AGE_MIN: Int = 12 * 60
 
     fun deliveryUnavailable(client: Boolean, pumpSuspended: Boolean, pumpInitialized: Boolean): DeliveryUnavailable? = when {
         client                            -> DeliveryUnavailable.FOLLOWER
@@ -29,20 +25,12 @@ object InsulinEntryPolicy {
         else                              -> null
     }
 
-    /** The time recorded for the entry. Delivery ignores any time picked while the screen was in Log mode. */
-    fun eventTime(intent: InsulinIntent, now: Long, loggedAt: Long): Long = when (intent) {
-        InsulinIntent.DELIVER -> now
-        InsulinIntent.LOG     -> loggedAt.coerceIn(now - MAX_LOG_AGE_MS, now)
-    }
-
     /**
-     * A clock time picked for a logged dose, as the most recent such moment not after [now]: a time
-     * later than the current clock means yesterday. Anything older than [MAX_LOG_AGE_MS] is held at that limit.
+     * The time recorded for the entry. Delivery ignores any time picked while the screen was in Log mode;
+     * a logged dose is held within the last [MAX_LOG_AGE_MIN] minutes and never in the future.
      */
-    fun logTime(now: Long, time: LocalTime, zone: ZoneId): Long {
-        val nowZoned = Instant.ofEpochMilli(now).atZone(zone)
-        var picked = nowZoned.with(time).withSecond(0).withNano(0)
-        if (picked.isAfter(nowZoned)) picked = picked.minusDays(1)
-        return picked.toInstant().toEpochMilli().coerceAtLeast(now - MAX_LOG_AGE_MS)
+    fun eventTime(intent: InsulinIntent, now: Long, offsetMin: Int): Long = when (intent) {
+        InsulinIntent.DELIVER -> now
+        InsulinIntent.LOG     -> now + offsetMin.coerceIn(-MAX_LOG_AGE_MIN, 0) * 60_000L
     }
 }

@@ -2,16 +2,10 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.time.T
@@ -28,6 +22,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.ui.R
@@ -35,7 +30,6 @@ import app.aaps.ui.dialogs.compose.LoopActionId
 import app.aaps.ui.dialogs.compose.LoopModeOption
 import app.aaps.ui.dialogs.compose.LoopSheet
 import app.aaps.ui.dialogs.compose.LoopSheetState
-import dagger.android.support.DaggerDialogFragment
 import javax.inject.Inject
 
 /**
@@ -43,7 +37,7 @@ import javax.inject.Inject
  * `loop.handleRunningModeChange(...)` behind the SAME `OKDialog` confirmation as before (gated on
  * `loop.allowedNextModes()`). DI + `runLoopDialog` routing unchanged.
  */
-class LoopDialog : DaggerDialogFragment() {
+class LoopDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
@@ -59,12 +53,6 @@ class LoopDialog : DaggerDialogFragment() {
     private var queryingProtection = false
     private var showOkCancel: Boolean = true
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onSaveInstanceState(savedInstanceState: Bundle) {
         super.onSaveInstanceState(savedInstanceState)
@@ -73,18 +61,10 @@ class LoopDialog : DaggerDialogFragment() {
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         (savedInstanceState ?: arguments)?.let { showOkCancel = it.getBoolean("showOkCancel", true) }
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(true)
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AapsTheme {
-                    LoopSheet(state = buildState(), onAction = ::onAction, onClose = { dismiss() })
-                }
-            }
+        return sheetContent {
+            LoopSheet(state = buildState(), onAction = ::onAction, onClose = { dismiss() })
         }
     }
 

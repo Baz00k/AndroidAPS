@@ -2,15 +2,9 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -28,13 +22,13 @@ import app.aaps.core.interfaces.utils.HardLimits
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.profile.ProfileSealed
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.ui.R
 import app.aaps.ui.dialogs.compose.ProfileEffect
 import app.aaps.ui.dialogs.compose.ProfileSwitchSheet
 import app.aaps.ui.dialogs.compose.ProfileSwitchSheetState
-import dagger.android.support.DaggerDialogFragment
 import java.util.Locale
 import javax.inject.Inject
 
@@ -44,7 +38,7 @@ import javax.inject.Inject
  * dialog. The "effect at N%" preview is illustrative (basal ×N%, ISF/IC ÷N%). DI +
  * `runProfileSwitchDialog` routing unchanged.
  */
-class ProfileSwitchDialog : DaggerDialogFragment() {
+class ProfileSwitchDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
@@ -61,31 +55,17 @@ class ProfileSwitchDialog : DaggerDialogFragment() {
 
     private var queryingProtection = false
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(true)
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AapsTheme {
-                    ProfileSwitchSheet(
-                        state = buildState(),
-                        computeEffect = ::computeEffect,
-                        onApply = ::apply,
-                        onClose = { dismiss() }
-                    )
-                }
-            }
+        return sheetContent {
+            ProfileSwitchSheet(
+                state = buildState(),
+                computeEffect = ::computeEffect,
+                onApply = ::apply,
+                onClose = { dismiss() }
+            )
         }
     }
 

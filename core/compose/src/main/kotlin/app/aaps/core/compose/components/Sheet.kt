@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,8 +25,15 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Bottom-sheet surface: scrim-less rounded-top panel with a grabber and a title row. Hosted inside a
- * DialogFragment whose window is bottom-gravity. [title] + optional close.
+ * True while the surrounding host really lets the sheet be dragged away. The grabber is drawn only
+ * then: a handle on something that cannot be dragged is a false affordance.
+ */
+val LocalSheetDraggable = staticCompositionLocalOf { false }
+
+/**
+ * Bottom-sheet surface: rounded-top panel with a grabber and a title row. Hosted by a native modal
+ * bottom sheet ([LocalSheetDraggable] = true) or, for blocking content, a plain dialog. [title] +
+ * optional close.
  */
 @Composable
 fun SheetSurface(
@@ -42,20 +50,21 @@ fun SheetSurface(
             .background(colors.surface3)
             .padding(bottom = 12.dp)
     ) {
-        // grabber
-        Box(
-            Modifier
-                .padding(top = 8.dp)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
+        if (LocalSheetDraggable.current)
             Box(
                 Modifier
-                    .size(width = 40.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White.copy(alpha = 0.22f))
-            )
-        }
+                    .padding(top = 8.dp)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(width = 40.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White.copy(alpha = 0.22f))
+                )
+            }
+        else Box(Modifier.padding(top = 8.dp))
         Row(
             Modifier
                 .fillMaxWidth()

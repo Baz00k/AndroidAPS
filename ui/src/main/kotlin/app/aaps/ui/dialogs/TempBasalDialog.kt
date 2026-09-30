@@ -2,15 +2,9 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -29,6 +23,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
@@ -37,7 +32,6 @@ import app.aaps.ui.dialogs.compose.TempBasalInputs
 import app.aaps.ui.dialogs.compose.TempBasalSheet
 import app.aaps.ui.dialogs.compose.TempBasalSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
@@ -47,7 +41,7 @@ import kotlin.math.abs
  * `OKDialog` confirmation + `commandQueue.tempBasalPercent` / `tempBasalAbsolute` path as the legacy
  * dialog. The pump decides which modes are offered (percent / absolute).
  */
-class TempBasalDialog : DaggerDialogFragment() {
+class TempBasalDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -62,23 +56,11 @@ class TempBasalDialog : DaggerDialogFragment() {
 
     private var queryingProtection = false
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { TempBasalSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { TempBasalSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     private fun buildState(): TempBasalSheetState {

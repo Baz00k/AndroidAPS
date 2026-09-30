@@ -1,16 +1,11 @@
 package app.aaps.ui.dialogs
 
+import io.reactivex.rxjava3.kotlin.plusAssign
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
 import app.aaps.core.data.model.TT
@@ -43,6 +38,7 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.ui.dialogs.compose.PumpReadyGate
@@ -53,12 +49,11 @@ import app.aaps.ui.dialogs.compose.DeliveryUnavailable
 import app.aaps.ui.dialogs.compose.InsulinEntryPolicy
 import app.aaps.ui.dialogs.compose.InsulinInputs
 import app.aaps.ui.dialogs.compose.InsulinIntent
+import app.aaps.ui.dialogs.compose.TargetPreset
 import app.aaps.ui.dialogs.compose.InsulinSheet
 import app.aaps.ui.dialogs.compose.InsulinSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -68,7 +63,7 @@ import kotlin.math.abs
  * Redesigned Insulin (careportal bolus) dialog. UI is Compose ([InsulinSheet]); [submit] runs the
  * SAME constraint + `OKDialog` confirmation + eating-soon TT + record / `commandQueue.bolus` path.
  */
-class InsulinDialog : DaggerDialogFragment() {
+class InsulinDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -88,26 +83,16 @@ class InsulinDialog : DaggerDialogFragment() {
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var loop: Loop
     @Inject lateinit var pumpReadyGate: PumpReadyGate
+    @Inject lateinit var targetPresets: TargetPresets
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
-        val units = profileFunction.getUnits()
-        val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
         val state = InsulinSheetState(
             maxInsulin = constraintChecker.getMaxBolusAllowed().value(),
             bolusStep = bolusStep,
@@ -118,17 +103,10 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
             deliveryUnavailable = deliveryUnavailable(),
-            eatingSoonSummary = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)
-                .let { if (units == GlucoseUnit.MMOL) decimalFormatter.to1Decimal(it) else decimalFormatter.to0Decimal(it) } + " " + unitLabel +
-                " · " + rh.gs(app.aaps.core.ui.R.string.format_mins, preferences.get(IntKey.OverviewEatingSoonDuration)),
-            showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs),
-            now = dateUtil::now,
-            formatTime = { t -> if (dateUtil.isSameDay(t, dateUtil.now())) dateUtil.timeString(t) else dateUtil.dateAndTimeString(t) }
+            targets = targetPresets.options(),
+            showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs)
         )
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { InsulinSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { InsulinSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     override fun onDestroyView() {
@@ -151,10 +129,8 @@ class InsulinDialog : DaggerDialogFragment() {
         val insulin = inputs.amount
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         val actions: LinkedList<String?> = LinkedList()
-        val units = profileFunction.getUnits()
-        val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
         val recordOnlyChecked = inputs.intent == InsulinIntent.LOG
-        val eatingSoonChecked = inputs.eatingSoon
+        val target = inputs.target
 
         if (insulinAfterConstraints > 0) {
             actions.add(
@@ -166,19 +142,16 @@ class InsulinDialog : DaggerDialogFragment() {
             if (abs(insulinAfterConstraints - insulin) > pumpDescription.pumpType.determineCorrectBolusStepSize(insulinAfterConstraints))
                 actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_constraint_applied_warn, insulin, insulinAfterConstraints).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         }
-        val eatingSoonTTDuration = preferences.get(IntKey.OverviewEatingSoonDuration)
-        val eatingSoonTT = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)
-        if (eatingSoonChecked)
-            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(eatingSoonTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, eatingSoonTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
+        if (target != TargetPreset.NONE) actions.add(targetPresets.confirmationLine(context, target))
 
-        val time = InsulinEntryPolicy.eventTime(inputs.intent, dateUtil.now(), inputs.loggedAt)
+        val time = InsulinEntryPolicy.eventTime(inputs.intent, dateUtil.now(), inputs.offsetMin)
         if (recordOnlyChecked && insulinAfterConstraints > 0)
             actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(time))
         val notes = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
 
-        if (insulinAfterConstraints > 0 || eatingSoonChecked) {
+        if (insulinAfterConstraints > 0 || target != TargetPreset.NONE) {
             activity?.let { activity ->
                 val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
                 // A dose that reaches the pump is pre-flighted BEFORE the hold-to-confirm. A record-only
@@ -186,25 +159,13 @@ class InsulinDialog : DaggerDialogFragment() {
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
                     if (delivers) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
-                confirm(if (recordOnlyChecked) "Log insulin" else rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
-                    if (eatingSoonChecked) {
-                        disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
-                            TT(
-                                timestamp = System.currentTimeMillis(),
-                                duration = TimeUnit.MINUTES.toMillis(eatingSoonTTDuration.toLong()),
-                                reason = TT.Reason.EATING_SOON,
-                                lowTarget = profileUtil.convertToMgdl(eatingSoonTT, profileFunction.getUnits()),
-                                highTarget = profileUtil.convertToMgdl(eatingSoonTT, profileFunction.getUnits())
-                            ),
-                            action = Action.TT, source = Sources.InsulinDialog,
-                            note = notes,
-                            listValues = listOf(
-                                ValueWithUnit.TETTReason(TT.Reason.EATING_SOON),
-                                ValueWithUnit.fromGlucoseUnit(eatingSoonTT, units),
-                                ValueWithUnit.Minute(eatingSoonTTDuration)
-                            )
-                        ).subscribe()
-                    }
+                val title = when {
+                    insulinAfterConstraints <= 0 -> rh.gs(app.aaps.core.ui.R.string.temporary_target)
+                    recordOnlyChecked            -> "Log insulin"
+                    else                         -> rh.gs(app.aaps.core.ui.R.string.bolus)
+                }
+                confirm(title, HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
+                    targetPresets.start(target, Sources.InsulinDialog, note = notes)?.let { disposable += it }
                     if (insulinAfterConstraints > 0) {
                         val detailedBolusInfo = DetailedBolusInfo()
                         detailedBolusInfo.eventType = TE.Type.CORRECTION_BOLUS
