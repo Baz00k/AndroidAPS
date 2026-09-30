@@ -17,4 +17,10 @@
     <string name="ultra_fast_acting_insulin_comment">Fiasp</string>
 
 
+    <string name="insulin_config_builder_hint">Change insulin type in Config Builder.</string>
+    <string name="insulin_activity_description">Modeled insulin activity over time.</string>
+    <string name="insulin_activity_axis_title">INSULIN ACTIVITY · % PER HOUR</string>
+    <string name="insulin_activity_peak">Peak %1$d min</string>
+    <string name="insulin_activity_unavailable">Activity preview unavailable</string>
+    <string name="insulin_activity_accessibility">Insulin activity: peak at %1$d minutes, duration %2$s, peak activity %3$s percent per hour, vertical scale 0 to %4$s percent per hour.</string>
 </resources>

@@ -8,28 +8,27 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.plugin.ActivePlugin
-import app.aaps.core.interfaces.plugin.PluginBase
-import app.aaps.core.interfaces.resources.ResourceHelper
-import app.aaps.plugins.insulin.compose.InsulinChip
 import app.aaps.plugins.insulin.compose.InsulinScreen
 import app.aaps.plugins.insulin.compose.InsulinUiState
+import app.aaps.plugins.insulin.compose.buildInsulinActivityCurve
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
 class InsulinFragment : DaggerFragment() {
 
     @Inject lateinit var activePlugin: ActivePlugin
-    @Inject lateinit var rh: ResourceHelper
 
     private val state = mutableStateOf(InsulinUiState())
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
-        ComposeView(requireContext()).apply {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        // ViewPager can display this page while it is still STARTED, before onResume refreshes it.
+        build()
+        return ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent { AapsTheme { InsulinScreen(state.value) } }
         }
+    }
 
     override fun onResume() {
         super.onResume()
@@ -38,15 +37,14 @@ class InsulinFragment : DaggerFragment() {
 
     private fun build() {
         val active = activePlugin.activeInsulin
-        val chips = activePlugin.getSpecificPluginsList(PluginType.INSULIN).map { p ->
-            InsulinChip(label = (p as PluginBase).name, active = p === active)
-        }
+        val diaHours = active.dia
+        val activityCurve = buildInsulinActivityCurve(active, diaHours)
         state.value = InsulinUiState(
-            types = chips,
             activeName = active.friendlyName,
             comment = active.comment,
-            diaHours = active.dia,
-            peakMinutes = active.peak
+            diaHours = diaHours,
+            peakMinutes = activityCurve?.peak?.minutes?.toInt() ?: active.peak,
+            activityCurve = activityCurve
         )
     }
 }

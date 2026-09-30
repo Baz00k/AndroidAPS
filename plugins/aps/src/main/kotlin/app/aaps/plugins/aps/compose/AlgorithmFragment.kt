@@ -9,7 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
@@ -71,9 +70,6 @@ class AlgorithmFragment : DaggerFragment() {
 
     private fun build() {
         val active = activePlugin.activeAPS as PluginBase
-        val chips = activePlugin.getSpecificPluginsList(PluginType.APS).map { p ->
-            AlgoChip(label = (p as PluginBase).name, active = p === active)
-        }
         val rt = runCatching { activePlugin.activeAPS.lastAPSResult?.rawData() as? RT }.getOrNull()
         val toggles = if (isHovorka()) listOf(
             AlgoToggle("tdd", "Dynamic sensitivity", "Adapts basal to your recent days", preferences.get(BooleanKey.HovorkaTddAdaptation)),
@@ -84,7 +80,6 @@ class AlgorithmFragment : DaggerFragment() {
 
         state.value = AlgorithmUiState(
             title = active.name,
-            chips = chips,
             predictedMmol = rt?.eventualBG?.let { it / MGDL_PER_MMOL },
             targetMmol = rt?.targetBG?.let { it / MGDL_PER_MMOL },
             bodyWeight = if (isHovorka()) preferences.get(DoubleKey.HovorkaBodyWeight) else null,
