@@ -183,7 +183,6 @@
     <string name="overview">首页概览</string>
     <string name="overview_shortname">主页</string>
     <string name="description_overview">显示闭环的当前状态和大多数常用操作的按钮</string>
-    <string name="overview_buttons_selection">按钮</string>
     <string name="not_available_full">不可用</string>
     <string name="constraints_violation">违反约束条件</string>
     <string name="change_your_input">更改您的输入!</string>
@@ -202,7 +201,6 @@
     <string name="firstcarbsincrement">第一碳水化合物增量</string>
     <string name="secondcarbsincrement">第二碳水化合物增量</string>
     <string name="thirdcarbsincrement">第三碳水化合物增量</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">默认的临时目标</string>
     <string name="fill_bolus_title">输注/充盈标准胰岛素剂量</string>
     <string name="button1">按钮1</string>

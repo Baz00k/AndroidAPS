@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -98,7 +99,7 @@ fun HomeScreen(
                 DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }
-            ActionBar(actions)
+            ActionBar(state.actions, state.calculatorEnabled, actions)
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
@@ -209,11 +210,16 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             val targetDescription = state.tempTarget?.let { "Temp target · $it" } ?: state.targetRange
             if (state.stateLine.isNotBlank() || targetDescription.isNotBlank()) {
                 val activeTarget = state.tempTarget != null
+                // The target shown here is the control for changing it.
                 Box(
                     modifier = Modifier.fillMaxWidth().then(
-                        if (activeTarget) Modifier.clickable(
-                            role = Role.Button, onClickLabel = "Edit or cancel temporary target", onClick = actions.onTempTarget
-                        )
+                        if (state.targetEditable) Modifier
+                            .clip(AapsTheme.shape.cardSmall)
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = if (activeTarget) "Edit or cancel temporary target" else "Set temporary target",
+                                onClick = actions.onTempTarget
+                            )
                         else Modifier
                     ),
                     contentAlignment = Alignment.CenterStart
@@ -545,8 +551,13 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+/**
+ * The treatment bar: the primary actions the user keeps on Home, with the Calculator as the widest,
+ * filled button, and "+" for everything else. The bar never reflows on availability, only on the
+ * user's own shortcut choices.
+ */
 @Composable
-private fun ActionBar(actions: HomeActions) {
+private fun ActionBar(layout: HomeActionLayout, calculatorEnabled: Boolean, actions: HomeActions) {
     val colors = AapsTheme.colors
     Row(
         Modifier
@@ -554,44 +565,76 @@ private fun ActionBar(actions: HomeActions) {
             .background(colors.bar)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom))
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Two primary actions for a closed loop: announce Carbs, or bolus (the wizard-calculated dose).
-        // A raw manual bolus (type-the-units, no calc) is the rare case — it lives in the "+" menu.
-        ActionBarButton("Carbs", AapsIcons.Restaurant, actions.onCarbs, Modifier.weight(1f))
-        ActionBarButton(
-            "Bolus", AapsIcons.Vaccines, actions.onWizard, Modifier.weight(1.4f),
-            container = colors.inRange, content = colors.onAccent
-        )
-        MoreMenu(actions)
+        layout.bar.forEach { shortcut ->
+            when (shortcut) {
+                HomeShortcut.CALCULATOR -> ActionBarButton(
+                    shortcutLabel(shortcut), shortcutIcon(shortcut), actions.onCalculator, Modifier.weight(1.5f),
+                    emphasized = true, enabled = calculatorEnabled
+                )
+                else                    -> ActionBarButton(shortcutLabel(shortcut), shortcutIcon(shortcut), { actions.onShortcut(shortcut) }, Modifier.weight(1f))
+            }
+        }
+        MoreMenu(layout.menu, calculatorEnabled, actions)
     }
 }
 
+private fun shortcutLabel(shortcut: HomeShortcut) = when (shortcut) {
+    HomeShortcut.CALCULATOR -> "Calculator"
+    HomeShortcut.CARBS      -> "Carbs"
+    HomeShortcut.INSULIN    -> "Insulin"
+}
+
+private fun shortcutIcon(shortcut: HomeShortcut) = when (shortcut) {
+    HomeShortcut.CALCULATOR -> AapsIcons.Calculate
+    HomeShortcut.CARBS      -> AapsIcons.Restaurant
+    HomeShortcut.INSULIN    -> AapsIcons.Vaccines
+}
+
 @Composable
-private fun MoreMenu(actions: HomeActions) {
-    val colors = AapsTheme.colors
+private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, actions: HomeActions) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { expanded = true })
+        RoundIconButton(Icons.Rounded.Add, "More treatments", onClick = { expanded = true })
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // Only actions that are NOT primary on the bottom bar (Carbs/Wizard live there).
-            DropdownMenuItem(
-                text = { Text("Bolus (manual)", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onBolus() }
-            )
-            DropdownMenuItem(
-                text = { Text("Bolus (record only)", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onInsulinRecord() }
-            )
-            DropdownMenuItem(
-                text = { Text("Temp target", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onTempTarget() }
-            )
-            DropdownMenuItem(
-                text = { Text("Calibrate CGM", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onCalibration() }
-            )
+            fun run(action: () -> Unit) {
+                expanded = false
+                action()
+            }
+            items.forEachIndexed { i, item ->
+                // Hidden primaries come first; separate them from the secondary actions below.
+                if (i > 0 && items[i - 1] is HomeMenuItem.Shortcut && item !is HomeMenuItem.Shortcut) HorizontalDivider()
+                when (item) {
+                    is HomeMenuItem.Shortcut      -> MenuRow(
+                        shortcutLabel(item.shortcut), shortcutIcon(item.shortcut),
+                        enabled = item.shortcut != HomeShortcut.CALCULATOR || calculatorEnabled
+                    ) { run { actions.onShortcut(item.shortcut) } }
+                    is HomeMenuItem.TempTarget    -> MenuRow("Temporary target", AapsIcons.GpsFixed, status = item.status) { run(actions.onTempTarget) }
+                    is HomeMenuItem.ExtendedBolus -> MenuRow("Extended bolus", AapsIcons.Timelapse, status = item.status, enabled = item.enabled) {
+                        run(if (item.status != null) actions.onCancelExtendedBolus else actions.onExtendedBolus)
+                    }
+                    HomeMenuItem.Calibration      -> MenuRow("Calibrate CGM", AapsIcons.Bloodtype) { run(actions.onCalibration) }
+                }
+            }
         }
     }
+}
+
+/** A menu entry; [status] is the live state of a running action (a target, an extended bolus). */
+@Composable
+private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, status: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    val colors = AapsTheme.colors
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(label, color = if (enabled) colors.textPrimary else colors.textTertiary)
+                if (status != null) Text(status, style = AapsTheme.type.caption, color = colors.accent)
+            }
+        },
+        leadingIcon = { Icon(icon, contentDescription = null, tint = if (enabled) colors.textSecondary else colors.textTertiary) },
+        enabled = enabled,
+        onClick = onClick
+    )
 }

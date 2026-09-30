@@ -217,9 +217,6 @@
     <string name="overview">Panoramica</string>
     <string name="overview_shortname">HOME</string>
     <string name="description_overview">Visualizza lo stato corrente del tuo loop e i tasti per le azioni più comuni</string>
-    <string name="overview_buttons_selection">Tasti</string>
-    <string name="show_calibration_button_summary">Invia una calibrazione a xDrip+ (assicurati che \'Accetta calibrazioni\' sia abilitata in xDrip+ nelle impostazioni Inter-App).</string>
-    <string name="show_cgm_button_summary">Apri xDrip+ o l\'app Dexcom (puoi usare il tasto indietro per tornare ad AAPS).</string>
     <string name="not_available_full">Non disponibile</string>
     <string name="constraints_violation">Violazione dei vincoli</string>
     <string name="change_your_input">Cambia il tuo input!</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">Primo incremento di CHO</string>
     <string name="secondcarbsincrement">Secondo incremento di CHO</string>
     <string name="thirdcarbsincrement">Terzo incremento di CHO</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Target temporanei predefiniti</string>
     <string name="eatingsoon_duration">Durata Pasto a breve (minuti)</string>
     <string name="eatingsoon_target">Valore target Pasto a breve</string>

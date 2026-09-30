@@ -217,9 +217,6 @@
     <string name="overview">首頁總覽</string>
     <string name="overview_shortname">主頁</string>
     <string name="description_overview">顯示目前循環狀態和最常用操作的按鈕</string>
-    <string name="overview_buttons_selection">按鈕</string>
-    <string name="show_calibration_button_summary">發送校準到 xDrip+（請確保在 xDrip+ 的設定中啟用「接受校準」功能）。</string>
-    <string name="show_cgm_button_summary">打開 xDrip+ 或 Dexcom 應用程式（您可以使用返回鍵回到 AAPS）。</string>
     <string name="not_available_full">不可用</string>
     <string name="constraints_violation">約束違反</string>
     <string name="change_your_input">更改您的輸入！</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">第一次碳水化合物增量</string>
     <string name="secondcarbsincrement">第二次碳水化合物增量</string>
     <string name="thirdcarbsincrement">第三次碳水化合物增量</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">預設臨時目標</string>
     <string name="eatingsoon_duration">即將用餐持續時間（分鐘）</string>
     <string name="eatingsoon_target">即將用餐目標值</string>

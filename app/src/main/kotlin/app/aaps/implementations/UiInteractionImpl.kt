@@ -35,7 +35,6 @@ import app.aaps.ui.dialogs.ProfileSwitchDialog
 import app.aaps.ui.dialogs.ProfileViewerDialog
 import app.aaps.ui.dialogs.TempBasalDialog
 import app.aaps.ui.dialogs.TempTargetDialog
-import app.aaps.ui.dialogs.TreatmentDialog
 import app.aaps.ui.dialogs.WizardDialog
 import app.aaps.ui.services.AlarmSoundService
 import app.aaps.ui.services.AlarmSoundServiceHelper
@@ -101,11 +100,6 @@ class UiInteractionImpl @Inject constructor(
     override fun runTempBasalDialog(fragmentManager: FragmentManager) {
         TempBasalDialog()
             .show(fragmentManager, "TempBasalDialog")
-    }
-
-    override fun runTreatmentDialog(fragmentManager: FragmentManager) {
-        TreatmentDialog()
-            .show(fragmentManager, "TreatmentDialog")
     }
 
     override fun runInsulinDialog(fragmentManager: FragmentManager, defaultRecordOnly: Boolean) {

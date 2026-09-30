@@ -196,7 +196,6 @@
     <string name="overview">Übersicht</string>
     <string name="overview_shortname">HOME</string>
     <string name="description_overview">Zeigt den aktuellen Status deines Loops und Schaltflächen für die geläufigsten Aktionen an</string>
-    <string name="overview_buttons_selection">Schaltflächen</string>
     <string name="not_available_full">Nicht verfügbar</string>
     <string name="constraints_violation">Beschränkungen wurden verletzt oder Limit erreicht.</string>
     <string name="change_your_input">Ändere deine Eingabe!</string>
@@ -215,7 +214,6 @@
     <string name="firstcarbsincrement">Erste KH-Erhöhung</string>
     <string name="secondcarbsincrement">Zweite KH-Erhöhung</string>
     <string name="thirdcarbsincrement">Dritte KH-Erhöhung</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Vordefinierte temporäre Ziele</string>
     <string name="fill_bolus_title">Füll-/Vorfüll-Standardmengen</string>
     <string name="button1">Schaltfläche 1</string>

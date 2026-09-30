@@ -126,6 +126,9 @@
     <string name="category">Category</string>
     <string name="subcategory">Subcategory</string>
     <string name="calculator_label">Calculator</string>
+    <string name="overview_shortcuts">Home shortcuts</string>
+    <string name="overview_shortcuts_summary">Hidden shortcuts stay in the + menu</string>
+    <string name="overview_increments">Increments</string>
 
     <!-- Theme switcher dark and light mode-->
     <string name="theme_switcher" translatable="false">Theme switcher</string>
@@ -238,9 +241,6 @@
     <string name="overview">Overview</string>
     <string name="overview_shortname">HOME</string>
     <string name="description_overview">Displays the current state of your loop and buttons for most common actions</string>
-    <string name="overview_buttons_selection">Buttons</string>
-    <string name="show_calibration_button_summary">Sends a calibration to xDrip+ (ensure \'Accept Calibrations\' is enabled in xDrip+ under Inter-App settings).</string>
-    <string name="show_cgm_button_summary">Opens xDrip+ or Dexcom App (you can use back button to return to AAPS).</string>
     <string name="not_available_full">Not available</string>
     <string name="constraints_violation">Constraints violation</string>
     <string name="change_your_input">Change your input!</string>
@@ -259,7 +259,6 @@
     <string name="firstcarbsincrement">First carbs increment</string>
     <string name="secondcarbsincrement">Second carbs increment</string>
     <string name="thirdcarbsincrement">Third carbs increment</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Default Temp-Targets</string>
     <string name="eatingsoon_duration">Eating Soon duration (minutes)</string>
     <string name="eatingsoon_target">Eating Soon target value</string>

@@ -63,6 +63,12 @@ import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.BooleanNonKey
+import app.aaps.core.keys.BooleanKey
+import app.aaps.core.objects.extensions.toStringMedium
+import app.aaps.plugins.main.general.actions.ExtendedBolusActions
+import app.aaps.plugins.main.general.actions.TherapyActionAvailability
+import app.aaps.plugins.main.general.overview.compose.HomeMenuItem
+import app.aaps.plugins.main.general.overview.compose.homeActionLayout
 import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
@@ -156,8 +162,10 @@ class OverviewFragment : DaggerFragment() {
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var calculationWorkflow: CalculationWorkflow
+    @Inject lateinit var extendedBolusActions: ExtendedBolusActions
 
     private val disposable = CompositeDisposable()
+    private val extendedBolusCancelGuard = ExtendedBolusActions.CancelGuard()
 
     private var smallWidth = false
     private var smallHeight = false
@@ -362,28 +370,25 @@ class OverviewFragment : DaggerFragment() {
             protectionCheck.queryProtection(act, ProtectionCheck.Protection.BOLUS, UIRunnable { if (isAdded) run() })
         }
         return HomeActions(
+            onCalculator = { bolusProtected { uiInteraction.runWizardDialog(childFragmentManager) } },
             onCarbs = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
-            onBolus = { bolusProtected { uiInteraction.runTreatmentDialog(childFragmentManager) } },
-            onWizard = { bolusProtected { uiInteraction.runWizardDialog(childFragmentManager) } },
-            // "Record only" insulin entry (log a delivered pump/pen bolus into IOB WITHOUT re-delivering).
-            onInsulinRecord = { bolusProtected { uiInteraction.runInsulinDialog(childFragmentManager, defaultRecordOnly = true) } },
+            onInsulin = { bolusProtected { uiInteraction.runInsulinDialog(childFragmentManager) } },
+            onTempTarget = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
+            onExtendedBolus = { activity?.let { if (!childFragmentManager.isStateSaved) extendedBolusActions.start(it, childFragmentManager) } },
+            onCancelExtendedBolus = { activity?.let { extendedBolusActions.confirmCancel(it, Sources.Overview, extendedBolusCancelGuard) { scheduleUpdateGUI() } } },
+            onCalibration = { bolusProtected { uiInteraction.runCalibrationDialog(childFragmentManager) } },
+            onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
+            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
+            onDeleteCarb = { entry -> bolusProtected { removeCarbEntry(entry) } },
+            onDeleteInsulin = { entry -> bolusProtected { removeInsulinEntry(entry) } },
+            // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
+            onRange = { hours -> rxBus.send(EventScale(hours)) },
             onDismissAlert = { alert ->
                 context?.let { ctx ->
                     notificationStore.snapshot().firstOrNull { it.id == alert.id }?.let { notificationStore.dismiss(it, ctx) }
                 }
                 refreshAll()
-            },
-            onMore = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
-            onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
-            onTempTarget = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
-            onProfile = { uiInteraction.runProfileViewerDialog(childFragmentManager, dateUtil.now(), UiInteraction.Mode.RUNNING_PROFILE) },
-            onCob = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
-            onDeleteCarb = { entry -> bolusProtected { removeCarbEntry(entry) } },
-            onDeleteInsulin = { entry -> bolusProtected { removeInsulinEntry(entry) } },
-            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
-            // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
-            onRange = { hours -> rxBus.send(EventScale(hours)) },
-            onCalibration = { bolusProtected { uiInteraction.runCalibrationDialog(childFragmentManager) } }
+            }
         )
     }
 
@@ -493,7 +498,7 @@ class OverviewFragment : DaggerFragment() {
         val lowMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
         val bgTone = when {
-            bgMgdl == null        -> AapsTone.InRange
+            bgMgdl == null        -> AapsTone.Neutral
             bgMgdl > highMarkMgdl -> AapsTone.High   // amber (hyper)
             bgMgdl < lowMarkMgdl  -> AapsTone.Low    // red (hypo)
             else                  -> AapsTone.InRange // green
@@ -616,6 +621,25 @@ class OverviewFragment : DaggerFragment() {
             levels.battery?.let { add(batterySupply(it)) }
         }
 
+        val targetEditable = TherapyActionAvailability.tempTarget(target.temporaryTarget != null, profile != null, mode)
+        val extendedBolusAvailable = TherapyActionAvailability.extendedBolus(
+            pump.pumpDescription.isExtendedBolusCapable, pump.isInitialized(), pump.isSuspended(), mode,
+            pump.isFakingTempsByExtendedBoluses, config.AAPSCLIENT
+        )
+        val runningExtendedBolus = if (extendedBolusAvailable) persistenceLayer.getExtendedBolusActiveAt(now) else null
+        val actionLayout = homeActionLayout(
+            showCalculator = preferences.get(BooleanKey.OverviewShowWizardButton),
+            showCarbs = preferences.get(BooleanKey.OverviewShowCarbsButton),
+            showInsulin = preferences.get(BooleanKey.OverviewShowInsulinButton),
+            tempTarget = if (targetEditable) HomeMenuItem.TempTarget(tempTarget) else null,
+            extendedBolus = if (extendedBolusAvailable) HomeMenuItem.ExtendedBolus(
+                status = runningExtendedBolus?.toStringMedium(dateUtil, rh),
+                // A cancel already queued cannot be confirmed a second time.
+                enabled = runningExtendedBolus == null || !commandQueue.extendedBolusInQueue()
+            ) else null,
+            calibration = xDripSource.isEnabled()
+        )
+
         homeState.value = HomeUiState(
             loopStateLabel = loopLabel,
             loopSubLabel = loopSub,
@@ -648,6 +672,9 @@ class OverviewFragment : DaggerFragment() {
             profileName = profileFunction.getProfileName(),
             tempTarget = tempTarget,
             ready = true,
+            actions = actionLayout,
+            calculatorEnabled = profile != null,
+            targetEditable = targetEditable,
             notifications = notificationStore.snapshot().map {
                 HomeUiState.Alert(
                     id = it.id,

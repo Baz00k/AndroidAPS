@@ -32,11 +32,9 @@
     <string name="overview_cgm">CGM</string>
     <string name="overview">Kezdőlap</string>
     <string name="overview_shortname">KEZD</string>
-    <string name="overview_buttons_selection">Gombok</string>
     <string name="openaps">OpenAPS</string>
     <string name="uploader">Feltöltő</string>
     <string name="keep_screen_on_title">Képernyő bekapcsolva tartása</string>
-    <string name="cgm">CGM</string>
     <string name="button1">Gomb 1</string>
     <string name="button2">Gomb 2</string>
     <string name="button3">Gomb 3</string>

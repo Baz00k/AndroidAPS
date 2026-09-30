@@ -195,7 +195,6 @@
     <string name="overview">Visão Geral</string>
     <string name="overview_shortname">Início</string>
     <string name="description_overview">Exibe o estado actual do loop e botões para acções mais comuns</string>
-    <string name="overview_buttons_selection">Botões</string>
     <string name="not_available_full">Indisponível</string>
     <string name="constraints_violation">Violação das restrições</string>
     <string name="change_your_input">Altere o seu input!</string>
@@ -214,7 +213,6 @@
     <string name="firstcarbsincrement">Primeiro incremento hidratos</string>
     <string name="secondcarbsincrement">Segundo incremento hidratos</string>
     <string name="thirdcarbsincrement">Terceiro incremento hidratos</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Alvo-Temp padrão</string>
     <string name="fill_bolus_title">Valores Padrão de insulina para Purgar/Preencher</string>
     <string name="button1">Botão 1</string>

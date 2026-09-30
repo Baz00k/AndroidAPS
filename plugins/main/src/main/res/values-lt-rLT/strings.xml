@@ -212,8 +212,6 @@
     <string name="overview">Pradžios ekr.</string>
     <string name="overview_shortname">PRADŽIA</string>
     <string name="description_overview">Rodo dabartinę Ciklo būseną ir pagrindinių veiksmų mygtukus</string>
-    <string name="overview_buttons_selection">Mygtukai</string>
-    <string name="show_calibration_button_summary">Siunčia kalibraciją į xDrip+ (įsitikinkite, kad xDrip+ nustatymuose Inter-App modulyje yra įjungta „Priimti kalibravimus“).</string>
     <string name="not_available_full">Nėra duomenų</string>
     <string name="constraints_violation">Apribojimų pažeidimas</string>
     <string name="change_your_input">Pakeiskite įvestus duomenis!</string>
@@ -232,7 +230,6 @@
     <string name="firstcarbsincrement">Pirmas angliavandenių kiekio žingsnis</string>
     <string name="secondcarbsincrement">Antras angliavandenių kiekio žingsnis</string>
     <string name="thirdcarbsincrement">Trečias angliavandenių kiekio žingsnis</string>
-    <string name="cgm">NGJ</string>
     <string name="default_temptargets">Numatyti Laikini Tikslai</string>
     <string name="eatingsoon_duration">Netrukus valgysiu trukmė (minutėmis)</string>
     <string name="eatingsoon_target">Netrukus valgysiu tikslinė reikšmė</string>

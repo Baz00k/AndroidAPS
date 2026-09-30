@@ -217,9 +217,6 @@
     <string name="overview">Overzicht</string>
     <string name="overview_shortname">OVZ</string>
     <string name="description_overview">Toont de huidige Loop-status en knoppen voor meest gebruikte acties</string>
-    <string name="overview_buttons_selection">Knoppen</string>
-    <string name="show_calibration_button_summary">Verzend een kalibratie naar xDrip+ (zorg ervoor dat \'Accept Calibrations\' is ingeschakeld in xDrip+ onder Inter-App instellingen).</string>
-    <string name="show_cgm_button_summary">Opent xDrip+ of Dexcom App (je kunt de terug knop gebruiken om terug te keren naar AAPS).</string>
     <string name="not_available_full">Niet beschikbaar</string>
     <string name="constraints_violation">In strijd met beperkingen</string>
     <string name="change_your_input">Wijzig het ingegevene!</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">Eerste koolhydraten increment</string>
     <string name="secondcarbsincrement">Tweede koolhydraten increment</string>
     <string name="thirdcarbsincrement">Derde koolhydraten increment</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Standaard tijdelijke streefdoelen</string>
     <string name="eatingsoon_duration">Binnenkort eten tijdsduur (minuten)</string>
     <string name="eatingsoon_target">Binnenkort eten streefwaarde</string>

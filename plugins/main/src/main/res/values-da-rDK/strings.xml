@@ -196,7 +196,6 @@
     <string name="overview">Overblik</string>
     <string name="overview_shortname">HJEM</string>
     <string name="description_overview">Viser den aktuelle tilstand af dit loop og knapper til de mest almindelige handlinger</string>
-    <string name="overview_buttons_selection">Knapper</string>
     <string name="not_available_full">Ikke tilgængelig</string>
     <string name="constraints_violation">Begrænsninger overtrådt</string>
     <string name="change_your_input">Skift dit input!</string>
@@ -215,7 +214,6 @@
     <string name="firstcarbsincrement">Første kulhydratstigning</string>
     <string name="secondcarbsincrement">Anden kulhydratstigning</string>
     <string name="thirdcarbsincrement">Tredje kulhydratstigning</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Standard Midlertidige mål</string>
     <string name="fill_bolus_title">Fyld / Klargør standard insulinmængder</string>
     <string name="button1">Knap 1</string>

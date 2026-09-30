@@ -6,19 +6,24 @@ package app.aaps.plugins.main.general.overview.compose
  * `uiInteraction`), so the Compose UI never bypasses any confirmation/constraint path.
  */
 data class HomeActions(
+    val onCalculator: () -> Unit = {},
     val onCarbs: () -> Unit = {},
-    val onBolus: () -> Unit = {},
-    val onWizard: () -> Unit = {},
-    val onMore: () -> Unit = {},
-    val onLoop: () -> Unit = {},
+    val onInsulin: () -> Unit = {},
     val onTempTarget: () -> Unit = {},
-    val onProfile: () -> Unit = {},
-    val onCob: () -> Unit = {},
+    val onExtendedBolus: () -> Unit = {},
+    val onCancelExtendedBolus: () -> Unit = {},
+    val onCalibration: () -> Unit = {},
+    val onLoop: () -> Unit = {},
+    val onBasal: () -> Unit = {},
     val onDeleteCarb: (entry: HomeUiState.CarbEntry) -> Unit = {}, // undo a recent carb entry (COB sheet)
     val onDeleteInsulin: (entry: HomeUiState.InsulinEntry) -> Unit = {}, // undo a recent bolus (IOB sheet)
-    val onBasal: () -> Unit = {},
     val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
-    val onCalibration: () -> Unit = {},       // "+" overflow → calibrate CGM
-    val onInsulinRecord: () -> Unit = {},     // "+" overflow → log a bolus WITHOUT delivering (reconcile a pump/pen dose AAPS missed)
     val onDismissAlert: (alert: HomeUiState.Alert) -> Unit = {} // snooze/act on a home notification
-)
+) {
+
+    fun onShortcut(shortcut: HomeShortcut) = when (shortcut) {
+        HomeShortcut.CALCULATOR -> onCalculator()
+        HomeShortcut.CARBS      -> onCarbs()
+        HomeShortcut.INSULIN    -> onInsulin()
+    }
+}
