@@ -26,6 +26,8 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
+import app.aaps.core.interfaces.rx.events.EventProfileSwitchChanged
+import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.keys.IntKey
@@ -508,9 +510,12 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
+        val configurationRead = reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)
+        // A background history scan holds the same BLE lane; the read the user asked for would fail at once.
+        if (configurationRead) yieldHistoryRecovery()
         val statusRead = readStatusBlocking()
         if (statusRead) reconcileTbrWithStatus()
-        if (reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)) {
+        if (configurationRead) {
             val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
             // Compare before publishing the message, so the result names the consequence of the read
             // rather than only that the transfer finished.
@@ -646,8 +651,16 @@ class YpsoPumpPlugin @Inject constructor(
      * Compare the retained pump configuration against the profile AAPS is dosing with. A manual A/B
      * switch on the pump only becomes knowable here, so an explicit read/check must report its
      * consequence immediately rather than waiting for the next keepalive comparison.
+     *
+     * A profile switch refused against the previous read is accepted now if the pump holds it, rather
+     * than at the next keepalive retry. The queue re-runs the ordinary [setNewBasalProfile] check.
      */
     internal fun reconcileProfileWithLoop() {
+        val requested = profileFunction.getRequestedProfile()?.takeIf { profileFunction.isProfileChangePending() }
+        if (requested != null && isThisProfileSet(ProfileSealed.PS(requested, null))) {
+            rxBus.send(EventProfileSwitchChanged())
+            return
+        }
         val profile = profileFunction.getProfile()
         if (profile == null) {
             publishProfileComparisonNotification()
@@ -1205,7 +1218,7 @@ class YpsoPumpPlugin @Inject constructor(
         statusTimeoutMs: Long = 30_000L,
         stopWhen: () -> Boolean = { false },
     ): TherapyStatusReadiness {
-        if (!yieldHistoryRecoveryForTherapy(historyYieldTimeoutMs)) return TherapyStatusReadiness.HISTORY_BUSY
+        if (!yieldHistoryRecovery(historyYieldTimeoutMs)) return TherapyStatusReadiness.HISTORY_BUSY
         if (stopWhen()) return TherapyStatusReadiness.CANCELLED
         if (readStatusBlocking(statusTimeoutMs, stopWhen)) {
             reconcileTbrWithStatus()
@@ -1214,12 +1227,13 @@ class YpsoPumpPlugin @Inject constructor(
         return if (stopWhen()) TherapyStatusReadiness.CANCELLED else TherapyStatusReadiness.STATUS_UNAVAILABLE
     }
 
-    private fun readProfileBlocking(
-        timeoutMs: Long = 120_000,
-        activeOnly: Boolean = false,
-        yieldForQueue: Boolean = true,
-        stopWhen: () -> Boolean = { false },
-    ): Boolean {
+    /**
+     * A configuration read holds the command queue (a full read for about a minute) and cannot resume:
+     * its coherence rests on an unchanged event count across the whole acquisition. It therefore gives
+     * way only to insulin waiting to be delivered. Temporary basals and profile retries wait for it; yielding to them meant
+     * a read under an active loop was restarted from scratch every few minutes and never finished.
+     */
+    private fun readProfileBlocking(timeoutMs: Long = 120_000, activeOnly: Boolean = false): Boolean {
         var success = false
         val latch = java.util.concurrent.CountDownLatch(1)
         val onDone: (Boolean) -> Unit = {
@@ -1228,12 +1242,12 @@ class YpsoPumpPlugin @Inject constructor(
         }
         val attempt = bleManager.readProfileConfiguration(
             activeOnly,
-            { stopWhen() || (yieldForQueue && (commandQueue.size() > 0 || commandQueue.bolusInQueue())) },
+            { commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue() },
             onDone,
         )
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
         }
         if (latch.count == 0L) return success
         if (!attempt.cancel()) {
@@ -1445,8 +1459,8 @@ class YpsoPumpPlugin @Inject constructor(
         historyRecoveryAttempt.get()?.requestYield()
     }
 
-    /** Give an in-flight selector enough time to reconcile at a safe boundary before therapy I/O. */
-    internal fun yieldHistoryRecoveryForTherapy(timeoutMs: Long = HISTORY_YIELD_GRACE_MS): Boolean {
+    /** Give an in-flight selector enough time to reconcile at a safe boundary before therapy or configuration I/O. */
+    internal fun yieldHistoryRecovery(timeoutMs: Long = HISTORY_YIELD_GRACE_MS): Boolean {
         cancelHistoryRecovery()
         val deadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         while (historyRecoveryActive.get() && System.nanoTime() < deadlineNanos) {
@@ -1877,7 +1891,7 @@ class YpsoPumpPlugin @Inject constructor(
         if (YpsoPumpConst.READ_ONLY_MODE) return fail(R.string.ypsopump_read_only_bolus_blocked)
         // Therapy cancellation outranks abandonable accounting. Do not overlap bolus status/cancel I/O
         // with an in-flight selector transaction; it must first reconcile at a selector-safe boundary.
-        if (!yieldHistoryRecoveryForTherapy()) {
+        if (!yieldHistoryRecovery()) {
             return fail(YpsoBolusMessage.PUMP_BUSY)
         }
         val attempt = bolusController.currentAttempt()
