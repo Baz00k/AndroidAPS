@@ -130,7 +130,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         val actions: LinkedList<String?> = LinkedList()
         val recordOnlyChecked = inputs.intent == InsulinIntent.LOG
-        val target = inputs.target
+        val target = targetPresets.resolve(inputs.target)
 
         if (insulinAfterConstraints > 0) {
             actions.add(
@@ -142,16 +142,16 @@ class InsulinDialog : DaggerBottomSheetFragment() {
             if (abs(insulinAfterConstraints - insulin) > pumpDescription.pumpType.determineCorrectBolusStepSize(insulinAfterConstraints))
                 actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_constraint_applied_warn, insulin, insulinAfterConstraints).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         }
-        if (target != TargetPreset.NONE) actions.add(targetPresets.confirmationLine(context, target))
+        if (target != null) actions.add(targetPresets.confirmationLine(context, target))
 
-        val time = InsulinEntryPolicy.eventTime(inputs.intent, dateUtil.now(), inputs.offsetMin)
+        val time = InsulinEntryPolicy.eventTime(inputs.intent, dateUtil.now(), inputs.givenAt)
         if (recordOnlyChecked && insulinAfterConstraints > 0)
             actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(time))
         val notes = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
 
-        if (insulinAfterConstraints > 0 || target != TargetPreset.NONE) {
+        if (insulinAfterConstraints > 0 || target != null) {
             activity?.let { activity ->
                 val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
                 // A dose that reaches the pump is pre-flighted BEFORE the hold-to-confirm. A record-only
@@ -165,7 +165,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                     else                         -> rh.gs(app.aaps.core.ui.R.string.bolus)
                 }
                 confirm(title, HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
-                    targetPresets.start(target, Sources.InsulinDialog, note = notes)?.let { disposable += it }
+                    target?.let { disposable += targetPresets.start(it, Sources.InsulinDialog, note = notes) }
                     if (insulinAfterConstraints > 0) {
                         val detailedBolusInfo = DetailedBolusInfo()
                         detailedBolusInfo.eventType = TE.Type.CORRECTION_BOLUS

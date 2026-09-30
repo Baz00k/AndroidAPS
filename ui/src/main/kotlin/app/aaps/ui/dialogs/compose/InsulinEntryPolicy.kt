@@ -29,8 +29,8 @@ object InsulinEntryPolicy {
      * The time recorded for the entry. Delivery ignores any time picked while the screen was in Log mode;
      * a logged dose is held within the last [MAX_LOG_AGE_MIN] minutes and never in the future.
      */
-    fun eventTime(intent: InsulinIntent, now: Long, offsetMin: Int): Long = when (intent) {
+    fun eventTime(intent: InsulinIntent, now: Long, givenAt: Long?): Long = when (intent) {
         InsulinIntent.DELIVER -> now
-        InsulinIntent.LOG     -> now + offsetMin.coerceIn(-MAX_LOG_AGE_MIN, 0) * 60_000L
+        InsulinIntent.LOG     -> givenAt?.coerceIn(now - MAX_LOG_AGE_MIN * 60_000L, now) ?: now
     }
 }

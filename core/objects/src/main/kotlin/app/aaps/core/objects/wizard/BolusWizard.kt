@@ -112,6 +112,11 @@ class BolusWizard @Inject constructor(
         private set
 
     private var accepted = false
+    private var succeeded = false
+
+    /** True for the first successful result only: the queue may report a treatment more than once. */
+    @Synchronized
+    private fun onceOnSuccess(): Boolean = !succeeded.also { succeeded = true }
 
     // Result
     var calculatedTotalInsulin: Double = 0.0
@@ -418,10 +423,6 @@ class BolusWizard @Inject constructor(
                 return
             }
             accepted = true
-            if (calculatedTotalInsulin > 0.0)
-                automation.removeAutomationEventBolusReminder()
-            if (carbs > 0.0)
-                automation.removeAutomationEventEatReminder()
             if (bolusAdvisorApplies() && advisor != null)
                 if (advisor) bolusAdvisorProcessing(ctx, skipConfirmation) else commonProcessing(ctx, quickWizardEntry, skipConfirmation)
             else if (bolusAdvisorApplies())
@@ -471,7 +472,10 @@ class BolusWizard @Inject constructor(
                             if (!result.success)
                                 uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
                             // The carbs were deliberately not logged: remind the user to eat once glucose comes down.
-                            else automation.scheduleAutomationEventEatReminder()
+                            else if (onceOnSuccess()) {
+                                automation.removeAutomationEventBolusReminder()
+                                automation.scheduleAutomationEventEatReminder()
+                            }
                         }
                     })
                 }
@@ -582,8 +586,15 @@ class BolusWizard @Inject constructor(
                             override fun run() {
                                 if (!result.success)
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                                else if (useAlarm && this@BolusWizard.carbs > 0 && this@BolusWizard.carbTime > 0)
-                                    automation.scheduleTimeToEatReminder(T.mins(this@BolusWizard.carbTime.toLong()).secs().toInt())
+                                else if (onceOnSuccess()) {
+                                    // This treatment answers whatever the older reminders were waiting for.
+                                    if (insulinAfterConstraints > 0.0) automation.removeAutomationEventBolusReminder()
+                                    if (this@BolusWizard.carbs > 0) automation.removeAutomationEventEatReminder()
+                                    // Due at the meal time that was recorded, not a full carb time after delivery finished.
+                                    val secondsToMeal = (((carbsTimestamp ?: timestamp) - dateUtil.now()) / 1000).toInt()
+                                    if (useAlarm && this@BolusWizard.carbs > 0 && secondsToMeal > 0)
+                                        automation.scheduleTimeToEatReminder(secondsToMeal)
+                                }
                             }
                         })
                     }

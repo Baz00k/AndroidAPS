@@ -40,12 +40,18 @@ sealed interface CalculatorGlucose {
         /** The same freshness rule as `AutosensDataStore.actualBg()`, which the loop itself uses. */
         val MAX_SENSOR_AGE_MS = T.mins(9).msecs()
 
+        /** Clock skew tolerated between sensor and phone. Anything further ahead has no trustworthy time. */
+        val MAX_SENSOR_AHEAD_MS = T.mins(1).msecs()
+
         fun resolve(manualMgdl: Double?, sensorMgdl: Double?, sensorTimestamp: Long?, now: Long): CalculatorGlucose = when {
-            manualMgdl != null                                                  -> Manual(manualMgdl)
-            sensorMgdl == null || sensorTimestamp == null || !(sensorMgdl > 0.0) -> None
-            sensorTimestamp > now - MAX_SENSOR_AGE_MS                           -> Sensor(sensorMgdl, sensorTimestamp)
-            else                                                                -> Stale(sensorMgdl, sensorTimestamp)
+            manualMgdl != null                                                   -> if (usable(manualMgdl)) Manual(manualMgdl) else None
+            sensorMgdl == null || sensorTimestamp == null || !usable(sensorMgdl) -> None
+            sensorTimestamp > now + MAX_SENSOR_AHEAD_MS                          -> Stale(sensorMgdl, sensorTimestamp)
+            sensorTimestamp > now - MAX_SENSOR_AGE_MS                            -> Sensor(sensorMgdl, sensorTimestamp)
+            else                                                                 -> Stale(sensorMgdl, sensorTimestamp)
         }
+
+        private fun usable(mgdl: Double) = mgdl.isFinite() && mgdl > 0.0
     }
 }
 

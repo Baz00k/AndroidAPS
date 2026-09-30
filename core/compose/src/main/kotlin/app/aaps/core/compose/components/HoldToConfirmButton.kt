@@ -42,6 +42,9 @@ import app.aaps.core.compose.theme.AapsTheme
  * fills an accent overlay left→right over [holdMillis]; completing the hold fires [onConfirm].
  * Releasing early cancels (the fill animates back). This is a UI affordance ONLY — the caller must
  * still run the same constraint + confirmation + delivery path.
+ *
+ * A hold confirms what the button showed when it began. Whenever [confirms] changes (the amount on
+ * the label, say), a hold in progress is dropped and must start again.
  */
 @Composable
 fun HoldToConfirmButton(
@@ -49,10 +52,11 @@ fun HoldToConfirmButton(
     onConfirm: () -> Unit,
     modifier: Modifier = Modifier,
     holdMillis: Int = 1500,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    confirms: Any? = label
 ) {
     val colors = AapsTheme.colors
-    var holding by remember { mutableStateOf(false) }
+    var holding by remember(confirms) { mutableStateOf(false) }
     val currentOnConfirm by rememberUpdatedState(onConfirm)
     // progress animates to 1f while holding, back to 0f on release
     val progress by animateFloatAsState(
@@ -90,7 +94,8 @@ fun HoldToConfirmButton(
                 }
             }
             .then(
-                if (enabled) Modifier.pointerInput(Unit) {
+                // Keyed on [confirms]: a change cancels the gesture under the finger, not just the fill.
+                if (enabled) Modifier.pointerInput(confirms) {
                     detectTapGestures(
                         onPress = {
                             holding = true

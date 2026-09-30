@@ -198,7 +198,8 @@ class WizardDialog : DaggerDialogFragment() {
             superBolusInsulin = signed(w.insulinFromSuperBolus),
             scaledPercent = preferences.get(IntKey.OverviewBolusPercentage).takeIf { it != 100 },
             outcome = outcome(w, carbs),
-            advisorAvailable = w.bolusAdvisorApplies(),
+            // Only a dose can be taken now and eaten later.
+            advisorAvailable = w.bolusAdvisorApplies() && w.insulinAfterConstraints > 0.0,
             siteWarning = freshSiteWarning(w.insulinAfterConstraints),
             superBolusAvailable = false
         )
@@ -223,33 +224,55 @@ class WizardDialog : DaggerDialogFragment() {
         )
     }
 
-    /**
-     * Commit what the user reviewed. The calculation is rebuilt from current data first; if the dose or
-     * carbs moved (a new reading, an SMB, a target change) or the advisor no longer applies, nothing is
-     * sent and false is returned so the screen can show the new values for a fresh confirmation.
-     */
-    private fun commit(inputs: WizardInputs, reviewed: CalculatorOutcome): Boolean {
-        val activity = activity ?: return false
-        val profile = profileFunction.getProfile() ?: return false
+    /** What confirming will actually do, rebuilt from current data. Compared, never trusted from the screen. */
+    private class Plan(val wizard: BolusWizard, val outcome: CalculatorOutcome, val advisor: Boolean?)
+
+    private fun plan(inputs: WizardInputs): Plan? {
+        val profile = profileFunction.getProfile() ?: return null
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
         val w = buildWizard(inputs, profile, glucose(inputs), carbs)
-        val now = outcome(w, carbs)
-        val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
-        if (DoseDrift.changed(reviewed, now, bolusStep)) return false
-        if (inputs.eatLater && !w.bolusAdvisorApplies()) return false
-        // The advisor question has been answered on screen; never ask it again after the hold.
-        val advisor = if (w.bolusAdvisorApplies()) inputs.eatLater && now.commit == CalculatorOutcome.Commit.DELIVER else null
-        when (now.commit) {
-            // skipConfirmation: the Review step and its hold ARE the confirmation. Constraints, audit and the
-            // command queue still run. The pump is pre-flighted before the dose is queued.
-            CalculatorOutcome.Commit.DELIVER   ->
-                pumpReadyGate.runWhenPumpCanDeliver(activity) { w.confirmAndExecute(activity, skipConfirmation = true, advisor = advisor) }
-            // Carbs alone need no pump command, so no pump pre-flight either.
-            CalculatorOutcome.Commit.LOG_CARBS -> w.confirmAndExecute(activity, skipConfirmation = true, advisor = advisor)
-            CalculatorOutcome.Commit.NONE      -> return false
+        val outcome = outcome(w, carbs)
+        // "Eat later" is only a real choice for a dose the advisor applies to.
+        val advisorApplies = w.bolusAdvisorApplies() && outcome.commit == CalculatorOutcome.Commit.DELIVER
+        return Plan(w, outcome, if (advisorApplies) inputs.eatLater else null)
+    }
+
+    /** The reviewed plan still holds: same dose and carbs, and the same answer to the advisor. */
+    private fun Plan.matches(inputs: WizardInputs, reviewed: CalculatorOutcome): Boolean =
+        !DoseDrift.changed(reviewed, outcome, activePlugin.activePump.pumpDescription.bolusStep) &&
+            outcome.commit != CalculatorOutcome.Commit.NONE &&
+            (!inputs.eatLater || advisor == true)
+
+    /** Set on the first commit; a second confirmation (a repeated tap or accessibility action) is ignored. */
+    private var committing = false
+
+    /**
+     * Commit what the user reviewed, once. The plan is rebuilt from current data and compared with
+     * [reviewed] at the moment it would execute — after the pump pre-flight, which can wait on the
+     * user. If anything moved, nothing is sent and [onChanged] asks the screen for a fresh review.
+     */
+    private fun commit(inputs: WizardInputs, reviewed: CalculatorOutcome, onChanged: () -> Unit) {
+        if (committing) return
+        val activity = activity ?: return
+        committing = true
+        fun rejected() {
+            committing = false
+            onChanged()
         }
-        dismiss()
-        return true
+
+        fun execute() {
+            val plan = plan(inputs)?.takeIf { it.matches(inputs, reviewed) } ?: return rejected()
+            // skipConfirmation: Review and its hold ARE the confirmation. Constraints, audit and the
+            // command queue still run.
+            plan.wizard.confirmAndExecute(activity, skipConfirmation = true, advisor = plan.advisor)
+            dismiss()
+        }
+        when (plan(inputs)?.takeIf { it.matches(inputs, reviewed) }?.outcome?.commit) {
+            CalculatorOutcome.Commit.DELIVER   -> pumpReadyGate.runWhenPumpCanDeliver(activity, onCancel = { committing = false }) { execute() }
+            // Carbs alone need no pump command, so no pump pre-flight either.
+            CalculatorOutcome.Commit.LOG_CARBS -> execute()
+            else                               -> rejected()
+        }
     }
 
     private fun buildWizard(inputs: WizardInputs, profile: app.aaps.core.interfaces.profile.Profile, glucose: CalculatorGlucose, carbs: Int): BolusWizard =

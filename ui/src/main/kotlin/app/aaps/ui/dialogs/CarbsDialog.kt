@@ -140,10 +140,10 @@ class CarbsDialog : DaggerBottomSheetFragment() {
         val cob = iobCobCalculator.ads.getLastAutosensData("carbsDialog", aapsLogger, dateUtil)?.cob ?: 0.0
         val actions: LinkedList<String?> = LinkedList()
 
-        val eventTimeOriginal = dateUtil.nowWithoutMilliseconds()
-        val timeOffset = inputs.timeOffsetMin
-        val eventTime = eventTimeOriginal + timeOffset.toLong() * 1000 * 60
-        val eventTimeChanged = timeOffset != 0
+        val now = dateUtil.nowWithoutMilliseconds()
+        val eventTime = inputs.eatenAt ?: now
+        val timeOffset = ((eventTime - now) / 60_000L).toInt()
+        val eventTimeChanged = inputs.eatenAt != null
         val duration = inputs.durationHours
         val notes = inputs.notes
         val reminders = CarbReminders.plan(
@@ -154,8 +154,8 @@ class CarbsDialog : DaggerBottomSheetFragment() {
             bolusReminderOffered = sheetState.showBolusReminder
         )
 
-        val target = inputs.target
-        if (target != TargetPreset.NONE) actions.add(targetPresets.confirmationLine(context, target))
+        val target = targetPresets.resolve(inputs.target)
+        if (target != null) actions.add(targetPresets.confirmationLine(context, target))
 
         if (reminders.eatReminderSeconds != null)
             actions.add(rh.gs(app.aaps.core.ui.R.string.alarminxmin, timeOffset).formatColor(context, rh, app.aaps.core.ui.R.attr.infoColor))
@@ -178,10 +178,10 @@ class CarbsDialog : DaggerBottomSheetFragment() {
         if (eventTimeChanged)
             actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
 
-        if (carbsAfterConstraints != 0 || target != TargetPreset.NONE) {
+        if (carbsAfterConstraints != 0 || target != null) {
             activity?.let { activity ->
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.carbs), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
-                    targetPresets.start(target, Sources.CarbDialog, note = null)?.let { disposable += it }
+                    target?.let { disposable += targetPresets.start(it, Sources.CarbDialog, note = null) }
                     if (carbsAfterConstraints != 0) {
                         val detailedBolusInfo = DetailedBolusInfo().also {
                             it.eventType = TE.Type.CORRECTION_BOLUS

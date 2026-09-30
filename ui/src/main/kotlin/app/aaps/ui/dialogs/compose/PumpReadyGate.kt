@@ -138,9 +138,10 @@ class PumpReadyGate @Inject constructor(
     private val profileFunction: ProfileFunction
 ) {
 
-    fun runWhenPumpCanDeliver(activity: FragmentActivity, proceed: Runnable) {
+    /** Runs [proceed] once nothing blocks delivery; [onCancel] when the user walks away instead. */
+    fun runWhenPumpCanDeliver(activity: FragmentActivity, onCancel: () -> Unit = {}, proceed: Runnable) {
         val blocker = detect()
-        if (blocker == null) proceed.run() else showSheet(activity, blocker, proceed)
+        if (blocker == null) proceed.run() else showSheet(activity, blocker, proceed, onCancel)
     }
 
     private fun detect(): DeliveryBlocker? {
@@ -157,13 +158,18 @@ class PumpReadyGate @Inject constructor(
     }
 
     /** Same call the Loop sheet's Resume makes — mode change, audit log and all. */
-    /** True only when the loop really is running again; a dose must not follow a resume that did not happen. */
+    /**
+     * Resume, then look again: the dose follows only if the mode change happened and nothing else now
+     * blocks delivery. Restoring basal on the pump is queued ahead of the bolus; its own failure alarms
+     * and cannot add insulin, so the bolus does not wait for it.
+     */
     private fun resumeLoop(): Boolean {
         val profile = profileFunction.getProfile() ?: return false
-        return loop.handleRunningModeChange(newRM = RM.Mode.RESUME, action = Action.RESUME, source = Sources.LoopDialog, profile = profile)
+        return loop.handleRunningModeChange(newRM = RM.Mode.RESUME, action = Action.RESUME, source = Sources.LoopDialog, profile = profile) &&
+            detect() == null
     }
 
-    private fun showSheet(activity: FragmentActivity, blocker: DeliveryBlocker, proceed: Runnable) {
+    private fun showSheet(activity: FragmentActivity, blocker: DeliveryBlocker, proceed: Runnable, onCancel: () -> Unit) {
         val dialog = Dialog(activity)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -179,7 +185,7 @@ class PumpReadyGate @Inject constructor(
             if (closed) return
             closed = true
             dialog.dismiss()
-            if (runIt && !activity.isFinishing && !activity.isDestroyed && before()) proceed.run()
+            if (runIt && !activity.isFinishing && !activity.isDestroyed && before()) proceed.run() else onCancel()
         }
 
         val view = ComposeView(activity).apply {

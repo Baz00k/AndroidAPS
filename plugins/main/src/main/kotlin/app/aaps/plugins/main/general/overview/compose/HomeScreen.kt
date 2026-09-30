@@ -649,10 +649,17 @@ private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.Ima
 private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    var closing by remember { mutableStateOf(false) }
+    // One close per sheet. The action runs only after the sheet is really gone; if the close is
+    // cancelled (the screen left), so is the action.
     val close: (() -> Unit) -> Unit = { after ->
-        scope.launch { sheetState.hide() }.invokeOnCompletion {
-            onClose()
-            after()
+        if (!closing) {
+            closing = true
+            scope.launch {
+                sheetState.hide()
+                onClose()
+                after()
+            }
         }
     }
     ModalBottomSheet(

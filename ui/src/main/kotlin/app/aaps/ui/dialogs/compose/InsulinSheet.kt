@@ -11,7 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -41,8 +42,8 @@ data class InsulinSheetState(
 data class InsulinInputs(
     val amount: Double,
     val intent: InsulinIntent,
-    /** When a logged dose was given, minutes from now (never positive). Ignored for delivery, which is always now. */
-    val offsetMin: Int,
+    /** When a logged dose was given, or null for now. Ignored for delivery, which is always now. */
+    val givenAt: Long?,
     val target: TargetPreset,
     val notes: String
 )
@@ -55,11 +56,13 @@ data class InsulinInputs(
 @Composable
 fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
     val colors = AapsTheme.colors
-    var amount by remember { mutableStateOf(0.0) }
-    var intent by remember { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
-    var offset by remember { mutableIntStateOf(0) }
-    var target by remember { mutableStateOf(TargetPreset.NONE) }
-    var notes by remember { mutableStateOf("") }
+    var amount by rememberSaveable { mutableStateOf(0.0) }
+    var intent by rememberSaveable { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
+    // The picked time is a moment, not a distance from whenever the form is finally submitted.
+    var offset by rememberSaveable { mutableIntStateOf(0) }
+    var pickedAt by rememberSaveable { mutableLongStateOf(0L) }
+    var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
+    var notes by rememberSaveable { mutableStateOf("") }
 
     fun fmt(v: Double) = String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
 
@@ -89,7 +92,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             }
             if (intent == InsulinIntent.LOG)
                 EntryCard("When") {
-                    TimeStepper(offset, { offset = it }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0))
+                    TimeStepper(offset, { offset = it; pickedAt = System.currentTimeMillis() }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0))
                 }
             TargetPresetCard(state.targets, target) { target = it }
             if (state.showNotes) NotesField(notes, { notes = it })
@@ -101,7 +104,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                     else                        -> verb
                 },
                 enabled = amount > 0.0 || target != TargetPreset.NONE,
-                onClick = { onSubmit(InsulinInputs(amount, intent, offset, target, if (state.showNotes) notes else "")) }
+                onClick = { onSubmit(InsulinInputs(amount, intent, if (offset == 0) null else pickedAt + offset * 60_000L, target, if (state.showNotes) notes else "")) }
             )
         }
     }

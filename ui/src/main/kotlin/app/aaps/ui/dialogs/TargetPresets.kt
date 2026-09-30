@@ -56,8 +56,11 @@ class TargetPresets @Inject constructor(
         TargetPreset.NONE        -> TT.Reason.CUSTOM
     }
 
+    /** A preset with its values fixed: what the confirmation shows is exactly what is stored. */
+    data class Resolved(val reason: TT.Reason, val targetMgdl: Double, val durationMin: Int, val summary: String)
+
     /** "90 mg/dL · 45 min" */
-    fun summary(preset: TargetPreset): String {
+    private fun summary(preset: TargetPreset): String {
         val units = profileUtil.units
         val value = target(preset).let { if (units == GlucoseUnit.MMOL) decimalFormatter.to1Decimal(it) else decimalFormatter.to0Decimal(it) }
         val unit = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
@@ -67,32 +70,31 @@ class TargetPresets @Inject constructor(
     fun options(): List<TargetPresetOption> =
         listOf(TargetPreset.EATING_SOON, TargetPreset.ACTIVITY, TargetPreset.HYPO).map { TargetPresetOption(it, summary(it)) }
 
-    /** The line this preset adds to a confirmation. */
-    fun confirmationLine(context: Context?, preset: TargetPreset): String =
-        rh.gs(R.string.temp_target_short) + ": " + summary(preset).formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation)
+    fun resolve(preset: TargetPreset): Resolved? =
+        if (preset == TargetPreset.NONE) null
+        else Resolved(reason(preset), profileUtil.convertToMgdl(target(preset), profileUtil.units), durationMin(preset), summary(preset))
 
-    /** Start [preset] now, replacing any running target. */
-    fun start(preset: TargetPreset, source: Sources, note: String?): Disposable? {
-        if (preset == TargetPreset.NONE) return null
-        val target = target(preset)
-        val duration = durationMin(preset)
-        val units = profileUtil.units
-        return persistenceLayer.insertAndCancelCurrentTemporaryTarget(
+    /** The line this target adds to a confirmation. */
+    fun confirmationLine(context: Context?, target: Resolved): String =
+        rh.gs(R.string.temp_target_short) + ": " + target.summary.formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation)
+
+    /** Start [target] now, replacing any running target. */
+    fun start(target: Resolved, source: Sources, note: String?): Disposable =
+        persistenceLayer.insertAndCancelCurrentTemporaryTarget(
             temporaryTarget = TT(
                 timestamp = dateUtil.now(),
-                duration = TimeUnit.MINUTES.toMillis(duration.toLong()),
-                reason = reason(preset),
-                lowTarget = profileUtil.convertToMgdl(target, units),
-                highTarget = profileUtil.convertToMgdl(target, units)
+                duration = TimeUnit.MINUTES.toMillis(target.durationMin.toLong()),
+                reason = target.reason,
+                lowTarget = target.targetMgdl,
+                highTarget = target.targetMgdl
             ),
             action = Action.TT,
             source = source,
             note = note,
             listValues = listOf(
-                ValueWithUnit.TETTReason(reason(preset)),
-                ValueWithUnit.fromGlucoseUnit(target, units),
-                ValueWithUnit.Minute(duration)
+                ValueWithUnit.TETTReason(target.reason),
+                ValueWithUnit.Mgdl(target.targetMgdl),
+                ValueWithUnit.Minute(target.durationMin)
             )
         ).subscribe()
-    }
 }

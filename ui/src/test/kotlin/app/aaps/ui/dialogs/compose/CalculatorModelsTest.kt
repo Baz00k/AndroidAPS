@@ -29,10 +29,25 @@ class CalculatorModelsTest {
     }
 
     @Test
+    fun `a reading stamped in the future is never trusted to correct`() {
+        assertThat(CalculatorGlucose.resolve(null, 150.0, now + minute, now).usedMgdl).isEqualTo(150.0)
+        val ahead = CalculatorGlucose.resolve(null, 150.0, now + 2 * minute, now)
+        assertThat(ahead).isInstanceOf(CalculatorGlucose.Stale::class.java)
+        assertThat(ahead.usedMgdl).isNull()
+    }
+
+    @Test
+    fun `a nonsensical manual value is not used`() {
+        assertThat(CalculatorGlucose.resolve(Double.POSITIVE_INFINITY, 150.0, now, now)).isEqualTo(CalculatorGlucose.None)
+        assertThat(CalculatorGlucose.resolve(0.0, 150.0, now, now)).isEqualTo(CalculatorGlucose.None)
+    }
+
+    @Test
     fun `no reading, or a nonsensical one, is none`() {
         assertThat(CalculatorGlucose.resolve(null, null, null, now)).isEqualTo(CalculatorGlucose.None)
         assertThat(CalculatorGlucose.resolve(null, 0.0, now, now)).isEqualTo(CalculatorGlucose.None)
         assertThat(CalculatorGlucose.resolve(null, Double.NaN, now, now)).isEqualTo(CalculatorGlucose.None)
+        assertThat(CalculatorGlucose.resolve(null, Double.POSITIVE_INFINITY, now, now)).isEqualTo(CalculatorGlucose.None)
     }
 
     @Test

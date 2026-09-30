@@ -1,6 +1,8 @@
 package app.aaps.ui.dialogs.compose
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 
 /** User-editable Calculator inputs. Carbs + the factor toggles shown as "included in this dose". */
 @Immutable
@@ -41,7 +43,23 @@ data class WizardInputs(
     val eatLater: Boolean = false,
     /** Alarm when the pre-bolused meal is due; only meaningful while [carbTime] is in the future. */
     val remindToEat: Boolean = false
-)
+) {
+
+    companion object {
+
+        val Saver: Saver<WizardInputs, Any> = listSaver(
+            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat) },
+            restore = {
+                WizardInputs(
+                    carbs = it[0] as Int, carbTime = it[1] as Int, carbDurationHours = it[2] as Int,
+                    manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
+                    useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
+                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean
+                )
+            }
+        )
+    }
+}
 
 /** How the Calculator's glucose is shown: where it came from and whether it counts. */
 enum class GlucoseSource { SENSOR, STALE, MANUAL, NONE }

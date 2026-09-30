@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,19 +76,20 @@ private const val REFRESH_MS = 10_000L
 /**
  * The Calculator: inputs, then Review. Stateless with respect to the dose math: [compute] runs the
  * existing BolusWizard for the current [WizardInputs]; [onCommit] rebuilds it from current data and
- * commits only if it still matches what was reviewed, returning false otherwise. The result is
+ * commits only if it still matches what was reviewed, calling back when it did not. The result is
  * recomputed every [REFRESH_MS], so the numbers on screen follow new readings and decaying insulin.
  */
 @Composable
 fun WizardScreen(
     compute: (WizardInputs) -> WizardResult,
-    onCommit: (WizardInputs, CalculatorOutcome) -> Boolean,
+    onCommit: (inputs: WizardInputs, reviewed: CalculatorOutcome, onChanged: () -> Unit) -> Unit,
     onCancel: () -> Unit,
     initialInputs: WizardInputs = WizardInputs(),
     carbControls: WizardCarbControls
 ) {
     val colors = AapsTheme.colors
-    var inputs by remember { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
+    // Inputs survive recreation; the review step does not, so a restored screen always needs a fresh review.
+    var inputs by rememberSaveable(stateSaver = WizardInputs.Saver) { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
     var reviewing by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
@@ -139,12 +141,8 @@ fun WizardScreen(
             )
             else ReviewStep(
                 inputs, result, colors,
-                onCommit = { reviewed ->
-                    val committed = onCommit(inputs, reviewed)
-                    // Not sent: data moved under the review. Re-read now so the new numbers are what is shown.
-                    if (!committed) refresh++
-                    committed
-                },
+                // Not sent: data moved under the review. Re-read now so the new numbers are what is shown.
+                onCommit = { reviewed, onChanged -> onCommit(inputs, reviewed) { refresh++; onChanged() } },
                 onCancel = { reviewing = false }
             )
         }
@@ -377,16 +375,14 @@ private fun ReviewStep(
     inputs: WizardInputs,
     result: WizardResult,
     colors: AapsColors,
-    onCommit: (CalculatorOutcome) -> Boolean,
+    onCommit: (reviewed: CalculatorOutcome, onChanged: () -> Unit) -> Unit,
     onCancel: () -> Unit
 ) {
     val haptics = LocalHapticFeedback.current
     val baseline = remember { result }
     val outcome = result.outcome
     val changed = baseline.outcome.insulin != outcome.insulin || baseline.outcome.carbs != outcome.carbs
-    fun commit() {
-        if (!onCommit(outcome)) haptics.performHapticFeedback(HapticFeedbackType.Reject)
-    }
+    fun commit() = onCommit(outcome) { haptics.performHapticFeedback(HapticFeedbackType.Reject) }
 
     Column(
         Modifier
@@ -460,7 +456,7 @@ private fun ReviewStep(
             Text(result.siteWarning, style = AapsTheme.type.caption, color = colors.high, textAlign = TextAlign.Center)
 
         when (outcome.commit) {
-            CalculatorOutcome.Commit.DELIVER   -> HoldToConfirmButton(label = "Hold to deliver ${units(outcome.insulin)}", onConfirm = ::commit)
+            CalculatorOutcome.Commit.DELIVER   -> HoldToConfirmButton(label = "Hold to deliver ${units(outcome.insulin)}", onConfirm = ::commit, confirms = outcome to inputs.eatLater)
             CalculatorOutcome.Commit.LOG_CARBS -> PrimaryButton(label = "Log ${outcome.carbs} g", onClick = ::commit, modifier = Modifier.fillMaxWidth())
             CalculatorOutcome.Commit.NONE      -> PrimaryButton(label = "Nothing to confirm", onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth())
         }
