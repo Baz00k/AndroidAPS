@@ -1,9 +1,6 @@
 package app.aaps.plugins.aps.compose
 
-import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,15 +18,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.plugins.aps.R
 import java.util.Locale
 
 /**
- * Redesigned Algorithm screen (handoff Section 6 — Algorithm): algorithm chips, a model-response
+ * Redesigned Algorithm screen (handoff Section 6 — Algorithm): active algorithm details, a model-response
  * preview (the active APS's eventual/predicted BG toward target), first-class labeled toggles for the
  * active algorithm's real parameters, and a row into the full preferences. Bound to the active APS +
  * preferences — no dosing logic changes.
@@ -46,11 +45,10 @@ fun AlgorithmScreen(
     ) {
         Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
-        if (state.chips.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.chips.forEach { c -> Chip(label = c.label, onClick = {}, selected = c.active, enabled = false) }
-            }
-        }
+        Text(
+            stringResource(R.string.algorithm_config_builder_hint),
+            style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(bottom = AapsSpacing.sectionGap)
+        )
 
         if (state.predictedMmol != null) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {

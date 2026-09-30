@@ -3,9 +3,7 @@ package app.aaps.plugins.insulin.compose
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,19 +17,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.plugins.insulin.R
 import java.util.Locale
 import kotlin.math.exp
 
-/**
- * Redesigned Insulin curve screen (handoff Section 6 — Insulin): type chips, an activity-curve preview
- * (computed from the active insulin's DIA + peak via the oref exponential model), Duration/Peak tiles,
- * and helper text. Read-only presentation over the active [app.aaps.core.interfaces.insulin.Insulin].
- */
+/** Read-only details and activity-curve preview for the insulin selected in Config Builder. */
 @Composable
 fun InsulinScreen(state: InsulinUiState) {
     val colors = AapsTheme.colors
@@ -40,14 +35,15 @@ fun InsulinScreen(state: InsulinUiState) {
     ) {
         Text("Insulin", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
-        if (state.types.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = AapsSpacing.sectionGap),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                state.types.forEach { c -> Chip(label = c.label, onClick = {}, selected = c.active, enabled = false) }
-            }
+        Text(stringResource(R.string.insulin_active_type), style = AapsTheme.type.label, color = colors.textSecondary)
+        Text(state.activeName, style = AapsTheme.type.cardValue, color = colors.textPrimary, modifier = Modifier.padding(top = 6.dp))
+        if (state.comment.isNotBlank()) {
+            Text(state.comment, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(top = 6.dp))
         }
+        Text(
+            stringResource(R.string.insulin_config_builder_hint),
+            style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(top = 6.dp, bottom = AapsSpacing.sectionGap)
+        )
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
@@ -58,18 +54,17 @@ fun InsulinScreen(state: InsulinUiState) {
                     Text("peak ${state.peakMinutes}m", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f))
                     Text(fmtHours(state.diaHours), style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
+                Text(
+                    stringResource(R.string.insulin_activity_description),
+                    style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(top = 12.dp)
+                )
             }
         }
 
-        Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
             Tile("DURATION (DIA)", fmtHours(state.diaHours), Modifier.weight(1f))
             Tile("PEAK TIME", "${state.peakMinutes} min", Modifier.weight(1f))
         }
-
-        Text(
-            "This curve is how AAPS models insulin working in your body over time. Changing type reshapes it — and with it every dose calculation. Change the active insulin in Config Builder.",
-            style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp)
-        )
     }
 }
 
