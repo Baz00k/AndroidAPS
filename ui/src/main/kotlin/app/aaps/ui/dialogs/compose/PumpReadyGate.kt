@@ -38,8 +38,30 @@ internal sealed interface DeliveryBlocker {
     /** The pump reports it is not delivering. Only the user, at the pump, can clear this. */
     data class PumpStopped(val reservoirEmpty: Boolean, val detail: String, val wording: PumpWording) : DeliveryBlocker
 
-    /** AAPS is suspended or disconnected. Reversible right here. */
+    /**
+     * The user has declared the pump physically disconnected. Delivering now would be a dose into a
+     * pump that is not on the body, so there is no "anyway"; only reconnecting, from right here, clears it.
+     */
+    data object PumpDisconnected : DeliveryBlocker
+
+    /** AAPS is suspended (not disconnected). Reversible right here. */
     data class LoopSuspended(val mode: RM.Mode) : DeliveryBlocker
+}
+
+/**
+ * Pure classification behind [PumpReadyGate]. The pump's own suspension wins over any running mode: it is
+ * the one blocker this app cannot clear. [pumpStopped] is only evaluated then, so the pump is not
+ * polled for status text it will not show.
+ */
+internal fun classifyBlocker(
+    pumpSuspended: Boolean,
+    mode: RM.Mode,
+    pumpStopped: () -> DeliveryBlocker.PumpStopped
+): DeliveryBlocker? = when {
+    pumpSuspended                     -> pumpStopped()
+    mode == RM.Mode.DISCONNECTED_PUMP -> DeliveryBlocker.PumpDisconnected
+    mode.isSuspended()                -> DeliveryBlocker.LoopSuspended(mode)
+    else                              -> null
 }
 
 /**
@@ -102,9 +124,10 @@ internal data class PumpWording(
  *    [PumpWording] for how each pump is addressed. Check again
  *    reconnects and re-reads status, which is also what clears a merely stale reading — and when the
  *    pump comes back healthy the dose goes ahead without the user re-entering it.
- *  - **Loop suspended / pump disconnected in the app** — that IS reversible from here, so offer to
- *    resume. Not a hard block: suspending the loop is no reason to refuse a meal bolus, so
- *    "Bolus anyway" stays available.
+ *  - **Pump disconnected in the app** — the user said the pump is off the body. Reversible from here,
+ *    so offer "Reconnect and bolus"; there is deliberately no "Bolus anyway".
+ *  - **Loop suspended** — also reversible from here, so offer to resume. Not a hard block: suspending
+ *    the loop is no reason to refuse a meal bolus, so "Bolus anyway" stays available.
  *  - **Anything else** — [runWhenPumpCanDeliver] just runs the action, with no extra tap.
  */
 class PumpReadyGate @Inject constructor(
@@ -123,15 +146,13 @@ class PumpReadyGate @Inject constructor(
         val pump = activePlugin.activePump
         // isSuspended() is the pump's own answer, so this covers a user Stop, an occlusion stop and the
         // empty-cartridge auto-stop alike. The reservoir is read separately only to word the message.
-        if (pump.isSuspended())
-            return DeliveryBlocker.PumpStopped(
+        return classifyBlocker(pump.isSuspended(), loop.runningMode) {
+            DeliveryBlocker.PumpStopped(
                 reservoirEmpty = pump.reservoirLevel <= 0.0,
                 detail = pump.pumpSpecificShortStatus(true),
                 wording = PumpWording.of(pump.pumpDescription)
             )
-        val mode = loop.runningMode
-        if (mode.isSuspended()) return DeliveryBlocker.LoopSuspended(mode)
-        return null
+        }
     }
 
     /** Same call the Loop sheet's Resume makes — mode change, audit log and all. */
@@ -231,6 +252,16 @@ private fun PumpReadyContent(
             )
         )
 
+        DeliveryBlocker.PumpDisconnected -> AlertContent(
+            title = "Pump is disconnected",
+            message = "You marked the pump as disconnected, so it is not on your body. Reconnect to deliver this bolus.",
+            tint = AapsTheme.colors.low,
+            actions = listOf(
+                AlertAction("Reconnect and bolus", primary = true, onClick = onResumeLoop),
+                AlertAction("Cancel", onClick = onDismiss)
+            )
+        )
+
         is DeliveryBlocker.LoopSuspended -> AlertContent(
             title = "Loop is suspended",
             message = "AAPS is ${suspensionLabel(b.mode)}, so it is not adjusting basal. The pump can still take this bolus.",
@@ -245,7 +276,6 @@ private fun PumpReadyContent(
 }
 
 private fun suspensionLabel(mode: RM.Mode): String = when (mode) {
-    RM.Mode.DISCONNECTED_PUMP -> "disconnected from the pump"
     RM.Mode.SUSPENDED_BY_USER -> "suspended by you"
     RM.Mode.SUSPENDED_BY_PUMP -> "suspended by the pump"
     RM.Mode.SUSPENDED_BY_DST  -> "suspended for a clock change"
