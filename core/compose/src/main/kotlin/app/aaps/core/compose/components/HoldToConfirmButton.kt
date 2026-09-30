@@ -28,6 +28,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
 
@@ -68,6 +74,21 @@ fun HoldToConfirmButton(
             .height(60.dp)
             .clip(AapsTheme.shape.button)
             .background(container)
+            // Touch users hold the button; TalkBack / Switch Access get the same deliberate gesture as a
+            // long-click action. There is intentionally no semantic onClick: a plain double-tap must not
+            // deliver insulin.
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                if (enabled) {
+                    stateDescription = "Press and hold"
+                    onLongClick(label = label) {
+                        currentOnConfirm()
+                        true
+                    }
+                } else {
+                    disabled()
+                }
+            }
             .then(
                 if (enabled) Modifier.pointerInput(Unit) {
                     detectTapGestures(
