@@ -224,7 +224,7 @@ private fun OutcomeSummary(result: WizardResult, colors: AapsColors, modifier: M
                 Tag("Max bolus", colors.high)
             }
             outcome.commit == CalculatorOutcome.Commit.LOG_CARBS               -> Text("${outcome.carbs} g", style = AapsTheme.type.caption, color = colors.textSecondary)
-            outcome.carbEquivalent != null                                     -> Text("Carb equivalent ${outcome.carbEquivalent} g", style = AapsTheme.type.caption, color = colors.textSecondary)
+            outcome.carbEquivalent != null                                     -> Text("Carb equivalent ${outcome.carbEquivalent}\u00A0g", style = AapsTheme.type.caption, color = colors.textSecondary)
         }
     }
 }

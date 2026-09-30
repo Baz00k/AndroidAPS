@@ -57,7 +57,7 @@ fun NumberField(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (label.isNotBlank()) Text(label.uppercase(Locale.getDefault()), style = AapsTheme.type.label, color = colors.textSecondary)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StepButton(minus = true) { onValue((value - step).coerceIn(min, max)) }
+            StepButton(minus = true, label) { onValue((value - step).coerceIn(min, max)) }
             Box(
                 Modifier
                     .weight(1f)
@@ -75,6 +75,8 @@ fun NumberField(
                             onValue(parse(it).coerceIn(min, max))
                         },
                         singleLine = true,
+                        // Never wider than what is left: the unit must stay visible at large font scales.
+                        modifier = Modifier.weight(1f, fill = false),
                         textStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
                         keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0 || min < 0) KeyboardType.Number else KeyboardType.Number)
@@ -82,13 +84,13 @@ fun NumberField(
                     if (unit.isNotBlank()) Text(unit, style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
                 }
             }
-            StepButton(minus = false) { onValue((value + step).coerceIn(min, max)) }
+            StepButton(minus = false, label) { onValue((value + step).coerceIn(min, max)) }
         }
     }
 }
 
 @Composable
-private fun StepButton(minus: Boolean, onClick: () -> Unit) {
+private fun StepButton(minus: Boolean, label: String, onClick: () -> Unit) {
     val colors = AapsTheme.colors
     Box(
         Modifier
@@ -100,7 +102,7 @@ private fun StepButton(minus: Boolean, onClick: () -> Unit) {
     ) {
         Icon(
             if (minus) AapsIcons.Remove else Icons.Rounded.Add,
-            contentDescription = if (minus) "decrease" else "increase",
+            contentDescription = (if (minus) "Decrease" else "Increase") + if (label.isNotBlank()) " ${label.lowercase(Locale.getDefault())}" else "",
             tint = if (minus) colors.textPrimary else colors.accentOnLight,
             modifier = Modifier.size(22.dp)
         )
