@@ -1,9 +1,11 @@
 package app.aaps.implementation.wizard
 
+import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.interfaces.aps.AutosensDataStore
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -13,6 +15,7 @@ import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.keys.BooleanKey
 import app.aaps.core.objects.wizard.BolusWizard
 import app.aaps.plugins.aps.openAPSSMB.OpenAPSSMBPlugin
 import app.aaps.shared.tests.TestBaseWithProfile
@@ -38,6 +41,7 @@ class BolusWizardTest : TestBaseWithProfile() {
     @Mock lateinit var processedDeviceStatusData: ProcessedDeviceStatusData
     @Mock lateinit var openAPSSMBPlugin: OpenAPSSMBPlugin
     @Mock lateinit var uel: UserEntryLogger
+    @Mock lateinit var automation: Automation
     @Mock lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Mock lateinit var uiInteraction: UiInteraction
     @Mock lateinit var persistenceLayer: PersistenceLayer
@@ -75,7 +79,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -99,7 +103,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -129,7 +133,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -153,7 +157,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -183,7 +187,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -207,7 +211,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -229,5 +233,36 @@ class BolusWizardTest : TestBaseWithProfile() {
             )
         val bolusForBgInRange = bw.calculatedTotalInsulin
         assertThat(bolusForLowBg).isLessThan(bolusForBgInRange)
+    }
+
+    private fun advisorWizard(bgMgdl: Double, carbs: Int, carbTime: Int): BolusWizard {
+        val profile = setupProfile(100.0, 110.0, 50.0, 10.0)
+        whenever(profile.units).thenReturn(GlucoseUnit.MGDL)
+        return BolusWizard(
+            aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
+            commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+            persistenceLayer, decimalFormatter, processedDeviceStatusData
+        ).doCalc(
+            profile, "", null, carbs, 0.0, bgMgdl, 0.0, 100,
+            useBg = true, useCob = false, includeBolusIOB = true, includeBasalIOB = true, useSuperBolus = false,
+            useTT = false, useTrend = false, useAlarm = false, carbTime = carbTime
+        )
+    }
+
+    @Test
+    fun `bolus advisor applies to a meal eaten now or later while glucose is above 180 mg per dl`() {
+        whenever(preferences.get(BooleanKey.OverviewUseBolusAdvisor)).thenReturn(true)
+        assertThat(advisorWizard(bgMgdl = 181.0, carbs = 30, carbTime = 0).bolusAdvisorApplies()).isTrue()
+        assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = 15).bolusAdvisorApplies()).isTrue()
+    }
+
+    @Test
+    fun `bolus advisor does not apply at 180, without carbs, for carbs already eaten, or when switched off`() {
+        whenever(preferences.get(BooleanKey.OverviewUseBolusAdvisor)).thenReturn(true)
+        assertThat(advisorWizard(bgMgdl = 180.0, carbs = 30, carbTime = 0).bolusAdvisorApplies()).isFalse()
+        assertThat(advisorWizard(bgMgdl = 250.0, carbs = 0, carbTime = 0).bolusAdvisorApplies()).isFalse()
+        assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = -10).bolusAdvisorApplies()).isFalse()
+        whenever(preferences.get(BooleanKey.OverviewUseBolusAdvisor)).thenReturn(false)
+        assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = 0).bolusAdvisorApplies()).isFalse()
     }
 }
