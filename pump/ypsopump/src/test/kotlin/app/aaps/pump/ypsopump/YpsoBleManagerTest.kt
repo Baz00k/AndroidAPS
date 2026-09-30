@@ -87,6 +87,26 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `display readings survive same session configuration but clear for a replacement generation`() {
+        val owner = manager.session!!
+        whenever(provisioning.owner).thenReturn(owner)
+        val connection = YpsoProvisioningService.ConnectionSession(
+            owner.activeRecord()!!.generation, null, "10000001", "12:34:56:78:9A:BC", key.copyOf(), false
+        )
+        whenever(provisioning.connectionSession()).thenReturn(connection)
+        manager.configureInstalledSession()
+        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
+        manager.disconnect()
+        assertFalse(pumpState.hasVerifiedStatus)
+        assertEquals(42.0, pumpState.displayStatus().snapshot?.reservoirUnits)
+        manager.configureInstalledSession()
+        assertEquals(42.0, pumpState.displayStatus().snapshot?.reservoirUnits)
+        whenever(provisioning.connectionSession()).thenReturn(connection.copy(generation = "replacement"))
+        manager.configureInstalledSession()
+        assertNull(pumpState.displayStatus().snapshot)
+    }
+
+    @Test
     fun `valid callback publishes only after decrypt CRC and decode`() {
         val fixture = connectedGatt()
         stubStatus()
@@ -97,11 +117,15 @@ class YpsoBleManagerTest {
         manager.readStatus(results::add)
 
         assertFalse(pumpState.hasVerifiedStatus)
+        assertEquals(42.0, pumpState.displayStatus().snapshot?.reservoirUnits)
+        assertFalse(pumpState.displayStatus().isCurrent)
         manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
 
         assertEquals(listOf(true), results)
         assertTrue(pumpState.hasVerifiedStatus)
         assertEquals(5.5, pumpState.reservoirUnits)
+        assertEquals(5.5, pumpState.displayStatus().snapshot?.reservoirUnits)
+        assertTrue(pumpState.displayStatus().isCurrent)
         assertEquals(null, pumpState.statusSnapshot?.batteryPercent)
         assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         assertEquals("1.3", pumpState.controlServiceVersion)

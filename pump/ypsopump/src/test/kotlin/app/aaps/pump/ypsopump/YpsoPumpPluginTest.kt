@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
+import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
@@ -76,9 +77,12 @@ class YpsoPumpPluginTest {
             it.getArgument<(Boolean) -> Unit>(0)(false)
             YpsoBleManager.StatusReadAttempt()
         }
-        val profile: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        val profile: Profile = mock {
+            on { getBasal() } doReturn 0.5
+            on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5))
+        }
         val results = listOf(
-            plugin.deliverTreatment(DetailedBolusInfo().apply { insulin = 1.25 }),
+            plugin.deliverTreatment(DetailedBolusInfo().apply { insulin = 1.2 }),
             plugin.setNewBasalProfile(profile),
             plugin.setTempBasalAbsolute(1.2, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
             plugin.setTempBasalPercent(150, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
@@ -88,7 +92,9 @@ class YpsoPumpPluginTest {
         assertEquals(0.0, plugin.baseBasalRate)
         assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isTempBasalCapable)
         verifyNoInteractions(sync)
-        if (YpsoPumpConst.READ_ONLY_MODE) verifyNoInteractions(manager)
+        if (!YpsoPumpConst.READ_ONLY_MODE) verify(manager, atLeastOnce()).readStatus(any())
+        verify(manager, never()).startBolus(any(), any(), any(), any(), any())
+        verify(manager, never()).writeTbr(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -131,6 +137,37 @@ class YpsoPumpPluginTest {
         // A verified match confirms the profile, but this driver never writes a schedule.
         assertFalse(plugin.setNewBasalProfile(matching).enacted)
         assertTrue(plugin.setNewBasalProfile(matching).success)
+    }
+
+    @Test
+    fun `overview and pump tab agree while connected before first reading`() {
+        state.connectionState = YpsoBleManager.ConnectionState.CONNECTED
+        state.claimedSerialNumber = "10000001"
+        state.serialNumber = "10000001"
+        state.availability = PumpSession.Availability(emptySet())
+        whenever(rh.gs(R.string.ypsopump_awaiting_readings)).thenReturn("Connected · awaiting readings")
+
+        val display = buildPumpStatusState(state, commandQueue, mock(), rh)
+        assertEquals("Connected · awaiting readings", display.connectionSummary)
+        assertEquals(display.connectionSummary, plugin.pumpSpecificShortStatus(false))
+        assertEquals(display.connectionSummary, plugin.pumpSpecificShortStatus(true))
+        assertNull(display.connectionAction)
+        assertFalse(display.connectionHealthy)
+    }
+
+    @Test
+    fun `last known levels outlive the fresh window but automation levels do not`() {
+        var elapsed = 0L
+        state.elapsedRealtime = { elapsed }
+        state.publishStatus(0.0, 12, false, 100, 2000L)
+        assertEquals(Pump.LastKnownLevels(0.0, 12), plugin.lastKnownLevels)
+        elapsed = YpsoPumpState.STATUS_MAX_AGE_MS
+        assertTrue(plugin.reservoirLevel.isNaN())
+        assertNull(plugin.batteryLevel)
+        assertEquals(Pump.LastKnownLevels(0.0, 12), plugin.lastKnownLevels)
+        elapsed = YpsoPumpState.DISPLAY_MAX_AGE_MS
+        assertTrue(plugin.lastKnownLevels.reservoir.isNaN())
+        assertNull(plugin.lastKnownLevels.battery)
     }
 
     @Test

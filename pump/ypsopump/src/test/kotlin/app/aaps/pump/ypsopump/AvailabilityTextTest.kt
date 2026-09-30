@@ -25,6 +25,33 @@ import org.mockito.kotlin.whenever
 
 class AvailabilityTextTest {
 
+    @Test
+    fun `reconnect after status expiry displays last readings instead of no readings yet`() {
+        var elapsed = 1_000L
+        val state = YpsoPumpState().apply {
+            elapsedRealtime = { elapsed }
+            claimedSerialNumber = "10000001"
+            serialNumber = "10000001"
+            availability = PumpSession.Availability(emptySet())
+        }
+        state.publishStatus(42.5, 75, false, 100, 1234L)
+        state.connectionState = ConnectionState.DISCONNECTED
+        elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
+        state.connectionState = ConnectionState.CONNECTED
+
+        val date: DateUtil = mock { on { minOrSecAgo(org.mockito.kotlin.any(), org.mockito.kotlin.any()) } doReturn "5m ago" }
+        val status = buildPumpStatusState(state, mock(), date, resources(
+            R.string.ypsopump_authenticated_no_status to "No readings yet.",
+        ))
+
+        assertThat(status.connectionAction).isNotEqualTo("No readings yet.")
+        assertThat(status.reservoir).isEqualTo(42.5)
+        assertThat(status.battery).isEqualTo(75)
+        assertThat(status.connectionHealthy).isFalse()
+        assertThat(state.hasVerifiedStatus).isFalse()
+        assertThat(state.lastStatusTime).isEqualTo(0L)
+    }
+
     private fun resources(vararg text: Pair<Int, String>): ResourceHelper {
         val resources = mock<ResourceHelper> {
             on { gs(org.mockito.kotlin.any<Int>()) } doReturn "Fallback"

@@ -79,6 +79,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.plugins.main.general.overview.compose.BASAL_SAMPLE_MS
+import app.aaps.plugins.main.general.overview.compose.batterySupply
+import app.aaps.plugins.main.general.overview.compose.reservoirSupply
 import app.aaps.plugins.main.general.overview.compose.CHART_HISTORY_MS
 import app.aaps.plugins.main.general.overview.compose.CHART_MAX_FUTURE_MS
 import app.aaps.plugins.main.general.overview.compose.ChartPanState
@@ -601,25 +603,17 @@ class OverviewFragment : DaggerFragment() {
             // the moment it mattered — an empty cartridge looked identical to a screen that had never
             // shown one. Draw it whenever the pump has been read, and say "Empty" out loud. Thresholds
             // are the app's own reservoir preferences, the same ones the driver alerts on.
+            val levels = pump.lastKnownLevels
             if (pump.isInitialized()) {
-                val res = pump.reservoirLevel
                 add(
-                    HomeUiState.Supply(
-                        "Reservoir",
-                        if (res <= 0.0) "Empty" else rh.gs(app.aaps.core.ui.R.string.format_insulin_units, res),
-                        when {
-                            res <= preferences.get(IntKey.OverviewResCritical).toDouble() -> AapsTone.Low
-                            res <= preferences.get(IntKey.OverviewResWarning).toDouble()  -> AapsTone.High
-                            else                                                         -> AapsTone.InRange
-                        }
-                    )
+                    reservoirSupply(
+                        levels.reservoir,
+                        preferences.get(IntKey.OverviewResCritical).toDouble(), preferences.get(IntKey.OverviewResWarning).toDouble()
+                    ) { rh.gs(app.aaps.core.ui.R.string.format_insulin_units, it) }
                 )
             }
-            // Keep the battery pill stable: the pump reports 0 while disconnected/unread, so show "—"
-            // (neutral) rather than letting the pill vanish and reappear.
-            pump.batteryLevel?.let { bat ->
-                add(HomeUiState.Supply("Battery", if (bat > 0) "$bat%" else "—", if (bat in 1..24) AapsTone.Low else AapsTone.InRange))
-            }
+            // Keep the battery pill stable rather than letting it vanish and reappear.
+            levels.battery?.let { add(batterySupply(it)) }
         }
 
         homeState.value = HomeUiState(

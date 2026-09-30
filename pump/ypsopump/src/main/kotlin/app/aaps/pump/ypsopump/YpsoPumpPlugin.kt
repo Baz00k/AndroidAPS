@@ -501,8 +501,9 @@ class YpsoPumpPlugin @Inject constructor(
         aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
         // CommandReadStatus infers success from lastDataTime. Clear the prior sample even when this
         // invocation only starts a connection, so it cannot report a recent older read as current.
-        pumpState.invalidateStatus()
+        pumpState.invalidateStatus(preserveDisplay = true)
         if (!configured()) {
+            pumpState.invalidateStatus()
             aapsLogger.info(LTag.PUMP, "YpsoPump: session key and/or pump MAC not set — skipping read")
             return
         }
@@ -547,8 +548,13 @@ class YpsoPumpPlugin @Inject constructor(
     override val baseBasalRate: Double get() = pumpState.scheduledBaseBasalRateIfFresh() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.statusSnapshot?.reservoirUnits ?: Double.NaN
     // The pump reports battery as 0–5 bars, not a percentage. AAPS consumers expect percent;
-    // see the single canonical mapping at [YpsoPumpState.mappedBatteryPercent].
+    // see the single canonical mapping at [YpsoPumpState.StatusSnapshot.mappedBatteryPercent].
     override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
+    // Display only: automation, alerts and uploads keep reading the fresh-gated levels above.
+    override val lastKnownLevels: Pump.LastKnownLevels
+        get() = pumpState.displayStatus().snapshot.let {
+            Pump.LastKnownLevels(it?.reservoirUnits ?: Double.NaN, it?.mappedBatteryPercent)
+        }
 
     /** Presentation boundary: driver situations become translated operator text only here. */
     private fun message(reason: YpsoBolusMessage): String = rh.gs(
@@ -1181,7 +1187,7 @@ class YpsoPumpPlugin @Inject constructor(
             return success
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump status read timed out after ${timeoutMs}ms")
-        pumpState.invalidateStatus()
+        pumpState.invalidateStatus(preserveDisplay = true)
         bleManager.disconnect()
         return false
     }
@@ -2224,18 +2230,8 @@ class YpsoPumpPlugin @Inject constructor(
         // Configuration is pump-local and survives DST. A changed ZoneId inhibits comparison
         // in pumpState without destroying either stored schedule.
     }
-    override fun pumpSpecificShortStatus(veryShort: Boolean): String {
-        val snapshot = pumpState.statusSnapshot
-        return if (snapshot != null) {
-            // Framework-facing percent; bars stay internal (see batteryLevel mapping).
-            val battery = batteryLevel
-            if (battery != null)
-                rh.gs(R.string.ypsopump_short_status, snapshot.reservoirUnits, battery)
-            else rh.gs(R.string.ypsopump_short_status_reservoir, snapshot.reservoirUnits)
-        } else {
-            rh.gs(R.string.ypsopump_status_unavailable)
-        }
-    }
+    override fun pumpSpecificShortStatus(veryShort: Boolean): String =
+        pumpStatusPresentation(pumpState, rh).shortStatus
 
     companion object {
         internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
