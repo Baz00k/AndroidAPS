@@ -577,7 +577,7 @@ private fun ActionBar(layout: HomeActionLayout, calculatorEnabled: Boolean, acti
                 else                    -> ActionBarButton(shortcutLabel(shortcut), shortcutIcon(shortcut), { actions.onShortcut(shortcut) }, Modifier.weight(1f))
             }
         }
-        MoreMenu(layout.menu, calculatorEnabled, actions)
+        if (layout.menu.isNotEmpty()) MoreMenu(layout.menu, calculatorEnabled, actions)
     }
 }
 
