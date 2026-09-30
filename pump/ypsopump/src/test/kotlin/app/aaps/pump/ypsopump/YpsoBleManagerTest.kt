@@ -704,8 +704,12 @@ class YpsoBleManagerTest {
                 records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
                 activeGeneration = record.generation,
             )
+            val phases = mutableListOf<PumpSession.Phase?>()
             override fun load() = state
-            override fun commit(state: PumpSession.State) { this.state = state }
+            override fun commit(state: PumpSession.State) {
+                phases += state.records.single().reservation?.phase
+                this.state = state
+            }
         }
         manager.session = PumpSession(profileStore)
         ownGatt(fixture.gatt, ConnectionState.CONNECTED)
@@ -755,7 +759,8 @@ class YpsoBleManagerTest {
             assertEquals(listOf(false), results)
             assertFalse(pumpState.hasFreshProfileEvidence)
             verify(fixture.gatt, never()).readCharacteristic(value)
-            assertEquals(PumpSession.Phase.ACKED, manager.session!!.snapshot()!!.reservation!!.phase)
+            // Unreconciled, so it keeps blocking later writes; the transport ACK itself is not journalled.
+            assertEquals(PumpSession.Phase.POSSIBLY_SENT, manager.session!!.snapshot()!!.reservation!!.phase)
             return
         }
         selected(1, if (activeOnly) 10 else 3)
@@ -808,6 +813,9 @@ class YpsoBleManagerTest {
         assertEquals(expectedSuccess, pumpState.hasFreshProfileEvidence)
         assertEquals(4330, manager.writeCounter)
         assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
+        // Selectors resolve from POSSIBLY_SENT by identity read-back: no Keystore-rotating ACK commit.
+        assertTrue(PumpSession.Phase.POSSIBLY_SENT in profileStore.phases)
+        assertFalse(PumpSession.Phase.ACKED in profileStore.phases)
     }
 
     @Test
@@ -1150,9 +1158,13 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `authentication after a lost connection retires only its stranded history selector write`() {
+    fun `authentication after a lost connection retires only its stranded selector write`() {
         val baseline = manager.session!!.committedRecord()!!
-        for ((purpose, retired) in listOf("HISTORY_SELECTOR" to true, "THERAPY_COMMAND" to false)) {
+        for ((purpose, characteristic, retired) in listOf(
+            Triple("HISTORY_SELECTOR", YpsoWritePolicy.EVENT_INDEX_UUID, true),
+            Triple("SETTINGS_SELECTOR", YpsoWritePolicy.SETTING_ID_UUID, true),
+            Triple("THERAPY_COMMAND", YpsoWritePolicy.EVENT_INDEX_UUID, false),
+        )) {
             val record = baseline
             manager.session = PumpSession(object : PumpSession.Store {
                 var state = PumpSession.State(
@@ -1160,8 +1172,8 @@ class YpsoBleManagerTest {
                         write = 4281,
                         writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
                         reservation = PumpSession.Reservation(
-                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "history-lost",
-                            YpsoWritePolicy.EVENT_INDEX_UUID.toString(), purpose, "ab".repeat(32), priorWrite = 4280,
+                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "selector-lost",
+                            characteristic.toString(), purpose, "ab".repeat(32), priorWrite = 4280,
                         ),
                     )),
                     activeGeneration = record.generation,
@@ -1188,9 +1200,9 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `authentication does not retire a selector a history transport still holds, or one it cannot save`() {
+    fun `authentication does not retire a selector a read still holds, or one it cannot save`() {
         val baseline = manager.session!!.committedRecord()!!
-        for (case in listOf("held", "unsaved")) {
+        for (case in listOf("historyReadActive", "profileReadActive", "unsaved")) {
             var failCommits = false
             val store = object : PumpSession.Store {
                 var state = PumpSession.State(
@@ -1220,20 +1232,20 @@ class YpsoBleManagerTest {
             whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
             ownGatt(gatt, ConnectionState.DISCOVERING)
             manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-            if (case == "held") {
-                manager.javaClass.getDeclaredField("historyReadActive").apply { isAccessible = true }
-                    .let { (it.get(manager) as java.util.concurrent.atomic.AtomicBoolean).set(true) }
-            } else failCommits = true
+            if (case == "unsaved") failCommits = true
+            else readActive(case).set(true)
 
             manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
 
             // Still reserved, so write readiness keeps refusing therapy past it.
             assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.state.records.single().reservation?.phase, case)
             assertEquals("stranded", store.state.records.single().reservation?.id, case)
-            manager.javaClass.getDeclaredField("historyReadActive").apply { isAccessible = true }
-                .let { (it.get(manager) as java.util.concurrent.atomic.AtomicBoolean).set(false) }
+            if (case != "unsaved") readActive(case).set(false)
         }
     }
+
+    private fun readActive(field: String) = manager.javaClass.getDeclaredField(field).apply { isAccessible = true }
+        .get(manager) as java.util.concurrent.atomic.AtomicBoolean
 
     @Test
     fun `connected callback with GATT error fails before discovery`() {

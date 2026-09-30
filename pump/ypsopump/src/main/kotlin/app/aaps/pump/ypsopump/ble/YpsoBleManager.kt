@@ -2262,7 +2262,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                     if (status != BluetoothGatt.GATT_SUCCESS) return@synchronized "auth write failed ($status)"
                     markConnected(controlNotificationsEnabled = false)
-                    retireAbandonedHistorySelector()
+                    retireAbandonedSelector()
                     aapsLogger.info(
                         LTag.PUMP,
                         if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
@@ -2514,22 +2514,23 @@ class YpsoBleManager @Inject constructor(
     }
 
     /**
-     * A history selector write interrupted by a lost connection stays reserved in the session journal,
-     * and every therapy write refuses to start while it is. The scan that owned it is gone and a
-     * selector move has no therapy effect, so it is retired here, on the new authenticated session,
-     * rather than left to block the next command until some later history scan clears it. Called with
-     * [opLock] held; no operation can use the new connection before it returns.
+     * A history or setting selector write interrupted by a lost connection stays reserved in the
+     * session journal, and every therapy write refuses to start while it is. The read that owned it is
+     * gone and a selector move has no therapy effect, so it is retired here, on the new authenticated
+     * session, rather than left to block the next command until some later read clears it. Called
+     * with [opLock] held; no operation can use the new connection before it returns.
      */
-    private fun retireAbandonedHistorySelector() {
+    private fun retireAbandonedSelector() {
         val owner = session ?: return
         val token = sessionToken ?: return
         val reservation = owner.snapshot()?.reservation ?: return
-        if (reservation.phase == PumpSession.Phase.VERIFIED || !owner.isAbandonableHistorySelector(reservation)) return
-        // Only a selector no transport still holds: the old connection's scan was released on disconnect.
+        if (reservation.phase == PumpSession.Phase.VERIFIED || !owner.isAbandonableSelector(reservation)) return
+        // Only a selector no transport still holds: the old connection's read was released on disconnect.
         if (historyWriteTransportInstance?.isIdle() == false || historyReadActive.get()) return
-        runCatching { owner.retireAbandonedHistorySelector(token, reservation.id) }
-            .onSuccess { if (it) aapsLogger.info(LTag.PUMP, "YpsoPump retired history selector write ${reservation.id} left by a lost connection") }
-            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire abandoned history selector write: ${it.message}") }
+        if (profileWriteTransportInstance?.isIdle() == false || profileReadActive.get()) return
+        runCatching { owner.retireAbandonedSelector(token, reservation.id) }
+            .onSuccess { if (it) aapsLogger.info(LTag.PUMP, "YpsoPump retired ${reservation.purpose} write ${reservation.id} left by a lost connection") }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire abandoned selector write: ${it.message}") }
     }
 
     private fun markConnected(controlNotificationsEnabled: Boolean) {

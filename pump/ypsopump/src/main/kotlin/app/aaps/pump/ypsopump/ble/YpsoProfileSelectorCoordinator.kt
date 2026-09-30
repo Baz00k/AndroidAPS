@@ -15,7 +15,8 @@ internal class YpsoProfileSelectorCoordinator(
     private val transport: YpsoSerializedWriteTransport,
 ) {
     data class Owner(val gatt: Any, val connectionId: String, val token: PumpSession.Token)
-    private val accounting = YpsoWriteAccounting(session, crypto, transport)
+    // Resolved only by same-link selector identity read-back, from POSSIBLY_SENT.
+    private val accounting = YpsoWriteAccounting(session, crypto, transport, persistTransportAck = false)
 
     fun write(
         writeId: String,

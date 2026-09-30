@@ -1202,20 +1202,20 @@ class PumpSession(private val store: Store) {
     }
 
     /**
-     * Retires an ordinary event-history selector write left unresolved by a connection that is gone.
-     * A selector move has no therapy effect, so its unknown outcome matters only for the counter,
-     * which stays retained as the high-water mark exactly as in [recoverInterruptedWrite]. Anything
-     * else stays blocking: therapy writes, and lower-bound recovery probes, whose ambiguity must be
-     * resolved by pump evidence. [reservationId] must still be the current reservation.
+     * Retires an ordinary event-history or setting selector write left unresolved by a connection that
+     * is gone. A selector move has no therapy effect, so its unknown outcome matters only for the
+     * counter, which stays retained as the high-water mark exactly as in [recoverInterruptedWrite].
+     * Anything else stays blocking: therapy writes, and lower-bound recovery probes, whose ambiguity
+     * must be resolved by pump evidence. [reservationId] must still be the current reservation.
      *
      * @return whether a reservation was retired
      */
     @Synchronized
-    fun retireAbandonedHistorySelector(origin: Token, reservationId: String): Boolean {
+    fun retireAbandonedSelector(origin: Token, reservationId: String): Boolean {
         val old = owned(origin)
         check(transaction == null) { "Another session transaction is active" }
         val reserved = old.reservation?.takeIf { it.id == reservationId && it.phase != Phase.VERIFIED } ?: return false
-        if (!isAbandonableHistorySelector(reserved)) return false
+        if (!isAbandonableSelector(reserved)) return false
         recoverInterruptedWrite(origin)
         return true
     }
@@ -1411,10 +1411,13 @@ class PumpSession(private val store: Store) {
             else -> priorWrite < reservation.counter
         }
 
-    internal fun isAbandonableHistorySelector(reservation: Reservation): Boolean =
+    internal fun isAbandonableSelector(reservation: Reservation): Boolean =
         reservation.candidate == WriteCandidate.STANDARD &&
-            reservation.purpose == "HISTORY_SELECTOR" &&
-            reservation.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
+            when (reservation.purpose) {
+                "HISTORY_SELECTOR" -> reservation.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
+                "SETTINGS_SELECTOR" -> reservation.characteristic?.lowercase() == SETTING_ID_CHARACTERISTIC
+                else -> false
+            }
 
     private fun owned(origin: Token): Record {
         check(token == origin && state != null) { "Stale or unavailable session" }
