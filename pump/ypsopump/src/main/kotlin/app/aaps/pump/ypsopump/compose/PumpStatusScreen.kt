@@ -60,10 +60,6 @@ fun PumpStatusScreen(state: PumpStatusState) {
             }
         }
 
-        state.readingsNotice?.let { notice ->
-            Text(notice, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.padding(bottom = AapsSpacing.rowGap))
-        }
-
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
             GaugeTile(
                 "RESERVOIR", state.reservoir?.let { String.format(java.util.Locale.getDefault(), "%.0f U", it) } ?: state.unavailableLabel,

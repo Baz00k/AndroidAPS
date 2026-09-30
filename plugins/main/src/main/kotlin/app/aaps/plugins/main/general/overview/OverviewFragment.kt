@@ -607,13 +607,13 @@ class OverviewFragment : DaggerFragment() {
             if (pump.isInitialized()) {
                 add(
                     reservoirSupply(
-                        levels.reservoir, levels.stale,
+                        levels.reservoir,
                         preferences.get(IntKey.OverviewResCritical).toDouble(), preferences.get(IntKey.OverviewResWarning).toDouble()
                     ) { rh.gs(app.aaps.core.ui.R.string.format_insulin_units, it) }
                 )
             }
             // Keep the battery pill stable rather than letting it vanish and reappear.
-            levels.battery?.let { add(batterySupply(it, levels.stale)) }
+            levels.battery?.let { add(batterySupply(it)) }
         }
 
         homeState.value = HomeUiState(

@@ -108,7 +108,6 @@ internal fun buildPumpStatusState(
     return PumpStatusState(
         title = "YpsoPump",
         connectionSummary = status.connectionSummary,
-        readingsNotice = status.readingsNotice,
         alert = when (pumpState.profileComparison) {
             YpsoPumpState.ProfileComparison.MISMATCH -> rh.gs(R.string.ypsopump_profile_mismatch_notification, pumpState.lastReadProgram)
             else                                     -> null

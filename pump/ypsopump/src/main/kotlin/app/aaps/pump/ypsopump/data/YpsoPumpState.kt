@@ -52,14 +52,14 @@ class YpsoPumpState @Inject constructor() {
         get() = sample?.takeIf { elapsedRealtime() - it.elapsedAt in 0 until STATUS_MAX_AGE_MS }
 
     /** Display only: never use retained readings for dosing, alarms or command success. */
-    internal data class DisplayStatus(val snapshot: StatusSnapshot?, val isCurrent: Boolean, val ageMs: Long?)
+    internal data class DisplayStatus(val snapshot: StatusSnapshot?, val isCurrent: Boolean)
 
     @Synchronized
     internal fun displayStatus(): DisplayStatus {
         val retained = lastDisplaySample
         val age = retained?.let { elapsedRealtime() - it.elapsedAt }
-        if (retained == null || age == null || age !in 0 until DISPLAY_MAX_AGE_MS) return DisplayStatus(null, false, null)
-        return DisplayStatus(retained, sample === retained && age < STATUS_MAX_AGE_MS, age)
+        if (retained == null || age == null || age !in 0 until DISPLAY_MAX_AGE_MS) return DisplayStatus(null, false)
+        return DisplayStatus(retained, sample === retained && age < STATUS_MAX_AGE_MS)
     }
 
     // -- Connection State --

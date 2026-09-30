@@ -15,9 +15,6 @@ class PumpStatusPresentationTest {
         R.string.ypsopump_connecting to "Connecting…",
         R.string.ypsopump_awaiting_readings to "Connected · awaiting readings",
         R.string.ypsopump_authenticated_no_status to "No readings yet.",
-        R.string.ypsopump_value_unavailable to "Unavailable",
-        R.string.ypsopump_last_readings to "Last readings (%1\$s ago)",
-        R.string.ypsopump_cached_readings to "Last readings (%1\$s ago); current pump status unknown",
         R.string.ypsopump_short_status to "Reservoir %1\$.2f U Battery %2\$d%%",
         R.string.ypsopump_short_status_reservoir to "Reservoir %1\$.2f U",
     )
@@ -35,18 +32,17 @@ class PumpStatusPresentationTest {
         assertEquals("Connected · awaiting readings", presentation.connectionSummary)
         assertEquals(presentation.connectionSummary, presentation.shortStatus)
         assertNull(presentation.snapshot)
-        assertNull(presentation.readingsNotice)
         assertFalse(presentation.connectionHealthy)
     }
 
     @Test
-    fun `cached readings stay labelled through disconnect reconnect failure and recovery`() {
+    fun `last readings stay shown through disconnect reconnect failure and recovery`() {
         var elapsed = 1000L
         val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
         state.publishStatus(42.5, null, false, 100, 1234L, batteryBars = 3)
         var presentation = pumpStatusPresentation(state, rh)
         assertEquals("Not connected", presentation.connectionSummary)
-        assertEquals("Last readings (0m ago): Reservoir 42.50 U Battery 60%", presentation.shortStatus)
+        assertEquals("Reservoir 42.50 U Battery 60%", presentation.shortStatus)
         assertFalse(presentation.connectionHealthy)
 
         elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
@@ -55,8 +51,7 @@ class PumpStatusPresentationTest {
             presentation = pumpStatusPresentation(state, rh)
             assertEquals(42.5, presentation.snapshot?.reservoirUnits)
             assertEquals(60, presentation.battery)
-            assertEquals("Last readings (5m ago); current pump status unknown", presentation.readingsNotice)
-            assertTrue(presentation.shortStatus.startsWith(presentation.readingsNotice!!))
+            assertEquals("Reservoir 42.50 U Battery 60%", presentation.shortStatus)
             assertFalse(presentation.connectionHealthy)
         }
 
@@ -66,7 +61,6 @@ class PumpStatusPresentationTest {
         state.publishStatus(40.0, null, false, 100, 2345L)
         presentation = pumpStatusPresentation(state, rh)
         assertTrue(presentation.connectionHealthy)
-        assertNull(presentation.readingsNotice)
         assertNull(presentation.battery)
         assertEquals("Reservoir 40.00 U", presentation.shortStatus)
     }

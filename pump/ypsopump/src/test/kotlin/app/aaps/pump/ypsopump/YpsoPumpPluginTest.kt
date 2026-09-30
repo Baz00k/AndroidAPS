@@ -160,24 +160,14 @@ class YpsoPumpPluginTest {
         var elapsed = 0L
         state.elapsedRealtime = { elapsed }
         state.publishStatus(0.0, 12, false, 100, 2000L)
-        assertEquals(Pump.LastKnownLevels(0.0, 12, stale = false), plugin.lastKnownLevels)
+        assertEquals(Pump.LastKnownLevels(0.0, 12), plugin.lastKnownLevels)
         elapsed = YpsoPumpState.STATUS_MAX_AGE_MS
         assertTrue(plugin.reservoirLevel.isNaN())
         assertNull(plugin.batteryLevel)
-        assertEquals(Pump.LastKnownLevels(0.0, 12, stale = true), plugin.lastKnownLevels)
+        assertEquals(Pump.LastKnownLevels(0.0, 12), plugin.lastKnownLevels)
         elapsed = YpsoPumpState.DISPLAY_MAX_AGE_MS
         assertTrue(plugin.lastKnownLevels.reservoir.isNaN())
         assertNull(plugin.lastKnownLevels.battery)
-    }
-
-    @Test
-    fun `last known levels are read with a single clock reading`() {
-        var elapsed = 0L
-        state.elapsedRealtime = { elapsed++ }
-        state.publishStatus(42.0, 50, false, 100, 2000L)
-        // One millisecond before expiry, and the clock advances on every read: a second read would see it stale.
-        elapsed = YpsoPumpState.STATUS_MAX_AGE_MS - 1
-        assertEquals(Pump.LastKnownLevels(42.0, 50, stale = false), plugin.lastKnownLevels)
     }
 
     @Test

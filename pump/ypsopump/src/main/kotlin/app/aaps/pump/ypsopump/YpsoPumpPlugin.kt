@@ -552,8 +552,8 @@ class YpsoPumpPlugin @Inject constructor(
     override val batteryLevel: Int? get() = pumpState.mappedBatteryPercent
     // Display only: automation, alerts and uploads keep reading the fresh-gated levels above.
     override val lastKnownLevels: Pump.LastKnownLevels
-        get() = pumpState.displayStatus().let {
-            Pump.LastKnownLevels(it.snapshot?.reservoirUnits ?: Double.NaN, it.snapshot?.mappedBatteryPercent, stale = !it.isCurrent)
+        get() = pumpState.displayStatus().snapshot.let {
+            Pump.LastKnownLevels(it?.reservoirUnits ?: Double.NaN, it?.mappedBatteryPercent)
         }
 
     /** Presentation boundary: driver situations become translated operator text only here. */

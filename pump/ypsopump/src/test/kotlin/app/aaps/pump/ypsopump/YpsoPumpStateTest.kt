@@ -24,7 +24,6 @@ class YpsoPumpStateTest {
         state.invalidateStatus(preserveDisplay = true)
         assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
         assertEquals(1234L, state.displayStatus().snapshot?.acquiredAt)
-        assertEquals(100L, state.displayStatus().ageMs)
         assertFalse(state.displayStatus().isCurrent)
         assertNull(state.statusSnapshot)
         assertNull(state.reservoirUnitsIfFresh())
@@ -58,7 +57,6 @@ class YpsoPumpStateTest {
         elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
         state.connectionState = ConnectionState.CONNECTED
         assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
-        assertEquals(YpsoPumpState.STATUS_MAX_AGE_MS, state.displayStatus().ageMs)
         assertFalse(state.displayStatus().isCurrent)
         assertFalse(state.hasVerifiedStatus)
         elapsed = 0
@@ -94,7 +92,6 @@ class YpsoPumpStateTest {
         assertFalse(state.displayStatus().isCurrent)
         elapsed += 1
         assertNull(state.displayStatus().snapshot)
-        assertNull(state.displayStatus().ageMs)
     }
 
     @Test

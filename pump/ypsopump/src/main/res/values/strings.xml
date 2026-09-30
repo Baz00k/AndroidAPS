@@ -22,8 +22,6 @@
     <string name="ypsopump_firmware">Firmware</string>
     <string name="ypsopump_authenticated_no_status">No readings yet.</string>
     <string name="ypsopump_awaiting_readings">Connected · awaiting readings</string>
-    <string name="ypsopump_last_readings">Last readings (%1$s ago)</string>
-    <string name="ypsopump_cached_readings">Last readings (%1$s ago); current pump status unknown</string>
     <string name="ypsopump_connected">Connected</string>
     <string name="ypsopump_connecting">Connecting…</string>
     <string name="ypsopump_disconnected">Not connected</string>
