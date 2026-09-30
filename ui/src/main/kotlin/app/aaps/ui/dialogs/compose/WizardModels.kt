@@ -2,7 +2,7 @@ package app.aaps.ui.dialogs.compose
 
 import androidx.compose.runtime.Immutable
 
-/** User-editable wizard inputs. Carbs + the factor toggles the design exposes as "included in this dose". */
+/** User-editable Calculator inputs. Carbs + the factor toggles shown as "included in this dose". */
 @Immutable
 data class WizardInputs(
     val carbs: Int = 0,
@@ -24,46 +24,54 @@ data class WizardInputs(
      * Manually entered glucose, in the user's DISPLAY units, or null to use the CGM.
      *
      * Exists because the CGM is not always the truth: a failed sensor, a warm-up gap, or a fingerstick that
-     * disagrees all leave the wizard calculating a correction from a number the user can see is wrong. The
-     * legacy wizard had this field; the redesign dropped it "by design", which removed the only way to bolus
-     * off a fingerstick without doing the arithmetic by hand.
+     * disagrees all leave the Calculator correcting from a number the user can see is wrong.
      *
-     * Entering one also forces the TREND contribution off (see WizardDialog.compute): a CGM-derived trend
-     * describes the sensor trace, and if the sensor were trustworthy there would be no reason to override it.
+     * Entering one also forces the TREND contribution off: a CGM-derived trend describes the sensor trace,
+     * and if the sensor were trustworthy there would be no reason to override it.
      */
     val manualBg: Double? = null,
     val useBg: Boolean = true,
     val useIob: Boolean = true,
     val useTrend: Boolean = false,
-    val useSuperBolus: Boolean = false
+    val useSuperBolus: Boolean = false,
+    /**
+     * Bolus advisor: glucose is high, so bolus now and eat once it has come down. The carbs are not
+     * logged yet; an eat reminder is scheduled instead. Only offered while the advisor applies.
+     */
+    val eatLater: Boolean = false
 )
+
+/** How the Calculator's glucose is shown: where it came from and whether it counts. */
+enum class GlucoseSource { SENSOR, STALE, MANUAL, NONE }
+
+enum class GlucoseTone { LOW, IN_RANGE, HIGH, NONE }
 
 /** Computed result of running [WizardInputs] through the existing BolusWizard (strings pre-formatted). */
 @Immutable
 data class WizardResult(
-    val bgText: String = "--",
-    val bgTrendArrow: String = "",
-    val bgFromText: String = "",
-    /** True when [WizardInputs.manualBg] is in use — the screen shows it and offers a reset to CGM. */
-    val bgIsManual: Boolean = false,
-    /** Entry bounds for the manual-BG field, in display units (mmol/L vs mg/dL differ by 10x). */
+    /** False without a profile: there is nothing to calculate with. */
+    val available: Boolean = false,
+    val glucoseText: String = "--",
+    val glucoseSource: GlucoseSource = GlucoseSource.NONE,
+    val glucoseTone: GlucoseTone = GlucoseTone.NONE,
+    /** Reading age, e.g. "3 min ago"; blank for a manual or missing value. */
+    val glucoseAge: String = "",
+    val trendArrow: String = "",
+    /** Entry bounds for the manual glucose field, in display units (mmol/L vs mg/dL differ by 18x). */
     val bgEntryMin: Double = 1.0,
     val bgEntryMax: Double = 30.0,
     val bgEntryStep: Double = 0.1,
     val bgEntryDecimals: Int = 1,
     val bgUnitsLabel: String = "",
-    val bgInRange: Boolean = true,
     val carbsInsulin: String = "+0.00 U",
     val bgInsulin: String = "+0.00 U",
     val iobInsulin: String = "0.00 U",
     val trendInsulin: String = "+0.00 U",
     val superBolusInsulin: String = "+0.00 U",
-    val total: Double = 0.0,
-    val totalText: String = "0.00 U",
-    val deliverable: Boolean = false,
-    val carbsOnly: Boolean = false,
-    val note: String = "",
-    val cappedWarning: String = "",
+    /** The bolus percentage from settings, when it is not 100. */
+    val scaledPercent: Int? = null,
+    val outcome: CalculatorOutcome = CalculatorOutcome(),
+    val advisorAvailable: Boolean = false,
     /**
      * Advisory shown when the cannula is new. Insulin peaks about twice as slowly at a fresh site
      * (time-to-peak 110 min on day 1 vs 56 min on day 4, Hildebrandt 1991), and a single large bolus
@@ -77,4 +85,8 @@ data class WizardResult(
      */
     val siteWarning: String = "",
     val superBolusAvailable: Boolean = false
-)
+) {
+
+    val bgCorrectionAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR || glucoseSource == GlucoseSource.MANUAL
+    val trendAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR
+}

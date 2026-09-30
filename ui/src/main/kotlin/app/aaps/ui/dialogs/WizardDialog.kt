@@ -30,6 +30,11 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.wizard.BolusWizard
+import app.aaps.ui.dialogs.compose.CalculatorGlucose
+import app.aaps.ui.dialogs.compose.CalculatorOutcome
+import app.aaps.ui.dialogs.compose.DoseDrift
+import app.aaps.ui.dialogs.compose.GlucoseSource
+import app.aaps.ui.dialogs.compose.GlucoseTone
 import app.aaps.ui.dialogs.compose.WizardInputs
 import app.aaps.ui.dialogs.compose.WizardCarbControls
 import app.aaps.ui.dialogs.compose.PumpReadyGate
@@ -42,10 +47,10 @@ import javax.inject.Provider
 import kotlin.math.abs
 
 /**
- * Redesigned Bolus/Carb Wizard. The UI is Compose ([WizardScreen]); all dosing math reuses the
- * existing [BolusWizard] (`doCalc`) and delivery reuses [BolusWizard.confirmAndExecute] — the exact
- * same constraint + confirmation + execution path as before. BG is taken from CGM (no manual BG /
- * profile / correction fields, per the design). DI + `runWizardDialog` routing are unchanged.
+ * The Calculator. The UI is Compose ([WizardScreen]); all dosing math reuses the existing [BolusWizard]
+ * (`doCalc`) and delivery reuses [BolusWizard.confirmAndExecute] — the same constraint and execution path
+ * as before. What the user reviewed is exactly what is committed: the dose is recomputed at confirmation
+ * and nothing is sent if it changed ([DoseDrift]).
  */
 class WizardDialog : DaggerDialogFragment() {
 
@@ -98,7 +103,7 @@ class WizardDialog : DaggerDialogFragment() {
                 AapsTheme {
                     WizardScreen(
                         compute = ::compute,
-                        onDeliver = ::deliver,
+                        onCommit = ::commit,
                         onCancel = { dismiss() },
                         initialInputs = WizardInputs(carbs = initialCarbs),
                         carbControls = WizardCarbControls.fromOverviewIncrements(
@@ -115,57 +120,79 @@ class WizardDialog : DaggerDialogFragment() {
         }
     }
 
+    private fun glucose(inputs: WizardInputs): CalculatorGlucose {
+        val last = iobCobCalculator.ads.lastBg()
+        return CalculatorGlucose.resolve(
+            manualMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, profileFunction.getUnits()) },
+            sensorMgdl = last?.recalculated,
+            sensorTimestamp = last?.timestamp,
+            now = dateUtil.now()
+        )
+    }
+
+    private fun outcome(w: BolusWizard, carbs: Int) = CalculatorOutcome.of(
+        calculatedInsulin = w.calculatedTotalInsulin,
+        insulinAfterConstraints = w.insulinAfterConstraints,
+        carbsEquivalent = w.carbsEquivalent,
+        carbs = carbs,
+        bolusStep = activePlugin.activePump.pumpDescription.bolusStep
+    )
+
     /** Build the wizard for [inputs] and format its components for display. Pure — no side effects. */
     private fun compute(inputs: WizardInputs): WizardResult {
         val profile = profileFunction.getProfile() ?: return WizardResult()
         val units = profileFunction.getUnits()
-        // A manually entered glucose REPLACES the CGM everywhere in this calculation — the correction, the
-        // in-range label and the delivered dose all key off the same number, so there is no path where the
-        // display says one thing and the arithmetic uses another.
-        val cgmMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
-        val bgDisplay = inputs.manualBg ?: if (cgmMgdl > 0) profileUtil.fromMgdlToUnits(cgmMgdl, units) else 0.0
-        val bgMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, units) } ?: cgmMgdl
-        val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
-
-        val w = buildWizard(inputs, profile, bgDisplay, carbs)
-
-        // Label BG against the user's display low/high marks (e.g. 4.0–10.0) — the SAME band the rest of the
-        // app colours BG by — NOT the target band. A single-point profile target makes targetLow==targetHigh,
-        // so an at-target BG (7.1 vs target 7.0) would read "high", which is useless for bolusing. Display only.
-        val inRange = bgMgdl > 0 &&
-            bgDisplay in preferences.get(UnitDoubleKey.OverviewLowMark)..preferences.get(UnitDoubleKey.OverviewHighMark)
-        val delta = w.glucoseStatus?.delta ?: 0.0
         val mmol = units == GlucoseUnit.MMOL
+        val glucose = glucose(inputs)
+        val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
+        val w = buildWizard(inputs, profile, glucose, carbs)
+
+        // Shown value: the one in use, or a stale reading for context.
+        val shownMgdl = when (glucose) {
+            is CalculatorGlucose.Stale -> glucose.mgdl
+            else                       -> glucose.usedMgdl
+        }
+        // Colour against the display low/high marks — the band the rest of the app colours BG by, not
+        // the target band (a single-point target would make an at-target reading look "high").
+        val tone = shownMgdl?.let { mgdl ->
+            val shown = profileUtil.fromMgdlToUnits(mgdl, units)
+            when {
+                shown < preferences.get(UnitDoubleKey.OverviewLowMark)  -> GlucoseTone.LOW
+                shown > preferences.get(UnitDoubleKey.OverviewHighMark) -> GlucoseTone.HIGH
+                else                                                    -> GlucoseTone.IN_RANGE
+            }
+        } ?: GlucoseTone.NONE
+        val delta = w.glucoseStatus?.delta ?: 0.0
         return WizardResult(
-            bgText = if (bgMgdl > 0) profileUtil.fromMgdlToStringInUnits(bgMgdl) else "--",
-            // A manual entry has no trend: the arrow would be the SENSOR's, and the reason to type a value in
-            // is that the sensor is not to be trusted. Showing it would invite reading a slope into a number
-            // that has none.
-            bgTrendArrow = if (inputs.manualBg != null) "" else when { delta > 3 -> "↗"; delta < -3 -> "↘"; else -> "→" },
-            bgFromText = if (inputs.manualBg != null) "Entered manually" else "From CGM",
-            bgIsManual = inputs.manualBg != null,
+            available = true,
+            glucoseText = shownMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "--",
+            glucoseSource = when (glucose) {
+                is CalculatorGlucose.Sensor -> GlucoseSource.SENSOR
+                is CalculatorGlucose.Stale  -> GlucoseSource.STALE
+                is CalculatorGlucose.Manual -> GlucoseSource.MANUAL
+                CalculatorGlucose.None      -> GlucoseSource.NONE
+            },
+            glucoseTone = tone,
+            glucoseAge = when (glucose) {
+                is CalculatorGlucose.Sensor -> dateUtil.minOrSecAgo(rh, glucose.timestamp)
+                is CalculatorGlucose.Stale  -> dateUtil.minOrSecAgo(rh, glucose.timestamp)
+                else                        -> ""
+            },
+            // A trend is a property of a live sensor trace; none for a stale, missing or typed-in value.
+            trendArrow = if (glucose is CalculatorGlucose.Sensor) when { delta > 3 -> "↗"; delta < -3 -> "↘"; else -> "→" } else "",
             bgEntryMin = if (mmol) 1.0 else 20.0,
             bgEntryMax = if (mmol) 30.0 else 540.0,
             bgEntryStep = if (mmol) 0.1 else 1.0,
             bgEntryDecimals = if (mmol) 1 else 0,
             bgUnitsLabel = if (mmol) "mmol/L" else "mg/dL",
-            bgInRange = inRange,
             carbsInsulin = signed(w.insulinFromCarbs),
             bgInsulin = signed(w.insulinFromBG),
             iobInsulin = signed(-w.insulinFromBolusIOB - w.insulinFromBasalIOB),
             trendInsulin = signed(w.insulinFromTrend),
             superBolusInsulin = signed(w.insulinFromSuperBolus),
-            // Show the amount that will ACTUALLY be delivered (post max-bolus constraint), because the
-            // redesigned wizard no longer shows the legacy confirm dialog that surfaced the cap. If the
-            // constraint reduced the dose, expose it so the user isn't misled about what they're bolusing.
-            total = w.insulinAfterConstraints,
-            totalText = String.format(Locale.getDefault(), "%.2f U", w.insulinAfterConstraints),
-            deliverable = w.insulinAfterConstraints > 0.0,
-            carbsOnly = carbs > 0 && w.insulinAfterConstraints <= 0.0,
-            note = if (carbs > 0) "Also logging $carbs g carbs" else "",
-            cappedWarning = if (w.calculatedTotalInsulin - w.insulinAfterConstraints > activePlugin.activePump.pumpDescription.bolusStep)
-                String.format(Locale.getDefault(), "Capped by max bolus: %.2f U → %.2f U", w.calculatedTotalInsulin, w.insulinAfterConstraints)
-            else "",
+            scaledPercent = preferences.get(IntKey.OverviewBolusPercentage).takeIf { it != 100 },
+            outcome = outcome(w, carbs),
+            advisorAvailable = w.bolusAdvisorApplies(),
             siteWarning = freshSiteWarning(w.insulinAfterConstraints),
             superBolusAvailable = false
         )
@@ -190,38 +217,43 @@ class WizardDialog : DaggerDialogFragment() {
         )
     }
 
-    /** Deliver: rebuild for the confirmed inputs and run the SAME confirm+constraint+execute path. */
-    private fun deliver(inputs: WizardInputs) {
-        val activity = activity ?: return
-        val profile = profileFunction.getProfile() ?: return
-        val units = profileFunction.getUnits()
-        val cgmMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
-        val bgDisplay = inputs.manualBg ?: if (cgmMgdl > 0) profileUtil.fromMgdlToUnits(cgmMgdl, units) else 0.0
-        val bgMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, units) } ?: cgmMgdl
+    /**
+     * Commit what the user reviewed. The calculation is rebuilt from current data first; if the dose or
+     * carbs moved (a new reading, an SMB, a target change) or the advisor no longer applies, nothing is
+     * sent and false is returned so the screen can show the new values for a fresh confirmation.
+     */
+    private fun commit(inputs: WizardInputs, reviewed: CalculatorOutcome): Boolean {
+        val activity = activity ?: return false
+        val profile = profileFunction.getProfile() ?: return false
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
-        if (carbs <= 0 && !(bgMgdl > 0)) return
-        val w = buildWizard(inputs, profile, bgDisplay, carbs)
-        if (w.calculatedTotalInsulin > 0.0 || carbs > 0) {
-            // skipConfirmation: the Compose Confirm step + press-and-hold gesture IS the confirmation, so
-            // suppress the legacy OKDialog (redundant second popup). Constraints, UEL audit and the actual
-            // commandQueue.bolus still run — identical execute path, just without the extra tap.
-            // Pre-flight the pump before the dose is queued. A stopped or empty pump used to accept
-            // the command and then leave the progress dialog at 0% for the driver's whole confirm
-            // window; now the user is told why, and "Check again" delivers the SAME dose once the pump
-            // is running rather than making them rebuild it.
-            pumpReadyGate.runWhenPumpCanDeliver(activity) { w.confirmAndExecute(activity, skipConfirmation = true) }
-            dismiss()
+        val w = buildWizard(inputs, profile, glucose(inputs), carbs)
+        val now = outcome(w, carbs)
+        val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
+        if (DoseDrift.changed(reviewed, now, bolusStep)) return false
+        if (inputs.eatLater && !w.bolusAdvisorApplies()) return false
+        // The advisor question has been answered on screen; never ask it again after the hold.
+        val advisor = if (w.bolusAdvisorApplies()) inputs.eatLater && now.commit == CalculatorOutcome.Commit.DELIVER else null
+        when (now.commit) {
+            // skipConfirmation: the Review step and its hold ARE the confirmation. Constraints, audit and the
+            // command queue still run. The pump is pre-flighted before the dose is queued.
+            CalculatorOutcome.Commit.DELIVER   ->
+                pumpReadyGate.runWhenPumpCanDeliver(activity) { w.confirmAndExecute(activity, skipConfirmation = true, advisor = advisor) }
+            // Carbs alone need no pump command, so no pump pre-flight either.
+            CalculatorOutcome.Commit.LOG_CARBS -> w.confirmAndExecute(activity, skipConfirmation = true, advisor = advisor)
+            CalculatorOutcome.Commit.NONE      -> return false
         }
+        dismiss()
+        return true
     }
 
-    private fun buildWizard(inputs: WizardInputs, profile: app.aaps.core.interfaces.profile.Profile, bgDisplay: Double, carbs: Int): BolusWizard =
+    private fun buildWizard(inputs: WizardInputs, profile: app.aaps.core.interfaces.profile.Profile, glucose: CalculatorGlucose, carbs: Int): BolusWizard =
         bolusWizardProvider.get().doCalc(
             profile = profile,
             profileName = profileFunction.getProfileName(),
             tempTarget = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now()),
             carbs = carbs,
             cob = 0.0,
-            bg = bgDisplay,
+            bg = glucose.usedMgdl?.let { profileUtil.fromMgdlToUnits(it, profileFunction.getUnits()) } ?: 0.0,
             correction = 0.0,
             // pre-bolus: BolusWizard timestamps the carbs at now + carbTime (see its carbsTimestamp), so the
             // bolus goes in immediately while the loop is told when the carbs actually land.
@@ -229,15 +261,15 @@ class WizardDialog : DaggerDialogFragment() {
             // extended carbs: declares a slow meal's absorption per-meal (AAPS expands to 15-min chunks)
             carbDurationHours = inputs.carbDurationHours,
             percentageCorrection = preferences.get(IntKey.OverviewBolusPercentage),
-            useBg = inputs.useBg,
+            // No trustworthy glucose, no correction: a stale reading is never corrected from.
+            useBg = inputs.useBg && glucose.usedMgdl != null,
             useCob = false,
             includeBolusIOB = inputs.useIob,
             includeBasalIOB = inputs.useIob,
             useSuperBolus = inputs.useSuperBolus,
             useTT = true,
-            // Trend is a CGM property. If the user overrode the CGM, its slope is not evidence about the
-            // number they typed — so the trend contribution is withheld rather than silently reused.
-            useTrend = inputs.useTrend && inputs.manualBg == null,
+            // Trend is a property of a live sensor trace; not of a typed-in, stale or missing value.
+            useTrend = inputs.useTrend && glucose is CalculatorGlucose.Sensor,
             useAlarm = false
         )
 
