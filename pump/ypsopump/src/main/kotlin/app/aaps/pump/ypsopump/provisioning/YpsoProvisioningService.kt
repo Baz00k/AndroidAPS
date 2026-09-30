@@ -28,8 +28,8 @@ class YpsoProvisioningService internal constructor(
     private val bondedSerialForMac: (String) -> String? = { null },
 ) {
 
-    @Inject constructor(context: Context, pumpState: YpsoPumpState) : this(
-        PumpSession(SessionJournal(context)),
+    @Inject constructor(context: Context, pumpState: YpsoPumpState, logger: app.aaps.core.interfaces.logging.AAPSLogger) : this(
+        PumpSession(SessionJournal(context, logger)),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
         { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },

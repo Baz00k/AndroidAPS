@@ -59,7 +59,7 @@ class SessionEvidenceRetentionTest {
     }
 
     @Test
-    fun `every completed selector keeps memory and persisted evidence bounded across restart`() {
+    fun `completed profile and history selectors share the bound across restart without transport ACK`() {
         val store = store(emptyList())
         var session = PumpSession(store)
         var token = session.open("pump", key)
@@ -69,9 +69,10 @@ class SessionEvidenceRetentionTest {
                 token = session.open("pump", key)
             }
             val tx = session.begin(token)
-            session.reserve(token, tx, PumpSession.WriteIntent("history-$i", selector, "HISTORY_SELECTOR", "ab".repeat(32)))
+            val profile = i % 2 == 0
+            session.reserve(token, tx, PumpSession.WriteIntent("selector-$i", if (profile) settings else selector,
+                if (profile) "SETTINGS_SELECTOR" else "HISTORY_SELECTOR", "ab".repeat(32)))
             session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
-            session.advance(token, tx, PumpSession.Phase.ACKED)
             session.finish(token, tx)
             session.resolveWrite(token, tx, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "matched selector")
             val record = session.snapshot()!!

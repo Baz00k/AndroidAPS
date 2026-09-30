@@ -25,9 +25,20 @@ import org.json.JSONObject
  * makes the next revision authoritative. Process termination therefore leaves one decryptable,
  * unambiguous replay floor. The file is excluded from Android backup.
  */
-class SessionJournal internal constructor(private val storage: Storage) : PumpSession.Store {
+class SessionJournal internal constructor(
+    private val storage: Storage,
+    private val onSlowCommit: (Long, Int, Int) -> Unit = { _, _, _ -> },
+) : PumpSession.Store {
 
     constructor(context: Context) : this(AndroidStorage(context))
+    constructor(context: Context, logger: app.aaps.core.interfaces.logging.AAPSLogger) : this(
+        AndroidStorage(context),
+        { elapsedMs, bodyBytes, evidenceRecords ->
+            logger.debug(app.aaps.core.interfaces.logging.LTag.PUMP,
+                "YpsoPump slow session journal commit: elapsedMs=$elapsedMs, bodyBytes=$bodyBytes, evidenceRecords=$evidenceRecords")
+        },
+    )
+    private var bodyBytes = 0
 
     internal interface Storage {
         fun read(): String?
@@ -410,7 +421,13 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
         }
 
     override fun commit(state: PumpSession.State) {
-        writeState(state, replaceUnavailable = false)
+        val started = System.nanoTime()
+        try {
+            writeState(state, replaceUnavailable = false)
+        } finally {
+            val elapsedMs = (System.nanoTime() - started) / 1_000_000
+            if (elapsedMs >= 500) runCatching { onSlowCommit(elapsedMs, bodyBytes, state.records.sumOf { it.writeEvidence.size }) }
+        }
     }
 
     override fun replaceUnavailable(state: PumpSession.State) {
@@ -486,6 +503,7 @@ class SessionJournal internal constructor(private val storage: Storage) : PumpSe
             .put("candidateAttemptId", state.candidateAttemptId ?: JSONObject.NULL)
             .put("lastAttempt", state.lastAttempt?.let { JSONObject().put("id", it.id).put("status", it.status.name) } ?: JSONObject.NULL)
             .put("candidateAvailability", state.candidateAvailability?.let(::availabilityJson) ?: JSONObject.NULL).toString()
+        bodyBytes = body.toByteArray(Charsets.UTF_8).size
         val old = storage.anchors()
         val alias = PREFIX + UUID.randomUUID()
         try {

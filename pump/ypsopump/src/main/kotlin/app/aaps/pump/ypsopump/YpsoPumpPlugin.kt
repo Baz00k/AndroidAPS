@@ -499,8 +499,22 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun getPumpStatus(reason: String) = onLink(reopen = false) { getPumpStatusNow(reason) }
 
+    @Volatile internal var configurationReadSucceeded = false
+        private set
+    @Volatile internal var configurationReadSequence = 0L
+        private set
+
+    internal fun configurationReadNeedsWarning(previousRead: Long = configurationReadSequence - 1): Boolean =
+        configurationReadSequence <= previousRead || !configurationReadSucceeded ||
+            pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH
+
     private fun getPumpStatusNow(reason: String) {
         aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
+        val configurationRead = reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)
+        if (configurationRead) {
+            configurationReadSucceeded = false
+            configurationReadSequence++
+        }
         // CommandReadStatus infers success from lastDataTime. Clear the prior sample even when this
         // invocation only starts a connection, so it cannot report a recent older read as current.
         pumpState.invalidateStatus(preserveDisplay = true)
@@ -510,13 +524,13 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        val configurationRead = reason in setOf(PROFILE_READ_REASON, ACTIVE_PROGRAM_REASON)
         // A background history scan holds the same BLE lane; the read the user asked for would fail at once.
         if (configurationRead) yieldHistoryRecovery()
         val statusRead = readStatusBlocking()
         if (statusRead) reconcileTbrWithStatus()
         if (configurationRead) {
             val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
+            configurationReadSucceeded = success
             // Compare before publishing the message, so the result names the consequence of the read
             // rather than only that the transfer finished.
             reconcileProfileWithLoop()
@@ -1233,7 +1247,7 @@ class YpsoPumpPlugin @Inject constructor(
      * way only to insulin waiting to be delivered. Temporary basals and profile retries wait for it; yielding to them meant
      * a read under an active loop was restarted from scratch every few minutes and never finished.
      */
-    private fun readProfileBlocking(timeoutMs: Long = 120_000, activeOnly: Boolean = false): Boolean {
+    private fun readProfileBlocking(timeoutMs: Long = PROFILE_READ_TIMEOUT_MS, activeOnly: Boolean = false): Boolean {
         var success = false
         val latch = java.util.concurrent.CountDownLatch(1)
         val onDone: (Boolean) -> Unit = {
@@ -2184,11 +2198,14 @@ class YpsoPumpPlugin @Inject constructor(
         // it. Report the outcome against the application context so the result still arrives, and a
         // closed screen cannot be leaked or written to.
         val appContext = context.applicationContext
+        val previousRead = configurationReadSequence
         val accepted = commandQueue.readStatus(action.reason, object : app.aaps.core.interfaces.queue.Callback() {
             override fun run() {
-                val outcome = if (result.success) pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
+                // Queue status freshness is not transfer completion: a full read can outlive its status sample.
+                val completed = configurationReadSequence > previousRead && configurationReadSucceeded
+                val outcome = if (completed) pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
                 else rh.gs(R.string.ypsopump_profile_read_incomplete)
-                if (pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH)
+                if (configurationReadNeedsWarning(previousRead))
                     ToastUtils.warnToast(appContext, outcome)
                 else ToastUtils.okToast(appContext, outcome)
             }
@@ -2267,6 +2284,9 @@ class YpsoPumpPlugin @Inject constructor(
         /** A stop seen by status is open until status, or the pump's Resume row, ends it. */
         private const val STATUS_STOP_WINDOW_MS = 24 * 60 * 60_000L
         internal const val PROFILE_READ_REASON = "YpsoPump explicit profile read"
+        // Leave room for durable selector/read-floor commits on slower journals. Routine TBRs wait;
+        // boluses still preempt at selector-safe boundaries rather than waiting for this deadline.
+        private const val PROFILE_READ_TIMEOUT_MS = 180_000L
         internal const val ACTIVE_PROGRAM_REASON = "YpsoPump explicit active program check"
 
         /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */

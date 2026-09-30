@@ -925,6 +925,8 @@ class YpsoPumpPluginTest {
         assertEquals(YpsoPumpState.ProfileComparison.MISMATCH, state.profileComparison)
         verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
         assertEquals("does not match", state.profileReadMessage)
+        assertTrue(plugin.configurationReadSucceeded)
+        assertTrue(plugin.configurationReadNeedsWarning())
     }
 
     @Test
@@ -948,6 +950,57 @@ class YpsoPumpPluginTest {
         whenever(commandQueue.bolusInQueue()).thenReturn(false)
         whenever(commandQueue.extendedBolusInQueue()).thenReturn(true)
         assertTrue(yieldNow())
+    }
+
+    @Test
+    fun `incomplete configuration reads warn even when retained profile matches`() {
+        connectedForConfigurationRead()
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(2)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        assertFalse(plugin.configurationReadSucceeded)
+        assertTrue(plugin.configurationReadNeedsWarning())
+    }
+
+    @Test
+    fun `completed matching configuration reads have success styling`() {
+        connectedForConfigurationRead()
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        assertTrue(plugin.configurationReadSucceeded)
+        assertFalse(plugin.configurationReadNeedsWarning())
+    }
+
+    @Test
+    fun `a cancelled queued read cannot reuse the previous successful toast outcome`() {
+        connectedForConfigurationRead()
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        val previousRead = plugin.configurationReadSequence
+
+        // Cancellation calls back without getPumpStatus running again.
+        assertTrue(plugin.configurationReadNeedsWarning(previousRead))
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        assertFalse(plugin.configurationReadNeedsWarning(previousRead))
+    }
+
+    @Test
+    fun `a failed status read clears a previous successful configuration outcome`() {
+        connectedForConfigurationRead()
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.StatusReadAttempt()
+        }
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        assertFalse(plugin.configurationReadSucceeded)
+        assertTrue(plugin.configurationReadNeedsWarning())
     }
 
     @Test

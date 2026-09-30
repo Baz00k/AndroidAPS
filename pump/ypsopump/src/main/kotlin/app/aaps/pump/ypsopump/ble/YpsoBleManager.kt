@@ -241,7 +241,7 @@ class YpsoBleManager @Inject constructor(
         disconnect()
         val key = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         try {
-            val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
+            val owner = session ?: PumpSession(SessionJournal(context, aapsLogger)).also { session = it }
             owner.provisionReadBaseline(mac.uppercase(java.util.Locale.ROOT), key, reboot, read)
         } finally {
             key.fill(0)
@@ -303,7 +303,7 @@ class YpsoBleManager @Inject constructor(
             if (pumpState.pumpAddress != macAddress) disconnect()
             if (pumpState.connectionState != ConnectionState.DISCONNECTED) return
             try {
-                val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
+                val owner = session ?: PumpSession(SessionJournal(context, aapsLogger)).also { session = it }
                 val key = configured?.key ?: checkNotNull(configuredKey)
                 val generation = configured?.generation ?: checkNotNull(configuredGeneration)
                 importDebugBaseline(owner, macAddress, key)
@@ -1144,6 +1144,7 @@ class YpsoBleManager @Inject constructor(
         val owner = YpsoProfileSelectorCoordinator.Owner(gatt, connectionId, token)
         val startedElapsed = android.os.SystemClock.elapsedRealtime()
         var readback: YpsoProfileReadback? = null
+        aapsLogger.debug(LTag.PUMP, "YpsoPump profile acquisition started: evidenceRecords=${initial.writeEvidence.size}")
         var selectedSettingId: Int? = null
         var eventCountBefore: Int? = null
 
@@ -1246,13 +1247,21 @@ class YpsoBleManager @Inject constructor(
             if (!started) failProfile("selector $settingId could not start")
         }
         fun readRows(settingId: Int) {
-            if (settingId > 61) {
+            val firstRow = 14
+            val lastRow = 61
+            if (settingId > lastRow) {
                 select(1) { activeAfter -> readClock(activeAfter) }
                 return
             }
             select(settingId) { body ->
                 if (readback?.add(settingId, body) != true) failProfile("setting $settingId could not be added")
-                else scheduleProfileContinuation(Runnable { readRows(settingId + 1) })
+                else {
+                    val rowsRead = settingId - firstRow + 1
+                    if (rowsRead % 12 == 0) {
+                        aapsLogger.debug(LTag.PUMP, "YpsoPump profile acquisition progress: rows=$rowsRead/${lastRow - firstRow + 1}, elapsedMs=${android.os.SystemClock.elapsedRealtime() - startedElapsed}, evidenceRecords=${session?.snapshot()?.writeEvidence?.size}")
+                    }
+                    scheduleProfileContinuation(Runnable { readRows(settingId + 1) })
+                }
             }
         }
         enableProfileSetup(gatt) { setup ->
