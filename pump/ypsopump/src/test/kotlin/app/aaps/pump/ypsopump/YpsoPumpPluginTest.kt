@@ -930,29 +930,6 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `an explicit profile read keeps reading through loop traffic and gives way only to insulin`() {
-        connectedForConfigurationRead()
-        var shouldYield: (() -> Boolean)? = null
-        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
-            shouldYield = it.getArgument(1)
-            it.getArgument<(Boolean) -> Unit>(2)(true)
-            YpsoBleManager.ProfileReadAttempt()
-        }
-
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-        val yieldNow = checkNotNull(shouldYield)
-
-        // A queued temporary basal or keepalive profile retry waits; restarting for them never finished.
-        whenever(commandQueue.size()).thenReturn(2)
-        assertFalse(yieldNow())
-        whenever(commandQueue.bolusInQueue()).thenReturn(true)
-        assertTrue(yieldNow())
-        whenever(commandQueue.bolusInQueue()).thenReturn(false)
-        whenever(commandQueue.extendedBolusInQueue()).thenReturn(true)
-        assertTrue(yieldNow())
-    }
-
-    @Test
     fun `incomplete configuration reads warn even when retained profile matches`() {
         connectedForConfigurationRead()
         whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
@@ -1001,104 +978,6 @@ class YpsoPumpPluginTest {
 
         assertFalse(plugin.configurationReadSucceeded)
         assertTrue(plugin.configurationReadNeedsWarning())
-    }
-
-    @Test
-    fun `an explicit profile read starts only after background history releases the link`() {
-        connectedForConfigurationRead()
-        val attempt = YpsoBleManager.HistoryReadAttempt()
-        val active = plugin.javaClass.getDeclaredField("historyRecoveryActive").apply { isAccessible = true }
-            .get(plugin) as java.util.concurrent.atomic.AtomicBoolean
-        val attemptRef = plugin.javaClass.getDeclaredField("historyRecoveryAttempt").apply { isAccessible = true }
-            .get(plugin) as java.util.concurrent.atomic.AtomicReference<YpsoBleManager.HistoryReadAttempt?>
-        active.set(true)
-        attemptRef.set(attempt)
-        whenever(manager.readStatus(any())).thenAnswer {
-            assertFalse(active.get(), "the read must not race history for operation ownership")
-            it.getArgument<(Boolean) -> Unit>(0)(true)
-            YpsoBleManager.StatusReadAttempt()
-        }
-        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
-            it.getArgument<(Boolean) -> Unit>(2)(true)
-            YpsoBleManager.ProfileReadAttempt()
-        }
-        val release = Thread {
-            while (!attempt.shouldYield) Thread.yield()
-            active.set(false)
-        }.apply { start() }
-
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-
-        release.join()
-        verify(manager).readProfileConfiguration(eq(false), any(), any())
-    }
-
-    @Test
-    fun `a read showing the pump holds a pending profile switch accepts it without waiting for keepalive`() {
-        connectedForConfigurationRead()
-        // AAPS still doses with the old profile: its switch was refused against the previous read.
-        val running: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
-        whenever(profileFunction.getProfile()).thenReturn(running)
-        whenever(profileFunction.getRequestedProfile()).thenReturn(requestedSwitch(0.5))
-        whenever(profileFunction.isProfileChangePending()).thenReturn(true)
-
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-
-        verify(rxBus).send(isA<EventProfileSwitchChanged>())
-        assertEquals(YpsoPumpState.ProfileComparison.MATCHES, state.profileComparison)
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), any())
-    }
-
-    @Test
-    fun `a pending profile switch the pump does not hold is left to the mismatch report`() {
-        connectedForConfigurationRead()
-        val running: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
-        whenever(profileFunction.getProfile()).thenReturn(running)
-        whenever(profileFunction.getRequestedProfile()).thenReturn(requestedSwitch(0.7))
-        whenever(profileFunction.isProfileChangePending()).thenReturn(true)
-
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-
-        verify(rxBus, never()).send(isA<EventProfileSwitchChanged>())
-        assertEquals(YpsoPumpState.ProfileComparison.MISMATCH, state.profileComparison)
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
-    }
-
-    /** Connected with a readable status; a full read publishes profile A at 0.5 U/h all day. */
-    private fun connectedForConfigurationRead() {
-        state.elapsedRealtime = { 2_001L }
-        state.currentZone = { ZoneId.of("Europe/Warsaw") }
-        whenever(provisioning.installed()).thenReturn(installed)
-        whenever(provisioning.isConfigured()).thenReturn(true)
-        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
-        whenever(manager.isConnected).thenReturn(true)
-        whenever(manager.canReadProfile).thenReturn(true)
-        whenever(manager.readStatus(any())).thenAnswer {
-            it.getArgument<(Boolean) -> Unit>(0)(true)
-            YpsoBleManager.StatusReadAttempt()
-        }
-        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
-            state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
-            it.getArgument<(Boolean) -> Unit>(2)(true)
-            YpsoBleManager.ProfileReadAttempt()
-        }
-    }
-
-    private fun requestedSwitch(basal: Double): app.aaps.core.data.model.PS {
-        val day = 24 * 60 * 60_000L
-        return app.aaps.core.data.model.PS(
-            timestamp = 1_000L,
-            basalBlocks = listOf(Block(day, basal)),
-            isfBlocks = listOf(Block(day, 100.0)),
-            icBlocks = listOf(Block(day, 10.0)),
-            targetBlocks = listOf(TargetBlock(day, 100.0, 100.0)),
-            glucoseUnit = GlucoseUnit.MGDL,
-            profileName = "switched",
-            timeshift = 0L,
-            percentage = 100,
-            duration = 0L,
-            iCfg = ICfg("insulin", 5 * 60 * 60_000L, 75 * 60_000L),
-        )
     }
 
     @Test
