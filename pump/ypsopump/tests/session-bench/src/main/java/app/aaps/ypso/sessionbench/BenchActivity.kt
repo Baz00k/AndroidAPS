@@ -34,6 +34,27 @@ class BenchActivity : Activity() {
                     report("COMMITTED:101")
                 }
                 "inspect" -> report("READ:${journal.load().records.single().read}")
+                "performance" -> {
+                    val evidence = (0 until 2000).map { i ->
+                        PumpSession.WriteEvidence("operation-$i", "reservation-$i", i + 1L,
+                            "669a0c20-0008-969e-e211-fcbee38b7bc5", "START_STOP_TBR",
+                            PumpSession.fingerprint("payload-$i".toByteArray()), i.toLong(),
+                            PumpSession.WriteCandidate.STANDARD, PumpSession.WriteResolution.ACCEPTED,
+                            PumpSession.fingerprint("evidence-$i".toByteArray()), "same-link status proved requested temporary basal")
+                    }
+                    var state = PumpSession.State(listOf(PumpSession.Record("synthetic-pump", "00".repeat(32),
+                        "synthetic-generation", 8, 100, 2000, writeEvidence = evidence,
+                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)))
+                    journal.commit(state)
+                    val started = System.nanoTime()
+                    repeat(6) {
+                        state = state.copy(records = state.records.map { r -> r.copy(read = r.read!! + 1) })
+                        journal.commit(state)
+                    }
+                    val elapsedMs = (System.nanoTime() - started) / 1_000_000
+                    check(journal.load() == state) { "Round-trip changed session evidence" }
+                    report("PERFORMANCE:commits=6,elapsedMs=$elapsedMs,journalBytes=${File(noBackupFilesDir, "ypso-session.json").length()},evidence=${evidence.size}")
+                }
                 else -> error("Unknown action")
             }
         } catch (e: Exception) {

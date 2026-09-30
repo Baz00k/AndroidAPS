@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 
 /** Executes journal serialization/order, legacy HMAC and sealed-body behavior; storage is not Android Keystore. */
 class SessionJournalTest {
-    private class Storage : SessionJournal.Storage {
+    private class Storage(var compressBodies: Boolean = false) : SessionJournal.Storage {
         var file: String? = null
         val keys = mutableMapOf<String, ByteArray>()
         var fault = ""
@@ -37,13 +37,14 @@ class SessionJournalTest {
         }
         override fun seal(alias: String, body: String): String {
             check(!failSeal) { "Injected seal failure" }
-            return body + "." + authenticateLegacy(alias, body).joinToString("") { "%02x".format(it) }
+            val sealedBody = if (compressBodies) java.util.Base64.getEncoder().encodeToString(SessionJournal.encodeBody(body)) else body
+            return sealedBody + "." + authenticateLegacy(alias, sealedBody).joinToString("") { "%02x".format(it) }
         }
         override fun open(alias: String, sealed: String): String {
             val body = sealed.substringBeforeLast('.')
             val mac = sealed.substringAfterLast('.').chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             check(java.security.MessageDigest.isEqual(authenticateLegacy(alias, body), mac))
-            return body
+            return if (body.startsWith("{")) body else SessionJournal.decodeBody(java.util.Base64.getDecoder().decode(body))
         }
         override fun writeAndSync(value: String) {
             boundary("before-truncate")
@@ -57,6 +58,50 @@ class SessionJournalTest {
 
     private val old = PumpSession.State(listOf(PumpSession.Record("pump", "00".repeat(32), "generation", 8, 100, null)))
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
+
+    @Test
+    fun `plain sealed revision upgrades to compression without changing evidence or replay floor`() {
+        val storage = Storage()
+        SessionJournal(storage).commit(old)
+        storage.compressBodies = true
+        assertEquals(old, SessionJournal(storage).load())
+        storage.terminateAt = "before-delete"
+        assertThrows(ThreadDeath::class.java) { SessionJournal(storage).commit(next) }
+        storage.terminateAt = ""
+        assertEquals(old, SessionJournal(storage).load())
+        SessionJournal(storage).commit(next)
+        assertEquals(next, SessionJournal(storage).load())
+    }
+
+    @Test
+    fun `compressed revisions preserve the authoritative replay floor across interrupted publication`() {
+        for (boundary in listOf("after-create", "before-truncate", "after-sync", "before-delete", "after-delete")) {
+            val storage = Storage(compressBodies = true)
+            val journal = SessionJournal(storage)
+            journal.commit(old)
+            storage.terminateAt = boundary
+
+            assertThrows(ThreadDeath::class.java) { journal.commit(next) }
+
+            storage.terminateAt = ""
+            val recovered = SessionJournal(storage).load()
+            assertEquals(if (boundary == "after-delete") next else old, recovered, boundary)
+            journal.commit(next)
+            assertEquals(next, SessionJournal(storage).load())
+        }
+    }
+
+    @Test
+    fun `sealed body compression preserves evidence text and reads older plain JSON`() {
+        val body = "{\"evidence\":[" + (0 until 2000).joinToString(",") {
+            "{\"operation\":\"operation-$it\",\"detail\":\"same-link status proved requested temporary basal\"}"
+        } + "]}"
+        val encoded = SessionJournal.encodeBody(body)
+        assertEquals(body, SessionJournal.decodeBody(encoded))
+        assertTrue(encoded.size < body.toByteArray().size / 4, "Repeated evidence must not dominate sealed journal size")
+        assertEquals(body, SessionJournal.decodeBody(body.toByteArray(Charsets.UTF_8)))
+        assertThrows(java.io.IOException::class.java) { SessionJournal.decodeBody(encoded.copyOf(encoded.size / 2)) }
+    }
 
     @Test
     fun `process termination before publication preserves exact committed journal with an extra key`() {

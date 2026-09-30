@@ -29,7 +29,10 @@ class YpsoProvisioningService internal constructor(
 ) {
 
     @Inject constructor(context: Context, pumpState: YpsoPumpState, logger: app.aaps.core.interfaces.logging.AAPSLogger) : this(
-        PumpSession(SessionJournal(context, logger)),
+        PumpSession(SessionJournal(context) { elapsedMs, bodyBytes, evidenceRecords ->
+            logger.debug(app.aaps.core.interfaces.logging.LTag.PUMP,
+                "YpsoPump slow session journal commit: elapsedMs=$elapsedMs, bodyBytes=$bodyBytes, evidenceRecords=$evidenceRecords")
+        }),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
         { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },
