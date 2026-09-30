@@ -19,6 +19,7 @@ import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
+import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
@@ -47,6 +48,7 @@ import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
+import app.aaps.ui.dialogs.compose.CarbReminders
 import app.aaps.ui.dialogs.compose.CarbTt
 import app.aaps.ui.dialogs.compose.CarbsInputs
 import app.aaps.ui.dialogs.compose.CarbsSheet
@@ -83,8 +85,10 @@ class CarbsDialog : DaggerDialogFragment() {
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var dateUtil: DateUtil
+    @Inject lateinit var automation: Automation
 
     private var queryingProtection = false
+    private lateinit var sheetState: CarbsSheetState
     private val disposable = CompositeDisposable()
 
     override fun onStart() {
@@ -100,9 +104,11 @@ class CarbsDialog : DaggerDialogFragment() {
         isCancelable = true
         dialog?.setCanceledOnTouchOutside(false)
 
+        // Built once so submit() sees exactly what the sheet offered (e.g. whether the bolus reminder toggle was shown).
+        sheetState = buildState()
         return ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { CarbsSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
+            setContent { AapsTheme { CarbsSheet(state = sheetState, onSubmit = ::submit, onClose = { dismiss() }) } }
         }
     }
 
@@ -138,7 +144,8 @@ class CarbsDialog : DaggerDialogFragment() {
             ),
             maxDurationHours = HardLimits.MAX_CARBS_DURATION_HOURS.toInt(),
             autoHypoTt = autoHypo,
-            showBolusReminder = showBolusReminder
+            showBolusReminder = showBolusReminder,
+            showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs)
         )
     }
 
@@ -155,8 +162,6 @@ class CarbsDialog : DaggerDialogFragment() {
         val hypoTT = preferences.get(UnitDoubleKey.OverviewHypoTarget)
         val actions: LinkedList<String?> = LinkedList()
         val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
-        val useAlarm = inputs.useAlarm
-        val remindBolus = inputs.remindBolus
 
         val eventTimeOriginal = dateUtil.nowWithoutMilliseconds()
         val timeOffset = inputs.timeOffsetMin
@@ -164,6 +169,13 @@ class CarbsDialog : DaggerDialogFragment() {
         val eventTimeChanged = timeOffset != 0
         val duration = inputs.durationHours
         val notes = inputs.notes
+        val reminders = CarbReminders.plan(
+            carbsAfterConstraints = carbsAfterConstraints,
+            timeOffsetMin = timeOffset,
+            eatReminder = inputs.useAlarm,
+            bolusReminder = inputs.remindBolus,
+            bolusReminderOffered = sheetState.showBolusReminder
+        )
 
         val activitySelected = inputs.tt == CarbTt.ACTIVITY
         if (activitySelected)
@@ -175,7 +187,7 @@ class CarbsDialog : DaggerDialogFragment() {
         if (hypoSelected)
             actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(hypoTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, hypoTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
 
-        if (useAlarm && carbs > 0 && timeOffset > 0)
+        if (reminders.eatReminderSeconds != null)
             actions.add(rh.gs(app.aaps.core.ui.R.string.alarminxmin, timeOffset).formatColor(context, rh, app.aaps.core.ui.R.attr.infoColor))
         if (duration > 0)
             actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + duration + rh.gs(app.aaps.core.interfaces.R.string.shorthour))
@@ -261,6 +273,8 @@ class CarbsDialog : DaggerDialogFragment() {
                             }
                         })
                     }
+                    reminders.eatReminderSeconds?.let { automation.scheduleTimeToEatReminder(it) }
+                    if (reminders.bolusReminder) automation.scheduleAutomationEventBolusReminder()
                 }, null)
             }
         } else

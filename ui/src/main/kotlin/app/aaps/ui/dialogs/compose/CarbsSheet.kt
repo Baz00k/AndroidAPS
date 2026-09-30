@@ -31,7 +31,8 @@ data class CarbsSheetState(
     val quickIncrements: List<Int>,
     val maxDurationHours: Int,
     val autoHypoTt: Boolean,
-    val showBolusReminder: Boolean
+    val showBolusReminder: Boolean,
+    val showNotes: Boolean
 )
 
 data class CarbsInputs(
@@ -59,6 +60,9 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
     var remindBolus by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
 
+    // Only a future meal can be reminded; the toggle is hidden (and its value ignored) otherwise.
+    val eatReminderAvailable = timeOffset.toInt() > 0
+
     SheetSurface(title = "Carbs", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
             NumberField("Carbs", carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", modifier = Modifier.fillMaxWidth())
@@ -79,14 +83,26 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
             NumberField("Time", timeOffset, { timeOffset = it }, step = 5.0, min = -7 * 24 * 60.0, max = 12 * 60.0, decimals = 0, unit = "min", modifier = Modifier.fillMaxWidth())
             NumberField("Extended over", duration, { duration = it }, step = 1.0, min = 0.0, max = state.maxDurationHours.toDouble(), decimals = 0, unit = "h", modifier = Modifier.fillMaxWidth())
 
-            ToggleRow("Remind me to eat", alarm, { alarm = it }, sub = "Alarm at the chosen time offset")
+            if (eatReminderAvailable) ToggleRow("Remind me to eat", alarm, { alarm = it })
             if (state.showBolusReminder) ToggleRow("Remind me to bolus", remindBolus, { remindBolus = it })
-            NotesField(notes, { notes = it })
+            if (state.showNotes) NotesField(notes, { notes = it })
 
             PrimaryButton(
                 label = "Add carbs",
                 enabled = carbs != 0.0 || tt != CarbTt.NONE,
-                onClick = { onSubmit(CarbsInputs(carbs.toInt(), timeOffset.toInt(), duration.toInt(), tt, alarm, remindBolus, notes)) }
+                onClick = {
+                    onSubmit(
+                        CarbsInputs(
+                            carbs = carbs.toInt(),
+                            timeOffsetMin = timeOffset.toInt(),
+                            durationHours = duration.toInt(),
+                            tt = tt,
+                            useAlarm = alarm && eatReminderAvailable,
+                            remindBolus = remindBolus && state.showBolusReminder,
+                            notes = if (state.showNotes) notes else ""
+                        )
+                    )
+                }
             )
         }
     }
