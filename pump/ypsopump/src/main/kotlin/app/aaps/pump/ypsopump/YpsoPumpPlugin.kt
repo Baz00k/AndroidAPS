@@ -665,7 +665,6 @@ class YpsoPumpPlugin @Inject constructor(
      * Compare the retained pump configuration against the profile AAPS is dosing with. A manual A/B
      * switch on the pump only becomes knowable here, so an explicit read/check must report its
      * consequence immediately rather than waiting for the next keepalive comparison.
-     *
      */
     internal fun reconcileProfileWithLoop() {
         val profile = profileFunction.getProfile()
