@@ -102,9 +102,8 @@ class UiInteractionImpl @Inject constructor(
             .show(fragmentManager, "TempBasalDialog")
     }
 
-    override fun runInsulinDialog(fragmentManager: FragmentManager, defaultRecordOnly: Boolean) {
+    override fun runInsulinDialog(fragmentManager: FragmentManager) {
         InsulinDialog()
-            .also { it.arguments = Bundle().also { bundle -> bundle.putBoolean("defaultRecordOnly", defaultRecordOnly) } }
             .show(fragmentManager, "InsulinDialog")
     }
 
