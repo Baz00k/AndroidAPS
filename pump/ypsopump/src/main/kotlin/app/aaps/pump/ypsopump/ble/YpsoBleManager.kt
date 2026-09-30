@@ -241,7 +241,7 @@ class YpsoBleManager @Inject constructor(
         disconnect()
         val key = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         try {
-            val owner = session ?: PumpSession(newSessionJournal()).also { session = it }
+            val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
             owner.provisionReadBaseline(mac.uppercase(java.util.Locale.ROOT), key, reboot, read)
         } finally {
             key.fill(0)
@@ -303,7 +303,7 @@ class YpsoBleManager @Inject constructor(
             if (pumpState.pumpAddress != macAddress) disconnect()
             if (pumpState.connectionState != ConnectionState.DISCONNECTED) return
             try {
-                val owner = session ?: PumpSession(newSessionJournal()).also { session = it }
+                val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
                 val key = configured?.key ?: checkNotNull(configuredKey)
                 val generation = configured?.generation ?: checkNotNull(configuredGeneration)
                 importDebugBaseline(owner, macAddress, key)
@@ -952,11 +952,6 @@ class YpsoBleManager @Inject constructor(
         YpsoFirmwareVersion.parse(pumpState.masterVersion)?.meetsMinimum == true &&
             YpsoFirmwareVersion.parse(pumpState.supervisorVersion)?.meetsMinimum == true &&
             pumpState.controlServiceVersion == "1.3"
-
-    private fun newSessionJournal() = SessionJournal(context) { elapsedMs, bodyBytes, evidenceRecords ->
-        aapsLogger.debug(LTag.PUMP,
-            "YpsoPump slow session journal commit: elapsedMs=$elapsedMs, bodyBytes=$bodyBytes, evidenceRecords=$evidenceRecords")
-    }
 
     private fun decryptOwned(payload: ByteArray): ByteArray = synchronized(opLock) {
         val owner = checkNotNull(session) { "No durable session" }

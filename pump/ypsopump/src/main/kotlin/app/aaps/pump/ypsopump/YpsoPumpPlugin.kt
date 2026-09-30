@@ -533,7 +533,7 @@ class YpsoPumpPlugin @Inject constructor(
             configurationReadSucceeded = success
             // Compare before publishing the message, so the result names the consequence of the read
             // rather than only that the transfer finished.
-            reconcileProfileWithLoop()
+            if (!success || !acceptPendingProfileSwitch()) reconcileProfileWithLoop()
             pumpState.profileReadMessage = when {
                 !success                                                                -> rh.gs(R.string.ypsopump_profile_read_incomplete)
                 pumpState.profileComparison == YpsoPumpState.ProfileComparison.MISMATCH ->
@@ -666,21 +666,27 @@ class YpsoPumpPlugin @Inject constructor(
      * switch on the pump only becomes knowable here, so an explicit read/check must report its
      * consequence immediately rather than waiting for the next keepalive comparison.
      *
-     * A profile switch refused against the previous read is accepted now if the pump holds it, rather
-     * than at the next keepalive retry. The queue re-runs the ordinary [setNewBasalProfile] check.
      */
     internal fun reconcileProfileWithLoop() {
-        val requested = profileFunction.getRequestedProfile()?.takeIf { profileFunction.isProfileChangePending() }
-        if (requested != null && isThisProfileSet(ProfileSealed.PS(requested, null))) {
-            rxBus.send(EventProfileSwitchChanged())
-            return
-        }
         val profile = profileFunction.getProfile()
         if (profile == null) {
             publishProfileComparisonNotification()
             return
         }
         isThisProfileSet(profile)
+    }
+
+    /** Called only after a coherent read; the normal queued profile check still confirms acceptance. */
+    private fun acceptPendingProfileSwitch(): Boolean {
+        val requested = profileFunction.getRequestedProfile()?.takeIf { profileFunction.isProfileChangePending() }
+            ?: return false
+        val profile = ProfileSealed.PS(requested, null)
+        val effective = profile.getBasalValues().map { YpsoBasalSchedule.EffectiveSegment(it.timeAsSeconds, it.value) }
+        // A rejected pending switch must not transiently change the running-profile notification.
+        if (!pumpState.activeScheduleMatches(effective)) return false
+        if (!isThisProfileSet(profile)) return false
+        rxBus.send(EventProfileSwitchChanged())
+        return true
     }
 
     @Synchronized
@@ -1242,7 +1248,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     /**
-     * A configuration read holds the command queue (a full read for about a minute) and cannot resume:
+     * A configuration read holds the command queue (a full read for one to two minutes) and cannot resume:
      * its coherence rests on an unchanged event count across the whole acquisition. It therefore gives
      * way only to insulin waiting to be delivered. Temporary basals and profile retries wait for it; yielding to them meant
      * a read under an active loop was restarted from scratch every few minutes and never finished.
@@ -2194,7 +2200,7 @@ class YpsoPumpPlugin @Inject constructor(
      * itself, so a second tap is answered rather than silently dropped.
      */
     private fun startConfigurationRead(context: Context, action: ConfigurationAction): Boolean {
-        // A full read runs for about a minute, well past the life of the settings screen that started
+        // A full read runs for one to two minutes, well past the life of the settings screen that started
         // it. Report the outcome against the application context so the result still arrives, and a
         // closed screen cannot be leaked or written to.
         val appContext = context.applicationContext

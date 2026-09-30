@@ -199,6 +199,10 @@ class YpsoPumpState @Inject constructor() {
      * pump-side A/B switch becomes visible against the retained configuration.
      */
     @Synchronized
+    internal fun activeScheduleMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean =
+        profileEvidence?.activeSchedule?.matches(effective) == true
+
+    @Synchronized
     internal fun profileMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean {
         val schedule = profileEvidence?.activeSchedule
         val matches = schedule?.matches(effective) == true

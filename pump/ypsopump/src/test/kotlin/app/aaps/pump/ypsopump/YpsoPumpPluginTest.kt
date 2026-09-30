@@ -1034,6 +1034,42 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `a failed configuration read cannot accept a pending switch against retained evidence`() {
+        connectedForConfigurationRead()
+        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
+        val running: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.9)) }
+        whenever(profileFunction.getProfile()).thenReturn(running)
+        whenever(profileFunction.getRequestedProfile()).thenReturn(requestedSwitch(0.5))
+        whenever(profileFunction.isProfileChangePending()).thenReturn(true)
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(2)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        verify(rxBus, never()).send(isA<EventProfileSwitchChanged>())
+        assertFalse(plugin.configurationReadSucceeded)
+        assertEquals(YpsoPumpState.ProfileComparison.MISMATCH, state.profileComparison)
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), eq(Notification.URGENT))
+    }
+
+    @Test
+    fun `an unmatched pending switch does not briefly notify when the running profile matches`() {
+        connectedForConfigurationRead()
+        val running: Profile = mock { on { getBasalValues() } doReturn arrayOf(ProfileValue(0, 0.5)) }
+        whenever(profileFunction.getProfile()).thenReturn(running)
+        whenever(profileFunction.getRequestedProfile()).thenReturn(requestedSwitch(0.7))
+        whenever(profileFunction.isProfileChangePending()).thenReturn(true)
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        verify(rxBus, never()).send(isA<EventProfileSwitchChanged>())
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_PROFILE_MISMATCH), any(), any())
+        assertEquals(YpsoPumpState.ProfileComparison.MATCHES, state.profileComparison)
+    }
+
+    @Test
     fun `a read showing the pump holds a pending profile switch accepts it without waiting for keepalive`() {
         connectedForConfigurationRead()
         // AAPS still doses with the old profile: its switch was refused against the previous read.
