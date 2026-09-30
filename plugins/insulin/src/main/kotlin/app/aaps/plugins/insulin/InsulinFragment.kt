@@ -11,6 +11,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.plugins.insulin.compose.InsulinScreen
 import app.aaps.plugins.insulin.compose.InsulinUiState
+import app.aaps.plugins.insulin.compose.buildInsulinActivityCurve
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
@@ -33,11 +34,14 @@ class InsulinFragment : DaggerFragment() {
 
     private fun build() {
         val active = activePlugin.activeInsulin
+        val diaHours = active.dia
+        val peakMinutes = active.peak
         state.value = InsulinUiState(
             activeName = active.friendlyName,
             comment = active.comment,
-            diaHours = active.dia,
-            peakMinutes = active.peak
+            diaHours = diaHours,
+            peakMinutes = peakMinutes,
+            activityCurve = buildInsulinActivityCurve(active, diaHours, peakMinutes)
         )
     }
 }
