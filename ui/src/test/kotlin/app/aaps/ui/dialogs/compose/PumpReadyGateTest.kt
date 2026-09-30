@@ -35,8 +35,13 @@ class PumpReadyGateTest {
     }
 
     @Test
+    fun `a suspension reported by the pump blocks like a stopped pump`() {
+        assertThat(classify(pumpSuspended = false, mode = RM.Mode.SUSPENDED_BY_PUMP)).isSameInstanceAs(stopped)
+    }
+
+    @Test
     fun `other suspensions stay a loop-suspended warning`() {
-        listOf(RM.Mode.SUSPENDED_BY_USER, RM.Mode.SUSPENDED_BY_DST, RM.Mode.SUSPENDED_BY_PUMP, RM.Mode.SUPER_BOLUS).forEach { mode ->
+        listOf(RM.Mode.SUSPENDED_BY_USER, RM.Mode.SUSPENDED_BY_DST, RM.Mode.SUPER_BOLUS).forEach { mode ->
             assertThat(classify(pumpSuspended = false, mode = mode)).isEqualTo(DeliveryBlocker.LoopSuspended(mode))
         }
     }

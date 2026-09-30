@@ -26,6 +26,7 @@ object CarbReminders {
     ): CarbReminderPlan = CarbReminderPlan(
         eatReminderSeconds = T.mins(timeOffsetMin.toLong()).secs().toInt()
             .takeIf { eatReminder && carbsAfterConstraints > 0 && timeOffsetMin > 0 },
-        bolusReminder = bolusReminder && bolusReminderOffered
+        // A reminder to bolus for these carbs; there is nothing to bolus for without them.
+        bolusReminder = bolusReminder && bolusReminderOffered && carbsAfterConstraints > 0
     )
 }

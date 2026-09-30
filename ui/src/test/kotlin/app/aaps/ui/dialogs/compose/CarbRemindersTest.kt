@@ -42,6 +42,7 @@ class CarbRemindersTest {
         assertThat(plan(bolus = true, bolusOffered = true).bolusReminder).isTrue()
         assertThat(plan(bolus = true, bolusOffered = false).bolusReminder).isFalse()
         assertThat(plan(bolus = false, bolusOffered = true).bolusReminder).isFalse()
+        assertThat(plan(carbs = 0, bolus = true, bolusOffered = true).bolusReminder).isFalse()
     }
 
     @Test

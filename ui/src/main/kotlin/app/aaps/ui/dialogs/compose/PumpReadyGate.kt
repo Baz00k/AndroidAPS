@@ -58,10 +58,11 @@ internal fun classifyBlocker(
     mode: RM.Mode,
     pumpStopped: () -> DeliveryBlocker.PumpStopped
 ): DeliveryBlocker? = when {
-    pumpSuspended                     -> pumpStopped()
-    mode == RM.Mode.DISCONNECTED_PUMP -> DeliveryBlocker.PumpDisconnected
-    mode.isSuspended()                -> DeliveryBlocker.LoopSuspended(mode)
-    else                              -> null
+    // The pump said it is not delivering, whether or not its latest status read agrees yet.
+    pumpSuspended || mode == RM.Mode.SUSPENDED_BY_PUMP -> pumpStopped()
+    mode == RM.Mode.DISCONNECTED_PUMP                  -> DeliveryBlocker.PumpDisconnected
+    mode.isSuspended()                                 -> DeliveryBlocker.LoopSuspended(mode)
+    else                                               -> null
 }
 
 /**
@@ -156,9 +157,10 @@ class PumpReadyGate @Inject constructor(
     }
 
     /** Same call the Loop sheet's Resume makes — mode change, audit log and all. */
-    private fun resumeLoop() {
-        val profile = profileFunction.getProfile() ?: return
-        loop.handleRunningModeChange(newRM = RM.Mode.RESUME, action = Action.RESUME, source = Sources.LoopDialog, profile = profile)
+    /** True only when the loop really is running again; a dose must not follow a resume that did not happen. */
+    private fun resumeLoop(): Boolean {
+        val profile = profileFunction.getProfile() ?: return false
+        return loop.handleRunningModeChange(newRM = RM.Mode.RESUME, action = Action.RESUME, source = Sources.LoopDialog, profile = profile)
     }
 
     private fun showSheet(activity: FragmentActivity, blocker: DeliveryBlocker, proceed: Runnable) {
@@ -173,11 +175,11 @@ class PumpReadyGate @Inject constructor(
 
         var closed = false
         // Only ever act once, and never on an activity that has gone away underneath a slow re-check.
-        fun finish(runIt: Boolean, before: () -> Unit = {}) {
+        fun finish(runIt: Boolean, before: () -> Boolean = { true }) {
             if (closed) return
             closed = true
             dialog.dismiss()
-            if (runIt && !activity.isFinishing && !activity.isDestroyed) { before(); proceed.run() }
+            if (runIt && !activity.isFinishing && !activity.isDestroyed && before()) proceed.run()
         }
 
         val view = ComposeView(activity).apply {
@@ -254,7 +256,7 @@ private fun PumpReadyContent(
 
         DeliveryBlocker.PumpDisconnected -> AlertContent(
             title = "Pump is disconnected",
-            message = "You marked the pump as disconnected, so it is not on your body. Reconnect to deliver this bolus.",
+            message = "Reconnect it in AAPS to deliver.",
             tint = AapsTheme.colors.low,
             actions = listOf(
                 AlertAction("Reconnect and bolus", primary = true, onClick = onResumeLoop),
@@ -277,7 +279,6 @@ private fun PumpReadyContent(
 
 private fun suspensionLabel(mode: RM.Mode): String = when (mode) {
     RM.Mode.SUSPENDED_BY_USER -> "suspended by you"
-    RM.Mode.SUSPENDED_BY_PUMP -> "suspended by the pump"
     RM.Mode.SUSPENDED_BY_DST  -> "suspended for a clock change"
     RM.Mode.SUPER_BOLUS       -> "running a super bolus"
     else                      -> "suspended"
