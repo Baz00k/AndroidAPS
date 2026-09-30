@@ -21,11 +21,14 @@ class InsulinFragment : DaggerFragment() {
 
     private val state = mutableStateOf(InsulinUiState())
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
-        ComposeView(requireContext()).apply {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        // ViewPager can display this page while it is still STARTED, before onResume refreshes it.
+        build()
+        return ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent { AapsTheme { InsulinScreen(state.value) } }
         }
+    }
 
     override fun onResume() {
         super.onResume()
@@ -35,13 +38,13 @@ class InsulinFragment : DaggerFragment() {
     private fun build() {
         val active = activePlugin.activeInsulin
         val diaHours = active.dia
-        val peakMinutes = active.peak
+        val activityCurve = buildInsulinActivityCurve(active, diaHours)
         state.value = InsulinUiState(
             activeName = active.friendlyName,
             comment = active.comment,
             diaHours = diaHours,
-            peakMinutes = peakMinutes,
-            activityCurve = buildInsulinActivityCurve(active, diaHours, peakMinutes)
+            peakMinutes = activityCurve?.peak?.minutes?.toInt() ?: active.peak,
+            activityCurve = activityCurve
         )
     }
 }

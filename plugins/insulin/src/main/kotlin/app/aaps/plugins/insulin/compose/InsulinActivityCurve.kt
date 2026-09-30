@@ -15,13 +15,15 @@ data class InsulinActivityCurve(
 
 data class InsulinActivityPoint(val minutes: Double, val percentPerHour: Double)
 
-fun buildInsulinActivityCurve(insulin: Insulin, diaHours: Double, peakMinutes: Int): InsulinActivityCurve? {
+fun buildInsulinActivityCurve(insulin: Insulin, diaHours: Double): InsulinActivityCurve? {
     val durationMinutes = diaHours * 60.0
     val durationMillis = diaHours * 3_600_000.0
     // Do not silently clamp a peak or draw an invented curve for an invalid oref configuration.
     if (!durationMillis.isFinite() || durationMillis >= Long.MAX_VALUE.toDouble() ||
-        durationMinutes < 30.0 || peakMinutes <= 0 || peakMinutes >= durationMinutes / 2.0
+        durationMinutes < 30.0
     ) return null
+    val peakMinutes = insulin.peak
+    if (peakMinutes <= 0 || peakMinutes >= durationMinutes / 2.0) return null
 
     val peakMillis = peakMinutes * 60_000L
     val times = ((0..80).map { (durationMillis * it / 80.0).roundToLong() } + peakMillis).distinct().sorted()
