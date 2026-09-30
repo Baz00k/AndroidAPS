@@ -85,7 +85,8 @@ object HoldConfirmDialog {
      * theme attributes from the old palette, so we take the text and let the redesign colour it.
      */
     private fun CharSequence.toPlainText(): String =
-        HtmlCompat.fromHtml(toString(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
+        // A Spanned is already parsed and keeps its line breaks; parsing it again would fold them into spaces.
+        (if (this is android.text.Spanned) toString() else HtmlCompat.fromHtml(toString(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString()).trim()
 }
 
 @Composable

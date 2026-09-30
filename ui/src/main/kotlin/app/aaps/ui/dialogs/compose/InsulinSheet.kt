@@ -1,7 +1,7 @@
 package app.aaps.ui.dialogs.compose
 
-import android.app.TimePickerDialog
 import android.text.format.DateFormat
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -12,7 +12,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDefaults
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -79,15 +85,16 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
     fun fmt(v: Double) = String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
     fun fmtInc(v: Double) = (if (v > 0) "+" else "") + fmt(v)
 
-    fun pickLogTime() {
-        val zone = ZoneId.systemDefault()
-        val current = Instant.ofEpochMilli(loggedAt).atZone(zone)
-        TimePickerDialog(
-            context,
-            { _, hour, minute -> loggedAt = InsulinEntryPolicy.logTime(state.now(), LocalTime.of(hour, minute), zone) },
-            current.hour, current.minute, DateFormat.is24HourFormat(context)
-        ).show()
-    }
+    var pickingTime by remember { mutableStateOf(false) }
+    if (pickingTime) LogTimePicker(
+        initial = Instant.ofEpochMilli(loggedAt).atZone(ZoneId.systemDefault()).toLocalTime(),
+        is24Hour = DateFormat.is24HourFormat(context),
+        onPick = { time ->
+            pickingTime = false
+            loggedAt = InsulinEntryPolicy.logTime(state.now(), time, ZoneId.systemDefault())
+        },
+        onDismiss = { pickingTime = false }
+    )
 
     SheetSurface(title = "Insulin", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
@@ -115,19 +122,28 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clip(AapsTheme.shape.cardSmall)
-                        .clickable(role = Role.Button, onClickLabel = "Change time", onClick = ::pickLogTime)
+                        .clickable(role = Role.Button, onClickLabel = "Change time") { pickingTime = true }
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Given at", style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                    Text(state.formatTime(loggedAt), style = AapsTheme.type.listTitle, color = colors.accent)
+                    Text(
+                        state.formatTime(loggedAt),
+                        style = AapsTheme.type.listTitle,
+                        color = colors.accentOnLight,
+                        modifier = Modifier
+                            .clip(AapsTheme.shape.pill)
+                            .background(colors.accentTint)
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
                 }
             ToggleRow("Eating soon target", eatingSoon, { eatingSoon = it }, sub = state.eatingSoonSummary)
             if (state.showNotes) NotesField(notes, { notes = it })
+            val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
             val label = when {
-                amount <= 0.0                  -> "Set target"
-                intent == InsulinIntent.LOG    -> "Log ${fmt(amount)} U"
-                else                           -> "Deliver ${fmt(amount)} U"
+                amount > 0.0 -> "$verb ${fmt(amount)} U"
+                eatingSoon   -> "Set target"
+                else         -> verb
             }
             PrimaryButton(
                 label = label,
@@ -136,4 +152,39 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             )
         }
     }
+}
+
+/** The time a logged dose was given, picked on the app's own palette rather than the platform dialog's. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogTimePicker(initial: LocalTime, is24Hour: Boolean, onPick: (LocalTime) -> Unit, onDismiss: () -> Unit) {
+    val colors = AapsTheme.colors
+    val picker = rememberTimePickerState(initialHour = initial.hour, initialMinute = initial.minute, is24Hour = is24Hour)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        confirmButton = { TextButton(onClick = { onPick(LocalTime.of(picker.hour, picker.minute)) }) { Text("OK", color = colors.accent) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = colors.textSecondary) } },
+        text = {
+            TimePicker(
+                state = picker,
+                colors = TimePickerDefaults.colors(
+                    clockDialColor = colors.controlFill,
+                    clockDialSelectedContentColor = colors.onAccent,
+                    clockDialUnselectedContentColor = colors.textPrimary,
+                    selectorColor = colors.accent,
+                    containerColor = colors.surface,
+                    periodSelectorBorderColor = colors.hairline,
+                    periodSelectorSelectedContainerColor = colors.accentTintStrong,
+                    periodSelectorUnselectedContainerColor = colors.surface,
+                    periodSelectorSelectedContentColor = colors.accentOnLight,
+                    periodSelectorUnselectedContentColor = colors.textSecondary,
+                    timeSelectorSelectedContainerColor = colors.accentTintStrong,
+                    timeSelectorUnselectedContainerColor = colors.controlFill,
+                    timeSelectorSelectedContentColor = colors.accentOnLight,
+                    timeSelectorUnselectedContentColor = colors.textPrimary
+                )
+            )
+        }
+    )
 }

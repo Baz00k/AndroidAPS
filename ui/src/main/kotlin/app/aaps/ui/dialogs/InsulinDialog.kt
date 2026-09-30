@@ -118,7 +118,8 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
             deliveryUnavailable = deliveryUnavailable(),
-            eatingSoonSummary = decimalFormatter.to1Decimal(preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)) + " " + unitLabel +
+            eatingSoonSummary = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)
+                .let { if (units == GlucoseUnit.MMOL) decimalFormatter.to1Decimal(it) else decimalFormatter.to0Decimal(it) } + " " + unitLabel +
                 " · " + rh.gs(app.aaps.core.ui.R.string.format_mins, preferences.get(IntKey.OverviewEatingSoonDuration)),
             showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs),
             now = dateUtil::now,
@@ -185,7 +186,7 @@ class InsulinDialog : DaggerDialogFragment() {
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
                     if (delivers) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
-                confirm(rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
+                confirm(if (recordOnlyChecked) "Log insulin" else rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (eatingSoonChecked) {
                         disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
                             TT(
