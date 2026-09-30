@@ -41,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -116,6 +118,10 @@ fun AmountStepper(
     var text by remember { mutableStateOf(fmt(value)) }
     LaunchedEffect(value) { if (parse(text) != value) text = fmt(value) }
     val stepText = fmt(step)
+    // A text field fills whatever width it is given; size it to its text so the unit sits right after the number.
+    val style = AapsTheme.type.bigValue.copy(color = colors.textPrimary)
+    val measurer = rememberTextMeasurer()
+    val fieldWidth = with(LocalDensity.current) { measurer.measure(text.ifEmpty { "0" }, style).size.width.toDp() + 2.dp }
     StepperRow(
         decreaseLabel = "Subtract $stepText $unit $name", onDecrease = { onValue((value - step).coerceIn(min, max)) },
         increaseLabel = "Add $stepText $unit $name", onIncrease = { onValue((value + step).coerceIn(min, max)) }
@@ -127,12 +133,10 @@ fun AmountStepper(
                 onValue((parse(it) ?: 0.0).coerceIn(min, max))
             },
             singleLine = true,
-            textStyle = AapsTheme.type.bigValue.copy(color = colors.textPrimary, textAlign = TextAlign.End),
+            textStyle = style,
             cursorBrush = SolidColor(colors.accent),
             keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0) KeyboardType.Decimal else KeyboardType.Number),
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .width(androidx.compose.foundation.layout.IntrinsicSize.Min)
+            modifier = Modifier.width(fieldWidth)
         )
         Text(" $unit", style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp))
     }
@@ -164,12 +168,13 @@ fun TimeStepper(
     ) {
         Column(
             Modifier
+                .weight(1f, fill = false)
                 .clip(AapsTheme.shape.cardSmall)
                 .clickable(role = Role.Button, onClickLabel = "Pick a time") { picking = true }
                 .padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(if (selected) EntryTime.relative(offsetMin) else "—", style = AapsTheme.type.bigValue, color = colors.textPrimary, textAlign = TextAlign.Center)
+            FittedText(if (selected) EntryTime.relative(offsetMin) else "—", AapsTheme.type.bigValue, colors.textPrimary, minScale = 0.5f)
             if (selected && offsetMin != 0)
                 Text(
                     DateFormat.getTimeFormat(context).format(Date(System.currentTimeMillis() + offsetMin * 60_000L)),
