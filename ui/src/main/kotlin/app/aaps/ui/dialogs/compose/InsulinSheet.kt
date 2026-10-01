@@ -4,8 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,7 +23,6 @@ import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.TimeStepper
-import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 data class InsulinSheetState(
@@ -66,37 +63,11 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
 
     fun fmt(v: Double) = String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
 
-    SheetSurface(title = "Insulin", onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SegmentedControl(
-                    options = listOf("Deliver", "Log"),
-                    selectedIndex = intent.ordinal,
-                    onSelect = { intent = InsulinIntent.entries[it] },
-                    modifier = Modifier.fillMaxWidth(),
-                    fillWidth = true,
-                    disabled = if (state.deliveryUnavailable != null) setOf(InsulinIntent.DELIVER.ordinal) else emptySet(),
-                    disabledReason = state.deliveryUnavailable?.label
-                )
-                state.deliveryUnavailable?.let {
-                    Text(it.label, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 12.dp))
-                }
-            }
-            EntryCard("Insulin") {
-                AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
-                ChoiceRow {
-                    state.quickIncrements.forEach { inc ->
-                        Choice((if (inc > 0) "+" else "") + fmt(inc), selected = false) { amount = (amount + inc).coerceIn(0.0, state.maxInsulin) }
-                    }
-                }
-            }
-            if (intent == InsulinIntent.LOG)
-                EntryCard("When") {
-                    TimeStepper(offset, { offset = it; pickedAt = System.currentTimeMillis() }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0))
-                }
-            TargetPresetCard(state.targets, target) { target = it }
-            if (state.showNotes) NotesField(notes, { notes = it })
-            val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
+    val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
+    SheetSurface(
+        title = "Insulin",
+        onClose = onClose,
+        footer = {
             PrimaryButton(
                 label = when {
                     amount > 0.0                -> "$verb ${fmt(amount)} U"
@@ -107,5 +78,36 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                 onClick = { onSubmit(InsulinInputs(amount, intent, if (offset == 0) null else pickedAt + offset * 60_000L, target, if (state.showNotes) notes else "")) }
             )
         }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SegmentedControl(
+                options = listOf("Deliver", "Log"),
+                selectedIndex = intent.ordinal,
+                onSelect = { intent = InsulinIntent.entries[it] },
+                modifier = Modifier.fillMaxWidth(),
+                fillWidth = true,
+                disabled = if (state.deliveryUnavailable != null) setOf(InsulinIntent.DELIVER.ordinal) else emptySet(),
+                disabledReason = state.deliveryUnavailable?.label
+            )
+            state.deliveryUnavailable?.let {
+                Text(it.label, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp))
+            }
+        }
+        EntryCard("Insulin") {
+            AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
+            ChoiceRow {
+                state.quickIncrements.forEach { inc ->
+                    Choice((if (inc > 0) "+" else "") + fmt(inc), selected = false, enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0) {
+                        amount = (amount + inc).coerceIn(0.0, state.maxInsulin)
+                    }
+                }
+            }
+        }
+        if (intent == InsulinIntent.LOG)
+            EntryCard("When") {
+                TimeStepper(offset, { offset = it; pickedAt = System.currentTimeMillis() }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0))
+            }
+        TargetPresetCard(state.targets, target) { target = it }
+        if (state.showNotes) NotesField(notes, { notes = it })
     }
 }

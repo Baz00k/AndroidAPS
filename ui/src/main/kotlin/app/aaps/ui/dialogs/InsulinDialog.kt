@@ -157,7 +157,10 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                 // A dose that reaches the pump is pre-flighted BEFORE the hold-to-confirm. A record-only
                 // entry (reconciling a dose already given by hand) never touches the pump.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (delivers) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
+                    if (delivers) { t2, m, r ->
+                        val action = "Deliver " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, pumpDescription.bolusStep)
+                        pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r, action = action) }
+                    }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 val title = when {
                     insulinAfterConstraints <= 0 -> rh.gs(app.aaps.core.ui.R.string.temporary_target)

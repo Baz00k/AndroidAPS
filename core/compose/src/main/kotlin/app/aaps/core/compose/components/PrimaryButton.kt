@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
@@ -19,13 +20,14 @@ fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modif
     Text(
         label,
         style = AapsTheme.type.title,
-        color = if (enabled) colors.onAccent else colors.textTertiary,
+        color = colors.onAccent,
         textAlign = TextAlign.Center,
         modifier = modifier
             .fillMaxWidth()
+            .disabledAlpha(enabled)
             .clip(AapsTheme.shape.button)
-            .background(if (enabled) colors.accent else colors.controlFill)
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .background(colors.accent)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(vertical = 14.dp)
     )
 }

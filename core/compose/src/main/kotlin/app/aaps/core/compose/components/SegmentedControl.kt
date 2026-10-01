@@ -54,13 +54,10 @@ fun SegmentedControl(
             Text(
                 text = label,
                 style = AapsTheme.type.label,
-                color = when {
-                    active   -> colors.accentOnLight
-                    !enabled -> colors.textTertiary
-                    else     -> colors.textSecondary
-                },
+                color = if (active) colors.accentOnLight else colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = (if (fillWidth) Modifier.weight(1f) else Modifier)
+                    .disabledAlpha(enabled)
                     .clip(RoundedCornerShape(999.dp))
                     .selectable(selected = active, enabled = enabled, role = Role.Tab) { onSelect(i) }
                     .then(if (!enabled && disabledReason != null) Modifier.semantics { stateDescription = disabledReason } else Modifier)

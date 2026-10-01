@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -55,7 +54,7 @@ fun ToggleRow(
     sub: String? = null
 ) {
     val colors = AapsTheme.colors
-    Row(modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
             if (sub != null) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
@@ -63,13 +62,7 @@ fun ToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = colors.onAccent,
-                checkedTrackColor = colors.accent,
-                uncheckedTrackColor = colors.controlFill,
-                uncheckedThumbColor = colors.textSecondary,
-                uncheckedBorderColor = colors.hairline
-            )
+            colors = aapsSwitchColors()
         )
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.rememberCoroutineScope
+import app.aaps.core.compose.components.disabledAlpha
 import app.aaps.core.compose.components.LocalSheetDraggable
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
@@ -212,7 +213,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             }
             // One wrapping status line in the existing target position, not a second banner.
             // tempTarget already contains the effective range and remaining time; do not repeat it.
-            val targetDescription = state.tempTarget?.let { "Temp target · $it" } ?: state.targetRange
+            val targetDescription = state.tempTarget?.let { "Temporary target · $it" } ?: state.targetRange
             if (state.stateLine.isNotBlank() || targetDescription.isNotBlank()) {
                 val activeTarget = state.tempTarget != null
                 // The target shown here is the control for changing it.
@@ -407,7 +408,7 @@ private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
                     DetailRow("Algorithm", state.algorithmName.ifBlank { "—" })
                     DetailRow("Sensitivity", state.sensitivity.ifBlank { "—" })
                     DetailRow("Profile", state.profileName.ifBlank { "—" })
-                    if (!state.tempTarget.isNullOrBlank()) DetailRow("Temp target", state.tempTarget)
+                    if (!state.tempTarget.isNullOrBlank()) DetailRow("Temporary target", state.tempTarget)
                 }
             }
             Box(Modifier.height(8.dp))
@@ -578,7 +579,7 @@ private fun shortcutIcon(shortcut: HomeShortcut) = when (shortcut) {
 @Composable
 private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, actions: HomeActions) {
     var open by remember { mutableStateOf(false) }
-    RoundIconButton(Icons.Rounded.Add, "More treatments", onClick = { open = true })
+    RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { open = true })
     if (open) HomeSheet(onClose = { open = false }) { close ->
         fun run(action: () -> Unit) = close { action() }
         MenuSurface {
@@ -626,14 +627,15 @@ private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.Ima
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
+            .disabledAlpha(enabled)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = AapsSpacing.screenH, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = if (enabled) colors.textSecondary else colors.textTertiary, modifier = Modifier.size(24.dp))
+        Icon(icon, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(24.dp))
         Column(Modifier.weight(1f)) {
-            Text(label, style = AapsTheme.type.listTitle, color = if (enabled) colors.textPrimary else colors.textTertiary)
+            Text(label, style = AapsTheme.type.listTitle, color = colors.textPrimary)
             if (status != null) Text(status, style = AapsTheme.type.caption, color = colors.accent)
         }
     }

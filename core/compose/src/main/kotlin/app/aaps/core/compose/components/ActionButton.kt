@@ -20,8 +20,8 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * A tonal action-bar button (icon + label). Tint conveys role: accent tint for ordinary actions,
- * filled accent ([emphasized]) for the primary one. A disabled button keeps its place and label so
- * the bar does not reflow, but drops to control-fill.
+ * filled accent ([emphasized]) for the primary one. A disabled button keeps its place, label and
+ * colour so the bar does not reflow, at the shared disabled opacity.
  *
  * The label shrinks before it clips (large font scales, narrow windows); the bar grows taller rather
  * than cutting the icon off.
@@ -38,19 +38,12 @@ fun ActionBarButton(
     enabled: Boolean = true
 ) {
     val colors = AapsTheme.colors
-    val bg = when {
-        !enabled   -> colors.controlFill
-        emphasized -> colors.accent
-        else       -> container
-    }
-    val fg = when {
-        !enabled   -> colors.textTertiary
-        emphasized -> colors.onAccent
-        else       -> content
-    }
+    val bg = if (emphasized) colors.accent else container
+    val fg = if (emphasized) colors.onAccent else content
     Column(
         modifier = modifier
             .heightIn(min = 58.dp)
+            .disabledAlpha(enabled)
             .clip(AapsTheme.shape.button)
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick, role = Role.Button)
