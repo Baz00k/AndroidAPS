@@ -1,11 +1,13 @@
 package app.aaps.core.compose.components
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
 
@@ -33,20 +35,38 @@ fun FittedText(
     style: TextStyle,
     color: Color,
     modifier: Modifier = Modifier,
-    minScale: Float = 0.62f
+    minScale: Float = 0.62f,
+    /** More than one lets a label that cannot fit one line even at [minScale] wrap rather than clip. */
+    maxLines: Int = 1
 ) {
+    val max = style.fontSize
+    if (maxLines > 1 && !max.isUnspecified) {
+        // Shrinking keeps a label on one line and is tried first; wrapping is the last resort, so
+        // "−30 min" shrinks while "Eating soon" at a large font scale breaks onto two lines.
+        BoxWithConstraints(modifier) {
+            val measurer = rememberTextMeasurer()
+            val smallest = measurer.measure(text, style.copy(fontSize = max * minScale), maxLines = 1, softWrap = false)
+            AutoSizedText(text, style, color, Modifier, minScale, lines = if (smallest.size.width <= constraints.maxWidth) 1 else maxLines)
+        }
+        return
+    }
+    AutoSizedText(text, style, color, modifier, minScale, maxLines)
+}
+
+@Composable
+private fun AutoSizedText(text: String, style: TextStyle, color: Color, modifier: Modifier, minScale: Float, lines: Int) {
     val max = style.fontSize
     // Not `== TextUnit.Unspecified`: that sentinel is NaN-backed, so equality is never true.
     if (max.isUnspecified) {
         // Nothing to shrink towards; render as-is rather than guessing a size.
-        BasicText(text = text, modifier = modifier, style = style.copy(color = color), maxLines = 1)
+        BasicText(text = text, modifier = modifier, style = style.copy(color = color), maxLines = lines)
         return
     }
     BasicText(
         text = text,
         modifier = modifier,
         style = style.copy(color = color),
-        maxLines = 1,
+        maxLines = lines,
         autoSize = TextAutoSize.StepBased(
             minFontSize = max * minScale,
             maxFontSize = max,

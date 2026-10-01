@@ -265,7 +265,7 @@ fun RowScope.Choice(
         if (icon != null) Icon(icon, contentDescription = null, tint = fg, modifier = Modifier
             .size(16.dp)
             .padding(end = 2.dp))
-        FittedText(label, AapsTheme.type.body.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold), fg)
+        FittedText(label, AapsTheme.type.body.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold), fg, maxLines = 2)
     }
 }
 
