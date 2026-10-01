@@ -7,28 +7,23 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -51,13 +46,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.AbsorptionCard
 import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.SheetSurface
+import app.aaps.core.compose.components.aapsSwitchColors
 import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.EntryTime
-import app.aaps.core.compose.components.StepperRow
-import app.aaps.core.compose.components.StepperValue
 import app.aaps.core.compose.components.TimeStepper
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.components.HoldToConfirmButton
@@ -73,11 +69,15 @@ import java.util.Locale
 /** How often the Calculator re-reads glucose, IOB and targets while it is open. */
 private const val REFRESH_MS = 10_000L
 
+/** Longest extended-carbs spread the Calculator offers. */
+private const val MAX_ABSORPTION_H = 8
+
 /**
- * The Calculator: inputs, then Review. Stateless with respect to the dose math: [compute] runs the
- * existing BolusWizard for the current [WizardInputs]; [onCommit] rebuilds it from current data and
- * commits only if it still matches what was reviewed, calling back when it did not. The result is
- * recomputed every [REFRESH_MS], so the numbers on screen follow new readings and decaying insulin.
+ * The Calculator: inputs, then Review, in one sheet. Stateless with respect to the dose math: [compute]
+ * runs the existing BolusWizard for the current [WizardInputs]; [onCommit] rebuilds it from current
+ * data and commits only if it still matches what was reviewed, calling back when it did not. The
+ * result is recomputed every [REFRESH_MS], so the numbers on screen follow new readings and decaying
+ * insulin.
  */
 @Composable
 fun WizardScreen(
@@ -88,6 +88,7 @@ fun WizardScreen(
     carbControls: WizardCarbControls
 ) {
     val colors = AapsTheme.colors
+    val haptics = LocalHapticFeedback.current
     // Inputs survive recreation; the review step does not, so a restored screen always needs a fresh review.
     var inputs by rememberSaveable(stateSaver = WizardInputs.Saver) { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
     var reviewing by remember { mutableStateOf(false) }
@@ -103,119 +104,90 @@ fun WizardScreen(
     LaunchedEffect(result.advisorAvailable) {
         if (!result.advisorAvailable && inputs.eatLater) inputs = inputs.copy(eatLater = false)
     }
+    // What Review was opened on; the live result is compared against it.
+    var reviewed by remember { mutableStateOf<WizardResult?>(null) }
+    BackHandler(enabled = reviewing) { reviewing = false }
+    fun onInputs(changed: WizardInputs) {
+        inputs = changed.copy(carbs = carbControls.clamp(changed.carbs))
+    }
 
-    // fillMaxSize: bounding the root is what lets weight(1f) below reserve space for the action bar.
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(colors.background)
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconBtn(if (reviewing) Icons.Rounded.ArrowBack else Icons.Rounded.Close, if (reviewing) "Back" else "Close") {
-                if (reviewing) reviewing = false else onCancel()
+    SheetSurface(
+        title = if (reviewing) "Review" else "Calculator",
+        onClose = onCancel,
+        onBack = if (reviewing) ({ reviewing = false }) else null,
+        footer = {
+            if (!reviewing) InputFooter(result, colors) {
+                reviewed = result
+                reviewing = true
             }
-            Text(
-                if (reviewing) "Review" else "Calculator",
-                style = AapsTheme.type.title, color = colors.textPrimary,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp)
-            )
+            else ReviewFooter(inputs, result.outcome) {
+                // Not sent: data moved under the review. Re-read now so the new numbers are what is shown.
+                onCommit(inputs, result.outcome) {
+                    refresh++
+                    haptics.performHapticFeedback(HapticFeedbackType.Reject)
+                }
+            }
         }
-
+    ) {
         AnimatedContent(
             targetState = reviewing,
             transitionSpec = { fadeIn() togetherWith fadeOut() },
-            label = "calculator-step",
-            modifier = Modifier.weight(1f)
+            label = "calculator-step"
         ) { onReview ->
-            if (!onReview) InputStep(
-                inputs, result, carbControls, colors,
-                onInputs = { inputs = it.copy(carbs = carbControls.clamp(it.carbs)) },
-                onReview = { reviewing = true }
-            )
-            else ReviewStep(
-                inputs, result, colors,
-                // Not sent: data moved under the review. Re-read now so the new numbers are what is shown.
-                onCommit = { reviewed, onChanged -> onCommit(inputs, reviewed) { refresh++; onChanged() } },
-                onCancel = { reviewing = false }
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
+                if (!onReview) InputCards(inputs, result, carbControls, colors, ::onInputs)
+                else ReviewContent(inputs, result, reviewed ?: result, colors)
+            }
         }
     }
 }
 
 @Composable
-private fun InputStep(
+private fun InputCards(
     inputs: WizardInputs,
     result: WizardResult,
     carbControls: WizardCarbControls,
     colors: AapsColors,
-    onInputs: (WizardInputs) -> Unit,
-    onReview: () -> Unit
+    onInputs: (WizardInputs) -> Unit
 ) {
-    Column(Modifier.fillMaxSize()) {
-        // weight(1f): the cards scroll in whatever space the action bar leaves, so Review stays on screen.
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = AapsSpacing.screenH)
-                .padding(bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
-        ) {
-            GlucoseCard(inputs, result, colors, onInputs)
-            CarbsCard(inputs, carbControls, onInputs)
-            if (inputs.carbs > 0) {
-                EatingCard(inputs, result.advisorAvailable, onInputs)
-                AbsorptionCard(inputs, onInputs)
-            }
-            AapsCard {
-                Column {
-                    SectionLabel("INCLUDED", colors, Modifier.padding(bottom = 4.dp))
-                    FactorRow("Carbs", "${inputs.carbs} g", result.carbsInsulin, colors)
-                    FactorRow(
-                        "BG correction", null, result.bgInsulin, colors,
-                        on = inputs.useBg && result.bgCorrectionAvailable, enabled = result.bgCorrectionAvailable,
-                        onToggle = { onInputs(inputs.copy(useBg = it)) }
-                    )
-                    FactorRow("Active insulin", null, result.iobInsulin, colors, on = inputs.useIob, iob = true, onToggle = { onInputs(inputs.copy(useIob = it)) })
-                    FactorRow(
-                        "15-min trend", null, result.trendInsulin, colors,
-                        on = inputs.useTrend && result.trendAvailable, enabled = result.trendAvailable,
-                        onToggle = { onInputs(inputs.copy(useTrend = it)) }
-                    )
-                    if (result.superBolusAvailable)
-                        FactorRow("Superbolus", null, result.superBolusInsulin, colors, on = inputs.useSuperBolus, onToggle = { onInputs(inputs.copy(useSuperBolus = it)) })
-                    result.scaledPercent?.let { FactorRow("Scaled", null, "$it%", colors) }
-                }
-            }
+    GlucoseCard(inputs, result, colors, onInputs)
+    CarbsCard(inputs, carbControls, onInputs)
+    if (inputs.carbs > 0) {
+        if (result.advisorAvailable) AdvisorCard(inputs, onInputs)
+        // Eating later means the carbs are not logged now: when and how they absorb is decided then.
+        if (!inputs.eatLater) {
+            EatingCard(inputs, onInputs)
+            AbsorptionCard(inputs.carbDurationHours, { onInputs(inputs.copy(carbDurationHours = it)) }, MAX_ABSORPTION_H)
         }
-
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(colors.bar)
-                .padding(horizontal = AapsSpacing.screenH, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutcomeSummary(result, colors, Modifier.weight(1f))
-            val enabled = result.outcome.commit != CalculatorOutcome.Commit.NONE
-            Text(
-                "Review",
-                style = AapsTheme.type.title,
-                color = if (enabled) colors.onAccent else colors.textTertiary,
-                modifier = Modifier
-                    .clip(AapsTheme.shape.button)
-                    .background(if (enabled) colors.accent else colors.controlFill)
-                    .clickable(enabled = enabled, role = Role.Button, onClick = onReview)
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
+    }
+    AapsCard {
+        Column {
+            SectionLabel("INCLUDED", colors, Modifier.padding(bottom = 4.dp))
+            FactorRow("Carbs", "${inputs.carbs} g", result.carbsInsulin, colors)
+            FactorRow(
+                "BG correction", null, result.bgInsulin, colors,
+                on = inputs.useBg && result.bgCorrectionAvailable, enabled = result.bgCorrectionAvailable,
+                onToggle = { onInputs(inputs.copy(useBg = it)) }
             )
+            FactorRow("Active insulin", null, result.iobInsulin, colors, on = inputs.useIob, iob = true, onToggle = { onInputs(inputs.copy(useIob = it)) })
+            FactorRow(
+                "15-min trend", null, result.trendInsulin, colors,
+                on = inputs.useTrend && result.trendAvailable, enabled = result.trendAvailable,
+                onToggle = { onInputs(inputs.copy(useTrend = it)) }
+            )
+            if (result.superBolusAvailable)
+                FactorRow("Superbolus", null, result.superBolusInsulin, colors, on = inputs.useSuperBolus, onToggle = { onInputs(inputs.copy(useSuperBolus = it)) })
+            result.scaledPercent?.let { FactorRow("Scaled", null, "$it%", colors) }
         }
+    }
+}
+
+/** The result as it stands, and the way to Review it. */
+@Composable
+private fun InputFooter(result: WizardResult, colors: AapsColors, onReview: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutcomeSummary(result, colors, Modifier.weight(1f))
+        PrimaryButton("Review", onReview, Modifier.weight(1f), enabled = result.outcome.commit != CalculatorOutcome.Commit.NONE)
     }
 }
 
@@ -320,6 +292,7 @@ private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, on
             carbControls.quickIncrements.forEach { increment ->
                 Choice(
                     if (increment > 0) "+$increment g" else "$increment g", selected = false,
+                    enabled = if (increment > 0) inputs.carbs < carbControls.maxCarbs else inputs.carbs > 0,
                     clickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs"
                 ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
             }
@@ -328,145 +301,113 @@ private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, on
 }
 
 /**
- * When the carbs are eaten. The bolus always goes in now; this tells the loop when the carbs land
- * (a pre-bolus, or carbs already eaten). With glucose high, "Later" is the bolus advisor: bolus now,
- * log nothing yet, and be reminded to eat.
+ * Bolus advisor: with glucose high, bolus now and eat once it has come down. The carbs are not logged
+ * now; a reminder fires when glucose is falling, and the Calculator is run again for the meal (active
+ * insulin then accounts for this bolus).
  */
 @Composable
-private fun EatingCard(inputs: WizardInputs, advisorAvailable: Boolean, onInputs: (WizardInputs) -> Unit) {
-    EntryCard("When") {
-        TimeStepper(
-            offsetMin = inputs.carbTime,
-            onOffset = { onInputs(inputs.copy(carbTime = it, eatLater = false)) },
-            minOffsetMin = -60, maxOffsetMin = 60,
-            presets = listOf(0, 15, 30),
-            selected = !inputs.eatLater
-        ) {
-            if (advisorAvailable)
-                Choice("Later", selected = inputs.eatLater, icon = Icons.Rounded.Notifications) { onInputs(inputs.copy(eatLater = true, carbTime = 0)) }
-        }
-        if (inputs.carbTime > 0 && !inputs.eatLater)
-            ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })
+private fun AdvisorCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
+    EntryCard("Bolus advisor") {
+        ToggleRow(
+            "Eat once glucose falls", inputs.eatLater, { onInputs(inputs.copy(eatLater = it, carbTime = 0)) },
+            sub = "Glucose is high. Bolus now and log the carbs when the reminder comes."
+        )
     }
 }
 
-/** Extended carbs: a slow meal declared per-meal, which the loop's single absorption constant cannot describe. */
+/**
+ * When the carbs are eaten. The bolus always goes in now; this tells the loop when the carbs land
+ * (a pre-bolus, or carbs already eaten).
+ */
 @Composable
-private fun AbsorptionCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
-    fun over(hours: Int) = onInputs(inputs.copy(carbDurationHours = hours.coerceIn(0, 8)))
-    EntryCard("Absorption") {
-        StepperRow(
-            decreaseLabel = "Shorten carb absorption by 1 hour", onDecrease = { over(inputs.carbDurationHours - 1) },
-            increaseLabel = "Lengthen carb absorption by 1 hour", onIncrease = { over(inputs.carbDurationHours + 1) }
-        ) { StepperValue(if (inputs.carbDurationHours == 0) "fast" else "${inputs.carbDurationHours}", if (inputs.carbDurationHours == 0) "" else "h") }
-        ChoiceRow {
-            listOf(0, 2, 3, 4).forEach { h -> Choice(if (h == 0) "Fast" else "$h h", selected = inputs.carbDurationHours == h) { over(h) } }
-        }
+private fun EatingCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
+    EntryCard("When") {
+        TimeStepper(
+            offsetMin = inputs.carbTime,
+            onOffset = { onInputs(inputs.copy(carbTime = it)) },
+            minOffsetMin = -60, maxOffsetMin = 60,
+            presets = listOf(-15, 0, 15, 30)
+        )
+        if (inputs.carbTime > 0)
+            ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })
     }
 }
 
 /**
  * Review: exactly what the hold (or the carbs button) will commit. The numbers stay live; when they
- * move — while reviewing, or because the commit found newer data — the previous value is struck
- * through and the factor that changed is highlighted, and the button always carries the current amount.
+ * move — while reviewing, or because the commit found newer data — the value Review opened on is
+ * struck through and the factor that changed is highlighted, and the button always carries the
+ * current amount.
  */
 @Composable
-private fun ReviewStep(
-    inputs: WizardInputs,
-    result: WizardResult,
-    colors: AapsColors,
-    onCommit: (reviewed: CalculatorOutcome, onChanged: () -> Unit) -> Unit,
-    onCancel: () -> Unit
-) {
-    val haptics = LocalHapticFeedback.current
-    val baseline = remember { result }
+private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: WizardResult, colors: AapsColors) {
     val outcome = result.outcome
     val changed = baseline.outcome.insulin != outcome.insulin || baseline.outcome.carbs != outcome.carbs
-    fun commit() = onCommit(outcome) { haptics.performHapticFeedback(HapticFeedbackType.Reject) }
-
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = AapsSpacing.screenH)
-            .padding(top = 8.dp, bottom = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
-    ) {
-        val delivers = outcome.commit == CalculatorOutcome.Commit.DELIVER
-        val headline = if (delivers || outcome.commit == CalculatorOutcome.Commit.NONE) units(outcome.insulin) else "${outcome.carbs} g"
-        val previous = if (delivers || outcome.commit == CalculatorOutcome.Commit.NONE) units(baseline.outcome.insulin) else "${baseline.outcome.carbs} g"
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (changed)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Struck(previous, colors)
-                    Tag("Updated", colors.accent)
-                }
-            Text(headline, style = AapsTheme.type.hero, color = colors.textPrimary)
-            outcome.uncappedInsulin?.let { uncapped ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Struck(units(uncapped), colors)
-                    Tag("Max bolus", colors.high)
-                }
+    val delivers = outcome.commit == CalculatorOutcome.Commit.DELIVER
+    val showsInsulin = delivers || outcome.commit == CalculatorOutcome.Commit.NONE
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (changed)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Struck(if (showsInsulin) units(baseline.outcome.insulin) else "${baseline.outcome.carbs} g", colors)
+                Tag("Updated", colors.accent)
             }
-            when {
-                delivers && inputs.eatLater -> IconLine(Icons.Rounded.Notifications, "Remind to eat", colors.accent)
-                delivers && outcome.carbs > 0 -> Text("+ ${outcome.carbs} g", style = AapsTheme.type.listTitle, color = colors.textSecondary)
+        Text(if (showsInsulin) units(outcome.insulin) else "${outcome.carbs} g", style = AapsTheme.type.hero, color = colors.textPrimary)
+        outcome.uncappedInsulin?.let { uncapped ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Struck(units(uncapped), colors)
+                Tag("Max bolus", colors.high)
             }
         }
+        when {
+            delivers && inputs.eatLater   -> IconLine(Icons.Rounded.Notifications, "Carbs not logged · reminder to eat", colors.accent)
+            delivers && outcome.carbs > 0 -> Text("+ ${outcome.carbs} g", style = AapsTheme.type.listTitle, color = colors.textSecondary)
+        }
+    }
 
-        AapsCard(Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                BreakdownRow("Carbs", result.carbsInsulin, colors, changed = baseline.carbsInsulin != result.carbsInsulin)
-                if (inputs.useBg && result.bgCorrectionAvailable)
-                    BreakdownRow("BG correction", result.bgInsulin, colors, changed = baseline.bgInsulin != result.bgInsulin)
-                if (inputs.useTrend && result.trendAvailable)
-                    BreakdownRow("15-min trend", result.trendInsulin, colors, changed = baseline.trendInsulin != result.trendInsulin)
-                if (inputs.useIob)
-                    BreakdownRow("Active insulin", result.iobInsulin, colors, iob = true, changed = baseline.iobInsulin != result.iobInsulin)
-                if (result.superBolusAvailable && inputs.useSuperBolus) BreakdownRow("Superbolus", result.superBolusInsulin, colors)
-                result.scaledPercent?.let { BreakdownRow("Scaled", "$it%", colors) }
-                outcome.carbEquivalent?.let { BreakdownRow("Carb equivalent", "$it g", colors) }
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp)
-                        .background(colors.hairline)
-                        .size(1.dp)
-                )
-                Row(Modifier.fillMaxWidth()) {
-                    Text("Total", style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
-                    Text(units(outcome.insulin), style = AapsTheme.type.listTitle, color = colors.textPrimary, fontWeight = FontWeight.ExtraBold)
-                }
+    AapsCard(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            BreakdownRow("Carbs", result.carbsInsulin, colors, changed = baseline.carbsInsulin != result.carbsInsulin)
+            if (inputs.useBg && result.bgCorrectionAvailable)
+                BreakdownRow("BG correction", result.bgInsulin, colors, changed = baseline.bgInsulin != result.bgInsulin)
+            if (inputs.useTrend && result.trendAvailable)
+                BreakdownRow("15-min trend", result.trendInsulin, colors, changed = baseline.trendInsulin != result.trendInsulin)
+            if (inputs.useIob)
+                BreakdownRow("Active insulin", result.iobInsulin, colors, iob = true, changed = baseline.iobInsulin != result.iobInsulin)
+            if (result.superBolusAvailable && inputs.useSuperBolus) BreakdownRow("Superbolus", result.superBolusInsulin, colors)
+            result.scaledPercent?.let { BreakdownRow("Scaled", "$it%", colors) }
+            outcome.carbEquivalent?.let { BreakdownRow("Carb equivalent", "$it g", colors) }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .background(colors.hairline)
+                    .size(1.dp)
+            )
+            Row(Modifier.fillMaxWidth()) {
+                Text("Total", style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Text(units(outcome.insulin), style = AapsTheme.type.listTitle, color = colors.textPrimary, fontWeight = FontWeight.ExtraBold)
             }
         }
+    }
 
-        if (outcome.carbs > 0 && !inputs.eatLater) {
-            val timing = when {
-                inputs.carbTime != 0 -> "Eating ${EntryTime.relative(inputs.carbTime)}"
-                else                -> null
-            }
-            val absorption = if (inputs.carbDurationHours > 0) "Absorbing over ${inputs.carbDurationHours} h" else null
-            val reminder = if (inputs.remindToEat && inputs.carbTime > 0) "Reminder" else null
-            listOfNotNull(timing, absorption, reminder).takeIf { it.isNotEmpty() }?.let {
-                Text(it.joinToString(" · "), style = AapsTheme.type.body, color = colors.textSecondary, textAlign = TextAlign.Center)
-            }
+    if (outcome.carbs > 0 && !inputs.eatLater) {
+        val timing = if (inputs.carbTime != 0) "Eating ${EntryTime.relative(inputs.carbTime)}" else null
+        val absorption = if (inputs.carbDurationHours > 0) "Absorption ${inputs.carbDurationHours} h" else null
+        val reminder = if (inputs.remindToEat && inputs.carbTime > 0) "Reminder" else null
+        listOfNotNull(timing, absorption, reminder).takeIf { it.isNotEmpty() }?.let {
+            Text(it.joinToString(" · "), style = AapsTheme.type.body, color = colors.textSecondary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
-        if (result.siteWarning.isNotBlank())
-            Text(result.siteWarning, style = AapsTheme.type.caption, color = colors.high, textAlign = TextAlign.Center)
+    }
+    if (result.siteWarning.isNotBlank())
+        Text(result.siteWarning, style = AapsTheme.type.caption, color = colors.high, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+}
 
-        when (outcome.commit) {
-            CalculatorOutcome.Commit.DELIVER   -> HoldToConfirmButton(label = "Hold to deliver ${units(outcome.insulin)}", onConfirm = ::commit, confirms = outcome to inputs.eatLater)
-            CalculatorOutcome.Commit.LOG_CARBS -> PrimaryButton(label = "Log ${outcome.carbs} g", onClick = ::commit, modifier = Modifier.fillMaxWidth())
-            CalculatorOutcome.Commit.NONE      -> PrimaryButton(label = "Nothing to confirm", onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth())
-        }
-        Text(
-            "Cancel", style = AapsTheme.type.body, color = colors.textSecondary,
-            modifier = Modifier
-                .clip(AapsTheme.shape.pill)
-                .clickable(role = Role.Button, onClick = onCancel)
-                .padding(horizontal = 24.dp, vertical = 10.dp)
-        )
+@Composable
+private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCommit: () -> Unit) {
+    when (outcome.commit) {
+        CalculatorOutcome.Commit.DELIVER   -> HoldToConfirmButton(label = "Deliver ${units(outcome.insulin)}", onConfirm = onCommit, confirms = outcome to inputs.eatLater)
+        CalculatorOutcome.Commit.LOG_CARBS -> PrimaryButton(label = "Log ${outcome.carbs} g", onClick = onCommit)
+        CalculatorOutcome.Commit.NONE      -> PrimaryButton(label = "Nothing to confirm", onClick = {}, enabled = false)
     }
 }
 
@@ -534,16 +475,7 @@ private fun FactorRow(
             modifier = Modifier.padding(end = if (onToggle != null) 12.dp else 0.dp)
         )
         if (onToggle != null)
-            Switch(
-                checked = on, onCheckedChange = onToggle, enabled = enabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.onAccent,
-                    checkedTrackColor = colors.accent,
-                    uncheckedTrackColor = colors.controlFill,
-                    uncheckedThumbColor = colors.textSecondary,
-                    uncheckedBorderColor = colors.hairline
-                )
-            )
+            Switch(checked = on, onCheckedChange = onToggle, enabled = enabled, colors = aapsSwitchColors())
     }
 }
 

@@ -8,11 +8,6 @@ import android.os.HandlerThread
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.TE
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
@@ -40,7 +35,7 @@ import app.aaps.ui.dialogs.compose.WizardCarbControls
 import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.ui.dialogs.compose.WizardResult
 import app.aaps.ui.dialogs.compose.WizardScreen
-import dagger.android.support.DaggerDialogFragment
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Provider
@@ -52,7 +47,7 @@ import kotlin.math.abs
  * as before. What the user reviewed is exactly what is committed: the dose is recomputed at confirmation
  * and nothing is sent if it changed ([DoseDrift]).
  */
-class WizardDialog : DaggerDialogFragment() {
+class WizardDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -73,18 +68,6 @@ class WizardDialog : DaggerDialogFragment() {
 
     private var initialCarbs = 0
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.apply {
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            // A plain background drops the platform dialog's inset frame: the Calculator is a full screen.
-            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            // Enter and leave like the app's sheets, from the bottom edge, instead of fading.
-            setWindowAnimations(com.google.android.material.R.style.Animation_Design_BottomSheetDialog)
-        }
-        aapsLogger.debug(LTag.APS, "Dialog opened: ${this.javaClass.simpleName}")
-    }
-
     /**
      * The HandlerThread started above is not a daemon, so without this it outlives the dialog and
      * one thread leaks per wizard open — ten of them were live on device. ErrorDialog already does
@@ -98,31 +81,23 @@ class WizardDialog : DaggerDialogFragment() {
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         arguments?.let { initialCarbs = it.getDouble("carbs_input", 0.0).toInt() }
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
-
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AapsTheme {
-                    WizardScreen(
-                        compute = ::compute,
-                        onCommit = ::commit,
-                        onCancel = { dismiss() },
-                        initialInputs = WizardInputs(carbs = initialCarbs),
-                        carbControls = WizardCarbControls.fromOverviewIncrements(
-                            listOf(
-                                preferences.get(IntKey.OverviewCarbsButtonIncrement1),
-                                preferences.get(IntKey.OverviewCarbsButtonIncrement2),
-                                preferences.get(IntKey.OverviewCarbsButtonIncrement3)
-                            ),
-                            maxCarbs = constraintChecker.getMaxCarbsAllowed().value()
-                        )
-                    )
-                }
-            }
+        aapsLogger.debug(LTag.APS, "Dialog opened: ${this.javaClass.simpleName}")
+        return sheetContent {
+            WizardScreen(
+                compute = ::compute,
+                onCommit = ::commit,
+                onCancel = { dismiss() },
+                initialInputs = WizardInputs(carbs = initialCarbs),
+                carbControls = WizardCarbControls.fromOverviewIncrements(
+                    listOf(
+                        preferences.get(IntKey.OverviewCarbsButtonIncrement1),
+                        preferences.get(IntKey.OverviewCarbsButtonIncrement2),
+                        preferences.get(IntKey.OverviewCarbsButtonIncrement3)
+                    ),
+                    maxCarbs = constraintChecker.getMaxCarbsAllowed().value()
+                )
+            )
         }
     }
 
