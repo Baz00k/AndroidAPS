@@ -29,6 +29,7 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
@@ -160,9 +162,26 @@ fun AmountStepper(
     }
 }
 
+/** The current time, refreshed every [periodMs], so a relative time on screen does not go stale. */
+@Composable
+fun rememberNow(periodMs: Long = 15_000L): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(periodMs) {
+        while (true) {
+            delay(periodMs)
+            now = System.currentTimeMillis()
+        }
+    }
+    return now
+}
+
 /**
  * When something happened or will happen, as minutes from now. − / + move it by [step] minutes; tapping
  * the value opens a clock for anything further away. Quick [presets] are minute offsets.
+ *
+ * [atMs] is the moment itself, for an entry that records a fixed time: the clock shown (and the
+ * picker's start) is then exactly what will be saved, however long the screen has been open.
+ * Without it the time is relative, e.g. a meal 15 min after a bolus that has not been given yet.
  */
 @Composable
 fun TimeStepper(
@@ -171,10 +190,12 @@ fun TimeStepper(
     minOffsetMin: Int,
     maxOffsetMin: Int,
     presets: List<Int>,
-    step: Int = 5
+    step: Int = 5,
+    atMs: Long? = null
 ) {
     val colors = AapsTheme.colors
     val context = LocalContext.current
+    fun moment() = atMs ?: (System.currentTimeMillis() + offsetMin * 60_000L)
     var picking by remember { mutableStateOf(false) }
     fun set(minutes: Int) = onOffset(minutes.coerceIn(minOffsetMin, maxOffsetMin))
     StepperRow(
@@ -193,7 +214,7 @@ fun TimeStepper(
             FittedText(EntryTime.relative(offsetMin), entryValueStyle(), colors.textPrimary, minScale = 0.5f)
             if (offsetMin != 0)
                 Text(
-                    DateFormat.getTimeFormat(context).format(Date(System.currentTimeMillis() + offsetMin * 60_000L)),
+                    DateFormat.getTimeFormat(context).format(Date(moment())),
                     style = AapsTheme.type.caption, color = colors.textTertiary
                 )
         }
@@ -202,7 +223,7 @@ fun TimeStepper(
         presets.forEach { m -> Choice(EntryTime.signed(m), selected = offsetMin == m) { set(m) } }
     }
     if (picking) ClockPicker(
-        initial = Instant.ofEpochMilli(System.currentTimeMillis() + offsetMin * 60_000L).atZone(ZoneId.systemDefault()).toLocalTime(),
+        initial = Instant.ofEpochMilli(moment()).atZone(ZoneId.systemDefault()).toLocalTime(),
         is24Hour = DateFormat.is24HourFormat(context),
         onPick = { time ->
             picking = false

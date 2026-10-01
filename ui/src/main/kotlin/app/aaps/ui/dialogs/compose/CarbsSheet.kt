@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import app.aaps.core.compose.components.AbsorptionCard
@@ -16,6 +15,8 @@ import app.aaps.core.compose.components.NotesField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.TimeStepper
+import app.aaps.core.compose.components.rememberNow
+import kotlin.math.roundToInt
 import app.aaps.core.compose.components.ToggleRow
 
 data class CarbsSheetState(
@@ -52,9 +53,11 @@ private const val CARBS_LATEST_MIN = 12 * 60
 @Composable
 fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose: () -> Unit) {
     var carbs by rememberSaveable { mutableStateOf(0.0) }
-    // The picked time is a moment, not a distance from whenever the form is finally submitted.
-    var timeOffset by rememberSaveable { mutableIntStateOf(0) }
-    var pickedAt by rememberSaveable { mutableLongStateOf(0L) }
+    // The picked time is a moment, not a distance from whenever the form is finally submitted; the
+    // distance shown is derived from it.
+    var at by rememberSaveable { mutableStateOf<Long?>(null) }
+    val now = rememberNow()
+    val timeOffset = at?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
     var duration by rememberSaveable { mutableIntStateOf(0) }
     var target by rememberSaveable { mutableStateOf(state.initialTarget) }
     var alarm by rememberSaveable { mutableStateOf(false) }
@@ -80,7 +83,7 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
                     onSubmit(
                         CarbsInputs(
                             carbs = grams,
-                            eatenAt = if (timeOffset == 0) null else pickedAt + timeOffset * 60_000L,
+                            eatenAt = at,
                             durationHours = duration,
                             target = target,
                             useAlarm = alarm && eatReminderAvailable,
@@ -103,7 +106,7 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
             }
         }
         EntryCard("When") {
-            TimeStepper(timeOffset, { timeOffset = it; pickedAt = System.currentTimeMillis() }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, presets = listOf(-30, -15, 0, 15))
+            TimeStepper(timeOffset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, presets = listOf(-30, -15, 0, 15), atMs = at)
             if (eatReminderAvailable) ToggleRow("Remind me to eat", alarm, { alarm = it })
         }
         AbsorptionCard(duration, { duration = it }, state.maxDurationHours)

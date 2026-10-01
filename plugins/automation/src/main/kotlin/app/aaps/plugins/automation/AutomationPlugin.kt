@@ -456,8 +456,10 @@ class AutomationPlugin @Inject constructor(
      *
      * @param seconds seconds to the future
      */
+    // A timed reminder is for a meal whose carbs are already on record; only the bolus advisor's
+    // reminder (below) asks for the meal to be entered.
     override fun scheduleTimeToEatReminder(seconds: Int) =
-        timerUtil.scheduleReminder(seconds, rh.gs(R.string.time_to_eat))
+        timerUtil.scheduleReminder(seconds, rh.gs(R.string.time_to_eat_logged))
 
     /**
      * Create new Automation event to alarm when is time to eat

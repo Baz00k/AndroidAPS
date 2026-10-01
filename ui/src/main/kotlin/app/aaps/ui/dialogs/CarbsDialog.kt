@@ -205,11 +205,16 @@ class CarbsDialog : DaggerBottomSheetFragment() {
                             override fun run() {
                                 if (!result.success)
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
+                                // Reminders are about carbs that are on record: none for an entry that failed.
+                                // The eat reminder is due at the meal, however long the confirmation took.
+                                else {
+                                    if (reminders.eatReminderSeconds != null)
+                                        ((eventTime - dateUtil.now()) / 1000L).toInt().takeIf { it > 0 }?.let { automation.scheduleTimeToEatReminder(it) }
+                                    if (reminders.bolusReminder) automation.scheduleAutomationEventBolusReminder()
+                                }
                             }
                         })
                     }
-                    reminders.eatReminderSeconds?.let { automation.scheduleTimeToEatReminder(it) }
-                    if (reminders.bolusReminder) automation.scheduleAutomationEventBolusReminder()
                 }, null)
             }
         } else

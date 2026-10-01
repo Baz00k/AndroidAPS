@@ -235,9 +235,10 @@ class BolusWizardTest : TestBaseWithProfile() {
         assertThat(bolusForLowBg).isLessThan(bolusForBgInRange)
     }
 
-    private fun advisorWizard(bgMgdl: Double, carbs: Int, carbTime: Int): BolusWizard {
+    private fun advisorWizard(bgMgdl: Double, carbs: Int, carbTime: Int, bolusIob: Double = 0.0): BolusWizard {
         val profile = setupProfile(100.0, 110.0, 50.0, 10.0)
         whenever(profile.units).thenReturn(GlucoseUnit.MGDL)
+        whenever(iobCobCalculator.calculateIobFromBolus()).thenReturn(IobTotal(System.currentTimeMillis()).also { it.iob = bolusIob })
         return BolusWizard(
             aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
             commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
@@ -264,5 +265,12 @@ class BolusWizardTest : TestBaseWithProfile() {
         assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = -10).bolusAdvisorApplies()).isFalse()
         whenever(preferences.get(BooleanKey.OverviewUseBolusAdvisor)).thenReturn(false)
         assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = 0).bolusAdvisorApplies()).isFalse()
+    }
+
+    @Test
+    fun `bolus advisor does not apply when there is no dose, so eating later cannot drop the carbs`() {
+        whenever(preferences.get(BooleanKey.OverviewUseBolusAdvisor)).thenReturn(true)
+        // 30 g at IC 10 plus a correction from 250 is ~5.3 U; 10 U on board more than covers it.
+        assertThat(advisorWizard(bgMgdl = 250.0, carbs = 30, carbTime = 0, bolusIob = 10.0).bolusAdvisorApplies()).isFalse()
     }
 }

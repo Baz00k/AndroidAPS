@@ -7,9 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -23,6 +21,8 @@ import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.TimeStepper
+import app.aaps.core.compose.components.rememberNow
+import kotlin.math.roundToInt
 import app.aaps.core.compose.theme.AapsTheme
 
 data class InsulinSheetState(
@@ -55,9 +55,11 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
     val colors = AapsTheme.colors
     var amount by rememberSaveable { mutableStateOf(0.0) }
     var intent by rememberSaveable { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
-    // The picked time is a moment, not a distance from whenever the form is finally submitted.
-    var offset by rememberSaveable { mutableIntStateOf(0) }
-    var pickedAt by rememberSaveable { mutableLongStateOf(0L) }
+    // The picked time is a moment, not a distance from whenever the form is finally submitted; the
+    // distance shown is derived from it.
+    var at by rememberSaveable { mutableStateOf<Long?>(null) }
+    val now = rememberNow()
+    val offset = at?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
     var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
     var notes by rememberSaveable { mutableStateOf("") }
 
@@ -75,7 +77,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                     else                        -> verb
                 },
                 enabled = amount > 0.0 || target != TargetPreset.NONE,
-                onClick = { onSubmit(InsulinInputs(amount, intent, if (offset == 0) null else pickedAt + offset * 60_000L, target, if (state.showNotes) notes else "")) }
+                onClick = { onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else "")) }
             )
         }
     ) {
@@ -105,7 +107,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
         }
         if (intent == InsulinIntent.LOG)
             EntryCard("When") {
-                TimeStepper(offset, { offset = it; pickedAt = System.currentTimeMillis() }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0))
+                TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0), atMs = at)
             }
         TargetPresetCard(state.targets, target) { target = it }
         if (state.showNotes) NotesField(notes, { notes = it })

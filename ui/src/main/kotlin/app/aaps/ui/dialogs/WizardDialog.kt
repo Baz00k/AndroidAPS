@@ -173,8 +173,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
             superBolusInsulin = signed(w.insulinFromSuperBolus),
             scaledPercent = preferences.get(IntKey.OverviewBolusPercentage).takeIf { it != 100 },
             outcome = outcome(w, carbs),
-            // Only a dose can be taken now and eaten later.
-            advisorAvailable = w.bolusAdvisorApplies() && w.insulinAfterConstraints > 0.0,
+            advisorAvailable = w.bolusAdvisorApplies(),
             siteWarning = freshSiteWarning(w.insulinAfterConstraints),
             superBolusAvailable = false
         )
@@ -200,23 +199,24 @@ class WizardDialog : DaggerBottomSheetFragment() {
     }
 
     /** What confirming will actually do, rebuilt from current data. Compared, never trusted from the screen. */
-    private class Plan(val wizard: BolusWizard, val outcome: CalculatorOutcome, val advisor: Boolean?)
+    private class Plan(val wizard: BolusWizard, val outcome: CalculatorOutcome, val advisor: Boolean)
 
     private fun plan(inputs: WizardInputs): Plan? {
         val profile = profileFunction.getProfile() ?: return null
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
         val w = buildWizard(inputs, profile, glucose(inputs), carbs)
         val outcome = outcome(w, carbs)
-        // "Eat later" is only a real choice for a dose the advisor applies to.
+        // "Eat later" is only a real choice for a dose the advisor applies to. The answer is always
+        // explicit: a null would let BolusWizard ask again in a popup, after the hold.
         val advisorApplies = w.bolusAdvisorApplies() && outcome.commit == CalculatorOutcome.Commit.DELIVER
-        return Plan(w, outcome, if (advisorApplies) inputs.eatLater else null)
+        return Plan(w, outcome, advisorApplies && inputs.eatLater)
     }
 
     /** The reviewed plan still holds: same dose and carbs, and the same answer to the advisor. */
     private fun Plan.matches(inputs: WizardInputs, reviewed: CalculatorOutcome): Boolean =
         !DoseDrift.changed(reviewed, outcome, activePlugin.activePump.pumpDescription.bolusStep) &&
             outcome.commit != CalculatorOutcome.Commit.NONE &&
-            (!inputs.eatLater || advisor == true)
+            (!inputs.eatLater || advisor)
 
     /** Set on the first commit; a second confirmation (a repeated tap or accessibility action) is ignored. */
     private var committing = false

@@ -403,10 +403,12 @@ class BolusWizard @Inject constructor(
 
     /**
      * High glucose with a meal: the bolus advisor offers to bolus now and remind the user to eat once
-     * glucose has come down, instead of logging the carbs straight away.
+     * glucose has come down, instead of logging the carbs straight away. Only with a dose to give:
+     * without one, "eat later" would drop the carbs and deliver nothing.
      */
     fun bolusAdvisorApplies(): Boolean =
-        preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0
+        preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0 &&
+            insulinAfterConstraints > 0.0
 
     /**
      * [skipConfirmation] — when true the final "are you sure" [OKDialog.showConfirmation] is NOT shown and
