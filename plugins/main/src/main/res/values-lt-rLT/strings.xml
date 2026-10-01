@@ -248,7 +248,6 @@
     <string name="short_tabtitles">Naudoti sutrumpintus skirtukų pavadinimus</string>
     <string name="overview_show_notes_field_in_dialogs_title">Rodyti pastabų laukelį terapijos dialoguose</string>
     <string name="deliverpartofboluswizard">Boluso skaičiuoklė atlieka skaičiavimus, tačiau tik dalis apskaičiuoto insulino yra suleidžiama. Naudinga kartu su SMB algoritmu.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Suleisti 100% bolusą, jei glikemijos duomenys senesni nei</string>
     <string name="enable_bolus_advisor">Įjungti boluso patarėją</string>
     <string name="enable_bolus_advisor_summary">Naudokite priminimą valgyti vėliau, o ne patarėjo rezultatą esant aukštam gliukozės lygiui („pre-bolusas“)</string>
     <string name="enablesuperbolus">Įjungti superbolusus skaičiuoklėje</string>

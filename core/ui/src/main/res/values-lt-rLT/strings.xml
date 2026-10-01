@@ -429,7 +429,6 @@
     <string name="cobvsiob">AAO prieš AIO</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! Nustatytas lėtas angliavandenių įsisavinimas: %2$d%% laiko. Dar karą patikrinkite savo skaičiavimus. AAO gali būti pervertinti, todėl gali būti suleista per daug insulino!!!!!</font>]]></string>
     <string name="partialboluswizard">Suleisti šią boluso skaičiuoklės rezultato dalį [%]</string>
-    <string name="partialboluswizard_reset_time">Senų glikemijos duomenų riba [min]</string>
     <string name="bolus_constraint_applied_warn">Pritaikytas boluso apribojimas: %1$.2f v iki %2$.2f v</string>
     <string name="bolus_recorded_only">Bolusas bus tik įrašytas (nebus suleistas)</string>
     <string name="advisoralarm">Pranešti apie laiką valgyti</string>

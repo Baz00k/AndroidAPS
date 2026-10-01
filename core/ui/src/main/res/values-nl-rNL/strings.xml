@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB vs IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!! Trage koolhydraat absorptie gedetecteerd: %2$d%% van de tijd. Controleer je berekening nogmaals. COB kan zijn overschat waardoor er misschien meer insuline wordt afgegeven!!!</font> zijn]]></string>
     <string name="partialboluswizard">Voer dit deel van het bolus wizard resultaat uit [%]</string>
-    <string name="partialboluswizard_reset_time">Oude glycemie tijdsdrempel [min]</string>
     <string name="bolus_constraint_applied_warn">Bolusbeperking toegepast: %1$.2f E naar %2$.2f E</string>
     <string name="bolus_recorded_only">Bolus wordt alleen geregistreerd (niet toegediend door pomp)</string>
     <string name="advisoralarm">Start alarm wanneer het tijd is om te eten</string>

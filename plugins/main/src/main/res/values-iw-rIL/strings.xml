@@ -240,7 +240,6 @@
     <string name="short_tabtitles">קצר את כותרות הלשוניות</string>
     <string name="overview_show_notes_field_in_dialogs_title">הצג שדות הערות בתיבות דו-שיח של טיפול</string>
     <string name="deliverpartofboluswizard">אשף הבולוס מבצע חישוב אך רק חלק זה של האינסולין המחושב מוזרק. שימושי בשימוש עם אלגוריתם SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">הוזרק 100% מהבולוס, אם ערך הסוכר בדם ישן </string>
     <string name="enable_bolus_advisor">אפשר את יועץ הבולוסים</string>
     <string name="enable_bolus_advisor_summary">מציג תזכורת לאכול אחר כך במקום להזריק את המינון שהומלץ ע\"י האשף בעת היפרגליקמיה (\"בולוס מקדים\")</string>
     <string name="enablesuperbolus">אפשר סופר בולוס באשף</string>

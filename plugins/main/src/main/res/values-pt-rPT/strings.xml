@@ -225,7 +225,6 @@
     <string name="short_tabtitles">Abreviar títulos dos separadores</string>
     <string name="overview_show_notes_field_in_dialogs_title">Mostrar campo de notas na janela de tratamentos</string>
     <string name="deliverpartofboluswizard">Assistente de bólus executa o cálculo, mas apenas esta parte da insulina calculada é administada. Útil com o algoritmo SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Entregar bólus completo (100%) se a glicemia for mais velha que</string>
     <string name="enable_bolus_advisor">Activar Guia de Bólus</string>
     <string name="enable_bolus_advisor_summary">Use lembrete para começar a comer mais tarde em vez di resultado do assistente durante a glicemia alta (\"pré-bolus\")</string>
     <string name="enablesuperbolus">Activar superbólus no assistente</string>

@@ -253,7 +253,6 @@
     <string name="short_tabtitles">Krátke názvy modulov</string>
     <string name="overview_show_notes_field_in_dialogs_title">Zobrazovať kolónku poznámky v dialógoch ošetrení</string>
     <string name="deliverpartofboluswizard">Bolusová kalkulačka urobí výpočet, ale iba táto časť vypočítaného inzulínu je podaná. Pomáha pri SMB algoritme.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Podať celý bolus (100%), pokiaľ je glykémia staršia ako</string>
     <string name="enable_bolus_advisor">Povoliť bolusového poradcu</string>
     <string name="enable_bolus_advisor_summary">Pri vysokej glykémii spustiť pripomienku namiesto výsledku z kalkulačky, aby ste začali jesť neskôr (tzv. \"prebolus\")</string>
     <string name="enablesuperbolus">Povoliť superbolus</string>

@@ -405,7 +405,6 @@
     <string name="cobvsiob">COB vs IOB (ενεργοί υδατάνθρακες vs ενεργή ινσουλίνη)</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! Μικρή απορρόφηση υδατανθράκων ανιχνεύτηκε: %2$d%% της ώρας. Τσεκάρετε τους υπολογισμούς σας. COB μπορεί να υπερεκτιμήθηκε και να δόθηκε περισσότερη ινσουλίνη!!!!!</font>]]></string>
     <string name="partialboluswizard">Χορήγηση του αποτελέσματος αυτού του μέρους του υπολογισμού bolus [%]</string>
-    <string name="partialboluswizard_reset_time">Χρονικό όριο παλιάς γλυκαιμίας [min]</string>
     <string name="bolus_constraint_applied_warn">Ορίστηκε περιορισμός Bolus: %1$.2f U σε %2$.2f U</string>
     <string name="bolus_recorded_only">Το Bolus μόνο θα καταγραφεί (δε θα χορηγηθεί από την αντλία)</string>
     <string name="advisoralarm">Εκτέλεση συναγερμού όταν έρθει η ώρα να φάτε</string>

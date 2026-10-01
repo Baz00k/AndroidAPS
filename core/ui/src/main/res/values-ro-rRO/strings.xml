@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB vs IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! A fost detectată o absorbție lentă a carbohidraților: %2$d%% din timp. Reverificați calculele. COB poate fi supraestimat, astfel că este posibilă administrarea de mai multă insulină !!!!!</font>]]></string>
     <string name="partialboluswizard">Livrați doar partea aceasta din rezultatul sugerat de wizard [%]</string>
-    <string name="partialboluswizard_reset_time">Prag de timp pentru vechimea glicemiei [min]</string>
     <string name="bolus_constraint_applied_warn">Este aplicatâ limitarea bolusului %1$.2f U la %2$.2f U</string>
     <string name="bolus_recorded_only">Bolusul va fi doar consemnat (nu va fi livrat de pompă)</string>
     <string name="advisoralarm">Rulează alarma când este timpul să mănânci</string>

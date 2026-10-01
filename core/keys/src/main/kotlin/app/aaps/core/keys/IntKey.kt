@@ -50,7 +50,6 @@ enum class IntKey(
     OverviewBattWarning("statuslights_bat_warning", 51, 0, 100, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewBattCritical("statuslights_bat_critical", 26, 0, 100, defaultedBySM = true, dependency = BooleanKey.OverviewShowStatusLights),
     OverviewBolusPercentage("boluswizard_percentage", 100, 10, 100),
-    OverviewResetBolusPercentageTime("key_reset_boluswizard_percentage_time", 16, 6, 120, defaultedBySM = true, engineeringModeOnly = true),
     ProtectionTimeout("protection_timeout", 1, 1, 180, defaultedBySM = true),
     ProtectionTypeSettings("settings_protection", 0, 0, 5),
     ProtectionTypeApplication("application_protection", 0, 0, 5),

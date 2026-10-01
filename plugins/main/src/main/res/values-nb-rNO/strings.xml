@@ -253,7 +253,6 @@
     <string name="short_tabtitles">Korte navn i menyfaner</string>
     <string name="overview_show_notes_field_in_dialogs_title">Vis merknadsfelt i dialogvindu for behandlinger, sensorbytte, profilbytte og BS-kontroll</string>
     <string name="deliverpartofboluswizard">Boluskalkulator utfører beregninger, men bare denne del av beregnet insulin leveres. Nyttig ved bruk av SMB-algoritmen.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Gi full bolus (100 %) dersom blodsukker er eldre enn</string>
     <string name="enable_bolus_advisor">Aktiver bolusveileder</string>
     <string name="enable_bolus_advisor_summary">Bruk en påminnelse om å spise senere istedet for boluskalkulatorens resultat når blodsukker er høyt (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Aktiver superbolus i boluskalkulator</string>

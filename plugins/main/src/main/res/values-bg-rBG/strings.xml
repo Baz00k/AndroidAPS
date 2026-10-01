@@ -228,7 +228,6 @@
     <string name="short_tabtitles">Използвай къси имена</string>
     <string name="overview_show_notes_field_in_dialogs_title">Показване на поле \"бележки\" в диалоговите прозорци за лечение</string>
     <string name="deliverpartofboluswizard">Калкулатора изчислява нужния инсулин, но само тази част ще бъде доставена. Полезно със SMB алгоритъма.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Достави целия болус (100%), ако гликемията е била преди повече от</string>
     <string name="enable_bolus_advisor">Активиране на болус съветник</string>
     <string name="enable_bolus_advisor_summary">Използвай напомняне за старт на хранене вместо съветника по време на висока гликемия (\"пре-болус\")</string>
     <string name="enablesuperbolus">Разреши използването на Суперболус</string>

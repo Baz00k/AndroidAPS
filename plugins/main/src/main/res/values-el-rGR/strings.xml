@@ -226,7 +226,6 @@
     <string name="short_tabtitles">Συντομογραφίες ενοτήτων</string>
     <string name="overview_show_notes_field_in_dialogs_title">Εμφάνιση πεδίου σημειώσεων στους διαλόγους θεραπείας</string>
     <string name="deliverpartofboluswizard">Ο Υπολογισμός Bolus κάνει υπολογισμούς αλλά μόνο αυτό το μέρος της υπολογίσημης ινσουλίνης χορηγείται. Χρήσιμο με τον αλγόριθμο SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Χορήγησε το πλήρες bolus (100%) εάν η γλυκαιμία είναι παλαιότερη από</string>
     <string name="enable_bolus_advisor">Ενεργοποίηση συμβούλου bolus</string>
     <string name="enable_bolus_advisor_summary">Χρησιμοποιήστε υπενθύμιση για να ξεκινήσετε να τρώτε αργότερα αντί για το αποτέλεσμα του οδηγού κατά τη διάρκεια υψηλής γλυκαιμίας (\"προ-bolus\")</string>
     <string name="enablesuperbolus">Ενεργοποίηση superbolus στον σύντομο οδηγό</string>

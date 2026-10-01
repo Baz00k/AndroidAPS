@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB vs. IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! Detekovaná pomalá absorbcia sacharidov: %2$d%% času. Prekontrolujte kalkuláciu. COB môže byť úplne iné, môže byť podaného viac inzulínu!!!!!</font>]]></string>
     <string name="partialboluswizard">Podaj túto časť z výsledku kalkulácie [%]</string>
-    <string name="partialboluswizard_reset_time">Časový limit starej glykémie [min]</string>
     <string name="bolus_constraint_applied_warn">Použité obmedzenie bolusu: %1$.2f U na %2$.2f U</string>
     <string name="bolus_recorded_only">Bolus bude iba zaznamenaný (nie pumpou vydaný)</string>
     <string name="advisoralarm">Spustiť výstrahu, keď je čas na jedlo</string>

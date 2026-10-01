@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB 對 IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! 偵測到碳水化合物吸收緩慢：%2$d%% 的時間。請再次檢查您的計算。COB 可能被高估，因此可能會導致給予過多的胰島素 (建議取消計算機中的COB後再重新計算)!!!!!</font>]]></string>
     <string name="partialboluswizard">傳送一部分的注射嚮導結果 [%]</string>
-    <string name="partialboluswizard_reset_time">舊血糖時間門檻值 [分鐘]</string>
     <string name="bolus_constraint_applied_warn">注射限制已套用：%1$.2f U 至 %2$.2f U</string>
     <string name="bolus_recorded_only">僅紀錄注射（不由幫浦傳送）</string>
     <string name="advisoralarm">當到達用餐時間時提醒我</string>

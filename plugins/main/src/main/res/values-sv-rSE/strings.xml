@@ -226,7 +226,6 @@
     <string name="short_tabtitles">Förkorta namnen på flikarna</string>
     <string name="overview_show_notes_field_in_dialogs_title">Anteckning i behandlingsdialoger</string>
     <string name="deliverpartofboluswizard">Bolusguiden utför beräkningar, men endast denna del av beräknat insulin levereras. Användbar med SMB-algoritm.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Leverera full bolus (100%) om BG-värde är äldre än</string>
     <string name="enable_bolus_advisor">Aktivera bolusguiden</string>
     <string name="enable_bolus_advisor_summary">Få en påminnelse om att börja äta senare (istället för kalkylatorns resultat) om du ligger högt i BG</string>
     <string name="enablesuperbolus">Aktivera superbolus i kalkylatorn</string>

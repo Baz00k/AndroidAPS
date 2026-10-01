@@ -248,7 +248,6 @@
     <string name="short_tabtitles">Kısa sekme başlıkları</string>
     <string name="overview_show_notes_field_in_dialogs_title">Tedavi diyaloglarında not alanını göster</string>
     <string name="deliverpartofboluswizard">Bolus sihirbazı hesaplamayı gerçekleştirir ancak hesaplanan insülinin yalnızca bu kısmı iletilir. SMB algoritması ile kullanışlıdır.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">KŞ şu tarihten daha eskiyse tam bolus (%100) verin</string>
     <string name="enable_bolus_advisor">Bolus danışmanını etkinleştir</string>
     <string name="enable_bolus_advisor_summary">Yüksek glisemi sırasında sihirbaz sonucu yerine daha sonra yemeye başlamak için hatırlatıcı kullanın (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Sihirbazda süperbolusu etkinleştir</string>

@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB vs IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!! Advarsel: Oppdaget treg absorpsjon av karbohydrater: %2$d%% av tiden. Dobbeltsjekk din beregning. COB kan være misvisende og du risikerer å få for mye insulin !!</font>]]></string>
     <string name="partialboluswizard">Doser denne delen av resultatet fra boluskalkulatoren [%]</string>
-    <string name="partialboluswizard_reset_time">Terskel for gammel BS-verdi [min]</string>
     <string name="bolus_constraint_applied_warn">Bolus begrensning brukt: %1$.2f E til %2$.2f E</string>
     <string name="bolus_recorded_only">Bolus vil bare bli loggført (ikke levert av pumpe)</string>
     <string name="advisoralarm">Aktiver alarm når det er på tide å spise</string>

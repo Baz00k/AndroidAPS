@@ -253,7 +253,6 @@
     <string name="short_tabtitles">縮短標籤標題</string>
     <string name="overview_show_notes_field_in_dialogs_title">在治療對話框中顯示備註欄</string>
     <string name="deliverpartofboluswizard">注射嚮導執行計算，但僅輸送計算出的一部分胰島素。對SMB算法有用。</string>
-    <string name="deliver_part_of_boluswizard_reset_time">如果血糖值超過，則輸送全部注射（100%）</string>
     <string name="enable_bolus_advisor">啟用注射建議</string>
     <string name="enable_bolus_advisor_summary">提醒需要延後用餐，不要在高血糖期間用餐（“應提早注射”）</string>
     <string name="enablesuperbolus">在嚮導中啟用超級注射</string>

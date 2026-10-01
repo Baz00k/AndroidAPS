@@ -226,7 +226,6 @@
     <string name="short_tabtitles">Forkort titel</string>
     <string name="overview_show_notes_field_in_dialogs_title">Vis notefelt i behandlingsdialoger</string>
     <string name="deliverpartofboluswizard">Bolus guiden udfører beregning, men kun denne del af beregnet insulin leveres. Nyttig med SMB algoritme.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Levér fuld bolus (100%), hvis glycæmi er ældre end</string>
     <string name="enable_bolus_advisor">Aktiver bolus rådgiver</string>
     <string name="enable_bolus_advisor_summary">Brug påmindelse om at begynde at spise senere i stedet for guiden under høj glykæmi (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Aktiver superbolus i guiden</string>

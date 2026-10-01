@@ -253,7 +253,6 @@
     <string name="short_tabtitles">Thu gọn tên tab</string>
     <string name="overview_show_notes_field_in_dialogs_title">Hiển thị trường ghi chú trong hộp thoại điều trị</string>
     <string name="deliverpartofboluswizard">Trình Bolus Wizard thực hiện tính toán nhưng chỉ một phần insulin được tính toán mới được tiêm. Hữu ích khi dùng với thuật toán SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Tiêm bolus đầy đủ (100%) nếu dữ liệu đường huyết cũ hơn</string>
     <string name="enable_bolus_advisor">Bật trợ lý tính liều bolus</string>
     <string name="enable_bolus_advisor_summary">Sử dụng nhắc nhở để bắt đầu ăn sau đó thay vì kết quả của Bolus Wizard khi đường huyết cao (‘tiêm trước bữa ăn _ pre-bolus’)</string>
     <string name="enablesuperbolus">Bật Superbolus trong wizard</string>

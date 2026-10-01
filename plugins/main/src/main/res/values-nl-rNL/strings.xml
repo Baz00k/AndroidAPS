@@ -253,7 +253,6 @@
     <string name="short_tabtitles">Afgekorte tab titels</string>
     <string name="overview_show_notes_field_in_dialogs_title">Toon notities veld in behandeling dialoogvensters</string>
     <string name="deliverpartofboluswizard">Bolus wizard voert de berekening uit maar alleen dit deel van berekende insuline wordt geleverd. Handig in combinatie met het SMB algoritme.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Volledige bolus (100%) leveren als glycemie ouder is dan</string>
     <string name="enable_bolus_advisor">Bolusadviseur inschakelen</string>
     <string name="enable_bolus_advisor_summary">Gebruik bij een hoge bloedglucose niet het resultaat van de wizard, maar een herinnering om later met eten te beginnen (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Activeer superbolus in de wizard</string>

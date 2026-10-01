@@ -251,7 +251,6 @@
     <string name="short_tabtitles">Skrócone tytuły kart</string>
     <string name="overview_show_notes_field_in_dialogs_title">Pokaż pole uwag w oknie leczenia</string>
     <string name="deliverpartofboluswizard">Kreator bolusa wykonuje obliczenia, ale tylko ta część obliczonej dawki insuliny jest dostarczana. Pomocne z algorytmem SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Dostarcz pełen bolus (100%), jeśli glikemia jest starsza niż</string>
     <string name="enable_bolus_advisor">Włącz doradcę bolusa</string>
     <string name="enable_bolus_advisor_summary">Użyj przypomnienia, aby rozpocząć jedzenie później podczas wysokiej glikemii (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Zezwalaj na superbolus w kalkulatorze</string>

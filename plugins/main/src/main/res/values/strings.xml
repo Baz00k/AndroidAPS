@@ -277,7 +277,6 @@
     <string name="short_tabtitles">Shorten tab titles</string>
     <string name="overview_show_notes_field_in_dialogs_title">Notes on entry screens</string>
     <string name="deliverpartofboluswizard">The Calculator delivers only this part of what it calculates. Useful with SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Deliver full bolus (100%) if glycemia is older than</string>
     <string name="enable_bolus_advisor">Bolus advisor</string>
     <string name="enable_bolus_advisor_summary">With glucose high, the Calculator offers to bolus now and remind you to eat once glucose falls</string>
     <string name="enablesuperbolus">Superbolus in QuickWizard</string>

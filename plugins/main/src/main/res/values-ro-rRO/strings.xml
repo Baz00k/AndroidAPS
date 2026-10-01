@@ -253,7 +253,6 @@
     <string name="short_tabtitles">Scurtează titlurile secțiunilor</string>
     <string name="overview_show_notes_field_in_dialogs_title">Afișează câmp pentru note în dialogurile de tratamente</string>
     <string name="deliverpartofboluswizard">Wizard bolus face un calcul, dar numai o parte din insulina calculată este și livrată. Este mai eficient când se folosește cu algoritmul SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Livrează bolus complet (100%) dacă glicemia este mai veche de</string>
     <string name="enable_bolus_advisor">Activare consilier bolus</string>
     <string name="enable_bolus_advisor_summary">Folosește o alarma de reamintire pentru a începe sa mănânci mai târziu în loc de alerta de la calculatorul de bolus din timpul hiperglicemiei (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Activează superbolus în asistent</string>
