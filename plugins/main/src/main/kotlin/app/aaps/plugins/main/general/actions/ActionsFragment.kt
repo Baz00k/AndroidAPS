@@ -206,11 +206,11 @@ class ActionsFragment : DaggerFragment() {
         val therapy = buildList {
             // An existing target must remain visible and editable even when the loop is stopped.
             if (TherapyActionAvailability.tempTarget(targetStatus != null, profile != null, loop.runningMode))
-                add(TherapyAction(ActionId.TEMP_TARGET, "Temp Target", targetStatus.orEmpty(), active = targetStatus != null))
+                add(TherapyAction(ActionId.TEMP_TARGET, "Temporary target", targetStatus.orEmpty(), active = targetStatus != null))
             if (pump.pumpDescription.isTempBasalCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && notClient) {
                 val active = processedTbrEbData.getTempBasalIncludingConvertedExtended(now)
-                if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temp Basal", active.toStringShort(rh), cancelable = true))
-                else add(TherapyAction(ActionId.TEMP_BASAL, "Temp Basal"))
+                if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temporary basal", active.toStringShort(rh), cancelable = true))
+                else add(TherapyAction(ActionId.TEMP_BASAL, "Temporary basal"))
             }
             if (TherapyActionAvailability.extendedBolus(
                     pump.pumpDescription.isExtendedBolusCapable, pump.isInitialized(), pump.isSuspended(), loop.runningMode,
@@ -221,24 +221,24 @@ class ActionsFragment : DaggerFragment() {
                 if (eb != null) add(
                     TherapyAction(
                         ActionId.EXTENDED_BOLUS_CANCEL,
-                        "Extended Bolus",
+                        "Extended bolus",
                         eb.toStringMedium(dateUtil, rh),
                         cancelable = true,
                         enabled = !commandQueue.extendedBolusInQueue(),
                         disabledSub = rh.gs(R.string.extended_bolus_cancellation_pending),
                     )
                 )
-                else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended Bolus"))
+                else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended bolus"))
             }
             if (activePlugin.activeProfileSource.profile != null && pump.pumpDescription.isSetBasalProfileCapable && pump.isInitialized() && notDisconnected && !pump.isSuspended())
-                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile Switch", profileFunction.getProfileName()))
+                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile switch", profileFunction.getProfileName()))
         }
 
         val events = buildList {
             if (pump.pumpDescription.isRefillingCapable && pump.isInitialized()) add(EventAction(ActionId.FILL, "Prime/Fill"))
             add(EventAction(ActionId.SENSOR_INSERT, "Sensor"))
             if (pump.pumpDescription.isBatteryReplaceable || pump.isBatteryChangeLoggingEnabled()) add(EventAction(ActionId.BATTERY_CHANGE, "Battery"))
-            add(EventAction(ActionId.BG_CHECK, "BG Check"))
+            add(EventAction(ActionId.BG_CHECK, "BG check"))
             add(EventAction(ActionId.NOTE, "Note"))
             add(EventAction(ActionId.EXERCISE, "Exercise"))
             add(EventAction(ActionId.ANNOUNCEMENT, "Announce"))

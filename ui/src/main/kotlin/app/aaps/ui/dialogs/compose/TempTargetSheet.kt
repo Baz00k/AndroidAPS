@@ -46,7 +46,7 @@ fun TempTargetSheet(
 
     fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${state.decimals}f", v)
 
-    SheetSurface(title = "Temp target", onClose = onClose) {
+    SheetSurface(title = "Temporary target", onClose = onClose) {
         Column(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -93,7 +93,7 @@ fun TempTargetSheet(
 
             val enabled = target > 0.0 && duration > 0
             Text(
-                "Start temp target",
+                "Start temporary target",
                 style = AapsTheme.type.title,
                 color = if (enabled) colors.onAccent else colors.textTertiary,
                 textAlign = TextAlign.Center,
@@ -106,7 +106,7 @@ fun TempTargetSheet(
             )
             if (state.hasActive)
                 Text(
-                    "Cancel current temp target",
+                    "Cancel current temporary target",
                     style = AapsTheme.type.body,
                     color = colors.low,
                     textAlign = TextAlign.Center,

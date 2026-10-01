@@ -275,15 +275,15 @@
     <string name="low_mark">LOW mark</string>
     <string name="high_mark">HIGH mark</string>
     <string name="short_tabtitles">Shorten tab titles</string>
-    <string name="overview_show_notes_field_in_dialogs_title">Show notes field in treatment dialogs</string>
-    <string name="deliverpartofboluswizard">Bolus wizard performs calculation but only this part of calculated insulin is delivered. Useful with SMB algorithm.</string>
+    <string name="overview_show_notes_field_in_dialogs_title">Notes on entry screens</string>
+    <string name="deliverpartofboluswizard">The Calculator delivers only this part of what it calculates. Useful with SMB.</string>
     <string name="deliver_part_of_boluswizard_reset_time">Deliver full bolus (100%) if glycemia is older than</string>
-    <string name="enable_bolus_advisor">Enable bolus advisor</string>
-    <string name="enable_bolus_advisor_summary">Use reminder to start eating later instead of wizard result during high glycemia ("pre-bolus")</string>
-    <string name="enablesuperbolus">Enable superbolus in wizard</string>
-    <string name="enablesuperbolus_summary">Enable superbolus functionality in wizard. Do not enable until you learn what it really does. IT MAY CAUSE INSULIN OVERDOSE IF USED BLINDLY!</string>
-    <string name="enablebolusreminder">Enable bolus reminder</string>
-    <string name="enablebolusreminder_summary">Use reminder to bolus later with wizard ("post-bolus")</string>
+    <string name="enable_bolus_advisor">Bolus advisor</string>
+    <string name="enable_bolus_advisor_summary">With glucose high, the Calculator offers to bolus now and remind you to eat once glucose falls</string>
+    <string name="enablesuperbolus">Superbolus in QuickWizard</string>
+    <string name="enablesuperbolus_summary">Allow QuickWizard entries to add a superbolus. Do not enable until you learn what it really does. IT MAY CAUSE INSULIN OVERDOSE IF USED BLINDLY!</string>
+    <string name="enablebolusreminder">Bolus reminder</string>
+    <string name="enablebolusreminder_summary">With glucose low or falling, Carbs offers to remind you to bolus once glucose rises again</string>
     <string name="run_question">Run %s?</string>
 
     <!--    OverviewMenu-->
