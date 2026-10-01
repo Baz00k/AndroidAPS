@@ -297,7 +297,7 @@ class YpsoProvisioningService internal constructor(
      * counter; writes reconcile from zero against the pump through the pump-confirmed exponential
      * search and establish ownership on acceptance.
      */
-    internal fun recoverLostJournalReadOnly(
+    internal fun recoverLostJournalIdentityOnly(
         stream: InputStream,
         expectedDocumentSha256: String,
         now: Instant = Instant.now(),
@@ -314,7 +314,7 @@ class YpsoProvisioningService internal constructor(
                 val serial = PumpIdentity.normalizeSerial(document.serial)
                 PumpIdentity.validatePair(serial, document.mac)
                 quiesceConnection()
-                owner.recoverLostJournalReadOnly(
+                owner.recoverLostJournalIdentityOnly(
                     PumpSession.Provisioning(
                         document.mac,
                         serial,
@@ -343,7 +343,7 @@ class YpsoProvisioningService internal constructor(
                 val documentHash = document.documentSha256
                     ?: throw SecurityException("Reviewed session document hash is required for journal recovery")
                 quiesceConnection()
-                owner.recoverLostJournalReadOnly(
+                owner.recoverLostJournalIdentityOnly(
                     PumpSession.Provisioning(
                         document.mac,
                         serial,
@@ -377,96 +377,13 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
-    internal fun reviewOwnershipHandoff(
-        stream: InputStream,
-        expectedSha256: String,
-    ): YpsoOwnershipHandoff.Reviewed {
-        require(expectedSha256.matches(Regex("[0-9a-f]{64}"))) { "A reviewed lowercase SHA-256 is required" }
-        val data = boundedRead(stream, YpsoOwnershipHandoff.MAX_DOCUMENT_BYTES)
-        return try {
-            val observed = MessageDigest.getInstance("SHA-256").digest(data)
-            require(MessageDigest.isEqual(observed, expectedSha256.hexBytes())) { "Ownership handoff hash does not match review" }
-            val active = owner.committedRecord() ?: throw SecurityException("Install and verify the pump key before importing ownership")
-            val key = active.keyHex?.hexBytes() ?: throw SecurityException("Protected pump key is unavailable")
-            try {
-                YpsoOwnershipHandoff.parse(data, key).also { reviewed ->
-                    require(reviewed.documentSha256 == expectedSha256)
-                    require(reviewed.record.pump == active.pump && reviewed.record.keyId == active.keyId && reviewed.record.serial == active.serial) {
-                        "Ownership handoff belongs to another installed pump"
-                    }
-                }
-            } finally {
-                key.fill(0)
-            }
-        } finally {
-            data.fill(0)
-        }
-    }
-
-    internal fun installOwnershipHandoff(
-        reviewed: YpsoOwnershipHandoff.Reviewed,
-        now: Instant = Instant.now(),
-    ) = synchronized(provisioningLock) {
-        synchronized(this) { mutationEpoch.incrementAndGet() }
-        try {
-            quiesceConnection()
-            synchronized(this) {
-                val source = mapOf(
-                    "ownership_handoff_sha256" to reviewed.documentSha256,
-                    "ownership_evidence_sha256" to reviewed.reviewedEvidenceSha256,
-                    "ownership_source_apk_sha256" to reviewed.source.apkSha256,
-                    "ownership_source_journal_sha256" to reviewed.source.journalSha256,
-                )
-                val active = owner.committedRecord() ?: throw SecurityException("No installed pump session")
-                if (active.writeBootstrapState == PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH) {
-                    owner.recoverIdentityOnlyLowerBound(reviewed.record, now.toEpochMilli(), source)
-                } else {
-                    owner.adoptOwnershipHandoff(
-                        reviewed.record,
-                        now.toEpochMilli(),
-                        source,
-                        minimumKnownWriteFloor = durableBolusRecoveryEvidence()?.let { evidence ->
-                            try {
-                                val allocated = evidence.attempts.filter {
-                                    it.dispatchCounter != null || it.cancelCounter != null
-                                }
-                                allocated.forEach { attempt ->
-                                    check(attempt.pumpSerial == reviewed.record.serial) {
-                                        "Durable bolus allocation belongs to another pump"
-                                    }
-                                    check(attempt.sessionKeyId == reviewed.record.keyId) {
-                                        "Durable bolus allocation is not bound to the reviewed ownership key"
-                                    }
-                                    check(attempt.baseline.pumpReboot == reviewed.record.reboot) {
-                                        "Durable bolus allocation belongs to another pump epoch"
-                                    }
-                                }
-                                allocated.maxOfOrNull { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }
-                                    ?.takeIf { it >= 0 }
-                            } finally {
-                                evidence.bytes.fill(0)
-                            }
-                        },
-                    )
-                }
-                pumpState.invalidateStatus()
-                pumpState.invalidateProfileEvidence()
-                refreshState()
-                publishAvailability()
-            }
-        } finally {
-            completeMutationEpoch()
-        }
-    }
-
     internal fun ownershipStatus(): String {
         val record = owner.committedRecord() ?: return owner.loadFailureLocation?.let { "JOURNAL_UNAVAILABLE:$it" } ?: "UNCONFIGURED"
         val reservation = record.reservation
         return "generation=${record.generation},reboot=${record.reboot},read=${record.read},write=${record.write}," +
             "bootstrap=${record.writeBootstrapState},pending=${reservation?.operationId ?: "none"}," +
             "phase=${reservation?.phase ?: "none"},evidence=${record.writeEvidence.size}," +
-            "retired_legacy=${record.retiredLegacyBenchAlarmCursorRecovery?.operationId ?: "none"}," +
-            "handoff=${record.source["ownership_handoff_sha256"] ?: "none"}"
+            "lower_bound_reboot=${record.lowerBoundRecoveryReboot ?: "none"}"
     }
 
     /** Document equivalent of [installManualAndStartVerification], including secret destruction. */

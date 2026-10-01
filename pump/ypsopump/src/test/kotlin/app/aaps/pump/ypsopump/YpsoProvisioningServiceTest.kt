@@ -9,7 +9,6 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
-import app.aaps.pump.ypsopump.provisioning.YpsoOwnershipHandoff
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 import java.time.Instant
@@ -1316,7 +1315,7 @@ class YpsoProvisioningServiceTest {
     @Test
     fun `journal loss recovery requires reviewed document and durable bolus evidence hashes`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline(mac, key, 21, 100)
+        store.saved = readBaseline(mac, key, 21, 100)
         store.unavailable = true
         val document = validDocument().toByteArray()
         val evidence = "durable-bolus-allocation".toByteArray()
@@ -1348,9 +1347,9 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `ordinary reviewed document import replaces unavailable journal as read only session`() {
+    fun `ordinary reviewed document import replaces unavailable journal as identity only session`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline(mac, key, 21, 100)
+        store.saved = readBaseline(mac, key, 21, 100)
         store.unavailable = true
         val replacementStore = object : PumpSession.Store {
             override fun load(): PumpSession.State = error("lost journal")
@@ -1371,7 +1370,7 @@ class YpsoProvisioningServiceTest {
         assertNull(recovered.read)
         assertNull(recovered.write)
         assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
-        assertEquals(validDocument().toByteArray().sha256(), recovered.source["journal_loss_read_only_document_sha256"])
+        assertEquals(validDocument().toByteArray().sha256(), recovered.source["journal_loss_identity_document_sha256"])
         assertTrue(service.connectionSession() != null)
     }
 
@@ -1389,7 +1388,7 @@ class YpsoProvisioningServiceTest {
         val document = validDocument().toByteArray()
 
         assertThrows(IllegalArgumentException::class.java) {
-            service.recoverLostJournalReadOnly(
+            service.recoverLostJournalIdentityOnly(
                 ByteArrayInputStream(document),
                 "00".repeat(32),
             )
@@ -1412,7 +1411,7 @@ class YpsoProvisioningServiceTest {
         )
         val document = validDocument().toByteArray()
 
-        service.recoverLostJournalReadOnly(
+        service.recoverLostJournalIdentityOnly(
             ByteArrayInputStream(document),
             document.sha256(),
             Instant.parse("2026-09-20T04:01:00Z"),
@@ -1423,11 +1422,11 @@ class YpsoProvisioningServiceTest {
         assertNull(recovered.read)
         assertNull(recovered.write)
         assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
-        assertEquals(document.sha256(), recovered.source["journal_loss_read_only_document_sha256"])
+        assertEquals(document.sha256(), recovered.source["journal_loss_identity_document_sha256"])
     }
 
     @Test
-    fun `read only recovered session verifies setup while write ownership stays uncertain`() {
+    fun `identity only recovered session verifies setup while write ownership stays uncertain`() {
         val store = object : PumpSession.Store {
             var saved = PumpSession.State()
             override fun load(): PumpSession.State = error("lost journal")
@@ -1436,7 +1435,7 @@ class YpsoProvisioningServiceTest {
         }
         val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
         val document = validDocument().toByteArray()
-        service.recoverLostJournalReadOnly(
+        service.recoverLostJournalIdentityOnly(
             ByteArrayInputStream(document),
             document.sha256(),
             Instant.parse("2026-09-20T04:01:00Z"),
@@ -1457,59 +1456,6 @@ class YpsoProvisioningServiceTest {
         assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, recovered.writeBootstrapState)
         assertEquals(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN), service.availability().causes)
         connection.key.fill(0)
-    }
-
-    @Test
-    fun `verified identity only session imports a stale handoff only as selector recovery lower bound`() {
-        val local = PumpSession.Record(
-            pump = mac,
-            keyId = PumpSession.fingerprint(key),
-            generation = "local-generation",
-            reboot = 21,
-            read = 73_051,
-            write = null,
-            serial = serial,
-            keyHex = key.hex(),
-            verifiedAt = 3_000,
-            verifiedSerial = serial,
-            source = mapOf("journal_loss_read_only_document_sha256" to "aa".repeat(32)),
-            writeBootstrapState = PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH,
-        )
-        val store = MemoryStore(
-            PumpSession.State(
-                records = listOf(local),
-                activeGeneration = local.generation,
-                availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
-            ),
-        )
-        val service = service(store).first
-        val handoff = local.copy(
-            generation = "handoff-generation",
-            read = 2_998,
-            write = 4_280,
-            keyHex = null,
-            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-        )
-        val reviewed = YpsoOwnershipHandoff.Reviewed(
-            handoff,
-            createdAt = 2_000,
-            reviewedEvidenceSha256 = "bb".repeat(32),
-            source = YpsoOwnershipHandoff.SourceArtifacts(
-                "app.aaps.ypso.writebench",
-                "01".repeat(32), "02".repeat(32), "03".repeat(32),
-                "04".repeat(32), "05".repeat(32), "06".repeat(32),
-            ),
-            documentSha256 = "cc".repeat(32),
-        )
-
-        service.installOwnershipHandoff(reviewed, Instant.ofEpochMilli(4_000))
-
-        val recovered = service.owner.committedRecord()!!
-        assertEquals(73_051, recovered.read)
-        assertEquals(4_280, recovered.write)
-        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
-        assertEquals(21, recovered.lowerBoundRecoveryReboot)
-        assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in service.availability().causes)
     }
 
     @Test

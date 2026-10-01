@@ -70,10 +70,10 @@ class YpsoBleManagerTest {
             }
         whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any())).thenReturn(false)
         manager.session = PumpSession(object : PumpSession.Store {
-            var saved = PumpSession.State()
+            var saved = readBaseline("12:34:56:78:9A:BC", key, 8, 0)
             override fun load() = saved
             override fun commit(state: PumpSession.State) { saved = state }
-        }).apply { provisionReadBaseline("12:34:56:78:9A:BC", key, 8, 0) }
+        })
         manager.setSharedKey("00".repeat(32))
         val realCrypto = SessionCrypto()
         whenever(sessionCrypto.encrypt(any(), any(), any(), any())).thenAnswer {
@@ -1836,10 +1836,10 @@ class YpsoBleManagerTest {
         whenever(provisioning.installed()).thenReturn(installed)
         val installedKey = ByteArray(32) { 1 }
         val ownerSession = PumpSession(object : PumpSession.Store {
-            var saved = PumpSession.State()
+            var saved = readBaseline(installed.mac, installedKey, 8, 0)
             override fun load() = saved
             override fun commit(state: PumpSession.State) { saved = state }
-        }).apply { provisionReadBaseline(installed.mac, installedKey, 8, 0) }
+        })
         manager.session = ownerSession
         whenever(provisioning.owner).thenReturn(ownerSession)
         manager.setSharedKey("01".repeat(32))

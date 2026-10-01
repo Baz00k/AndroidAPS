@@ -41,6 +41,8 @@ internal object YpsoWritePolicy {
             YpsoGlb.decodeExact(payload)?.let { settingId ->
                 settingId == 1 || settingId in 14..61
             } == true
+        // Therapy frames are authorized only by identity with the controller's frame in YpsoBleManager;
+        // pump configuration (basal programming) is never written.
         YpsoRemoteWrite.THERAPY_COMMAND,
         YpsoRemoteWrite.CONFIGURATION_MUTATION,
         YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR -> false
@@ -54,14 +56,4 @@ internal object YpsoWritePolicy {
     ): Boolean = write == YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR &&
         characteristic == CONTROL_NOTIFY_UUID && descriptor == CCCD_UUID &&
         payload.contentEquals(byteArrayOf(1, 0))
-
-    fun allows(write: YpsoRemoteWrite): Boolean = when (write) {
-        YpsoRemoteWrite.AUTHENTICATION -> true
-        YpsoRemoteWrite.HISTORY_SELECTOR,
-        YpsoRemoteWrite.SETTINGS_SELECTOR,
-        YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR ->
-            true
-        YpsoRemoteWrite.THERAPY_COMMAND,
-        YpsoRemoteWrite.CONFIGURATION_MUTATION -> false
-    }
 }

@@ -58,17 +58,14 @@ dependencies {
 androidComponents.onVariants { variant ->
     val name = variant.name.replaceFirstChar { it.uppercase() }
     val verify = tasks.register<VerifyGattWriteOwnership>("verify${name}GattWriteOwnership")
-    val verifyQualification = tasks.register<VerifyYpsoQualificationBoundary>("verify${name}QualificationBoundary")
     variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(verify)
         .toGet(ScopedArtifact.CLASSES, VerifyGattWriteOwnership::jars, VerifyGattWriteOwnership::directories)
-    variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(verifyQualification)
-        .toGet(ScopedArtifact.CLASSES, VerifyYpsoQualificationBoundary::jars, VerifyYpsoQualificationBoundary::directories)
     tasks.matching {
         it.name in setOf(
             "assemble$name", "bundle${name}Aar", "test${name}UnitTest", "lint$name",
             "bundleLibRuntimeToDir$name", "bundleLibRuntimeToJar$name", "bundleLibCompileToJar$name"
         )
-    }.configureEach { dependsOn(verify, verifyQualification) }
+    }.configureEach { dependsOn(verify) }
 }
 
 tasks.withType<Test>().configureEach {

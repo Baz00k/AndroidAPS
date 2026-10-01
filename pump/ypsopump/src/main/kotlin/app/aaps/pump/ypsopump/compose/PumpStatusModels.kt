@@ -22,5 +22,4 @@ data class PumpStatusState(
     val unavailableLabel: String = "Unavailable",
     val rows: List<PumpStatusRow> = emptyList(),
     val queue: List<QueueItem> = emptyList(),
-    val note: String = ""
 )

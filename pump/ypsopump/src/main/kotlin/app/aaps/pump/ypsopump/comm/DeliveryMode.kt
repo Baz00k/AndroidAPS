@@ -1,7 +1,7 @@
 package app.aaps.pump.ypsopump.comm
 
 /**
- * Provisional delivery-mode interpretation. The status-only UI must not present these names as verified
+ * Provisional delivery-mode interpretation. The UI must not present these names as verified
  * until target-firmware captures and independent fixtures establish their meaning.
  */
 object DeliveryMode {

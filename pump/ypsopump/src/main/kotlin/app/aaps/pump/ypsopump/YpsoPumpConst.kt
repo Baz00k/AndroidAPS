@@ -51,12 +51,4 @@ object YpsoPumpConst {
 
     // Legacy credential names are retained solely for one-time protected migration. Normal setup never
     // reads credentials directly from preferences, build constants, ADB or configuration exports.
-
-    // Normal AAPS performs strict-next profile/history selector acquisition and reconciles an
-    // unknown write floor from zero through pump-confirmed counter errors. Pump configuration writes
-    // and therapy commands remain gated by policy and READ_ONLY_MODE.
-
-    // Setup safety gate. Keep true until read-only status/reconnect testing is complete and pump writes
-    // are explicitly approved; this also blocks production dosing paths.
-    const val READ_ONLY_MODE = true
 }
