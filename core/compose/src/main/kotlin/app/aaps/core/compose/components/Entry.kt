@@ -63,7 +63,7 @@ import java.util.Locale
 
 /** The size of an entry's main value: big enough to check at a glance, small enough to leave room. */
 @Composable
-private fun entryValueStyle(): TextStyle = AapsTheme.type.bigValue.let { it.copy(fontSize = it.fontSize * 0.75f, lineHeight = it.lineHeight * 0.75f) }
+private fun entryValueStyle(): TextStyle = AapsTheme.type.bigValue.let { it.copy(fontSize = it.fontSize * 0.7f, lineHeight = it.lineHeight * 0.7f) }
 
 /** A labelled card holding one entry value. */
 @Composable
@@ -88,9 +88,9 @@ fun StepperRow(
     center: @Composable RowScope.() -> Unit
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        StepButton(plus = false, contentDescription = decreaseLabel, onClick = onDecrease, enabled = decreaseEnabled)
+        StepButton(plus = false, contentDescription = decreaseLabel, onClick = onDecrease, enabled = decreaseEnabled, size = AapsSpacing.minTap)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom, content = center)
-        StepButton(plus = true, contentDescription = increaseLabel, onClick = onIncrease, enabled = increaseEnabled)
+        StepButton(plus = true, contentDescription = increaseLabel, onClick = onIncrease, enabled = increaseEnabled, size = AapsSpacing.minTap)
     }
 }
 
@@ -222,13 +222,13 @@ fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int) {
     AapsCard(contentPadding = PaddingValues(horizontal = AapsSpacing.cardPad, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("ABSORPTION", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-            StepButton(false, "Shorten carb absorption by 1 hour", { onHours((hours - 1).coerceAtLeast(0)) }, enabled = hours > 0)
+            StepButton(false, "Shorten carb absorption by 1 hour", { onHours((hours - 1).coerceAtLeast(0)) }, enabled = hours > 0, size = 40.dp)
             Text(
                 if (hours == 0) "Normal" else "$hours h",
                 style = AapsTheme.type.listTitle, color = colors.textPrimary, textAlign = TextAlign.Center,
                 modifier = Modifier.widthIn(min = 64.dp)
             )
-            StepButton(true, "Lengthen carb absorption by 1 hour", { onHours((hours + 1).coerceAtMost(maxHours)) }, enabled = hours < maxHours)
+            StepButton(true, "Lengthen carb absorption by 1 hour", { onHours((hours + 1).coerceAtMost(maxHours)) }, enabled = hours < maxHours, size = 40.dp)
         }
     }
 }
@@ -252,13 +252,13 @@ fun RowScope.Choice(
     Row(
         Modifier
             .weight(1f)
-            .heightIn(min = 40.dp)
+            .heightIn(min = 36.dp)
             .disabledAlpha(enabled)
             .clip(AapsTheme.shape.pill)
             .background(if (selected) colors.accentTintStrong else colors.controlFill)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = clickLabel, onClick = onClick)
             .wrapContentHeight(Alignment.CenterVertically)
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {

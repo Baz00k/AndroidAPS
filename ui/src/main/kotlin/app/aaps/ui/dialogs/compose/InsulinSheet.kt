@@ -97,7 +97,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
             ChoiceRow {
                 state.quickIncrements.forEach { inc ->
-                    Choice((if (inc > 0) "+" else "") + fmt(inc), selected = false, enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0) {
+                    Choice((if (inc > 0) "+" else "") + fmt(inc) + " U", selected = false, enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0) {
                         amount = (amount + inc).coerceIn(0.0, state.maxInsulin)
                     }
                 }

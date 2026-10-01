@@ -13,7 +13,7 @@ class EntryTimeTest {
 
     @Test
     fun `offsets read as time from now`() {
-        assertThat(EntryTime.relative(0)).isEqualTo("now")
+        assertThat(EntryTime.relative(0)).isEqualTo("Now")
         assertThat(EntryTime.relative(15)).isEqualTo("in 15 min")
         assertThat(EntryTime.relative(-20)).isEqualTo("20 min ago")
         assertThat(EntryTime.relative(-80)).isEqualTo("1 h 20 min ago")

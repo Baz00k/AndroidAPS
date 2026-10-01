@@ -29,6 +29,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -119,14 +121,16 @@ fun HoldToConfirmButton(
             ),
         contentAlignment = Alignment.Center
     ) {
-        // The hold's progress: a light wash over the held part, and a solid bar in the label's own
-        // ink along the bottom, which reads at full contrast in both themes.
+        // The hold's progress: a wash over the held part, and a solid bar in the label's own ink along
+        // the bottom. The wash moves away from the label's ink (darker under white text, lighter under
+        // dark text), so the label only gains contrast as the fill passes under it.
+        val wash = if (colors.onAccent.luminance() > 0.5f) Color.Black else Color.White
         Box(Modifier.matchParentSize()) {
             Box(
                 Modifier
                     .fillMaxWidth(progress)
                     .fillMaxHeight()
-                    .background(colors.onAccent.copy(alpha = 0.16f))
+                    .background(wash.copy(alpha = 0.2f))
             )
             Box(
                 Modifier

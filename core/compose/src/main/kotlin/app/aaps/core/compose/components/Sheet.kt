@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -101,7 +102,14 @@ fun SheetSurface(
                     .padding(bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) { content() }
-            Box(Modifier.padding(horizontal = AapsSpacing.screenH)) { footer() }
+            // A hairline where the scrolling cards pass under the pinned action.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(AapsSpacing.hairlineWidth)
+                    .background(colors.hairline)
+            )
+            Box(Modifier.padding(start = AapsSpacing.screenH, end = AapsSpacing.screenH, top = 12.dp)) { footer() }
         }
     }
 }

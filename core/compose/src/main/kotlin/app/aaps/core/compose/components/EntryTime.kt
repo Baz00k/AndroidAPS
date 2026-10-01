@@ -11,9 +11,9 @@ import kotlin.math.abs
  */
 object EntryTime {
 
-    /** "now", "in 15 min", "20 min ago", "1 h 20 min ago". */
+    /** "Now", "in 15 min", "20 min ago", "1 h 20 min ago". */
     fun relative(offsetMin: Int): String {
-        if (offsetMin == 0) return "now"
+        if (offsetMin == 0) return "Now"
         val span = duration(abs(offsetMin))
         return if (offsetMin > 0) "in $span" else "$span ago"
     }
