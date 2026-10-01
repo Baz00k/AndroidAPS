@@ -169,7 +169,17 @@ private fun InputCards(
                 on = inputs.useBg && result.bgCorrectionAvailable, enabled = result.bgCorrectionAvailable,
                 onToggle = { onInputs(inputs.copy(useBg = it)) }
             )
-            FactorRow("Active insulin", null, result.iobInsulin, colors, on = inputs.useIob, iob = true, onToggle = { onInputs(inputs.copy(useIob = it)) })
+            // Carbs on board is dosed only against active insulin, so it holds that switch on.
+            val cobCounted = inputs.useCob && result.cobAvailable
+            FactorRow(
+                "Carbs on board", result.cob ?: "Not available", result.cobInsulin, colors,
+                on = cobCounted, enabled = result.cobAvailable,
+                onToggle = { onInputs(inputs.copy(useCob = it, useIob = it || inputs.useIob)) }
+            )
+            FactorRow(
+                "Active insulin", if (cobCounted) "Counted with carbs on board" else null, result.iobInsulin, colors,
+                on = inputs.useIob || cobCounted, locked = cobCounted, iob = true, onToggle = { onInputs(inputs.copy(useIob = it)) }
+            )
             FactorRow(
                 "15-min trend", null, result.trendInsulin, colors,
                 on = inputs.useTrend && result.trendAvailable, enabled = result.trendAvailable,
@@ -370,7 +380,9 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
                 BreakdownRow("BG correction", result.bgInsulin, colors, changed = baseline.bgInsulin != result.bgInsulin)
             if (inputs.useTrend && result.trendAvailable)
                 BreakdownRow("15-min trend", result.trendInsulin, colors, changed = baseline.trendInsulin != result.trendInsulin)
-            if (inputs.useIob)
+            if (inputs.useCob && result.cobAvailable)
+                BreakdownRow("Carbs on board", result.cobInsulin, colors, changed = baseline.cobInsulin != result.cobInsulin)
+            if (inputs.useIob || (inputs.useCob && result.cobAvailable))
                 BreakdownRow("Active insulin", result.iobInsulin, colors, iob = true, changed = baseline.iobInsulin != result.iobInsulin)
             if (result.superBolusAvailable && inputs.useSuperBolus) BreakdownRow("Superbolus", result.superBolusInsulin, colors)
             result.scaledPercent?.let { BreakdownRow("Scaled", "$it%", colors) }
@@ -448,6 +460,8 @@ private fun FactorRow(
     colors: AapsColors,
     on: Boolean = true,
     enabled: Boolean = true,
+    /** Counted and cannot be switched off here (the sub says why). */
+    locked: Boolean = false,
     iob: Boolean = false,
     onToggle: ((Boolean) -> Unit)? = null
 ) {
@@ -474,7 +488,7 @@ private fun FactorRow(
             modifier = Modifier.padding(end = if (onToggle != null) 12.dp else 0.dp)
         )
         if (onToggle != null)
-            Switch(checked = on, onCheckedChange = onToggle, enabled = enabled, colors = aapsSwitchColors())
+            Switch(checked = on, onCheckedChange = onToggle, enabled = enabled && !locked, colors = aapsSwitchColors())
     }
 }
 

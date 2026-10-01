@@ -34,6 +34,13 @@ data class WizardInputs(
     val manualBg: Double? = null,
     val useBg: Boolean = true,
     val useIob: Boolean = true,
+    /**
+     * Dose for carbs already logged and still absorbing, e.g. after "Time to bolus" for carbs logged
+     * when glucose was low. Off unless asked for each time. Counting it forces [useIob] on: carbs
+     * that were bolused for are covered by that bolus's active insulin, and only subtracting it keeps
+     * them from being dosed twice.
+     */
+    val useCob: Boolean = false,
     val useTrend: Boolean = false,
     val useSuperBolus: Boolean = false,
     /**
@@ -45,16 +52,22 @@ data class WizardInputs(
     val remindToEat: Boolean = false
 ) {
 
+    /** Carbs on board is dosed only when asked for and known: an unknown amount is never taken as 0 g. */
+    fun countsCob(cob: Double?): Boolean = useCob && cob != null
+
+    /** Active insulin: when asked for, and always alongside carbs on board. */
+    fun countsIob(cob: Double?): Boolean = useIob || countsCob(cob)
+
     companion object {
 
         val Saver: Saver<WizardInputs, Any> = listSaver(
-            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat) },
+            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat, it.useCob) },
             restore = {
                 WizardInputs(
                     carbs = it[0] as Int, carbTime = it[1] as Int, carbDurationHours = it[2] as Int,
                     manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
                     useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
-                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean
+                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean
                 )
             }
         )
@@ -86,6 +99,9 @@ data class WizardResult(
     val carbsInsulin: String = "+0.00 U",
     val bgInsulin: String = "+0.00 U",
     val iobInsulin: String = "0.00 U",
+    /** Carbs on board, e.g. "18 g", or null while the loop has not worked it out. */
+    val cob: String? = null,
+    val cobInsulin: String = "+0.00 U",
     val trendInsulin: String = "+0.00 U",
     val superBolusInsulin: String = "+0.00 U",
     /** The bolus percentage from settings, when it is not 100. */
@@ -109,4 +125,5 @@ data class WizardResult(
 
     val bgCorrectionAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR || glucoseSource == GlucoseSource.MANUAL
     val trendAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR
+    val cobAvailable: Boolean get() = cob != null
 }

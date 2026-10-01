@@ -126,7 +126,8 @@ class WizardDialog : DaggerBottomSheetFragment() {
         val mmol = units == GlucoseUnit.MMOL
         val glucose = glucose(inputs)
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
-        val w = buildWizard(inputs, profile, glucose, carbs)
+        val cob = carbsOnBoard()
+        val w = buildWizard(inputs, profile, glucose, carbs, cob)
 
         // Shown value: the one in use, or a stale reading for context.
         val shownMgdl = when (glucose) {
@@ -169,6 +170,8 @@ class WizardDialog : DaggerBottomSheetFragment() {
             carbsInsulin = signed(w.insulinFromCarbs),
             bgInsulin = signed(w.insulinFromBG),
             iobInsulin = signed(-w.insulinFromBolusIOB - w.insulinFromBasalIOB),
+            cob = cob?.let { String.format(Locale.getDefault(), "%.0f g", it) },
+            cobInsulin = signed(w.insulinFromCOB),
             trendInsulin = signed(w.insulinFromTrend),
             superBolusInsulin = signed(w.insulinFromSuperBolus),
             scaledPercent = preferences.get(IntKey.OverviewBolusPercentage).takeIf { it != 100 },
@@ -204,7 +207,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
     private fun plan(inputs: WizardInputs): Plan? {
         val profile = profileFunction.getProfile() ?: return null
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
-        val w = buildWizard(inputs, profile, glucose(inputs), carbs)
+        val w = buildWizard(inputs, profile, glucose(inputs), carbs, carbsOnBoard())
         val outcome = outcome(w, carbs)
         // "Eat later" is only a real choice for a dose the advisor applies to. The answer is always
         // explicit: a null would let BolusWizard ask again in a popup, after the hold.
@@ -250,13 +253,18 @@ class WizardDialog : DaggerBottomSheetFragment() {
         }
     }
 
-    private fun buildWizard(inputs: WizardInputs, profile: app.aaps.core.interfaces.profile.Profile, glucose: CalculatorGlucose, carbs: Int): BolusWizard =
-        bolusWizardProvider.get().doCalc(
+    /** Carbs still absorbing, or null while the loop's calculation has none to give (never taken as 0). */
+    private fun carbsOnBoard(): Double? = iobCobCalculator.getCobInfo("Calculator").displayCob
+
+    private fun buildWizard(inputs: WizardInputs, profile: app.aaps.core.interfaces.profile.Profile, glucose: CalculatorGlucose, carbs: Int, cob: Double?): BolusWizard {
+        val useCob = inputs.countsCob(cob)
+        val useIob = inputs.countsIob(cob)
+        return bolusWizardProvider.get().doCalc(
             profile = profile,
             profileName = profileFunction.getProfileName(),
             tempTarget = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now()),
             carbs = carbs,
-            cob = 0.0,
+            cob = cob?.takeIf { useCob } ?: 0.0,
             bg = glucose.usedMgdl?.let { profileUtil.fromMgdlToUnits(it, profileFunction.getUnits()) } ?: 0.0,
             correction = 0.0,
             // pre-bolus: BolusWizard timestamps the carbs at now + carbTime (see its carbsTimestamp), so the
@@ -267,9 +275,9 @@ class WizardDialog : DaggerBottomSheetFragment() {
             percentageCorrection = preferences.get(IntKey.OverviewBolusPercentage),
             // No trustworthy glucose, no correction: a stale reading is never corrected from.
             useBg = inputs.useBg && glucose.usedMgdl != null,
-            useCob = false,
-            includeBolusIOB = inputs.useIob,
-            includeBasalIOB = inputs.useIob,
+            useCob = useCob,
+            includeBolusIOB = useIob,
+            includeBasalIOB = useIob,
             useSuperBolus = inputs.useSuperBolus,
             useTT = true,
             // Trend is a property of a live sensor trace; not of a typed-in, stale or missing value.
@@ -277,6 +285,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
             // Eat reminder for a pre-bolus: scheduled by BolusWizard once the bolus has gone through.
             useAlarm = inputs.remindToEat && inputs.carbTime > 0 && !inputs.eatLater
         )
+    }
 
     private fun signed(v: Double): String {
         val rounded = if (abs(v) < 0.005) 0.0 else v
