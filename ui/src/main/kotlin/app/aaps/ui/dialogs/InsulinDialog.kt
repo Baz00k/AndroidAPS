@@ -134,7 +134,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
 
         if (insulinAfterConstraints > 0) {
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(insulinAfterConstraints, pumpDescription.bolusStep)
+                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, pumpDescription.bolusStep)
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.bolusColor)
             )
             if (recordOnlyChecked)
