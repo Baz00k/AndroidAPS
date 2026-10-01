@@ -217,9 +217,6 @@
     <string name="overview">Přehled</string>
     <string name="overview_shortname">PŘEH</string>
     <string name="description_overview">Zobrazení stavu a informací. Přístup k nejběžnějším ovládacím prvkům</string>
-    <string name="overview_buttons_selection">Tlačítka</string>
-    <string name="show_calibration_button_summary">Odešle kalibraci do xDrip+ (ujistěte se, že je v xDrip+ povoleno \'Příjímat kalibrace\' v nastavení komunikace mezi aplikacemi).</string>
-    <string name="show_cgm_button_summary">Otevře xDrip+ nebo Dexcom aplikaci (můžete použít tlačítko zpět pro návrat do AAPS).</string>
     <string name="not_available_full">Nedostupný</string>
     <string name="constraints_violation">Mimo povolený rozsah</string>
     <string name="change_your_input">Změňte zadání!</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">První přídavek sacharidů</string>
     <string name="secondcarbsincrement">Druhý přídavek sacharidů</string>
     <string name="thirdcarbsincrement">Třetí přídavek sacharidů</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Výchozí nastavení dočasných cílů</string>
     <string name="eatingsoon_duration">Trvání Před jídlem (minuty)</string>
     <string name="eatingsoon_target">Cílová hodnota Před jídlem</string>
@@ -257,7 +253,6 @@
     <string name="short_tabtitles">Krátké názvy modulů</string>
     <string name="overview_show_notes_field_in_dialogs_title">Zobrazovat kolonku poznámky v dialozích ošetření</string>
     <string name="deliverpartofboluswizard">Kalkulátor provede výpočet, ale dodána je pouze tato část inzulínu. Výhodné při používání SMB algoritmu.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Vydat celý bolus (100%), pokud je glykémie starší než</string>
     <string name="enable_bolus_advisor">Povolit poradce s bolusem</string>
     <string name="enable_bolus_advisor_summary">Při vysoké glykémii použijte připomenutí, abyste začali jíst později, namísto výsledku z kalkulátoru („prebolus“)</string>
     <string name="enablesuperbolus">Povolit superbolus</string>

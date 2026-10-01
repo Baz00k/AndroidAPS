@@ -215,9 +215,6 @@
     <string name="overview">Przegląd</string>
     <string name="overview_shortname">HOME</string>
     <string name="description_overview">Wyświetla bieżący stan twojej pętli i przyciski dla większości typowych działań</string>
-    <string name="overview_buttons_selection">Przyciski</string>
-    <string name="show_calibration_button_summary">Wysyła kalibrację do xDrip+ (upewnij się, że \'Akceptuj kalibracje\' są włączone w xDrip+ w sekcji \'Ustawienia innych aplikacji\').</string>
-    <string name="show_cgm_button_summary">Otwiera xDrip+ lub aplikację Dexcom (możesz wrócić do AAPS androidowym przyciskiem \"cofnij\").</string>
     <string name="not_available_full">Niedostępne</string>
     <string name="constraints_violation">Naruszenie ograniczeń</string>
     <string name="change_your_input">Zmień wprowadzone dane!</string>
@@ -236,7 +233,6 @@
     <string name="firstcarbsincrement">Pierwszy stopień przyrostu węglow.</string>
     <string name="secondcarbsincrement">Drugi stopień przyrostu węglow.</string>
     <string name="thirdcarbsincrement">Trzeci stopień przyrostu węglow.</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Domyślne tymczasowe wartości docelowe</string>
     <string name="eatingsoon_duration">Czas trwania Wkrótce posiłek (minuty)</string>
     <string name="eatingsoon_target">Wartość docelowa celu Wkrótce posiłek</string>
@@ -255,7 +251,6 @@
     <string name="short_tabtitles">Skrócone tytuły kart</string>
     <string name="overview_show_notes_field_in_dialogs_title">Pokaż pole uwag w oknie leczenia</string>
     <string name="deliverpartofboluswizard">Kreator bolusa wykonuje obliczenia, ale tylko ta część obliczonej dawki insuliny jest dostarczana. Pomocne z algorytmem SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Dostarcz pełen bolus (100%), jeśli glikemia jest starsza niż</string>
     <string name="enable_bolus_advisor">Włącz doradcę bolusa</string>
     <string name="enable_bolus_advisor_summary">Użyj przypomnienia, aby rozpocząć jedzenie później podczas wysokiej glikemii (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Zezwalaj na superbolus w kalkulatorze</string>

@@ -196,7 +196,6 @@
     <string name="overview">Overblik</string>
     <string name="overview_shortname">HJEM</string>
     <string name="description_overview">Viser den aktuelle tilstand af dit loop og knapper til de mest almindelige handlinger</string>
-    <string name="overview_buttons_selection">Knapper</string>
     <string name="not_available_full">Ikke tilgængelig</string>
     <string name="constraints_violation">Begrænsninger overtrådt</string>
     <string name="change_your_input">Skift dit input!</string>
@@ -215,7 +214,6 @@
     <string name="firstcarbsincrement">Første kulhydratstigning</string>
     <string name="secondcarbsincrement">Anden kulhydratstigning</string>
     <string name="thirdcarbsincrement">Tredje kulhydratstigning</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Standard Midlertidige mål</string>
     <string name="fill_bolus_title">Fyld / Klargør standard insulinmængder</string>
     <string name="button1">Knap 1</string>
@@ -228,7 +226,6 @@
     <string name="short_tabtitles">Forkort titel</string>
     <string name="overview_show_notes_field_in_dialogs_title">Vis notefelt i behandlingsdialoger</string>
     <string name="deliverpartofboluswizard">Bolus guiden udfører beregning, men kun denne del af beregnet insulin leveres. Nyttig med SMB algoritme.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Levér fuld bolus (100%), hvis glycæmi er ældre end</string>
     <string name="enable_bolus_advisor">Aktiver bolus rådgiver</string>
     <string name="enable_bolus_advisor_summary">Brug påmindelse om at begynde at spise senere i stedet for guiden under høj glykæmi (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Aktiver superbolus i guiden</string>

@@ -195,7 +195,6 @@
     <string name="overview">Visão Geral</string>
     <string name="overview_shortname">Início</string>
     <string name="description_overview">Exibe o estado actual do loop e botões para acções mais comuns</string>
-    <string name="overview_buttons_selection">Botões</string>
     <string name="not_available_full">Indisponível</string>
     <string name="constraints_violation">Violação das restrições</string>
     <string name="change_your_input">Altere o seu input!</string>
@@ -214,7 +213,6 @@
     <string name="firstcarbsincrement">Primeiro incremento hidratos</string>
     <string name="secondcarbsincrement">Segundo incremento hidratos</string>
     <string name="thirdcarbsincrement">Terceiro incremento hidratos</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Alvo-Temp padrão</string>
     <string name="fill_bolus_title">Valores Padrão de insulina para Purgar/Preencher</string>
     <string name="button1">Botão 1</string>
@@ -227,7 +225,6 @@
     <string name="short_tabtitles">Abreviar títulos dos separadores</string>
     <string name="overview_show_notes_field_in_dialogs_title">Mostrar campo de notas na janela de tratamentos</string>
     <string name="deliverpartofboluswizard">Assistente de bólus executa o cálculo, mas apenas esta parte da insulina calculada é administada. Útil com o algoritmo SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Entregar bólus completo (100%) se a glicemia for mais velha que</string>
     <string name="enable_bolus_advisor">Activar Guia de Bólus</string>
     <string name="enable_bolus_advisor_summary">Use lembrete para começar a comer mais tarde em vez di resultado do assistente durante a glicemia alta (\"pré-bolus\")</string>
     <string name="enablesuperbolus">Activar superbólus no assistente</string>

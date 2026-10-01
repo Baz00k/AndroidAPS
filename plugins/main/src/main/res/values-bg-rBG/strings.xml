@@ -196,7 +196,6 @@
     <string name="overview">Общ</string>
     <string name="overview_shortname">ОСН</string>
     <string name="description_overview">Показва текущото състояние на вашия APS и бутони за най-често използваните действия</string>
-    <string name="overview_buttons_selection">Бутони</string>
     <string name="not_available_full">Недостъпно</string>
     <string name="constraints_violation">Нарушено ограничение</string>
     <string name="change_your_input">Променете данните!</string>
@@ -215,7 +214,6 @@
     <string name="firstcarbsincrement">Стойност на първия бърз бутон [гр]</string>
     <string name="secondcarbsincrement">Стойност на втория бърз бутон [гр]</string>
     <string name="thirdcarbsincrement">Стойност на третия бърз бутон [гр]</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Временна цел по подразбиране</string>
     <string name="eatingsoon_duration">За хранене (мин)</string>
     <string name="eatingsoon_target">За хранене цел</string>
@@ -230,7 +228,6 @@
     <string name="short_tabtitles">Използвай къси имена</string>
     <string name="overview_show_notes_field_in_dialogs_title">Показване на поле \"бележки\" в диалоговите прозорци за лечение</string>
     <string name="deliverpartofboluswizard">Калкулатора изчислява нужния инсулин, но само тази част ще бъде доставена. Полезно със SMB алгоритъма.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Достави целия болус (100%), ако гликемията е била преди повече от</string>
     <string name="enable_bolus_advisor">Активиране на болус съветник</string>
     <string name="enable_bolus_advisor_summary">Използвай напомняне за старт на хранене вместо съветника по време на висока гликемия (\"пре-болус\")</string>
     <string name="enablesuperbolus">Разреши използването на Суперболус</string>

@@ -212,8 +212,6 @@
     <string name="overview">Pradžios ekr.</string>
     <string name="overview_shortname">PRADŽIA</string>
     <string name="description_overview">Rodo dabartinę Ciklo būseną ir pagrindinių veiksmų mygtukus</string>
-    <string name="overview_buttons_selection">Mygtukai</string>
-    <string name="show_calibration_button_summary">Siunčia kalibraciją į xDrip+ (įsitikinkite, kad xDrip+ nustatymuose Inter-App modulyje yra įjungta „Priimti kalibravimus“).</string>
     <string name="not_available_full">Nėra duomenų</string>
     <string name="constraints_violation">Apribojimų pažeidimas</string>
     <string name="change_your_input">Pakeiskite įvestus duomenis!</string>
@@ -232,7 +230,6 @@
     <string name="firstcarbsincrement">Pirmas angliavandenių kiekio žingsnis</string>
     <string name="secondcarbsincrement">Antras angliavandenių kiekio žingsnis</string>
     <string name="thirdcarbsincrement">Trečias angliavandenių kiekio žingsnis</string>
-    <string name="cgm">NGJ</string>
     <string name="default_temptargets">Numatyti Laikini Tikslai</string>
     <string name="eatingsoon_duration">Netrukus valgysiu trukmė (minutėmis)</string>
     <string name="eatingsoon_target">Netrukus valgysiu tikslinė reikšmė</string>
@@ -251,7 +248,6 @@
     <string name="short_tabtitles">Naudoti sutrumpintus skirtukų pavadinimus</string>
     <string name="overview_show_notes_field_in_dialogs_title">Rodyti pastabų laukelį terapijos dialoguose</string>
     <string name="deliverpartofboluswizard">Boluso skaičiuoklė atlieka skaičiavimus, tačiau tik dalis apskaičiuoto insulino yra suleidžiama. Naudinga kartu su SMB algoritmu.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Suleisti 100% bolusą, jei glikemijos duomenys senesni nei</string>
     <string name="enable_bolus_advisor">Įjungti boluso patarėją</string>
     <string name="enable_bolus_advisor_summary">Naudokite priminimą valgyti vėliau, o ne patarėjo rezultatą esant aukštam gliukozės lygiui („pre-bolusas“)</string>
     <string name="enablesuperbolus">Įjungti superbolusus skaičiuoklėje</string>

@@ -196,7 +196,6 @@
     <string name="overview">홈</string>
     <string name="overview_shortname">홈</string>
     <string name="description_overview">현재 Loop 상태와 기본 기능 버튼을 표시합니다.</string>
-    <string name="overview_buttons_selection">버튼</string>
     <string name="not_available_full">알수없음</string>
     <string name="constraints_violation">제한 위반</string>
     <string name="change_your_input">입력값을 변경하세요!</string>
@@ -215,7 +214,6 @@
     <string name="firstcarbsincrement">1차 탄수화물 증분</string>
     <string name="secondcarbsincrement">2차 탄수화물 증분</string>
     <string name="thirdcarbsincrement">3차 탄수화물 증분</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">임시목표 기본값</string>
     <string name="fill_bolus_title">교체/채움 기본 인슐린 양</string>
     <string name="button1">버튼1</string>
@@ -228,7 +226,6 @@
     <string name="short_tabtitles">탭 이름 단축</string>
     <string name="overview_show_notes_field_in_dialogs_title">관리창에 노트 영역 보여주기</string>
     <string name="deliverpartofboluswizard">Bolus 마법사는 계산을 수행하지만 계산된 인슐린의 이 부분만 주입됩니다. SMB 알고리즘에 유용합니다.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">혈당증이 다음보다 오래된 경우 총 bolus (100%) 주입하기</string>
     <string name="enable_bolus_advisor">Bolus advisor 활성화</string>
     <string name="enable_bolus_advisor_summary">혈당이 높을 때 wizard 결과 대신 reminder를 사용하여 나중에 식사하기 (pre-bolus)</string>
     <string name="enablesuperbolus">마법사에서 Superbolus 활성화하기</string>

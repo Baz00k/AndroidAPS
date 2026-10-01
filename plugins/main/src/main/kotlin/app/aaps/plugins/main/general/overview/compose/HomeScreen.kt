@@ -23,11 +23,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
+import app.aaps.core.compose.components.disabledAlpha
+import app.aaps.core.compose.components.LocalSheetDraggable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,7 +105,7 @@ fun HomeScreen(
                 DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }
-            ActionBar(actions)
+            ActionBar(state.actions, state.calculatorEnabled, actions)
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
@@ -206,14 +213,19 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             }
             // One wrapping status line in the existing target position, not a second banner.
             // tempTarget already contains the effective range and remaining time; do not repeat it.
-            val targetDescription = state.tempTarget?.let { "Temp target · $it" } ?: state.targetRange
+            val targetDescription = state.tempTarget?.let { "Temporary target · $it" } ?: state.targetRange
             if (state.stateLine.isNotBlank() || targetDescription.isNotBlank()) {
                 val activeTarget = state.tempTarget != null
+                // The target shown here is the control for changing it.
                 Box(
                     modifier = Modifier.fillMaxWidth().then(
-                        if (activeTarget) Modifier.clickable(
-                            role = Role.Button, onClickLabel = "Edit or cancel temporary target", onClick = actions.onTempTarget
-                        )
+                        if (state.targetEditable) Modifier
+                            .clip(AapsTheme.shape.cardSmall)
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = if (activeTarget) "Edit or cancel temporary target" else "Set temporary target",
+                                onClick = actions.onTempTarget
+                            )
                         else Modifier
                     ),
                     contentAlignment = Alignment.CenterStart
@@ -371,44 +383,35 @@ private fun DetailsHandle(onClick: () -> Unit) {
 @Composable
 private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
     val colors = AapsTheme.colors
-    Box(Modifier.fillMaxSize()) {
-        // scrim
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(colors.scrim)
-                .clickable(onClick = onClose)
-        )
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-            SheetSurface(title = "Details", onClose = onClose) {
-                // Supplies & status
-                if (state.supplies.isNotEmpty()) {
-                    Text("SUPPLIES & STATUS", style = AapsTheme.type.label, color = colors.textSecondary)
-                    AapsCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            state.supplies.forEachIndexed { i, s ->
-                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Dot(s.dotTone.color(), size = 9.dp)
-                                    Text(s.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                                    Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                }
+    HomeSheet(onClose) { close ->
+        SheetSurface(title = "Details", onClose = { close {} }) {
+            // Supplies & status
+            if (state.supplies.isNotEmpty()) {
+                Text("SUPPLIES & STATUS", style = AapsTheme.type.label, color = colors.textSecondary)
+                AapsCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        state.supplies.forEachIndexed { i, s ->
+                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Dot(s.dotTone.color(), size = 9.dp)
+                                Text(s.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                                Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                             }
                         }
                     }
                 }
-                // Loop algorithm & sensitivity
-                Text("LOOP & SENSITIVITY", style = AapsTheme.type.label, color = colors.textSecondary)
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DetailRow("Algorithm", state.algorithmName.ifBlank { "—" })
-                        DetailRow("Sensitivity", state.sensitivity.ifBlank { "—" })
-                        DetailRow("Profile", state.profileName.ifBlank { "—" })
-                        if (!state.tempTarget.isNullOrBlank()) DetailRow("Temp target", state.tempTarget)
-                    }
-                }
-                Box(Modifier.height(8.dp))
             }
+            // Loop algorithm & sensitivity
+            Text("LOOP & SENSITIVITY", style = AapsTheme.type.label, color = colors.textSecondary)
+            AapsCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DetailRow("Algorithm", state.algorithmName.ifBlank { "—" })
+                    DetailRow("Sensitivity", state.sensitivity.ifBlank { "—" })
+                    DetailRow("Profile", state.profileName.ifBlank { "—" })
+                    if (!state.tempTarget.isNullOrBlank()) DetailRow("Temporary target", state.tempTarget)
+                }
+            }
+            Box(Modifier.height(8.dp))
         }
     }
 }
@@ -420,41 +423,32 @@ private fun CarbsUndoSheet(
     onClose: () -> Unit
 ) {
     val colors = AapsTheme.colors
-    Box(Modifier.fillMaxSize()) {
-        // scrim
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(colors.scrim)
-                .clickable(onClick = onClose)
-        )
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-            SheetSurface(title = "Recent carbs", onClose = onClose) {
-                if (carbs.isEmpty()) {
-                    Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
-                } else {
-                    Text("Remove a mistaken or duplicate entry.", style = AapsTheme.type.caption, color = colors.textTertiary)
-                    AapsCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            carbs.forEachIndexed { i, c ->
-                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(c.grams, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                        Text(c.time, style = AapsTheme.type.caption, color = colors.textTertiary)
-                                    }
-                                    RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
+    HomeSheet(onClose) { close ->
+        SheetSurface(title = "Recent carbs", onClose = { close {} }) {
+            if (carbs.isEmpty()) {
+                Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
+            } else {
+                Text("Remove a mistaken or duplicate entry.", style = AapsTheme.type.caption, color = colors.textTertiary)
+                AapsCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        carbs.forEachIndexed { i, c ->
+                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.grams, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                                    Text(c.time, style = AapsTheme.type.caption, color = colors.textTertiary)
                                 }
+                                RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
                             }
                         }
                     }
                 }
-                Box(Modifier.height(8.dp))
             }
+            Box(Modifier.height(8.dp))
         }
     }
 }
@@ -473,64 +467,55 @@ private fun InsulinUndoSheet(
     onClose: () -> Unit
 ) {
     val colors = AapsTheme.colors
-    Box(Modifier.fillMaxSize()) {
-        // scrim
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(colors.scrim)
-                .clickable(onClick = onClose)
-        )
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-            SheetSurface(title = "Insulin on board", onClose = onClose) {
-                Column(
-                    Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
-                ) {
-                    AapsCard(Modifier.fillMaxWidth()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            DetailRow("Total", state.iob.ifBlank { "--" })
-                            DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
-                            DetailRow("From basal", state.iobBasal.ifBlank { "--" })
-                        }
+    HomeSheet(onClose) { close ->
+        SheetSurface(title = "Insulin on board", onClose = { close {} }) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
+            ) {
+                AapsCard(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DetailRow("Total", state.iob.ifBlank { "--" })
+                        DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
+                        DetailRow("From basal", state.iobBasal.ifBlank { "--" })
                     }
-                    if (state.recentInsulin.isEmpty()) {
-                        Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
-                    } else {
-                        Text(
-                            "Remove a dose the pump did not actually deliver.",
-                            style = AapsTheme.type.caption, color = colors.textTertiary
-                        )
-                        AapsCard(Modifier.fillMaxWidth()) {
-                            Column {
-                                state.recentInsulin.forEachIndexed { i, e ->
-                                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                                    Row(
-                                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Column(Modifier.weight(1f)) {
-                                            Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                            Text(
-                                                if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
-                                                style = AapsTheme.type.caption, color = colors.textTertiary
-                                            )
-                                        }
-                                        if (e.removable)
-                                            RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
-                                        else
-                                            Text(
-                                                "Cancel first", style = AapsTheme.type.caption, color = colors.textTertiary,
-                                                modifier = Modifier.widthIn(max = 72.dp)
-                                            )
+                }
+                if (state.recentInsulin.isEmpty()) {
+                    Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
+                } else {
+                    Text(
+                        "Remove a dose the pump did not actually deliver.",
+                        style = AapsTheme.type.caption, color = colors.textTertiary
+                    )
+                    AapsCard(Modifier.fillMaxWidth()) {
+                        Column {
+                            state.recentInsulin.forEachIndexed { i, e ->
+                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                                        Text(
+                                            if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
+                                            style = AapsTheme.type.caption, color = colors.textTertiary
+                                        )
                                     }
+                                    if (e.removable)
+                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
+                                    else
+                                        Text(
+                                            "Cancel first", style = AapsTheme.type.caption, color = colors.textTertiary,
+                                            modifier = Modifier.widthIn(max = 72.dp)
+                                        )
                                 }
                             }
                         }
                     }
-                    Box(Modifier.height(8.dp))
                 }
+                Box(Modifier.height(8.dp))
             }
         }
     }
@@ -545,8 +530,13 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+/**
+ * The treatment bar: the primary actions the user keeps on Home, with the Calculator as the widest,
+ * filled button, and "+" for everything else. The bar never reflows on availability, only on the
+ * user's own shortcut choices.
+ */
 @Composable
-private fun ActionBar(actions: HomeActions) {
+private fun ActionBar(layout: HomeActionLayout, calculatorEnabled: Boolean, actions: HomeActions) {
     val colors = AapsTheme.colors
     Row(
         Modifier
@@ -554,44 +544,134 @@ private fun ActionBar(actions: HomeActions) {
             .background(colors.bar)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom))
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Two primary actions for a closed loop: announce Carbs, or bolus (the wizard-calculated dose).
-        // A raw manual bolus (type-the-units, no calc) is the rare case — it lives in the "+" menu.
-        ActionBarButton("Carbs", AapsIcons.Restaurant, actions.onCarbs, Modifier.weight(1f))
-        ActionBarButton(
-            "Bolus", AapsIcons.Vaccines, actions.onWizard, Modifier.weight(1.4f),
-            container = colors.inRange, content = colors.onAccent
-        )
-        MoreMenu(actions)
+        layout.bar.forEach { shortcut ->
+            when (shortcut) {
+                HomeShortcut.CALCULATOR -> ActionBarButton(
+                    shortcutLabel(shortcut), shortcutIcon(shortcut), actions.onCalculator, Modifier.weight(1.5f),
+                    emphasized = true, enabled = calculatorEnabled
+                )
+                else                    -> ActionBarButton(shortcutLabel(shortcut), shortcutIcon(shortcut), { actions.onShortcut(shortcut) }, Modifier.weight(1f))
+            }
+        }
+        if (layout.menu.isNotEmpty()) MoreMenu(layout.menu, calculatorEnabled, actions)
     }
 }
 
+private fun shortcutLabel(shortcut: HomeShortcut) = when (shortcut) {
+    HomeShortcut.CALCULATOR -> "Calculator"
+    HomeShortcut.CARBS      -> "Carbs"
+    HomeShortcut.INSULIN    -> "Insulin"
+}
+
+private fun shortcutIcon(shortcut: HomeShortcut) = when (shortcut) {
+    HomeShortcut.CALCULATOR -> AapsIcons.Calculate
+    HomeShortcut.CARBS      -> AapsIcons.Restaurant
+    HomeShortcut.INSULIN    -> AapsIcons.Vaccines
+}
+
+/**
+ * "+": the treatment actions that are not on the bar, as a native modal bottom sheet. A hidden
+ * primary shortcut comes first, separated from the secondary actions below it.
+ */
 @Composable
-private fun MoreMenu(actions: HomeActions) {
-    val colors = AapsTheme.colors
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { expanded = true })
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // Only actions that are NOT primary on the bottom bar (Carbs/Wizard live there).
-            DropdownMenuItem(
-                text = { Text("Bolus (manual)", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onBolus() }
-            )
-            DropdownMenuItem(
-                text = { Text("Bolus (record only)", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onInsulinRecord() }
-            )
-            DropdownMenuItem(
-                text = { Text("Temp target", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onTempTarget() }
-            )
-            DropdownMenuItem(
-                text = { Text("Calibrate CGM", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onCalibration() }
-            )
+private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, actions: HomeActions) {
+    var open by remember { mutableStateOf(false) }
+    RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { open = true })
+    if (open) HomeSheet(onClose = { open = false }) { close ->
+        fun run(action: () -> Unit) = close { action() }
+        MenuSurface {
+            items.forEachIndexed { i, item ->
+                if (i > 0 && items[i - 1] is HomeMenuItem.Shortcut && item !is HomeMenuItem.Shortcut)
+                    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(AapsTheme.colors.divider))
+                when (item) {
+                    is HomeMenuItem.Shortcut      -> MenuRow(
+                        shortcutLabel(item.shortcut), shortcutIcon(item.shortcut),
+                        enabled = item.shortcut != HomeShortcut.CALCULATOR || calculatorEnabled
+                    ) { run { actions.onShortcut(item.shortcut) } }
+                    is HomeMenuItem.TempTarget    -> MenuRow("Temporary target", AapsIcons.GpsFixed, status = item.status) { run(actions.onTempTarget) }
+                    is HomeMenuItem.ExtendedBolus -> MenuRow("Extended bolus", AapsIcons.Timelapse, status = item.status, enabled = item.enabled) {
+                        run(if (item.status != null) actions.onCancelExtendedBolus else actions.onExtendedBolus)
+                    }
+                    HomeMenuItem.Calibration      -> MenuRow("Calibrate CGM", AapsIcons.Bloodtype) { run(actions.onCalibration) }
+                }
+            }
         }
+    }
+}
+
+/** A list sheet: the grabber and rows, no title — the rows are the content. */
+@Composable
+private fun MenuSurface(content: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(AapsTheme.shape.sheet)
+            .background(AapsTheme.colors.surface3)
+            .padding(bottom = 12.dp)
+    ) {
+        Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(width = 40.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.22f)))
+        }
+        content()
+    }
+}
+
+/** A menu entry; [status] is the live state of a running action (a target, an extended bolus). */
+@Composable
+private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, status: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    val colors = AapsTheme.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .disabledAlpha(enabled)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = AapsSpacing.screenH, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(24.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+            if (status != null) Text(status, style = AapsTheme.type.caption, color = colors.accent)
+        }
+    }
+}
+
+/**
+ * The Home screen's sheets, as Material modal bottom sheets: they slide up, follow a drag and are
+ * dismissed by dragging down, the scrim or Back. [content] receives `close`, which slides the sheet
+ * away before running what comes next (so an action's own dialog does not open under a closing sheet).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    var closing by remember { mutableStateOf(false) }
+    // One close per sheet. The action runs only after the sheet is really gone; if the close is
+    // cancelled (the screen left), so is the action.
+    val close: (() -> Unit) -> Unit = { after ->
+        if (!closing) {
+            closing = true
+            scope.launch {
+                sheetState.hide()
+                onClose()
+                after()
+            }
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        sheetState = sheetState,
+        containerColor = AapsTheme.colors.surface3,
+        shape = AapsTheme.shape.sheet,
+        scrimColor = AapsTheme.colors.scrim,
+        dragHandle = null
+    ) {
+        CompositionLocalProvider(LocalSheetDraggable provides true) { content(close) }
     }
 }

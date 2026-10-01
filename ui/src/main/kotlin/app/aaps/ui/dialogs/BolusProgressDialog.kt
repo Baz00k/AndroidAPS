@@ -1,20 +1,16 @@
 package app.aaps.ui.dialogs
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import io.reactivex.rxjava3.kotlin.plusAssign
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import android.os.Bundle
 import android.os.SystemClock
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -31,9 +27,7 @@ import app.aaps.core.interfaces.rx.events.EventOverviewBolusStopDeliveryEnabled
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.ui.dialogs.compose.BolusProgressSheet
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 
 /**
@@ -43,7 +37,7 @@ import javax.inject.Inject
  * XML dialog; only the rendering was swapped. Compose state ([percent]/[status]/[stopEnabled])
  * is what the rxBus subscribers now update instead of the old view binding.
  */
-class BolusProgressDialog : DaggerDialogFragment() {
+class BolusProgressDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var rxBus: RxBus
@@ -77,10 +71,7 @@ class BolusProgressDialog : DaggerDialogFragment() {
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = false
-        dialog?.setCanceledOnTouchOutside(false)
 
         status = BolusProgressData.status
         percent = BolusProgressData.percent
@@ -88,26 +79,15 @@ class BolusProgressDialog : DaggerDialogFragment() {
         stopVisible = true
         BolusProgressData.stopPressed = false
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AapsTheme {
-                    BolusProgressSheet(
-                        percent = percent,
-                        status = status,
-                        onStop = { if (stopEnabled && stopVisible) onStopClicked() }
-                    )
-                }
-            }
+        return sheetContent {
+            BolusProgressSheet(
+                percent = percent,
+                status = status,
+                onStop = { if (stopEnabled && stopVisible) onStopClicked() }
+            )
         }
     }
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onResume() {
         super.onResume()

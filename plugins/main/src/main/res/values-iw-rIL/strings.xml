@@ -210,9 +210,6 @@
     <string name="overview">סקירה כללית</string>
     <string name="overview_shortname">בית</string>
     <string name="description_overview">מציג את המצב הנוכחי של הלולאה ולחצני פעולות שימושיות</string>
-    <string name="overview_buttons_selection">מקשים</string>
-    <string name="show_calibration_button_summary">שולח כיולים לאפליקציית xDrip+ (אנא ודאו ש\"קבל טיפולים\" מופעל בהגדרות xDrip+ תחת \"הגדרות לשיתוף פעולה בין אפליקציות\").</string>
-    <string name="show_cgm_button_summary">פותח את xDrip או את אפליקציית דקסקום (לחיצה על אחורה מחזירה ל-AAPS).</string>
     <string name="not_available_full">לא זמין</string>
     <string name="constraints_violation">הפרת מגבלות</string>
     <string name="change_your_input">שנה קלט!</string>
@@ -231,7 +228,6 @@
     <string name="firstcarbsincrement">תוספת פחמימות ראשונה</string>
     <string name="secondcarbsincrement">תוספת פחמימות שניה</string>
     <string name="thirdcarbsincrement">תוספת פחמימות שלישית</string>
-    <string name="cgm">סנסור</string>
     <string name="default_temptargets">ברירות מחדל ערכי מטרה</string>
     <string name="fill_bolus_title">מילוי\\תיחול כמויות סטנדרטיות של אינסולין</string>
     <string name="button1">כפתור 1</string>
@@ -244,7 +240,6 @@
     <string name="short_tabtitles">קצר את כותרות הלשוניות</string>
     <string name="overview_show_notes_field_in_dialogs_title">הצג שדות הערות בתיבות דו-שיח של טיפול</string>
     <string name="deliverpartofboluswizard">אשף הבולוס מבצע חישוב אך רק חלק זה של האינסולין המחושב מוזרק. שימושי בשימוש עם אלגוריתם SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">הוזרק 100% מהבולוס, אם ערך הסוכר בדם ישן </string>
     <string name="enable_bolus_advisor">אפשר את יועץ הבולוסים</string>
     <string name="enable_bolus_advisor_summary">מציג תזכורת לאכול אחר כך במקום להזריק את המינון שהומלץ ע\"י האשף בעת היפרגליקמיה (\"בולוס מקדים\")</string>
     <string name="enablesuperbolus">אפשר סופר בולוס באשף</string>

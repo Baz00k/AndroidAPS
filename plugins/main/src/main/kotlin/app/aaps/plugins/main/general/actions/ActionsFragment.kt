@@ -92,6 +92,7 @@ class ActionsFragment : DaggerFragment() {
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var loop: Loop
     @Inject lateinit var uiInteraction: UiInteraction
+    @Inject lateinit var extendedBolusActions: ExtendedBolusActions
 
     private var disposable: CompositeDisposable = CompositeDisposable()
 
@@ -100,7 +101,7 @@ class ActionsFragment : DaggerFragment() {
 
     // ---- Redesigned Actions (Compose overlay) ----
     private val actionsState = mutableStateOf(ActionsUiState())
-    private var extendedBolusCancellationConfirmationOpen = false
+    private val extendedBolusCancelGuard = ExtendedBolusActions.CancelGuard()
 
     private var _binding: ActionsFragmentBinding? = null
 
@@ -130,16 +131,7 @@ class ActionsFragment : DaggerFragment() {
             }
         }
         binding.extendedBolus.setOnClickListener {
-            activity?.let { activity ->
-                protectionCheck.queryProtection(activity, ProtectionCheck.Protection.BOLUS, UIRunnable {
-                    OKDialog.showConfirmation(
-                        activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), rh.gs(R.string.ebstopsloop),
-                        {
-                            uiInteraction.runExtendedBolusDialog(childFragmentManager)
-                        }, null
-                    )
-                })
-            }
+            activity?.let { extendedBolusActions.start(it, childFragmentManager) }
         }
         binding.extendedBolusCancel.setOnClickListener {
             confirmExtendedBolusCancellation()
@@ -213,36 +205,40 @@ class ActionsFragment : DaggerFragment() {
         }
         val therapy = buildList {
             // An existing target must remain visible and editable even when the loop is stopped.
-            if (targetStatus != null || (profile != null && loop.runningMode.isLoopRunning()))
-                add(TherapyAction(ActionId.TEMP_TARGET, "Temp Target", targetStatus.orEmpty(), active = targetStatus != null))
+            if (TherapyActionAvailability.tempTarget(targetStatus != null, profile != null, loop.runningMode))
+                add(TherapyAction(ActionId.TEMP_TARGET, "Temporary target", targetStatus.orEmpty(), active = targetStatus != null))
             if (pump.pumpDescription.isTempBasalCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && notClient) {
                 val active = processedTbrEbData.getTempBasalIncludingConvertedExtended(now)
-                if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temp Basal", active.toStringShort(rh), cancelable = true))
-                else add(TherapyAction(ActionId.TEMP_BASAL, "Temp Basal"))
+                if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temporary basal", active.toStringShort(rh), cancelable = true))
+                else add(TherapyAction(ActionId.TEMP_BASAL, "Temporary basal"))
             }
-            if (pump.pumpDescription.isExtendedBolusCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && !pump.isFakingTempsByExtendedBoluses && notClient) {
+            if (TherapyActionAvailability.extendedBolus(
+                    pump.pumpDescription.isExtendedBolusCapable, pump.isInitialized(), pump.isSuspended(), loop.runningMode,
+                    pump.isFakingTempsByExtendedBoluses, config.AAPSCLIENT
+                )
+            ) {
                 val eb = persistenceLayer.getExtendedBolusActiveAt(now)
                 if (eb != null) add(
                     TherapyAction(
                         ActionId.EXTENDED_BOLUS_CANCEL,
-                        "Extended Bolus",
+                        "Extended bolus",
                         eb.toStringMedium(dateUtil, rh),
                         cancelable = true,
                         enabled = !commandQueue.extendedBolusInQueue(),
                         disabledSub = rh.gs(R.string.extended_bolus_cancellation_pending),
                     )
                 )
-                else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended Bolus"))
+                else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended bolus"))
             }
             if (activePlugin.activeProfileSource.profile != null && pump.pumpDescription.isSetBasalProfileCapable && pump.isInitialized() && notDisconnected && !pump.isSuspended())
-                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile Switch", profileFunction.getProfileName()))
+                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile switch", profileFunction.getProfileName()))
         }
 
         val events = buildList {
             if (pump.pumpDescription.isRefillingCapable && pump.isInitialized()) add(EventAction(ActionId.FILL, "Prime/Fill"))
             add(EventAction(ActionId.SENSOR_INSERT, "Sensor"))
             if (pump.pumpDescription.isBatteryReplaceable || pump.isBatteryChangeLoggingEnabled()) add(EventAction(ActionId.BATTERY_CHANGE, "Battery"))
-            add(EventAction(ActionId.BG_CHECK, "BG Check"))
+            add(EventAction(ActionId.BG_CHECK, "BG check"))
             add(EventAction(ActionId.NOTE, "Note"))
             add(EventAction(ActionId.EXERCISE, "Exercise"))
             add(EventAction(ActionId.ANNOUNCEMENT, "Announce"))
@@ -271,9 +267,7 @@ class ActionsFragment : DaggerFragment() {
                 })
             }
 
-            ActionId.EXTENDED_BOLUS -> bolusProtected {
-                OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), rh.gs(R.string.ebstopsloop), { uiInteraction.runExtendedBolusDialog(childFragmentManager) }, null)
-            }
+            ActionId.EXTENDED_BOLUS -> extendedBolusActions.start(activity, childFragmentManager)
 
             ActionId.EXTENDED_BOLUS_CANCEL -> confirmExtendedBolusCancellation()
 
@@ -292,29 +286,7 @@ class ActionsFragment : DaggerFragment() {
 
     private fun confirmExtendedBolusCancellation() {
         val activity = activity ?: return
-        if (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) == null ||
-            commandQueue.extendedBolusInQueue() || extendedBolusCancellationConfirmationOpen
-        ) return
-        extendedBolusCancellationConfirmationOpen = true
-        OKDialog.showConfirmation(
-            activity,
-            rh.gs(app.aaps.core.ui.R.string.cancel) + " " + rh.gs(app.aaps.core.ui.R.string.extended_bolus),
-            rh.gs(R.string.confirm_cancel_extended_bolus),
-            Runnable {
-                extendedBolusCancellationConfirmationOpen = false
-                if (commandQueue.extendedBolusInQueue()) return@Runnable
-                uel.log(Action.CANCEL_EXTENDED_BOLUS, Sources.Actions)
-                if (commandQueue.cancelExtended(object : Callback() {
-                        override fun run() {
-                            if (!result.success) {
-                                uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.extendedbolusdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                            }
-                            activity?.runOnUiThread { if (_binding != null) updateGui() }
-                        }
-                    })) activity.runOnUiThread { if (_binding != null) updateGui() }
-            },
-            Runnable { extendedBolusCancellationConfirmationOpen = false },
-        )
+        extendedBolusActions.confirmCancel(activity, Sources.Actions, extendedBolusCancelGuard) { if (_binding != null) updateGui() }
     }
 
     @Synchronized
@@ -358,13 +330,13 @@ class ActionsFragment : DaggerFragment() {
 
     @Synchronized
     override fun onPause() {
-        extendedBolusCancellationConfirmationOpen = false
+        extendedBolusCancelGuard.open = false
         super.onPause()
         disposable.clear()
     }
 
     override fun onDestroyView() {
-        extendedBolusCancellationConfirmationOpen = false
+        extendedBolusCancelGuard.open = false
         super.onDestroyView()
         _binding = null
     }

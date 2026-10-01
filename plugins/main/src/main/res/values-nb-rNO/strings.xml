@@ -217,9 +217,6 @@
     <string name="overview">Oversikt</string>
     <string name="overview_shortname">HJEM</string>
     <string name="description_overview">Viser loopens nåværende tilstand og knapper for de vanligste funksjonene</string>
-    <string name="overview_buttons_selection">Knapper</string>
-    <string name="show_calibration_button_summary">Sender en kalibrering til xDrip+ (sørg for at \'Aksepter kalibrering\' er aktivert i xDrip+ under Innstillinger mellom apper).</string>
-    <string name="show_cgm_button_summary">Åpner xDrip+ eller Dexcom-appen (du kan bruke tilbake-knappen for å gå tilbake til AAPS).</string>
     <string name="not_available_full">Ikke tilgjengelig</string>
     <string name="constraints_violation">Brudd på begrensninger</string>
     <string name="change_your_input">Endre dine inndata!</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">Første økning knapp for karbohydrater</string>
     <string name="secondcarbsincrement">Andre økning knapp for karbohydrater</string>
     <string name="thirdcarbsincrement">Tredje økning knapp for karbohydrater</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Standard midlertidig mål</string>
     <string name="eatingsoon_duration">Spise snart varighet (minutter)</string>
     <string name="eatingsoon_target">Spise snart målverdi</string>
@@ -257,7 +253,6 @@
     <string name="short_tabtitles">Korte navn i menyfaner</string>
     <string name="overview_show_notes_field_in_dialogs_title">Vis merknadsfelt i dialogvindu for behandlinger, sensorbytte, profilbytte og BS-kontroll</string>
     <string name="deliverpartofboluswizard">Boluskalkulator utfører beregninger, men bare denne del av beregnet insulin leveres. Nyttig ved bruk av SMB-algoritmen.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Gi full bolus (100 %) dersom blodsukker er eldre enn</string>
     <string name="enable_bolus_advisor">Aktiver bolusveileder</string>
     <string name="enable_bolus_advisor_summary">Bruk en påminnelse om å spise senere istedet for boluskalkulatorens resultat når blodsukker er høyt (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Aktiver superbolus i boluskalkulator</string>

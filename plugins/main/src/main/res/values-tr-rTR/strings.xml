@@ -212,9 +212,6 @@
     <string name="overview">Genel Bakış</string>
     <string name="overview_shortname">GİRİŞ</string>
     <string name="description_overview">Döngünüzün mevcut durumunu ve en yaygın eylemler için düğmeleri görüntüler</string>
-    <string name="overview_buttons_selection">Butonlar</string>
-    <string name="show_calibration_button_summary">xDrip+\'a kalibrasyon gönderir (xDrip+\'ta Inter-App ayarları altında \"Kalibrasyonları Kabul Et\" seçeneğinin etkinleştirildiğinden emin olun).</string>
-    <string name="show_cgm_button_summary">xDrip+ veya Dexcom uygulamasını açar (AAPS\'e dönmek için geri butonunu kullanabilirsiniz).</string>
     <string name="not_available_full">Mevcut değil</string>
     <string name="constraints_violation">Kısıtlamalar ihlali</string>
     <string name="change_your_input">Girişinizi değiştirin!</string>
@@ -233,7 +230,6 @@
     <string name="firstcarbsincrement">Birinci karbonhidrat artışı</string>
     <string name="secondcarbsincrement">İkinci karbonhidrat artışı</string>
     <string name="thirdcarbsincrement">Üçüncü karbonhidrat artışı</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Varsayılan Geçici hedefler</string>
     <string name="eatingsoon_duration">Yakında Yemek süresi (dakika)</string>
     <string name="eatingsoon_target">Yakında Yemek Hedef değeri</string>
@@ -252,7 +248,6 @@
     <string name="short_tabtitles">Kısa sekme başlıkları</string>
     <string name="overview_show_notes_field_in_dialogs_title">Tedavi diyaloglarında not alanını göster</string>
     <string name="deliverpartofboluswizard">Bolus sihirbazı hesaplamayı gerçekleştirir ancak hesaplanan insülinin yalnızca bu kısmı iletilir. SMB algoritması ile kullanışlıdır.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">KŞ şu tarihten daha eskiyse tam bolus (%100) verin</string>
     <string name="enable_bolus_advisor">Bolus danışmanını etkinleştir</string>
     <string name="enable_bolus_advisor_summary">Yüksek glisemi sırasında sihirbaz sonucu yerine daha sonra yemeye başlamak için hatırlatıcı kullanın (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Sihirbazda süperbolusu etkinleştir</string>

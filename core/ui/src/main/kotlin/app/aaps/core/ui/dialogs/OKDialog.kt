@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.DialogInterface
 import android.os.SystemClock
 import android.text.Spanned
-import androidx.core.text.HtmlCompat
 import androidx.fragment.app.FragmentActivity
 import app.aaps.core.compose.components.AlertAction
 import app.aaps.core.compose.components.AlertContent
@@ -149,8 +148,8 @@ object OKDialog {
      * Call sites build their messages as HTML (`formatColor(...)` etc.) for the old AlertDialog. The
      * colours are attributes from the retired palette, so keep the text and let the redesign colour it.
      */
-    private fun Spanned.toDisplayText(): String =
-        HtmlCompat.fromHtml(toString(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
+    // Already parsed from HTML: its text keeps the line breaks. Parsing it again would fold them into spaces.
+    private fun Spanned.toDisplayText(): String = toString().trim()
 
     // region ---- legacy fallbacks (no activity in the context chain) ----
 

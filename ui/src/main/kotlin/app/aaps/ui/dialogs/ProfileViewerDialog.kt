@@ -1,15 +1,10 @@
 package app.aaps.ui.dialogs
 
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -29,7 +24,6 @@ import app.aaps.ui.dialogs.compose.ProfileViewerCategory
 import app.aaps.ui.dialogs.compose.ProfileViewerRow
 import app.aaps.ui.dialogs.compose.ProfileViewerSheet
 import app.aaps.ui.dialogs.compose.ProfileViewerState
-import dagger.android.support.DaggerDialogFragment
 import org.json.JSONObject
 import java.util.Locale
 import javax.inject.Inject
@@ -40,7 +34,7 @@ import javax.inject.Inject
  * "customProfile2") + [UiInteraction.Mode] handling — so `uiInteraction.runProfileViewerDialog`
  * callers are unaffected. Presentation only, no submit.
  */
-class ProfileViewerDialog : DaggerDialogFragment() {
+class ProfileViewerDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var dateUtil: DateUtil
@@ -60,12 +54,6 @@ class ProfileViewerDialog : DaggerDialogFragment() {
     private var customProfileJson2: String = ""
     private var customProfileName: String = ""
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         // load data from bundle
@@ -78,20 +66,14 @@ class ProfileViewerDialog : DaggerDialogFragment() {
                 customProfileJson2 = bundle.getString("customProfile2", "")
         }
 
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         val state = buildState()
         if (state == null) {
             dismiss()
             return View(requireContext())
         }
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { ProfileViewerSheet(state = state, onClose = { dismiss() }) } }
-        }
+        return sheetContent { ProfileViewerSheet(state = state, onClose = { dismiss() }) }
     }
 
     override fun onSaveInstanceState(bundle: Bundle) {

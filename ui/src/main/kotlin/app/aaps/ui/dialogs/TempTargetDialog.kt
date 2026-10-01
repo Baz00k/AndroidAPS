@@ -1,16 +1,11 @@
 package app.aaps.ui.dialogs
 
+import io.reactivex.rxjava3.kotlin.plusAssign
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TT
 import app.aaps.core.data.ue.Action
@@ -28,6 +23,7 @@ import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.ui.R
@@ -35,9 +31,7 @@ import app.aaps.ui.dialogs.compose.TempTargetSheet
 import app.aaps.ui.dialogs.compose.TempTargetSheetState
 import app.aaps.ui.dialogs.compose.TtPreset
 import app.aaps.ui.dialogs.compose.TtReason
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -48,7 +42,7 @@ import javax.inject.Inject
  * `cancelCurrentTemporaryTargetIfAny` path behind an `OKDialog` confirmation. DI + `runTempTargetDialog`
  * routing unchanged.
  */
-class TempTargetDialog : DaggerDialogFragment() {
+class TempTargetDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
@@ -63,31 +57,17 @@ class TempTargetDialog : DaggerDialogFragment() {
     private val disposable = CompositeDisposable()
     private var queryingProtection = false
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(true)
 
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                AapsTheme {
-                    TempTargetSheet(
-                        state = buildState(),
-                        onStart = ::start,
-                        onCancelActive = ::cancelActive,
-                        onClose = { dismiss() }
-                    )
-                }
-            }
+        return sheetContent {
+            TempTargetSheet(
+                state = buildState(),
+                onStart = ::start,
+                onCancelActive = ::cancelActive,
+                onClose = { dismiss() }
+            )
         }
     }
 

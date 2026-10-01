@@ -14,24 +14,52 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Bottom-sheet surface: scrim-less rounded-top panel with a grabber and a title row. Hosted inside a
- * DialogFragment whose window is bottom-gravity. [title] + optional close.
+ * True while the surrounding host really lets the sheet be dragged away. The grabber is drawn only
+ * then: a handle on something that cannot be dragged is a false affordance.
+ */
+val LocalSheetDraggable = staticCompositionLocalOf { false }
+
+/**
+ * Set by a host that drags the sheet by its header only, so scrolling a form never throws it away.
+ * [SheetSurface] hands it the header (grabber and title row) to hit-test a touch against.
+ */
+val LocalSheetDragHandle = staticCompositionLocalOf<((LayoutCoordinates) -> Unit)?> { null }
+
+/**
+ * Bottom-sheet surface: rounded-top panel with a grabber and a title row. Hosted by a native modal
+ * bottom sheet ([LocalSheetDraggable] = true) or, for blocking content, a plain dialog.
+ *
+ * The title row is the same on every sheet: [onBack] (a step back within the sheet) leads, [onClose]
+ * trails. Together with the grabber it is the sheet's handle. With a [footer] the content scrolls on its own and the footer, the sheet's action, stays
+ * on screen; without one the caller lays out (and scrolls) everything itself.
  */
 @Composable
 fun SheetSurface(
     title: String,
     modifier: Modifier = Modifier,
     onClose: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val colors = AapsTheme.colors
@@ -42,36 +70,70 @@ fun SheetSurface(
             .background(colors.surface3)
             .padding(bottom = 12.dp)
     ) {
-        // grabber
-        Box(
-            Modifier
-                .padding(top = 8.dp)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
+        val dragHandle = LocalSheetDragHandle.current
+        Column(if (dragHandle != null) Modifier.onGloballyPositioned(dragHandle) else Modifier) {
+            if (LocalSheetDraggable.current)
+                Box(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            // Text ink, not a fixed white: the grabber has to show on a light sheet too.
+                            .background(colors.textTertiary.copy(alpha = 0.5f))
+                    )
+                }
+            else Box(Modifier.padding(top = 8.dp))
+            Row(
                 Modifier
-                    .size(width = 40.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White.copy(alpha = 0.22f))
-            )
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AapsSpacing.screenH, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
-            if (onClose != null) Box(Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onClose).padding(4.dp)) {
-                Icon(Icons.Rounded.Close, contentDescription = "Close", tint = colors.textSecondary)
+                    .fillMaxWidth()
+                    .padding(start = if (onBack != null) 4.dp else AapsSpacing.screenH, end = 4.dp)
+                    .heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onBack != null) SheetIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
+                Text(title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                if (onClose != null) SheetIconButton(Icons.Rounded.Close, "Close", onClose)
             }
         }
-        Column(Modifier.padding(horizontal = AapsSpacing.screenH), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            content()
+        if (footer == null)
+            Column(Modifier.padding(horizontal = AapsSpacing.screenH), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
+                content()
+            }
+        else {
+            Column(
+                Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = AapsSpacing.screenH)
+                    .padding(bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
+            ) { content() }
+            // A hairline where the scrolling cards pass under the pinned action.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(AapsSpacing.hairlineWidth)
+                    .background(colors.hairline)
+            )
+            Box(Modifier.padding(start = AapsSpacing.screenH, end = AapsSpacing.screenH, top = 12.dp)) { footer() }
         }
     }
 }
+
+@Composable
+private fun SheetIconButton(icon: ImageVector, description: String, onClick: () -> Unit) =
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) { Icon(icon, contentDescription = description, tint = AapsTheme.colors.textSecondary) }
 
 /** A rounded chip. [selected] fills accent-tint; otherwise control-fill. */
 @Composable
@@ -83,24 +145,17 @@ fun Chip(
     enabled: Boolean = true
 ) {
     val colors = AapsTheme.colors
-    val bg = when {
-        !enabled -> colors.controlFill
-        selected -> colors.accentTintStrong
-        else     -> colors.controlFill
-    }
-    val fg = when {
-        !enabled -> colors.textTertiary
-        selected -> colors.accentOnLight
-        else     -> colors.textPrimary
-    }
+    val bg = if (selected) colors.accentTintStrong else colors.controlFill
+    val fg = if (selected) colors.accentOnLight else colors.textPrimary
     Text(
         label,
         style = AapsTheme.type.listTitle,
         color = fg,
         modifier = modifier
+            .disabledAlpha(enabled)
             .clip(AapsTheme.shape.pill)
             .background(bg)
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp)
     )
 }

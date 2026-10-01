@@ -1,17 +1,12 @@
 package app.aaps.ui.dialogs
 
+import io.reactivex.rxjava3.kotlin.plusAssign
 import android.content.Context
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -38,6 +33,7 @@ import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.ui.dialogs.compose.PumpReadyGate
@@ -48,9 +44,7 @@ import app.aaps.ui.dialogs.compose.FillInputs
 import app.aaps.ui.dialogs.compose.FillSheet
 import app.aaps.ui.dialogs.compose.FillSheetState
 import com.google.common.base.Joiner
-import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
@@ -60,7 +54,7 @@ import kotlin.math.abs
  * `OKDialog` confirmation + prime-`commandQueue.bolus` + site/insulin-change persistence + site-rotation
  * path as the legacy dialog. Event time is `dateUtil.now()` (the legacy sheet had no time offset input).
  */
-class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
+class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -80,18 +74,9 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
 
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog?.window?.setGravity(Gravity.BOTTOM)
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
-        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = true
-        dialog?.setCanceledOnTouchOutside(false)
 
         val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
         val state = FillSheetState(
@@ -105,10 +90,7 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
             ).filter { it > 0 },
             showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs)
         )
-        return ComposeView(requireContext()).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent { AapsTheme { FillSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) } }
-        }
+        return sheetContent { FillSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) }
     }
 
     override fun onDestroyView() {

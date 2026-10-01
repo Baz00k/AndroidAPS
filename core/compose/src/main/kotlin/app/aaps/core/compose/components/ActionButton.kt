@@ -4,10 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,11 +19,12 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * A tonal action-bar button (icon + label), 58dp tall. Tint conveys role:
- *  - accent tint = primary interactive (Carbs, +),
- *  - green tint = the Bolus deliver action,
- *  - filled accent ([emphasized]) = the emphasized Wizard.
- * All are interactive (accent/tinted), never using glucose colors as chrome.
+ * A tonal action-bar button (icon + label). Tint conveys role: accent tint for ordinary actions,
+ * filled accent ([emphasized]) for the primary one. A disabled button keeps its place, label and
+ * colour so the bar does not reflow, at the shared disabled opacity.
+ *
+ * The label shrinks before it clips (large font scales, narrow windows); the bar grows taller rather
+ * than cutting the icon off.
  */
 @Composable
 fun ActionBarButton(
@@ -33,21 +34,26 @@ fun ActionBarButton(
     modifier: Modifier = Modifier,
     container: Color = AapsTheme.colors.accentTint,
     content: Color = AapsTheme.colors.accentOnLight,
-    emphasized: Boolean = false
+    emphasized: Boolean = false,
+    enabled: Boolean = true
 ) {
-    val bg = if (emphasized) AapsTheme.colors.accent else container
-    val fg = if (emphasized) AapsTheme.colors.onAccent else content
+    val colors = AapsTheme.colors
+    val bg = if (emphasized) colors.accent else container
+    val fg = if (emphasized) colors.onAccent else content
     Column(
         modifier = modifier
-            .height(58.dp)
+            .heightIn(min = 58.dp)
+            .disabledAlpha(enabled)
             .clip(AapsTheme.shape.button)
             .background(bg)
-            .clickable(onClick = onClick, role = Role.Button),
+            .clickable(enabled = enabled, onClick = onClick, role = Role.Button)
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(22.dp))
-        Text(label, style = AapsTheme.type.label, color = fg)
+        // The label below names the action; a description here would be read twice.
+        Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
+        FittedText(label, AapsTheme.type.label, fg)
     }
 }
 

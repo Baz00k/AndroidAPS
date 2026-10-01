@@ -14,6 +14,7 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -71,6 +72,7 @@ class BolusWizard @Inject constructor(
     private val dateUtil: DateUtil,
     private val config: Config,
     private val uel: UserEntryLogger,
+    private val automation: Automation,
     private val glucoseStatusProvider: GlucoseStatusProvider,
     private val uiInteraction: UiInteraction,
     private val persistenceLayer: PersistenceLayer,
@@ -110,6 +112,11 @@ class BolusWizard @Inject constructor(
         private set
 
     private var accepted = false
+    private var succeeded = false
+
+    /** True for the first successful result only: the queue may report a treatment more than once. */
+    @Synchronized
+    private fun onceOnSuccess(): Boolean = !succeeded.also { succeeded = true }
 
     // Result
     var calculatedTotalInsulin: Double = 0.0
@@ -395,19 +402,32 @@ class BolusWizard @Inject constructor(
     }
 
     /**
-     * [skipConfirmation] — when true the final "are you sure" [OKDialog.showConfirmation] is NOT shown and
-     * the bolus executes directly. Used by the redesigned wizard, whose deliberate press-and-hold gesture
-     * is itself the confirmation, so a second dialog is redundant. The bolus-advisor split *choice* (a
-     * genuine decision, not a confirm) is still offered. Legacy/quick-wizard callers leave it false.
+     * High glucose with a meal: the bolus advisor offers to bolus now and remind the user to eat once
+     * glucose has come down, instead of logging the carbs straight away. Only with a dose to give:
+     * without one, "eat later" would drop the carbs and deliver nothing.
      */
-    fun confirmAndExecute(ctx: Context, quickWizardEntry: QuickWizardEntry? = null, skipConfirmation: Boolean = false) {
+    fun bolusAdvisorApplies(): Boolean =
+        preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0 &&
+            insulinAfterConstraints > 0.0
+
+    /**
+     * [skipConfirmation] — when true the final "are you sure" [OKDialog.showConfirmation] is NOT shown and
+     * the bolus executes directly. Used by the Calculator, whose deliberate press-and-hold gesture is
+     * itself the confirmation, so a second dialog is redundant.
+     *
+     * [advisor] — the Calculator's answer to the bolus advisor, chosen before the hold: true to bolus now
+     * and eat later, false to log the carbs now. Null (quick-wizard callers) asks in a dialog instead.
+     */
+    fun confirmAndExecute(ctx: Context, quickWizardEntry: QuickWizardEntry? = null, skipConfirmation: Boolean = false, advisor: Boolean? = null) {
         if (calculatedTotalInsulin > 0.0 || carbs > 0.0) {
             if (accepted) {
                 aapsLogger.debug(LTag.UI, "guarding: already accepted")
                 return
             }
             accepted = true
-            if (preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0)
+            if (bolusAdvisorApplies() && advisor != null)
+                if (advisor) bolusAdvisorProcessing(ctx, skipConfirmation) else commonProcessing(ctx, quickWizardEntry, skipConfirmation)
+            else if (bolusAdvisorApplies())
                 OKDialog.showYesNoCancel(
                     ctx, rh.gs(app.aaps.core.ui.R.string.bolus_advisor), rh.gs(app.aaps.core.ui.R.string.bolus_advisor_message),
                     { bolusAdvisorProcessing(ctx, skipConfirmation) },
@@ -453,6 +473,11 @@ class BolusWizard @Inject constructor(
                         override fun run() {
                             if (!result.success)
                                 uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
+                            // The carbs were deliberately not logged: remind the user to eat once glucose comes down.
+                            else if (onceOnSuccess()) {
+                                automation.removeAutomationEventBolusReminder()
+                                automation.scheduleAutomationEventEatReminder()
+                            }
                         }
                     })
                 }
@@ -563,6 +588,15 @@ class BolusWizard @Inject constructor(
                             override fun run() {
                                 if (!result.success)
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
+                                else if (onceOnSuccess()) {
+                                    // This treatment answers whatever the older reminders were waiting for.
+                                    if (insulinAfterConstraints > 0.0) automation.removeAutomationEventBolusReminder()
+                                    if (this@BolusWizard.carbs > 0) automation.removeAutomationEventEatReminder()
+                                    // Due at the meal time that was recorded, not a full carb time after delivery finished.
+                                    val secondsToMeal = (((carbsTimestamp ?: timestamp) - dateUtil.now()) / 1000).toInt()
+                                    if (useAlarm && this@BolusWizard.carbs > 0 && secondsToMeal > 0)
+                                        automation.scheduleTimeToEatReminder(secondsToMeal)
+                                }
                             }
                         })
                     }

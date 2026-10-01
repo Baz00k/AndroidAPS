@@ -68,6 +68,11 @@ data class HomeUiState(
 
     val ready: Boolean = false,            // becomes true once first real refresh has run
 
+    // Treatment actions: which primaries sit on the bar, and what the "+" menu holds.
+    val actions: HomeActionLayout = HomeActionLayout(),
+    val calculatorEnabled: Boolean = true,  // false without a profile: there is nothing to calculate with
+    val targetEditable: Boolean = false,    // the target line opens the temporary-target sheet
+
     // Active notifications (pump unreachable, NS alarms, profile failures...). The legacy overview
     // showed these in a RecyclerView under the graph; nothing displayed them after that hierarchy
     // was hidden, so they live on the hero now.

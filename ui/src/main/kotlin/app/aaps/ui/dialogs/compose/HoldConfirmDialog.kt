@@ -37,7 +37,7 @@ import app.aaps.core.compose.theme.AapsTheme
  *
  * Deliberately a drop-in for `OKDialog.showConfirmation(activity, title, message, ok, cancel)`: same
  * itemised summary (including the constraint warnings the callers build), but the positive action is a
- * press-and-hold rather than a tap. The Bolus Wizard has always gated delivery behind a hold; this is
+ * press-and-hold rather than a tap. The Calculator gates delivery behind a hold; this is
  * what lets every OTHER delivery route — manual bolus, insulin, extended bolus, prime/fill — use the
  * same gesture, so "how do I commit insulin" has exactly one answer in this app.
  *
@@ -46,7 +46,7 @@ import app.aaps.core.compose.theme.AapsTheme
  */
 object HoldConfirmDialog {
 
-    fun show(activity: FragmentActivity, title: String, message: CharSequence, ok: Runnable?, cancel: Runnable? = null) {
+    fun show(activity: FragmentActivity, title: String, message: CharSequence, ok: Runnable?, cancel: Runnable? = null, action: String = "Confirm") {
         val dialog = Dialog(activity)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -63,6 +63,7 @@ object HoldConfirmDialog {
                     HoldConfirmContent(
                         title = title,
                         message = message.toPlainText(),
+                        action = action,
                         onConfirm = {
                             dialog.dismiss()
                             ok?.run()
@@ -85,11 +86,12 @@ object HoldConfirmDialog {
      * theme attributes from the old palette, so we take the text and let the redesign colour it.
      */
     private fun CharSequence.toPlainText(): String =
-        HtmlCompat.fromHtml(toString(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
+        // A Spanned is already parsed and keeps its line breaks; parsing it again would fold them into spaces.
+        (if (this is android.text.Spanned) toString() else HtmlCompat.fromHtml(toString(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString()).trim()
 }
 
 @Composable
-private fun HoldConfirmContent(title: String, message: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
+private fun HoldConfirmContent(title: String, message: String, action: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
     val colors = AapsTheme.colors
     Box(Modifier.fillMaxWidth().padding(AapsSpacing.screenH)) {
         Column(
@@ -111,7 +113,7 @@ private fun HoldConfirmContent(title: String, message: String, onConfirm: () -> 
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 )
             HoldToConfirmButton(
-                label = "Hold to confirm",
+                label = action,
                 onConfirm = onConfirm,
                 modifier = Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGapSmall)
             )

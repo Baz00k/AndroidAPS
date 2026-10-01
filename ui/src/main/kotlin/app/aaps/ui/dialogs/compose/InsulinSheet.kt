@@ -1,27 +1,28 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
-import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.components.ToggleRow
-import app.aaps.core.compose.theme.AapsSpacing
+import app.aaps.core.compose.components.TimeStepper
+import app.aaps.core.compose.components.rememberNow
+import kotlin.math.roundToInt
 import app.aaps.core.compose.theme.AapsTheme
 
 data class InsulinSheetState(
@@ -29,48 +30,86 @@ data class InsulinSheetState(
     val bolusStep: Double,
     val decimals: Int,
     val quickIncrements: List<Double>,
-    val defaultRecordOnly: Boolean,
-    val suspendedWarning: Boolean
+    /** Set when the pump cannot be asked for a bolus; the screen then only logs. */
+    val deliveryUnavailable: DeliveryUnavailable?,
+    val targets: List<TargetPresetOption>,
+    val showNotes: Boolean
 )
 
 data class InsulinInputs(
     val amount: Double,
-    val recordOnly: Boolean,
-    val timeOffsetMin: Int,
-    val eatingSoon: Boolean,
+    val intent: InsulinIntent,
+    /** When a logged dose was given, or null for now. Ignored for delivery, which is always now. */
+    val givenAt: Long?,
+    val target: TargetPreset,
     val notes: String
 )
 
-/** Redesigned Insulin (careportal bolus) sheet. [onSubmit] runs the same constraint + confirm + deliver/record path. */
+/**
+ * The single manual insulin screen, laid out like Carbs and the Calculator. Deliver asks the pump for
+ * a bolus now; Log records a dose given another way (pen, a missed pump record) at the time it was
+ * given, without touching the pump.
+ */
 @Composable
 fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
     val colors = AapsTheme.colors
-    var amount by remember { mutableStateOf(0.0) }
-    var recordOnly by remember { mutableStateOf(state.defaultRecordOnly) }
-    var timeOffset by remember { mutableStateOf(0.0) }
-    var eatingSoon by remember { mutableStateOf(false) }
-    var notes by remember { mutableStateOf("") }
+    var amount by rememberSaveable { mutableStateOf(0.0) }
+    var intent by rememberSaveable { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
+    // The picked time is a moment, not a distance from whenever the form is finally submitted; the
+    // distance shown is derived from it.
+    var at by rememberSaveable { mutableStateOf<Long?>(null) }
+    val now = rememberNow()
+    val offset = at?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
+    var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
+    var notes by rememberSaveable { mutableStateOf("") }
 
-    fun fmtInc(v: Double) = (if (v > 0) "+" else "") + String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
+    fun fmt(v: Double) = String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
 
-    SheetSurface(title = "Insulin", onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            if (state.suspendedWarning)
-                Text("Pump is suspended / not ready — this will be recorded only.", style = AapsTheme.type.caption, color = colors.high)
-            NumberField("Insulin", amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", modifier = Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.quickIncrements.forEach { inc -> Chip(fmtInc(inc), onClick = { amount = (amount + inc).coerceIn(0.0, state.maxInsulin) }) }
-            }
-            ToggleRow("Record only", recordOnly, { recordOnly = it }, sub = "Log without delivering")
-            if (recordOnly)
-                NumberField("Time", timeOffset, { timeOffset = it }, step = 5.0, min = -12 * 60.0, max = 12 * 60.0, decimals = 0, unit = "min", modifier = Modifier.fillMaxWidth())
-            ToggleRow("Start eating-soon temp target", eatingSoon, { eatingSoon = it })
-            NotesField(notes, { notes = it })
+    val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
+    SheetSurface(
+        title = "Insulin",
+        onClose = onClose,
+        footer = {
             PrimaryButton(
-                label = if (recordOnly) "Record" else "Deliver",
-                enabled = amount > 0.0 || eatingSoon,
-                onClick = { onSubmit(InsulinInputs(amount, recordOnly, timeOffset.toInt(), eatingSoon, notes)) }
+                label = when {
+                    amount > 0.0                -> "$verb ${fmt(amount)} U"
+                    target != TargetPreset.NONE -> "Set target"
+                    else                        -> verb
+                },
+                enabled = amount > 0.0 || target != TargetPreset.NONE,
+                onClick = { onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else "")) }
             )
         }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SegmentedControl(
+                options = listOf("Deliver", "Log"),
+                selectedIndex = intent.ordinal,
+                onSelect = { intent = InsulinIntent.entries[it] },
+                modifier = Modifier.fillMaxWidth(),
+                fillWidth = true,
+                disabled = if (state.deliveryUnavailable != null) setOf(InsulinIntent.DELIVER.ordinal) else emptySet(),
+                disabledReason = state.deliveryUnavailable?.label
+            )
+            state.deliveryUnavailable?.let {
+                Text(it.label, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp))
+            }
+        }
+        EntryCard("Insulin") {
+            AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
+            ChoiceRow {
+                state.quickIncrements.forEach { inc ->
+                    Choice((if (inc > 0) "+" else "") + fmt(inc) + " U", selected = false, enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0) {
+                        amount = (amount + inc).coerceIn(0.0, state.maxInsulin)
+                    }
+                }
+            }
+        }
+        if (intent == InsulinIntent.LOG)
+            EntryCard("When") {
+                TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, atMs = at)
+            }
+        TargetPresetCard(state.targets, target) { target = it }
+        if (state.showNotes) NotesField(notes, { notes = it })
     }
 }

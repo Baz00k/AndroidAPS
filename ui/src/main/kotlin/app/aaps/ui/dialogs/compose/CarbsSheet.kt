@@ -1,93 +1,117 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.components.AbsorptionCard
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
-import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
+import app.aaps.core.compose.components.TimeStepper
+import app.aaps.core.compose.components.rememberNow
+import kotlin.math.roundToInt
 import app.aaps.core.compose.components.ToggleRow
-import app.aaps.core.compose.theme.AapsSpacing
-import app.aaps.core.compose.theme.AapsTheme
-
-enum class CarbTt { NONE, ACTIVITY, EATING_SOON, HYPO }
 
 data class CarbsSheetState(
     val maxCarbs: Double,
     val quickIncrements: List<Int>,
     val maxDurationHours: Int,
-    val autoHypoTt: Boolean,
-    val showBolusReminder: Boolean
+    val targets: List<TargetPresetOption>,
+    /** Preselected when glucose is low and no longer high target is already running. */
+    val initialTarget: TargetPreset,
+    val showBolusReminder: Boolean,
+    val showNotes: Boolean
 )
 
 data class CarbsInputs(
     val carbs: Int,
-    val timeOffsetMin: Int,
+    /** When the carbs are eaten, or null for now. */
+    val eatenAt: Long?,
     val durationHours: Int,
-    val tt: CarbTt,
+    val target: TargetPreset,
     val useAlarm: Boolean,
     val remindBolus: Boolean,
     val notes: String
 )
 
+/** Earliest and latest carb time, minutes from now: a week back for a forgotten entry, 12 h ahead for a planned one. */
+private const val CARBS_EARLIEST_MIN = -7 * 24 * 60
+private const val CARBS_LATEST_MIN = 12 * 60
+
 /**
- * Redesigned Carbs sheet. [onSubmit] runs the SAME constraint + `OKDialog` confirmation + temp-target /
- * `commandQueue.bolus` (carbs) + automation-reminder path as the legacy dialog.
+ * Carbs, laid out like the Calculator: amount, when, absorption, then a target. A negative amount
+ * is a correction of carbs already logged. [onSubmit] runs the same constraint + confirmation +
+ * temp-target / carbs + reminder path.
  */
 @Composable
 fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose: () -> Unit) {
-    val colors = AapsTheme.colors
-    var carbs by remember { mutableStateOf(0.0) }
-    var timeOffset by remember { mutableStateOf(0.0) }
-    var duration by remember { mutableStateOf(0.0) }
-    var tt by remember { mutableStateOf(if (state.autoHypoTt) CarbTt.HYPO else CarbTt.NONE) }
-    var alarm by remember { mutableStateOf(false) }
-    var remindBolus by remember { mutableStateOf(false) }
-    var notes by remember { mutableStateOf("") }
+    var carbs by rememberSaveable { mutableStateOf(0.0) }
+    // The picked time is a moment, not a distance from whenever the form is finally submitted; the
+    // distance shown is derived from it.
+    var at by rememberSaveable { mutableStateOf<Long?>(null) }
+    val now = rememberNow()
+    val timeOffset = at?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
+    var duration by rememberSaveable { mutableIntStateOf(0) }
+    var target by rememberSaveable { mutableStateOf(state.initialTarget) }
+    var alarm by rememberSaveable { mutableStateOf(false) }
+    var remindBolus by rememberSaveable { mutableStateOf(false) }
+    var notes by rememberSaveable { mutableStateOf("") }
 
-    SheetSurface(title = "Carbs", onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            NumberField("Carbs", carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", modifier = Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.quickIncrements.forEach { inc ->
-                    Chip(label = (if (inc > 0) "+$inc" else "$inc"), onClick = { carbs = (carbs + inc).coerceIn(-state.maxCarbs, state.maxCarbs) })
-                }
-            }
+    // Only a future meal can be reminded; the toggle is hidden (and its value ignored) otherwise.
+    val eatReminderAvailable = timeOffset > 0 && carbs > 0
 
-            Text("PRE-SET TEMP TARGET", style = AapsTheme.type.label, color = colors.textSecondary)
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("None", onClick = { tt = CarbTt.NONE }, selected = tt == CarbTt.NONE)
-                Chip("Activity", onClick = { tt = CarbTt.ACTIVITY }, selected = tt == CarbTt.ACTIVITY)
-                Chip("Eating soon", onClick = { tt = CarbTt.EATING_SOON }, selected = tt == CarbTt.EATING_SOON)
-                Chip("Hypo", onClick = { tt = CarbTt.HYPO }, selected = tt == CarbTt.HYPO)
-            }
-
-            NumberField("Time", timeOffset, { timeOffset = it }, step = 5.0, min = -7 * 24 * 60.0, max = 12 * 60.0, decimals = 0, unit = "min", modifier = Modifier.fillMaxWidth())
-            NumberField("Extended over", duration, { duration = it }, step = 1.0, min = 0.0, max = state.maxDurationHours.toDouble(), decimals = 0, unit = "h", modifier = Modifier.fillMaxWidth())
-
-            ToggleRow("Remind me to eat", alarm, { alarm = it }, sub = "Alarm at the chosen time offset")
-            if (state.showBolusReminder) ToggleRow("Remind me to bolus", remindBolus, { remindBolus = it })
-            NotesField(notes, { notes = it })
-
+    val grams = carbs.toInt()
+    SheetSurface(
+        title = "Carbs",
+        onClose = onClose,
+        footer = {
             PrimaryButton(
-                label = "Add carbs",
-                enabled = carbs != 0.0 || tt != CarbTt.NONE,
-                onClick = { onSubmit(CarbsInputs(carbs.toInt(), timeOffset.toInt(), duration.toInt(), tt, alarm, remindBolus, notes)) }
+                label = when {
+                    grams != 0                  -> "Log $grams g"
+                    target != TargetPreset.NONE -> "Set target"
+                    else                        -> "Log"
+                },
+                enabled = grams != 0 || target != TargetPreset.NONE,
+                onClick = {
+                    onSubmit(
+                        CarbsInputs(
+                            carbs = grams,
+                            eatenAt = at,
+                            durationHours = duration,
+                            target = target,
+                            useAlarm = alarm && eatReminderAvailable,
+                            remindBolus = remindBolus && state.showBolusReminder,
+                            notes = if (state.showNotes) notes else ""
+                        )
+                    )
+                }
             )
         }
+    ) {
+        EntryCard("Carbs") {
+            AmountStepper(carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", name = "of carbs")
+            ChoiceRow {
+                state.quickIncrements.forEach { inc ->
+                    Choice(if (inc > 0) "+$inc g" else "$inc g", selected = false, enabled = if (inc > 0) carbs < state.maxCarbs else carbs > -state.maxCarbs) {
+                        carbs = (carbs + inc).coerceIn(-state.maxCarbs, state.maxCarbs)
+                    }
+                }
+            }
+        }
+        EntryCard("When") {
+            TimeStepper(timeOffset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, atMs = at)
+            if (eatReminderAvailable) ToggleRow("Remind me to eat", alarm, { alarm = it })
+        }
+        AbsorptionCard(duration, { duration = it }, state.maxDurationHours)
+        TargetPresetCard(state.targets, target) { target = it }
+        if (state.showBolusReminder) ToggleRow("Remind me to bolus", remindBolus, { remindBolus = it }, sub = "When glucose is rising again")
+        if (state.showNotes) NotesField(notes, { notes = it })
     }
 }

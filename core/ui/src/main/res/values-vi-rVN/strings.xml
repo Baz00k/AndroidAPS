@@ -481,7 +481,6 @@
     <string name="cobvsiob">COB với IOB</string>
     <string name="slowabsorptiondetected"><![CDATA[<font color=\'%1$s\'>!!!!! Phát hiện hấp thụ carb chậm: %2$d%% thời gian. Kiểm tra lại tính toán của bạn. COB có thể bị đánh giá quá cao, dẫn đến việc bơm insulin nhiều hơn !!!!!</font>]]></string>
     <string name="partialboluswizard">Thực hiện phần này của kết quả bolus wizard [%]</string>
-    <string name="partialboluswizard_reset_time">Ngưỡng thời gian dữ liệu đường huyết cũ [min]</string>
     <string name="bolus_constraint_applied_warn">Giới hạn bolus đã áp dụng: %1$.2f U đến %2$.2f U</string>
     <string name="bolus_recorded_only">Bolus chỉ được ghi lại (không tiêm qua pump)</string>
     <string name="advisoralarm">Chạy báo thức khi đến giờ ăn</string>

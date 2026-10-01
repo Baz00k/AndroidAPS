@@ -129,8 +129,9 @@
     <string name="stop_processing">Stop processing</string>
 
     <!--    Reminders-->
-    <string name="time_to_eat">Time to eat!\nRun Bolus wizard and do calculation again.</string>
-    <string name="time_to_bolus">Time to bolus!\nRun Bolus wizard and do calculation again.</string>
+    <string name="time_to_eat">Time to eat!\nOpen the Calculator and enter your meal.</string>
+    <string name="time_to_eat_logged">Time to eat!\nYour meal is already logged; do not enter it again.</string>
+    <string name="time_to_bolus">Time to bolus!\nYour carbs are already logged. In the Calculator, turn on Carbs on board instead of entering them again.</string>
     <string name="error_setting_reminder">Error while setting future alarm</string>
 
     <!--    Autotune-->

@@ -217,9 +217,6 @@
     <string name="overview">Privire de ansamblu</string>
     <string name="overview_shortname">ACASĂ</string>
     <string name="description_overview">Afişează starea curentă a buclei şi butoanele pentru cele mai folosite acţiuni</string>
-    <string name="overview_buttons_selection">Butoane</string>
-    <string name="show_calibration_button_summary">Trimite o calibrare la xDrip+ (asigură-te că \'Acceptă calibrări este activat în xDrip+ în setările între aplicații).</string>
-    <string name="show_cgm_button_summary">Deschide aplicația xDrip+ sau Dexcom (poți folosi butonul înapoi pentru a te întoarce la AAPS).</string>
     <string name="not_available_full">Nu este disponibil</string>
     <string name="constraints_violation">Încălcare a unei limite</string>
     <string name="change_your_input">Schimbați ceea ce ați introdus!</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">Primul increment de carbohidrați</string>
     <string name="secondcarbsincrement">Al doilea increment de carbohidrați</string>
     <string name="thirdcarbsincrement">Al treilea increment de carbohidrați</string>
-    <string name="cgm">CGM</string>
     <string name="default_temptargets">Ținte-Temporare implicite</string>
     <string name="eatingsoon_duration">Durată Mănânc în curând (minute)</string>
     <string name="eatingsoon_target">Valoare țintă Mănânc în curând</string>
@@ -257,7 +253,6 @@
     <string name="short_tabtitles">Scurtează titlurile secțiunilor</string>
     <string name="overview_show_notes_field_in_dialogs_title">Afișează câmp pentru note în dialogurile de tratamente</string>
     <string name="deliverpartofboluswizard">Wizard bolus face un calcul, dar numai o parte din insulina calculată este și livrată. Este mai eficient când se folosește cu algoritmul SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Livrează bolus complet (100%) dacă glicemia este mai veche de</string>
     <string name="enable_bolus_advisor">Activare consilier bolus</string>
     <string name="enable_bolus_advisor_summary">Folosește o alarma de reamintire pentru a începe sa mănânci mai târziu în loc de alerta de la calculatorul de bolus din timpul hiperglicemiei (\"pre-bolus\")</string>
     <string name="enablesuperbolus">Activează superbolus în asistent</string>

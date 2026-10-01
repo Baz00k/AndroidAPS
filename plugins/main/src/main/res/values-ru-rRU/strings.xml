@@ -217,9 +217,6 @@
     <string name="overview">Начало</string>
     <string name="overview_shortname">НАЧАЛО</string>
     <string name="description_overview">Отображает текущее состояние цикла и часто используемые кнопки</string>
-    <string name="overview_buttons_selection">Кнопки</string>
-    <string name="show_calibration_button_summary">Отправляет калибровку xDrip+ (убедитесь, что параметр \'Принимать калибровки\' включен в xDrip+ в Настройках между приложениями).</string>
-    <string name="show_cgm_button_summary">Открывает приложение xDrip+ или Dexcom (можно использовать кнопку \"Назад\" для возврата к AAPS).</string>
     <string name="not_available_full">Недоступно</string>
     <string name="constraints_violation">ограничение нарушено</string>
     <string name="change_your_input">измените введенные данные</string>
@@ -238,7 +235,6 @@
     <string name="firstcarbsincrement">Первый шаг увеличения углеводов</string>
     <string name="secondcarbsincrement">Второй шаг увеличения углеводов</string>
     <string name="thirdcarbsincrement">Третий шаг увеличения углеводов</string>
-    <string name="cgm">Мониторинг ГК</string>
     <string name="default_temptargets">Временные цели по умолчанию</string>
     <string name="eatingsoon_duration">Продолжительность ВЦ Ожидаемый прием пищи (в минутах)</string>
     <string name="eatingsoon_target">Целевое значение ВЦ Ожидаемый прием пищи</string>
@@ -257,7 +253,6 @@
     <string name="short_tabtitles">Сокращенные наименования вкладок</string>
     <string name="overview_show_notes_field_in_dialogs_title">Показать поле примечаний в диалогах терапии</string>
     <string name="deliverpartofboluswizard">Помощник болюса выполняет расчет, но подается только эта часть рекомендуемого инсулина. Полезно с алгоритмом SMB.</string>
-    <string name="deliver_part_of_boluswizard_reset_time">Подать полный болюс (100%), если гликемия старше</string>
     <string name="enable_bolus_advisor">Вкл помощник болюса</string>
     <string name="enable_bolus_advisor_summary">Воспользуйтесь напоминанием, чтобы начать есть позже, вместо того, чтобы задействовать помощник болюса на высоких значениях ГК (\"пре-болюс\")</string>
     <string name="enablesuperbolus">Активировать суперболюс в помощнике болюса</string>

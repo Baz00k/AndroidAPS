@@ -1,20 +1,13 @@
 package app.aaps.core.compose.components
 
-import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,7 +50,7 @@ fun NumberField(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (label.isNotBlank()) Text(label.uppercase(Locale.getDefault()), style = AapsTheme.type.label, color = colors.textSecondary)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StepButton(minus = true) { onValue((value - step).coerceIn(min, max)) }
+            StepButton(plus = false, contentDescription = stepLabel("Decrease", label), onClick = { onValue((value - step).coerceIn(min, max)) }, enabled = value > min)
             Box(
                 Modifier
                     .weight(1f)
@@ -75,6 +68,8 @@ fun NumberField(
                             onValue(parse(it).coerceIn(min, max))
                         },
                         singleLine = true,
+                        // Never wider than what is left: the unit must stay visible at large font scales.
+                        modifier = Modifier.weight(1f, fill = false),
                         textStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
                         keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0 || min < 0) KeyboardType.Number else KeyboardType.Number)
@@ -82,27 +77,10 @@ fun NumberField(
                     if (unit.isNotBlank()) Text(unit, style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
                 }
             }
-            StepButton(minus = false) { onValue((value + step).coerceIn(min, max)) }
+            StepButton(plus = true, contentDescription = stepLabel("Increase", label), onClick = { onValue((value + step).coerceIn(min, max)) }, enabled = value < max)
         }
     }
 }
 
-@Composable
-private fun StepButton(minus: Boolean, onClick: () -> Unit) {
-    val colors = AapsTheme.colors
-    Box(
-        Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .background(if (minus) colors.controlFill else colors.accentTint)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            if (minus) AapsIcons.Remove else Icons.Rounded.Add,
-            contentDescription = if (minus) "decrease" else "increase",
-            tint = if (minus) colors.textPrimary else colors.accentOnLight,
-            modifier = Modifier.size(22.dp)
-        )
-    }
-}
+private fun stepLabel(verb: String, label: String) =
+    verb + if (label.isNotBlank()) " ${label.lowercase(Locale.getDefault())}" else ""
