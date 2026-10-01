@@ -18,13 +18,6 @@ object EntryTime {
         return if (offsetMin > 0) "in $span" else "$span ago"
     }
 
-    /** "+15 min", "−30 min", "Now": the compact form used on quick choices. */
-    fun signed(offsetMin: Int): String = when {
-        offsetMin == 0 -> "Now"
-        offsetMin > 0  -> "+${duration(offsetMin)}"
-        else           -> "−${duration(-offsetMin)}"
-    }
-
     private fun duration(minutes: Int): String = when {
         minutes < 60      -> "$minutes min"
         minutes % 60 == 0 -> "${minutes / 60} h"

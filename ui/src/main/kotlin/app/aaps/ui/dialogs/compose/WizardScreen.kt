@@ -325,8 +325,7 @@ private fun EatingCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
         TimeStepper(
             offsetMin = inputs.carbTime,
             onOffset = { onInputs(inputs.copy(carbTime = it)) },
-            minOffsetMin = -60, maxOffsetMin = 60,
-            presets = listOf(-15, 0, 15, 30)
+            minOffsetMin = -60, maxOffsetMin = 60
         )
         if (inputs.carbTime > 0)
             ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })

@@ -106,7 +106,7 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
             }
         }
         EntryCard("When") {
-            TimeStepper(timeOffset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, presets = listOf(-30, -15, 0, 15), atMs = at)
+            TimeStepper(timeOffset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, atMs = at)
             if (eatReminderAvailable) ToggleRow("Remind me to eat", alarm, { alarm = it })
         }
         AbsorptionCard(duration, { duration = it }, state.maxDurationHours)

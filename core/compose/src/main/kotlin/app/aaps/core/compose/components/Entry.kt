@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.text.BasicTextField
@@ -46,6 +45,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -58,9 +60,9 @@ import java.util.Locale
 
 /*
  * The building blocks every treatment entry screen (Calculator, Carbs, Insulin) is made of, so the
- * same kind of value always looks and behaves the same: a labelled card, a value between − and +,
- * and a row of quick choices under it. Sized to fit a whole entry on one screen without giving up
- * 48 dp touch targets.
+ * same kind of value always looks and behaves the same: a labelled card and a value between − and +
+ * that can be tapped to set exactly. Sized to fit a whole entry on one screen without giving up
+ * 44 dp touch targets.
  */
 
 /** The size of an entry's main value: big enough to check at a glance, small enough to leave room. */
@@ -107,7 +109,8 @@ fun StepperValue(value: String, unit: String = "") {
 /**
  * An amount that can be stepped with − / + or typed. The typed text is kept while it is being edited;
  * the value itself is always clamped to [min]..[max]. At a limit the button towards it disables and
- * the limit is named, so a number that stopped growing never looks like a missed tap.
+ * the limit is named, so a number that stopped growing never looks like a missed tap. With a
+ * [zeroLabel], zero is shown as that word ("Normal") rather than as a number.
  */
 @Composable
 fun AmountStepper(
@@ -118,18 +121,21 @@ fun AmountStepper(
     max: Double,
     decimals: Int,
     unit: String,
-    name: String
+    name: String,
+    zeroLabel: String? = null
 ) {
     val colors = AapsTheme.colors
     fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${decimals}f", v)
-    fun parse(s: String) = s.replace(',', '.').toDoubleOrNull()
-    var text by remember { mutableStateOf(fmt(value)) }
-    LaunchedEffect(value) { if (parse(text) != value) text = fmt(value) }
+    fun shown(v: Double) = if (zeroLabel != null && v == 0.0) "" else fmt(v)
+    fun parse(s: String) = s.replace(',', '.').toDoubleOrNull() ?: if (zeroLabel != null && s.isEmpty()) 0.0 else null
+    var text by remember { mutableStateOf(shown(value)) }
+    LaunchedEffect(value) { if (parse(text) != value) text = shown(value) }
+    val showsZeroLabel = zeroLabel != null && text.isEmpty()
     val stepText = fmt(step)
     // A text field fills whatever width it is given; size it to its text so the unit sits right after the number.
     val style = entryValueStyle().copy(color = colors.textPrimary)
     val measurer = rememberTextMeasurer()
-    val fieldWidth = with(LocalDensity.current) { measurer.measure(text.ifEmpty { "0" }, style).size.width.toDp() + 2.dp }
+    val fieldWidth = with(LocalDensity.current) { measurer.measure(text.ifEmpty { zeroLabel ?: "0" }, style).size.width.toDp() + 2.dp }
     val atMax = value >= max
     val atMin = value <= min
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -148,9 +154,17 @@ fun AmountStepper(
                 textStyle = style,
                 cursorBrush = SolidColor(colors.accent),
                 keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0) KeyboardType.Decimal else KeyboardType.Number),
-                modifier = Modifier.width(fieldWidth)
+                decorationBox = { field ->
+                    Box {
+                        if (showsZeroLabel) Text(zeroLabel.orEmpty(), style = style)
+                        field()
+                    }
+                },
+                modifier = Modifier
+                    .width(fieldWidth)
+                    .semantics { if (showsZeroLabel) stateDescription = zeroLabel.orEmpty() }
             )
-            Text(" $unit", style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
+            if (!showsZeroLabel) Text(" $unit", style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
         }
         // Zero is an obvious floor; a negative floor (a carb correction) and any ceiling are not.
         val limit = when {
@@ -176,8 +190,8 @@ fun rememberNow(periodMs: Long = 15_000L): Long {
 }
 
 /**
- * When something happened or will happen, as minutes from now. − / + move it by [step] minutes; tapping
- * the value opens a clock for anything further away. Quick [presets] are minute offsets.
+ * When something happened or will happen, as minutes from now, with the clock time under it. − / +
+ * move it by [step] minutes; tapping the value opens a clock for anything further away.
  *
  * [atMs] is the moment itself, for an entry that records a fixed time: the clock shown (and the
  * picker's start) is then exactly what will be saved, however long the screen has been open.
@@ -189,7 +203,6 @@ fun TimeStepper(
     onOffset: (Int) -> Unit,
     minOffsetMin: Int,
     maxOffsetMin: Int,
-    presets: List<Int>,
     step: Int = 5,
     atMs: Long? = null
 ) {
@@ -212,15 +225,12 @@ fun TimeStepper(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             FittedText(EntryTime.relative(offsetMin), entryValueStyle(), colors.textPrimary, minScale = 0.5f)
-            if (offsetMin != 0)
-                Text(
-                    DateFormat.getTimeFormat(context).format(Date(moment())),
-                    style = AapsTheme.type.caption, color = colors.textTertiary
-                )
+            // Always shown, "Now" included, so stepping away from now does not grow the card under the finger.
+            Text(
+                DateFormat.getTimeFormat(context).format(Date(moment())),
+                style = AapsTheme.type.caption, color = colors.textTertiary
+            )
         }
-    }
-    ChoiceRow {
-        presets.forEach { m -> Choice(EntryTime.signed(m), selected = offsetMin == m) { set(m) } }
     }
     if (picking) ClockPicker(
         initial = Instant.ofEpochMilli(moment()).atZone(ZoneId.systemDefault()).toLocalTime(),
@@ -235,22 +245,16 @@ fun TimeStepper(
 
 /**
  * Extended carbs: a slow meal spread over [hours], which the loop's single absorption constant cannot
- * describe. One line, since most meals keep the default.
+ * describe. Zero, the usual meal, reads "Normal".
  */
 @Composable
 fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int) {
-    val colors = AapsTheme.colors
-    AapsCard(contentPadding = PaddingValues(horizontal = AapsSpacing.cardPad, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("ABSORPTION", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-            StepButton(false, "Shorten carb absorption by 1 hour", { onHours((hours - 1).coerceAtLeast(0)) }, enabled = hours > 0, size = 40.dp)
-            Text(
-                if (hours == 0) "Normal" else "$hours h",
-                style = AapsTheme.type.listTitle, color = colors.textPrimary, textAlign = TextAlign.Center,
-                modifier = Modifier.widthIn(min = 64.dp)
-            )
-            StepButton(true, "Lengthen carb absorption by 1 hour", { onHours((hours + 1).coerceAtMost(maxHours)) }, enabled = hours < maxHours, size = 40.dp)
-        }
+    EntryCard("Absorption") {
+        AmountStepper(
+            value = hours.toDouble(), onValue = { onHours(it.toInt()) },
+            step = 1.0, min = 0.0, max = maxHours.toDouble(), decimals = 0,
+            unit = "h", name = "of carb absorption", zeroLabel = "Normal"
+        )
     }
 }
 

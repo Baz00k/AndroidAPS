@@ -18,8 +18,6 @@ class EntryTimeTest {
         assertThat(EntryTime.relative(-20)).isEqualTo("20 min ago")
         assertThat(EntryTime.relative(-80)).isEqualTo("1 h 20 min ago")
         assertThat(EntryTime.relative(120)).isEqualTo("in 2 h")
-        assertThat(EntryTime.signed(-30)).isEqualTo("−30 min")
-        assertThat(EntryTime.signed(0)).isEqualTo("Now")
     }
 
     @Test

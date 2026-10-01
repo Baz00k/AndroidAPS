@@ -107,7 +107,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
         }
         if (intent == InsulinIntent.LOG)
             EntryCard("When") {
-                TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, presets = listOf(-60, -30, -15, 0), atMs = at)
+                TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, atMs = at)
             }
         TargetPresetCard(state.targets, target) { target = it }
         if (state.showNotes) NotesField(notes, { notes = it })
