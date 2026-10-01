@@ -12,6 +12,8 @@ class SessionEvidenceRetentionTest {
     private val key = ByteArray(32) { it.toByte() }
     private val selector = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
     private val settings = "669a0c20-0008-969e-e211-fcbeb3147bc5"
+    private val bolus = "669a0c20-0008-969e-e211-fcbee18b7bc5"
+    private val tbr = "669a0c20-0008-969e-e211-fcbee38b7bc5"
 
     private class Store(var saved: PumpSession.State) : PumpSession.Store {
         var fail = false
@@ -26,6 +28,11 @@ class SessionEvidenceRetentionTest {
     private fun evidence(i: Int) = PumpSession.WriteEvidence(
         "history-$i", "reservation-$i", 43L + i, selector, "HISTORY_SELECTOR", "ab".repeat(32), 42L + i,
         PumpSession.WriteCandidate.STANDARD, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "verified selector read-back",
+    )
+
+    private fun therapyEvidence(i: Int) = evidence(i).copy(
+        characteristic = if (i % 2 == 0) tbr else bolus,
+        purpose = "THERAPY_COMMAND",
     )
 
     private fun store(evidence: List<PumpSession.WriteEvidence>) = Store(
@@ -59,7 +66,7 @@ class SessionEvidenceRetentionTest {
     }
 
     @Test
-    fun `every completed selector keeps memory and persisted evidence bounded across restart`() {
+    fun `completed profile and history selectors share the bound across restart without transport ACK`() {
         val store = store(emptyList())
         var session = PumpSession(store)
         var token = session.open("pump", key)
@@ -69,9 +76,10 @@ class SessionEvidenceRetentionTest {
                 token = session.open("pump", key)
             }
             val tx = session.begin(token)
-            session.reserve(token, tx, PumpSession.WriteIntent("history-$i", selector, "HISTORY_SELECTOR", "ab".repeat(32)))
+            val profile = i % 2 == 0
+            session.reserve(token, tx, PumpSession.WriteIntent("selector-$i", if (profile) settings else selector,
+                if (profile) "SETTINGS_SELECTOR" else "HISTORY_SELECTOR", "ab".repeat(32)))
             session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
-            session.advance(token, tx, PumpSession.Phase.ACKED)
             session.finish(token, tx)
             session.resolveWrite(token, tx, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "matched selector")
             val record = session.snapshot()!!
@@ -127,6 +135,143 @@ class SessionEvidenceRetentionTest {
         val history = (0 until 1000).map(::evidence)
         val store = store(listOf(evidence(-1).copy(payloadHash = "invalid")) + history)
         assertThrows(SecurityException::class.java) { PumpSession(store).open("pump", key) }
+    }
+
+    @Test
+    fun `completed therapy writes have a separate bounded tail without changing counter ownership`() {
+        val therapy = (0 until 5000).map(::therapyEvidence)
+        val selectors = (5000 until 5100).map(::evidence)
+        val store = store(therapy + selectors)
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val retained = therapy.takeLast(32) + selectors.takeLast(32)
+        assertEquals(retained, session.snapshot()!!.writeEvidence)
+        assertEquals(20_000L, session.snapshot()!!.write)
+        assertEquals(100L, session.snapshot()!!.read)
+        assertEquals(therapy + selectors, store.saved.records.single().writeEvidence, "Loading must not publish a revision")
+
+        val tx = session.begin(token)
+        assertEquals(20_001L, session.reserve(token, tx).counter)
+        assertEquals(retained, store.saved.records.single().writeEvidence)
+        session.finish(token, tx)
+        assertEquals(retained, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.writeEvidence)
+    }
+
+    @Test
+    fun `accepted therapy tail never removes uncertainty rejection unknown commands or current proof`() {
+        val currentProof = therapyEvidence(0)
+        val protected = listOf(
+            currentProof,
+            therapyEvidence(1).copy(resolution = null),
+            therapyEvidence(2).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_CONSUMED),
+            therapyEvidence(3).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED),
+            therapyEvidence(4).copy(candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR),
+            therapyEvidence(5).copy(characteristic = "another-characteristic"),
+            therapyEvidence(6).copy(purpose = "BOLUS"),
+        )
+        val history = (10 until 1010).map(::therapyEvidence)
+        val store = store(protected + history)
+        val record = store.saved.records.single()
+        store.saved = store.saved.copy(records = listOf(record.copy(
+            write = currentProof.counter,
+            reservation = PumpSession.Reservation(currentProof.reservationId, currentProof.counter, PumpSession.Phase.VERIFIED,
+                currentProof.operationId, currentProof.characteristic, currentProof.purpose, currentProof.payloadHash, currentProof.priorWrite),
+        )))
+        val session = PumpSession(store)
+        session.open("pump", key)
+        assertEquals(protected + history.takeLast(32), session.snapshot()!!.writeEvidence)
+        session.setAvailability(PumpSession.Availability())
+        assertEquals(protected + history.takeLast(32), store.saved.records.single().writeEvidence)
+    }
+
+    @Test
+    fun `therapy tail remains bounded through reservations resolutions and restart`() {
+        val store = store(emptyList())
+        var session = PumpSession(store)
+        var token = session.open("pump", key)
+        repeat(100) { i ->
+            if (i == 50) {
+                session = PumpSession(store)
+                token = session.open("pump", key)
+            }
+            val tx = session.begin(token)
+            session.reserve(token, tx, PumpSession.WriteIntent("therapy-$i", if (i % 2 == 0) tbr else bolus,
+                "THERAPY_COMMAND", "ab".repeat(32)))
+            session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+            session.advance(token, tx, PumpSession.Phase.ACKED)
+            session.finish(token, tx)
+            session.resolveWrite(token, tx, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "command-specific status proved effect")
+            val record = session.snapshot()!!
+            assertTrue(record.writeEvidence.size <= 32, "Completed therapy proofs must not grow for the session lifetime")
+            assertEquals(20_001L + i, record.write)
+            assertEquals(tx, record.writeEvidence.last().reservationId)
+            assertEquals(PumpSession.Phase.VERIFIED, record.reservation!!.phase)
+            assertEquals(record, store.saved.records.single())
+        }
+    }
+
+    @Test
+    fun `malformed historical therapy evidence is rejected before retention hides it`() {
+        val store = store(listOf(therapyEvidence(0).copy(payloadHash = "invalid")) + (1 until 1000).map(::therapyEvidence))
+        assertThrows(SecurityException::class.java) { PumpSession(store).open("pump", key) }
+    }
+
+    @Test
+    fun `later acceptance can age out but prior unresolved therapy evidence survives restart`() {
+        val store = store(emptyList())
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val first = session.begin(token)
+        session.reserve(token, first, PumpSession.WriteIntent("first-bolus", bolus, "THERAPY_COMMAND", "ab".repeat(32)))
+        session.advance(token, first, PumpSession.Phase.POSSIBLY_SENT)
+        session.advance(token, first, PumpSession.Phase.ACKED)
+        session.finish(token, first)
+        session.recordUnresolvedWriteEvidence(token, first, "ef".repeat(32), "status did not yet establish delivery")
+        val unresolved = session.snapshot()!!.writeEvidence.single()
+        session.resolveWrite(token, first, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "later status proved command effect")
+        assertEquals(2, session.snapshot()!!.writeEvidence.size)
+
+        repeat(40) { i ->
+            val tx = session.begin(token)
+            session.reserve(token, tx, PumpSession.WriteIntent("later-tbr-$i", tbr, "THERAPY_COMMAND", "ab".repeat(32)))
+            session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+            session.finish(token, tx)
+            session.resolveWrite(token, tx, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "same-link status proved TBR effect")
+        }
+
+        val retained = session.snapshot()!!.writeEvidence
+        assertEquals(33, retained.size)
+        assertEquals(unresolved, retained.first())
+        assertTrue(retained.none { it.reservationId == first && it.resolution == PumpSession.WriteResolution.ACCEPTED })
+        val restarted = PumpSession(store)
+        restarted.open("pump", key)
+        assertEquals(retained, restarted.snapshot()!!.writeEvidence)
+        assertEquals(20_041L, restarted.snapshot()!!.write)
+    }
+
+    @Test
+    fun `a failed compacted therapy resolution retains the durable acknowledged write on restart`() {
+        val store = store((0 until 1000).map(::therapyEvidence))
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val tx = session.begin(token)
+        session.reserve(token, tx, PumpSession.WriteIntent("pending-bolus", bolus, "THERAPY_COMMAND", "ab".repeat(32)))
+        session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+        session.advance(token, tx, PumpSession.Phase.ACKED)
+        session.finish(token, tx)
+        val durable = store.saved
+        store.fail = true
+
+        assertThrows(SecurityException::class.java) {
+            session.resolveWrite(token, tx, PumpSession.WriteResolution.ACCEPTED, "cd".repeat(32), "measured delivery effect")
+        }
+        assertNull(session.snapshot())
+        assertEquals(durable, store.saved)
+        store.fail = false
+        val restarted = PumpSession(store)
+        val reopened = restarted.open("pump", key)
+        assertEquals(PumpSession.Phase.ACKED, restarted.snapshot()!!.reservation!!.phase)
+        assertThrows(IllegalStateException::class.java) { restarted.reserve(reopened, restarted.begin(reopened)) }
     }
 
     @Test

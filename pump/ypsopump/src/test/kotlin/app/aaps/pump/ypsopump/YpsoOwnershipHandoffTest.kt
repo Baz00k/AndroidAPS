@@ -185,6 +185,37 @@ class YpsoOwnershipHandoffTest {
     }
 
     @Test
+    fun `differently retained therapy tails reject handoff without changing local ownership`() {
+        val current = qualifiedRecord()
+        val history = (0 until 64).map { i ->
+            current.writeEvidence.single().copy(
+                operationId = "therapy-$i", reservationId = "therapy-reservation-$i",
+                counter = 4_000L + i, priorWrite = 3_999L + i,
+                characteristic = "669a0c20-0008-969e-e211-fcbee38b7bc5", purpose = "THERAPY_COMMAND",
+            )
+        }
+        val store = MemoryStore(PumpSession.State(
+            records = listOf(current.copy(writeEvidence = history + current.writeEvidence)),
+            activeGeneration = current.generation,
+        ))
+        val local = PumpSession(store)
+        val token = local.open(pump, key)
+        val before = local.committedRecord()!!
+        assertEquals(history.takeLast(32) + current.writeEvidence, before.writeEvidence)
+        val durable = store.saved
+        val donor = current.copy(writeEvidence = history.take(32) + current.writeEvidence)
+        val imported = YpsoOwnershipHandoff.parse(
+            YpsoOwnershipHandoff.encode(donor, key, 20, "ef".repeat(32), source()), key,
+        ).record
+
+        assertThrows(IllegalStateException::class.java) { local.adoptOwnershipHandoff(imported, 30, emptyMap()) }
+
+        assertEquals(before, local.committedRecord())
+        assertEquals(durable, store.saved)
+        assertEquals(4_281L, local.reserve(token, local.begin(token)).counter)
+    }
+
+    @Test
     fun `same epoch handoff older than the authenticated local read cannot be adopted as exact ownership`() {
         val imported = qualifiedRecord()
         val store = MemoryStore()

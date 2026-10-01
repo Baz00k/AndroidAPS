@@ -12,7 +12,11 @@ The protected session records distinct causes for missing setup, bond/permission
 
 ## Basal schedules
 
-Pump basal programming and A/B activation remain manual. In **YpsoPump Preferences → Basal configuration**, use **Read pump basal profiles** after setup or editing schedules on the pump. This explicitly reads the active program, all 24 hourly settings for A and B, the active program again and pump clock on one connection. An incomplete or inconsistent read does not replace the last complete configuration. The stored schedules survive disconnects and restarts for that pump-session generation; they do not expire with status samples.
+Pump basal programming and A/B activation remain manual. In **YpsoPump Preferences → Basal configuration**, use **Read pump basal profiles** after setup or editing schedules on the pump. This reads the active program, all 24 hourly settings for A and B, the active program again and pump clock on one connection.
+
+The read has a three-minute timeout and can run while the loop is active. It yields to queued boluses, including extended boluses. Temporary basals, including cancellation and zero TBRs, and profile-switch retries wait until the read finishes or yields.
+
+An incomplete or inconsistent read does not replace the last complete configuration or trigger pending-switch acceptance. After a coherent read, a matching pending AAPS profile switch is rechecked through the normal switch path without waiting for keepalive. The stored schedules survive disconnects and restarts for that pump-session generation; they do not expire with status samples.
 
 Use **Check active pump profile** after switching A/B on the pump. It checks the active selector against the stored schedules without rereading all hours. The driver compares the complete effective AAPS basal schedule with the last observed active pump schedule and reports *not read*, *matches* or *mismatch*. A mismatch displays an urgent notification and pump-tab banner. `setNewBasalProfile()` never writes the pump: it returns success without enacting only when the retained configuration matches. Routine status polls do not read profile settings. Unreported manual edits or a switch away and back between reads may leave the stored comparison outdated; a timezone change requires another full read. This retained comparison is not current pump-side proof of schedule continuity, even when therapy writes are enabled by the build-time gate.
 

@@ -5,6 +5,8 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.SharedPreferences
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.YpsoPumpConst
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -28,8 +30,11 @@ class YpsoProvisioningService internal constructor(
     private val bondedSerialForMac: (String) -> String? = { null },
 ) {
 
-    @Inject constructor(context: Context, pumpState: YpsoPumpState) : this(
-        PumpSession(SessionJournal(context)),
+    @Inject constructor(context: Context, pumpState: YpsoPumpState, logger: AAPSLogger) : this(
+        PumpSession(SessionJournal(context) { elapsedMs, bodyBytes, evidenceRecords ->
+            logger.debug(LTag.PUMP,
+                "YpsoPump slow session journal commit: elapsedMs=$elapsedMs, bodyBytes=$bodyBytes, evidenceRecords=$evidenceRecords")
+        }),
         pumpState,
         SharedPreferencesLegacyStore(context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)),
         { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },

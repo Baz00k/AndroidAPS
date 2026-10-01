@@ -212,7 +212,8 @@ class YpsoProfileSelectorCoordinatorTest {
         assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
         while (outcomes.isEmpty()) transport.onCharacteristicWrite(gatt, YpsoWritePolicy.SETTING_ID_UUID, 0)
         assertTrue(outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
-        assertEquals(PumpSession.Phase.ACKED, session.snapshot()!!.reservation!!.phase)
+        // A transport ACK proves no more than POSSIBLY_SENT; only identity read-back resolves it.
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, session.snapshot()!!.reservation!!.phase)
 
         val encrypted = YpsoFraming.parseMultiFrameRead(frames)
         val message = crypto.decrypt(encrypted, key)

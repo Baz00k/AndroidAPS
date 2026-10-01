@@ -193,6 +193,11 @@ class YpsoPumpState @Inject constructor() {
         profileComparison = ProfileComparison.UNREAD
     }
 
+    /** Compares without recording a verdict or changing the displayed profile comparison. */
+    @Synchronized
+    internal fun activeScheduleMatches(effective: List<YpsoBasalSchedule.EffectiveSegment>): Boolean =
+        profileEvidence?.activeSchedule?.matches(effective) == true
+
     /**
      * Records the outcome so the UI and alerting can distinguish "not read yet" from "read, and it
      * disagrees". AAPS asks this question on every keepalive, which is the only moment a manual
