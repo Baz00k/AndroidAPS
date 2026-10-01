@@ -1498,13 +1498,12 @@ class PumpSession(private val store: Store) {
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
         /**
-         * Completed ordinary writes are not a lifetime audit log. Replay protection uses the durable
-         * counters and current reservation. Bolus/TBR delivery, retries and history accounting use
-         * their separate domain journals, never these historical transport proofs. Keep separate
-         * selector/therapy diagnostic tails so history scans cannot evict the latest therapy proofs.
-         * Never trim uncertain/rejected writes, unknown commands, qualification evidence, or any
-         * proof of the current reservation. Predecessor bindings cannot reference STANDARD writes.
-         * Validate BEFORE trimming so corrupt legacy evidence cannot disappear during migration.
+         * Replay protection uses durable counters and the current reservation; bolus/TBR delivery,
+         * retries and treatment accounting use separate journals. The accepted-proof tails are
+         * diagnostic only, kept separate so history scans cannot evict recent therapy proofs.
+         * Uncertain/rejected writes, unknown commands, qualification evidence and current-reservation
+         * proofs must remain. Predecessor bindings cannot reference STANDARD writes.
+         * Validate before trimming so corrupt evidence cannot disappear.
          */
         private fun compactCompletedEvidence(state: State): State = state.copy(records = state.records.map { record ->
             if (record.writeEvidence.size <= COMPLETED_EVIDENCE_LIMIT) return@map record

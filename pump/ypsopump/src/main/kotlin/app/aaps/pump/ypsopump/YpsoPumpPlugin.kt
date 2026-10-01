@@ -533,7 +533,7 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // A background history scan holds the same BLE lane; the read the user asked for would fail at once.
+        // History must release the BLE lane at a selector-safe boundary before configuration I/O.
         if (configurationRead && !yieldHistoryRecovery()) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump configuration read skipped: history still owns the link")
             return
@@ -1259,10 +1259,9 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     /**
-     * A configuration read holds the command queue (a full read for one to two minutes) and cannot resume:
-     * its coherence rests on an unchanged event count across the whole acquisition. It therefore gives
-     * way only to insulin waiting to be delivered. Temporary basals and profile retries wait for it; yielding to them meant
-     * a read under an active loop was restarted from scratch every few minutes and never finished.
+     * A configuration read cannot resume: coherence requires an unchanged event count across the
+     * acquisition. Yield only to queued boluses so routine TBRs and profile retries cannot repeatedly
+     * restart the read. TBR cancellation and zero-TBR requests also wait under this policy.
      */
     private fun readProfileBlocking(timeoutMs: Long = PROFILE_READ_TIMEOUT_MS, activeOnly: Boolean = false): Boolean {
         var success = false
@@ -2232,9 +2231,8 @@ class YpsoPumpPlugin @Inject constructor(
      * itself, so a second tap is answered rather than silently dropped.
      */
     private fun startConfigurationRead(context: Context, action: ConfigurationAction): Boolean {
-        // A full read runs for one to two minutes, well past the life of the settings screen that started
-        // it. Report the outcome against the application context so the result still arrives, and a
-        // closed screen cannot be leaked or written to.
+        // The read can outlive its settings screen. Use the application context so reporting its
+        // result neither retains nor accesses a closed screen.
         val appContext = context.applicationContext
         val accepted = queueConfigurationRead(action.reason) { outcome ->
             if (outcome.warning) ToastUtils.warnToast(appContext, outcome.message)
