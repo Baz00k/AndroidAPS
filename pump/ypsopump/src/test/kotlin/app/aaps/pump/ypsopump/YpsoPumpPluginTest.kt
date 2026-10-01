@@ -12,6 +12,9 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.queue.CommandQueue
+import app.aaps.core.interfaces.queue.Callback
+import app.aaps.core.interfaces.alerts.LocalAlertUtils
+import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventProfileSwitchChanged
 import app.aaps.core.data.model.GlucoseUnit
@@ -22,6 +25,9 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.IntKey
 import app.aaps.implementation.pump.PumpEnactResultObject
+import app.aaps.implementation.queue.commands.CommandReadStatus
+import dagger.android.AndroidInjector
+import dagger.android.HasAndroidInjector
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -953,19 +959,6 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `a cancelled queued read cannot reuse the previous successful toast outcome`() {
-        connectedForConfigurationRead()
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-        val previousRead = plugin.configurationReadSequence
-
-        // Cancellation calls back without getPumpStatus running again.
-        assertTrue(plugin.configurationReadNeedsWarning(previousRead))
-
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-        assertFalse(plugin.configurationReadNeedsWarning(previousRead))
-    }
-
-    @Test
     fun `a failed status read clears a previous successful configuration outcome`() {
         connectedForConfigurationRead()
         plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
@@ -1031,6 +1024,146 @@ class YpsoPumpPluginTest {
 
         release.join()
         verify(manager).readProfileConfiguration(eq(false), any(), any())
+    }
+
+    @Test
+    fun `a cancelled second queued configuration read cannot borrow the first result`() {
+        connectedForConfigurationRead()
+        whenever(rh.gs(R.string.ypsopump_profile_read_complete)).thenReturn("complete")
+        whenever(rh.gs(R.string.ypsopump_profile_read_incomplete)).thenReturn("incomplete")
+        val callbacks = mutableListOf<Callback>()
+        whenever(commandQueue.readStatus(any(), any())).thenAnswer {
+            callbacks += it.getArgument<Callback>(1)
+            true
+        }
+        val first = mutableListOf<YpsoPumpPlugin.ConfigurationReadResult>()
+        val second = mutableListOf<YpsoPumpPlugin.ConfigurationReadResult>()
+        assertTrue(plugin.queueConfigurationRead(YpsoPumpPlugin.PROFILE_READ_REASON, first::add))
+        // A TBR between queued status commands lets the queue accept a second configuration action.
+        assertTrue(plugin.queueConfigurationRead(YpsoPumpPlugin.ACTIVE_PROGRAM_REASON, second::add))
+        val performing = configurationCommand(YpsoPumpPlugin.PROFILE_READ_REASON, callbacks[0])
+        whenever(commandQueue.performing()).thenReturn(performing)
+        performing.execute()
+        // This command's transfer completed, even though the generic queue rejects its status age.
+        assertFalse(callbacks[0].result.success)
+        whenever(commandQueue.performing()).thenReturn(null)
+        configurationCommand(YpsoPumpPlugin.ACTIVE_PROGRAM_REASON, callbacks[1]).cancel()
+
+        assertEquals(listOf(YpsoPumpPlugin.ConfigurationReadResult("complete", false)), first)
+        assertEquals(listOf(YpsoPumpPlugin.ConfigurationReadResult("incomplete", true)), second)
+        verify(manager, times(1)).readProfileConfiguration(any(), any(), any())
+    }
+
+    @Test
+    fun `configuration completion keeps its own message when another read finishes before its callback`() {
+        connectedForConfigurationRead()
+        whenever(rh.gs(R.string.ypsopump_profile_read_complete)).thenReturn("complete")
+        whenever(rh.gs(R.string.ypsopump_profile_read_incomplete)).thenReturn("incomplete")
+        val callbacks = mutableListOf<Callback>()
+        whenever(commandQueue.readStatus(any(), any())).thenAnswer {
+            callbacks += it.getArgument<Callback>(1)
+            true
+        }
+        val first = mutableListOf<YpsoPumpPlugin.ConfigurationReadResult>()
+        val second = mutableListOf<YpsoPumpPlugin.ConfigurationReadResult>()
+        plugin.queueConfigurationRead(YpsoPumpPlugin.PROFILE_READ_REASON, first::add)
+        plugin.queueConfigurationRead(YpsoPumpPlugin.PROFILE_READ_REASON, second::add)
+        val firstCommand = configurationCommand(YpsoPumpPlugin.PROFILE_READ_REASON, callbacks[0])
+        whenever(commandQueue.performing()).thenReturn(firstCommand)
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(2)(false)
+            YpsoBleManager.ProfileReadAttempt()
+        }
+        val secondCommand = configurationCommand(YpsoPumpPlugin.PROFILE_READ_REASON, callbacks[1])
+        whenever(commandQueue.performing()).thenReturn(secondCommand)
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+        callbacks[1].result(PumpEnactResultObject(rh).success(false)).run()
+        callbacks[0].result(PumpEnactResultObject(rh).success(false)).run()
+
+        assertEquals(listOf(YpsoPumpPlugin.ConfigurationReadResult("complete", false)), first)
+        assertEquals(listOf(YpsoPumpPlugin.ConfigurationReadResult("incomplete", true)), second)
+    }
+
+    private fun configurationCommand(reason: String, callback: Callback): CommandReadStatus = CommandReadStatus(
+        object : HasAndroidInjector {
+            override fun androidInjector(): AndroidInjector<Any> = AndroidInjector { instance ->
+                val command = instance as CommandReadStatus
+                command.aapsLogger = AAPSLoggerTest()
+                command.rh = rh
+                command.activePlugin = mock<ActivePlugin> { on { activePump } doReturn plugin }
+                command.localAlertUtils = mock<LocalAlertUtils>()
+                command.pumpEnactResultProvider = Provider { PumpEnactResultObject(rh) }
+            }
+        }, reason, callback,
+    )
+
+    @Test
+    fun `a history yield requested before attempt publication reaches the later attempt`() {
+        connectedForConfigurationRead()
+        whenever(manager.canReadHistory).thenReturn(true)
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        var recovery: (() -> Unit)? = null
+        plugin.dispatchHistoryRecovery = { recovery = it }
+        plugin.getPumpStatus("schedule background recovery")
+        plugin.javaClass.getDeclaredMethod("cancelHistoryRecovery").apply { isAccessible = true }.invoke(plugin)
+        val callback = java.util.concurrent.atomic.AtomicReference<((YpsoHistorySnapshot?) -> Unit)?>()
+        val started = java.util.concurrent.CountDownLatch(1)
+        val attempt = YpsoBleManager.HistoryReadAttempt()
+        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+            callback.set(it.getArgument(2))
+            started.countDown()
+            attempt
+        }
+        val worker = Thread { checkNotNull(recovery).invoke() }.apply { start() }
+        try {
+            assertTrue(started.await(1, java.util.concurrent.TimeUnit.SECONDS))
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1)
+            while (!attempt.shouldYield && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(attempt.shouldYield, "a yield request must survive the missing-attempt interval")
+        } finally {
+            callback.get()?.invoke(null)
+            worker.join(1_000L)
+        }
+        assertFalse(worker.isAlive)
+        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+    }
+
+    @Test
+    fun `a completed history handoff does not cancel the next recovery`() {
+        connectedForConfigurationRead()
+        whenever(manager.canReadHistory).thenReturn(true)
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        var recovery: (() -> Unit)? = null
+        plugin.dispatchHistoryRecovery = { recovery = it }
+        val attempts = mutableListOf<YpsoBleManager.HistoryReadAttempt>()
+        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+            it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(null)
+            YpsoBleManager.HistoryReadAttempt().also(attempts::add)
+        }
+        plugin.getPumpStatus("schedule first recovery")
+        plugin.javaClass.getDeclaredMethod("cancelHistoryRecovery").apply { isAccessible = true }.invoke(plugin)
+        checkNotNull(recovery).invoke()
+        assertTrue(attempts.single().shouldYield)
+
+        plugin.getPumpStatus("schedule next recovery")
+        checkNotNull(recovery).invoke()
+
+        assertEquals(2, attempts.size)
+        assertFalse(attempts.last().shouldYield, "handoff is scoped to the recovery that was active")
+    }
+
+    @Test
+    fun `configuration reads do not start when history handoff times out`() {
+        connectedForConfigurationRead()
+        val subject = spy(plugin)
+        doReturn(false).whenever(subject).yieldHistoryRecovery(any())
+
+        subject.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        verify(manager, never()).readStatus(any())
+        verify(manager, never()).readProfileConfiguration(any(), any(), any())
+        assertEquals(rh.gs(R.string.ypsopump_profile_read_incomplete), state.profileReadMessage)
     }
 
     @Test

@@ -1413,11 +1413,7 @@ class PumpSession(private val store: Store) {
 
     internal fun isAbandonableSelector(reservation: Reservation): Boolean =
         reservation.candidate == WriteCandidate.STANDARD &&
-            when (reservation.purpose) {
-                "HISTORY_SELECTOR" -> reservation.characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
-                "SETTINGS_SELECTOR" -> reservation.characteristic?.lowercase() == SETTING_ID_CHARACTERISTIC
-                else -> false
-            }
+            isReadSelector(reservation.characteristic, reservation.purpose)
 
     private fun owned(origin: Token): Record {
         check(token == origin && state != null) { "Stale or unavailable session" }
@@ -1480,7 +1476,7 @@ class PumpSession(private val store: Store) {
         private val SHA256_HEX = Regex("[0-9a-f]{64}")
         private val THERAPY_COMMAND_CHARACTERISTICS = setOf(BOLUS_COMMAND_CHARACTERISTIC, TBR_COMMAND_CHARACTERISTIC)
 
-        private fun isAmbiguityConvergenceSelector(characteristic: String?, purpose: String?): Boolean =
+        private fun isReadSelector(characteristic: String?, purpose: String?): Boolean =
             when (purpose) {
                 "HISTORY_SELECTOR" -> characteristic?.lowercase() == EVENT_INDEX_CHARACTERISTIC
                 "SETTINGS_SELECTOR" -> characteristic?.lowercase() == SETTING_ID_CHARACTERISTIC
@@ -1517,7 +1513,7 @@ class PumpSession(private val store: Store) {
             val retained = record.writeEvidence.asReversed().filter { evidence ->
                 val completed = evidence.candidate == WriteCandidate.STANDARD && evidence.resolution == WriteResolution.ACCEPTED
                 val withinTail = when {
-                    completed && isAmbiguityConvergenceSelector(evidence.characteristic, evidence.purpose) ->
+                    completed && isReadSelector(evidence.characteristic, evidence.purpose) ->
                         ++selectors <= COMPLETED_EVIDENCE_LIMIT
                     completed && evidence.purpose == "THERAPY_COMMAND" &&
                         evidence.characteristic.lowercase() in THERAPY_COMMAND_CHARACTERISTICS ->
@@ -1922,7 +1918,7 @@ class PumpSession(private val store: Store) {
             require(binding.reservationId.isNotBlank() && binding.operationId.isNotBlank())
             require(binding.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED))
             require(binding.counter > 0 && binding.priorWrite >= 0 && binding.counter - binding.priorWrite == 1L)
-            require(isAmbiguityConvergenceSelector(binding.characteristic, binding.purpose))
+            require(isReadSelector(binding.characteristic, binding.purpose))
             require(binding.payloadHash.matches(SHA256_HEX))
             require(binding.evidenceHash.matches(SHA256_HEX))
             require(binding.candidate in setOf(WriteCandidate.BENCH_STRICT_NEXT_SELECTOR, WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR, WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR))
