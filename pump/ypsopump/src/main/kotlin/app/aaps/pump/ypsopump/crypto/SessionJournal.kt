@@ -579,13 +579,13 @@ class SessionJournal internal constructor(
         }
         override fun seal(alias: String, body: String): String = Cipher.getInstance("AES/GCM/NoPadding").run {
             init(Cipher.ENCRYPT_MODE, keys.getKey(alias, null) as SecretKey)
-            Base64.getEncoder().encodeToString(iv + doFinal(encodeBody(body)))
+            Base64.getEncoder().encodeToString(iv + doFinal(body.toByteArray(Charsets.UTF_8)))
         }
         override fun open(alias: String, sealed: String): String = Cipher.getInstance("AES/GCM/NoPadding").run {
             val bytes = Base64.getDecoder().decode(sealed)
             require(bytes.size > IV_SIZE)
             init(Cipher.DECRYPT_MODE, keys.getKey(alias, null) as SecretKey, GCMParameterSpec(128, bytes.copyOfRange(0, IV_SIZE)))
-            decodeBody(doFinal(bytes.copyOfRange(IV_SIZE, bytes.size)))
+            doFinal(bytes.copyOfRange(IV_SIZE, bytes.size)).toString(Charsets.UTF_8)
         }
         override fun authenticateLegacy(alias: String, body: String): ByteArray = Mac.getInstance("HmacSHA256").run {
             init(keys.getKey(alias, null) as SecretKey)
@@ -616,21 +616,6 @@ class SessionJournal internal constructor(
     private fun JSONObject.toStringMap(): Map<String, String> = keys().asSequence().associateWith(::getString)
 
     companion object {
-        /** Compression changes only the sealed bytes, not evidence retention or the commit point. */
-        internal fun encodeBody(body: String): ByteArray = java.io.ByteArrayOutputStream().use { output ->
-            java.util.zip.GZIPOutputStream(output).use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            output.toByteArray()
-        }
-
-        internal fun decodeBody(bytes: ByteArray): String {
-            // Existing revisions seal plain JSON. Decode compression only after GCM authentication.
-            if (bytes.size < 2 || bytes[0] != 0x1f.toByte() || bytes[1] != 0x8b.toByte())
-                return bytes.toString(Charsets.UTF_8)
-            return java.util.zip.GZIPInputStream(bytes.inputStream()).use { input ->
-                input.readBytes().toString(Charsets.UTF_8)
-            }
-        }
-
         private const val PREFIX = "ypso.session.revision."
         private const val TRANSITION_VERSION = 1
         private const val IV_SIZE = 12

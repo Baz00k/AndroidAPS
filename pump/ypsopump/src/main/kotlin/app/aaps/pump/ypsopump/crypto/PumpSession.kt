@@ -296,7 +296,7 @@ class PumpSession(private val store: Store) {
 
     // A completed attempt is feedback for the interaction that produced it, not durable state: a
     // fresh process renders the journaled availability instead of replaying the previous result.
-    private val loadedState = runCatching { compactSelectorEvidence(store.load().also(::validate)) }
+    private val loadedState = runCatching { compactCompletedEvidence(store.load().also(::validate)) }
     internal val loadFailureLocation: String? = loadedState.exceptionOrNull()?.let { error ->
         if (error is SessionJournal.AnchorMismatch) "anchor_count=${error.count},contains_current=${error.containsCurrent}"
         else error.javaClass.simpleName + ":" + error.stackTrace.firstOrNull { it.className.startsWith("app.aaps.pump.ypsopump") }
@@ -384,7 +384,7 @@ class PumpSession(private val store: Store) {
         require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
         require(lowerBound > 0)
         require(recoveryReboot >= 0)
-        require(evidenceHash.matches(Regex("[0-9a-f]{64}")))
+        require(evidenceHash.matches(SHA256_HEX))
         val record = Record(
             pump = provisioning.pump,
             keyId = fingerprint(provisioning.sharedKey),
@@ -430,7 +430,7 @@ class PumpSession(private val store: Store) {
         check(state == null && loadedState.isFailure) { "Read-only recovery requires an unavailable journal" }
         require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
         require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
-        require(documentHash.matches(Regex("[0-9a-f]{64}")))
+        require(documentHash.matches(SHA256_HEX))
         val record = Record(
             pump = provisioning.pump,
             keyId = fingerprint(provisioning.sharedKey),
@@ -1099,7 +1099,7 @@ class PumpSession(private val store: Store) {
         check(last <= Long.MAX_VALUE - increment) { "Write counter exhausted" }
         intent?.let {
             require(it.operationId.isNotBlank() && it.characteristic.isNotBlank() && it.purpose.isNotBlank())
-            require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(it.payloadHash.matches(SHA256_HEX))
         }
         val reserved = Reservation(
             id,
@@ -1171,7 +1171,7 @@ class PumpSession(private val store: Store) {
         check(old.write == reserved.counter && priorWrite >= 0 && validCounterDistance(reserved, priorWrite)) {
             "Invalid write reservation"
         }
-        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        require(evidenceHash.matches(SHA256_HEX) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, WriteResolution.REJECTED_COUNTER_NOT_CONSUMED, evidenceHash, detail)
         update(restoreAfterNotConsumed(old, reserved, evidence))
     }
@@ -1234,7 +1234,7 @@ class PumpSession(private val store: Store) {
         check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) {
             "Write is not awaiting counter-error recovery"
         }
-        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        require(evidenceHash.matches(SHA256_HEX) && detail.isNotBlank() && detail.length <= 4096)
         val nextExponent =
             if (old.counterRecoveryExponent < MAX_COUNTER_RECOVERY_EXPONENT) old.counterRecoveryExponent + 1
             else old.counterRecoveryExponent
@@ -1256,7 +1256,7 @@ class PumpSession(private val store: Store) {
         check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) {
             "Write is not awaiting reconciliation"
         }
-        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        require(evidenceHash.matches(SHA256_HEX) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, null, evidenceHash, detail)
         check(old.writeEvidence.none { it.reservationId == reserved.id && it.evidenceHash == evidenceHash }) {
             "Evidence already recorded"
@@ -1295,7 +1295,7 @@ class PumpSession(private val store: Store) {
         check(transaction == null) { "Another session transaction is active" }
         val reserved = checkNotNull(old.reservation)
         check(reserved.id == reservationId && reserved.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED)) { "Write is not awaiting reconciliation" }
-        require(evidenceHash.matches(Regex("[0-9a-f]{64}")) && detail.isNotBlank() && detail.length <= 4096)
+        require(evidenceHash.matches(SHA256_HEX) && detail.isNotBlank() && detail.length <= 4096)
         val evidence = writeEvidence(reserved, resolution, evidenceHash, detail)
         val next = when (resolution) {
             WriteResolution.ACCEPTED -> {
@@ -1439,7 +1439,7 @@ class PumpSession(private val store: Store) {
     private fun persist(next: State) {
         try {
             validate(next)
-            val compacted = compactSelectorEvidence(next)
+            val compacted = compactCompletedEvidence(next)
             store.commit(compacted)
             state = compacted
         } catch (e: Exception) {
@@ -1475,6 +1475,10 @@ class PumpSession(private val store: Store) {
 
         private const val EVENT_INDEX_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
         private const val SETTING_ID_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbeb3147bc5"
+        private const val BOLUS_COMMAND_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbee18b7bc5"
+        private const val TBR_COMMAND_CHARACTERISTIC = "669a0c20-0008-969e-e211-fcbee38b7bc5"
+        private val SHA256_HEX = Regex("[0-9a-f]{64}")
+        private val THERAPY_COMMAND_CHARACTERISTICS = setOf(BOLUS_COMMAND_CHARACTERISTIC, TBR_COMMAND_CHARACTERISTIC)
 
         private fun isAmbiguityConvergenceSelector(characteristic: String?, purpose: String?): Boolean =
             when (purpose) {
@@ -1498,25 +1502,34 @@ class PumpSession(private val store: Store) {
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
         /**
-         * Successful ordinary selector writes are not a lifetime audit log. Their replay protection
-         * is the record's durable counter, not thousands of old read-back hashes. Retain a small
-         * diagnostic tail; never trim therapy, uncertain/rejected writes, qualification evidence,
-         * or the current reservation's proof. Predecessor bindings cannot reference STANDARD writes.
+         * Completed ordinary writes are not a lifetime audit log. Replay protection uses the durable
+         * counters and current reservation. Bolus/TBR delivery, retries and history accounting use
+         * their separate domain journals, never these historical transport proofs. Keep separate
+         * selector/therapy diagnostic tails so history scans cannot evict the latest therapy proofs.
+         * Never trim uncertain/rejected writes, unknown commands, qualification evidence, or any
+         * proof of the current reservation. Predecessor bindings cannot reference STANDARD writes.
          * Validate BEFORE trimming so corrupt legacy evidence cannot disappear during migration.
          */
-        private fun compactSelectorEvidence(state: State): State = state.copy(records = state.records.map { record ->
-            if (record.writeEvidence.size <= SELECTOR_EVIDENCE_LIMIT) return@map record
-            var recent = 0
+        private fun compactCompletedEvidence(state: State): State = state.copy(records = state.records.map { record ->
+            if (record.writeEvidence.size <= COMPLETED_EVIDENCE_LIMIT) return@map record
+            var selectors = 0
+            var therapy = 0
             val retained = record.writeEvidence.asReversed().filter { evidence ->
-                val completedSelector = evidence.candidate == WriteCandidate.STANDARD &&
-                    evidence.resolution == WriteResolution.ACCEPTED &&
-                    isAmbiguityConvergenceSelector(evidence.characteristic, evidence.purpose)
-                !completedSelector || ++recent <= SELECTOR_EVIDENCE_LIMIT || evidence.reservationId == record.reservation?.id
+                val completed = evidence.candidate == WriteCandidate.STANDARD && evidence.resolution == WriteResolution.ACCEPTED
+                val withinTail = when {
+                    completed && isAmbiguityConvergenceSelector(evidence.characteristic, evidence.purpose) ->
+                        ++selectors <= COMPLETED_EVIDENCE_LIMIT
+                    completed && evidence.purpose == "THERAPY_COMMAND" &&
+                        evidence.characteristic.lowercase() in THERAPY_COMMAND_CHARACTERISTICS ->
+                        ++therapy <= COMPLETED_EVIDENCE_LIMIT
+                    else -> true
+                }
+                withinTail || evidence.reservationId == record.reservation?.id
             }.asReversed()
             if (retained.size == record.writeEvidence.size) record else record.copy(writeEvidence = retained)
         })
 
-        private const val SELECTOR_EVIDENCE_LIMIT = 32
+        private const val COMPLETED_EVIDENCE_LIMIT = 32
 
         fun validate(state: State) {
             val duplicateKeys = state.records.groupBy { it.keyId }.filterValues { it.size > 1 }
@@ -1526,22 +1539,22 @@ class PumpSession(private val store: Store) {
             })
             require(state.records.map { it.generation }.distinct().size == state.records.size)
             state.records.forEach { r ->
-                require(r.pump.isNotBlank() && r.generation.isNotBlank() && r.keyId.matches(Regex("[0-9a-f]{64}")))
+                require(r.pump.isNotBlank() && r.generation.isNotBlank() && r.keyId.matches(SHA256_HEX))
                 require((r.reboot == null) == (r.read == null))
                 require((r.reboot == null || r.reboot >= 0) && (r.read == null || r.read >= 0) && (r.write == null || r.write >= 0))
-                require(r.keyHex == null || r.keyHex.matches(Regex("[0-9a-f]{64}")) && fingerprint(r.keyHex.unhex()) == r.keyId)
+                require(r.keyHex == null || r.keyHex.matches(SHA256_HEX) && fingerprint(r.keyHex.unhex()) == r.keyId)
                 require(r.serial.isNotBlank() || r.keyHex == null)
                 require(r.verifiedSerial == null || r.verifiedSerial == r.serial && r.verifiedAt != null)
                 r.benchNewEpochBootstrapReference?.let {
                     require(it.reboot >= 0 && it.read > 0 && it.characteristic.isNotBlank())
-                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(it.payloadHash.matches(SHA256_HEX))
                     require(r.reboot != null && (it.reboot == r.reboot || it.reboot < Int.MAX_VALUE && it.reboot + 1 == r.reboot))
                 }
                 require(r.benchHistoryCounts.map { it.family }.distinct().size == r.benchHistoryCounts.size)
                 r.benchHistoryCounts.forEach {
                     require(it.reboot >= 0 && it.read > 0 && it.count > 0)
                     require(it.characteristic == expectedHistoryCountCharacteristic(it.family))
-                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(it.payloadHash.matches(SHA256_HEX))
                     require(r.reboot != null && it.reboot == r.reboot)
                     require(r.read != null && it.read > 0 && it.read <= r.read)
                 }
@@ -1549,7 +1562,7 @@ class PumpSession(private val store: Store) {
                 r.benchHistorySelectorStates.forEach {
                     require(it.reboot >= 0 && it.read > 0 && it.index >= 0)
                     require(it.characteristic == expectedHistoryValueCharacteristic(it.family))
-                    require(it.payloadHash.matches(Regex("[0-9a-f]{64}")))
+                    require(it.payloadHash.matches(SHA256_HEX))
                     require(r.reboot != null && it.reboot == r.reboot)
                     require(r.read != null && it.read > 0 && it.read <= r.read)
                 }
@@ -1680,7 +1693,7 @@ class PumpSession(private val store: Store) {
                         }
                     }
                     require((it.operationId == null) == (it.characteristic == null) && (it.characteristic == null) == (it.purpose == null) && (it.purpose == null) == (it.payloadHash == null))
-                    require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(Regex("[0-9a-f]{64}")))
+                    require(it.operationId == null || it.operationId.isNotBlank() && it.characteristic!!.isNotBlank() && it.purpose!!.isNotBlank() && it.payloadHash!!.matches(SHA256_HEX))
                     val family = historyFamilyFor(it.characteristic)
                     if (it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR) {
                         require(family == HistoryFamily.ALARM && it.historyBinding == null)
@@ -1724,7 +1737,7 @@ class PumpSession(private val store: Store) {
                             it.counter > 0 &&
                             it.characteristic.isNotBlank() &&
                             it.purpose.isNotBlank() &&
-                            it.payloadHash.matches(Regex("[0-9a-f]{64}")) &&
+                            it.payloadHash.matches(SHA256_HEX) &&
                             it.priorWrite >= 0,
                     )
                     when (it.candidate) {
@@ -1771,7 +1784,7 @@ class PumpSession(private val store: Store) {
                                 reservation.unresolvedPredecessor == it.unresolvedPredecessor,
                         )
                     }
-                    require(it.evidenceHash.matches(Regex("[0-9a-f]{64}")) && it.detail.isNotBlank() && it.detail.length <= 4096)
+                    require(it.evidenceHash.matches(SHA256_HEX) && it.detail.isNotBlank() && it.detail.length <= 4096)
                     val family = historyFamilyFor(it.characteristic)
                     if (it.candidate == WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR) {
                         require(family == HistoryFamily.ALARM && it.historyBinding == null)
@@ -1844,11 +1857,11 @@ class PumpSession(private val store: Store) {
             require(binding.count.reboot == binding.selectedBefore.reboot)
             require(binding.count.reboot >= 0 && binding.count.read > 0 && binding.count.count > 0)
             require(binding.count.characteristic == expectedHistoryCountCharacteristic(family))
-            require(binding.count.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.count.payloadHash.matches(SHA256_HEX))
             require(binding.selectedBefore.family == family)
             require(binding.selectedBefore.reboot >= 0 && binding.selectedBefore.read > 0 && binding.selectedBefore.index >= 0)
             require(binding.selectedBefore.characteristic == expectedHistoryValueCharacteristic(family))
-            require(binding.selectedBefore.payloadHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.selectedBefore.payloadHash.matches(SHA256_HEX))
             require(binding.writeIndex >= 0 && binding.writeIndex == binding.count.count - 1)
             require(binding.selectedBefore.index != binding.writeIndex)
             require(counter > 0)
@@ -1873,8 +1886,8 @@ class PumpSession(private val store: Store) {
             require(binding.counter > 0 && binding.priorWrite >= 0 && binding.priorWrite < binding.counter)
             require(binding.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC)
             require(binding.purpose == "HISTORY_SELECTOR")
-            require(binding.payloadHash.matches(Regex("[0-9a-f]{64}")))
-            require(binding.evidenceHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.payloadHash.matches(SHA256_HEX))
+            require(binding.evidenceHash.matches(SHA256_HEX))
             require(
                 binding.candidate in
                     setOf(
@@ -1910,8 +1923,8 @@ class PumpSession(private val store: Store) {
             require(binding.phase in setOf(Phase.POSSIBLY_SENT, Phase.ACKED))
             require(binding.counter > 0 && binding.priorWrite >= 0 && binding.counter - binding.priorWrite == 1L)
             require(isAmbiguityConvergenceSelector(binding.characteristic, binding.purpose))
-            require(binding.payloadHash.matches(Regex("[0-9a-f]{64}")))
-            require(binding.evidenceHash.matches(Regex("[0-9a-f]{64}")))
+            require(binding.payloadHash.matches(SHA256_HEX))
+            require(binding.evidenceHash.matches(SHA256_HEX))
             require(binding.candidate in setOf(WriteCandidate.BENCH_STRICT_NEXT_SELECTOR, WriteCandidate.BENCH_AMBIGUITY_CONVERGENCE_SELECTOR, WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR))
             if (binding.candidate == WriteCandidate.BENCH_SETTINGS_COUNTER_RECOVERY_SELECTOR) {
                 require(binding.purpose == "HISTORY_SELECTOR" && binding.characteristic.lowercase() == EVENT_INDEX_CHARACTERISTIC)
