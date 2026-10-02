@@ -20,8 +20,8 @@ For an isolated test emulator, run `:benchmark:connectedFullLoopAndroidTest` wit
 `-PaapsTargetAbi=x86_64`. Only on an emulator, add
 `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR`.
 The harness targets **FullLoop**, not a lookalike build type or different flavor. Its five cold
-launches use `CompilationMode.None`; a fresh installation measures setup-wizard launch, not
-an already-configured home screen. Emulator timing verifies the harness, not hardware
+launches use `CompilationMode.None`; a fresh installation exercises unconfigured launch,
+including first-run permission state, not a configured virtual-pump workload. Emulator timing verifies the harness, not hardware
 performance or battery life. Keep image revision, fixture, compilation mode and workload
 identical for comparisons; five iterations are not an approved performance tolerance.
 

@@ -9,8 +9,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Cold launch of the current fixture (fresh setup wizard or configured virtual-pump state).
- * Keep fixture state and compilation mode explicit when comparing runs; emulator timing is not a hardware baseline.
+/**
+ * Cold launch of an unconfigured install or a configured virtual-pump fixture.
+ * Keep permission state and compilation mode explicit; emulator timing is harness evidence, not a hardware baseline.
  */
 @RunWith(AndroidJUnit4::class)
 class StartupBenchmark {
