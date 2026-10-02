@@ -18,6 +18,8 @@ other flavors or the entire existing Android instrumentation suite.
 The `Validation evidence` CI workflow also exercises cold launch on a fresh API-35 emulator.
 Benchmarks stop/relaunch the app and reset its compilation. Use only an isolated emulator or
 verified non-patient-connected test hardware, never a daily-therapy installation.
+The connected test task installs and uninstalls its target package. Treat existing app data and
+Keystore credentials as at risk: use a fresh dedicated fixture, never an installation with records.
 For an isolated test emulator, run `:benchmark:connectedFullLoopAndroidTest` with
 `-PaapsTargetAbi=x86_64`. Only on an emulator, add
 `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR`.
