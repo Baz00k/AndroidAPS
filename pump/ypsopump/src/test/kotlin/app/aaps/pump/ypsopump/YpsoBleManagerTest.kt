@@ -41,6 +41,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import java.time.ZoneId
 import java.util.UUID
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 
@@ -243,14 +244,14 @@ class YpsoBleManagerTest {
         assertEquals(null, manager.session!!.snapshot()!!.reservation)
     }
 
-    private fun cachedProfile(): YpsoProfileReadback.VerifiedReadback {
+    private fun cachedProfile(zone: ZoneId = ZoneId.systemDefault()): YpsoProfileReadback.VerifiedReadback {
         val template = YpsoProfileReadbackTest.verified()
         val record = manager.session!!.snapshot()!!
         pumpState.elapsedRealtime = { 2001L }
-        pumpState.currentZone = { template.zone }
+        pumpState.currentZone = { ZoneId.systemDefault() }
         return YpsoProfileReadback.VerifiedReadback(
             record.generation, record.reboot!!, "connection", template.activeProgram,
-            template.profileA, template.profileB, 2000L, template.zone, 3000,
+            template.profileA, template.profileB, 2000L, zone, 3000,
         ).also(pumpState::publishProfileEvidence)
     }
 
@@ -695,8 +696,15 @@ class YpsoBleManagerTest {
         acquireProfile(activeOnly = true)
     }
 
+    @Test
+    fun `active program check rejects cached schedules from another time zone`() {
+        val foreignZone = if (ZoneId.systemDefault() == ZoneId.of("Europe/Warsaw")) ZoneId.of("UTC") else ZoneId.of("Europe/Warsaw")
+        acquireProfile(activeOnly = true, expectedSuccess = false, cachedZone = foreignZone)
+    }
+
     private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
-                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false, expectedSuccess: Boolean = true) {
+                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false, expectedSuccess: Boolean = true,
+                               cachedZone: ZoneId = ZoneId.systemDefault()) {
         val fixture = connectedGatt(eventCountPresent = true)
         val record = manager.session!!.snapshot()!!
         val profileStore = object : PumpSession.Store {
@@ -747,7 +755,7 @@ class YpsoBleManagerTest {
             respond(value, YpsoGlb.encode(settingValue))
         }
         val results = mutableListOf<Boolean>()
-        val previous = if (yieldAfterFirstRow || activeOnly) cachedProfile() else null
+        val previous = if (yieldAfterFirstRow || activeOnly) cachedProfile(cachedZone) else null
         var yielding = false
         val attempt = manager.readProfileConfiguration(activeOnly, { yielding }, results::add)
         manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
@@ -766,6 +774,11 @@ class YpsoBleManagerTest {
         selected(1, if (activeOnly) 10 else 3)
         if (activeOnly) {
             respond(fixture.eventCount, YpsoGlb.encode(3000))
+            if (!expectedSuccess) {
+                assertEquals(listOf(false), results)
+                assertFalse(pumpState.hasFreshProfileEvidence)
+                return
+            }
             assertEquals(listOf(true), results)
             assertEquals("B", pumpState.lastReadProgram)
             assertTrue(pumpState.profileEvidence!!.profileA === previous!!.profileA)
