@@ -2,7 +2,6 @@ package app.aaps.pump.ypsopump.data
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.crypto.PumpSession
-import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
@@ -228,10 +227,6 @@ class YpsoPumpState @Inject constructor() {
         verifiedProfile = null
         profileReadMessage = ""
         profileComparison = ProfileComparison.UNREAD
-    }
-
-    fun observeHistory(kind: YpsoHistoryKind) {
-        // Historical rows may predate the explicit read. They do not establish current configuration.
     }
 
     @Synchronized

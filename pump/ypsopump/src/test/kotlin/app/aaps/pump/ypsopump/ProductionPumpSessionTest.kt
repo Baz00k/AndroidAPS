@@ -314,7 +314,7 @@ class ProductionPumpSessionTest {
         for (phase in PumpSession.Phase.entries) for (fault in 0..2) {
             val store = MemoryStore()
             initialized(store)
-            // Injected bench contract only: production provisioning always leaves write=null.
+            // Production provisioning leaves write=null; inject an established write floor directly.
             store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
             val owner = PumpSession(store)
             val token = owner.open(pump, key)

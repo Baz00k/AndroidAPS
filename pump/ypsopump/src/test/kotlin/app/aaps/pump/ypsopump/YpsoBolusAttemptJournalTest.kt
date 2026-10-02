@@ -69,7 +69,7 @@ class YpsoBolusAttemptJournalTest {
         assertTrue(unresolved.hasUnresolvedWarning)
         // Readiness for a new dose is decided by live pump status, not by elapsed time, so the journal
         // itself no longer refuses a replacement attempt inside any observation window.
-        assertEquals("request-2", journal.prepare(attempt(requestId = "request-2"), 91_999).requestId)
+        assertEquals("request-2", journal.prepare(attempt(requestId = "request-2")).requestId)
     }
 
     @Test

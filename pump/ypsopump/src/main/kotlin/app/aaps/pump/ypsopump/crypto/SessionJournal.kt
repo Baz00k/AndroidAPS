@@ -54,7 +54,7 @@ class SessionJournal internal constructor(
         if (alias !in anchors) throw AnchorMismatch(anchors.size, false)
         val json = JSONObject(storage.open(alias, envelope.getString("sealed")))
         val version = json.getInt("version")
-        check(version == MIGRATED_VERSION || version == VERSION) { "Unsupported session journal version $version" }
+        check(version == VERSION) { "Unsupported session journal version $version" }
         val records = json.getJSONArray("records")
         val parsed = (0 until records.length()).map { index ->
             val r = records.getJSONObject(index)
@@ -65,7 +65,7 @@ class SessionJournal internal constructor(
                 reboot = r.optIntOrNull("reboot"),
                 read = r.optLongOrNull("read"),
                 write = r.optLongOrNull("write"),
-                reservation = r.optJSONObject("reservation")?.let { reservation(it, version) },
+                reservation = r.optJSONObject("reservation")?.let { reservation(it) },
                 serial = r.stringOrNull("serial").orEmpty(),
                 keyHex = r.stringOrNull("keyHex"),
                 createdAt = r.optLongOrNull("createdAt"),
@@ -74,7 +74,7 @@ class SessionJournal internal constructor(
                 verifiedAt = r.optLongOrNull("verifiedAt"),
                 verifiedSerial = r.stringOrNull("verifiedSerial"),
                 writeEvidence = r.getJSONArray("writeEvidence").let { values ->
-                    (0 until values.length()).mapNotNull { evidenceIndex -> writeEvidence(values.getJSONObject(evidenceIndex), version) }
+                    (0 until values.length()).map { evidenceIndex -> writeEvidence(values.getJSONObject(evidenceIndex)) }
                 },
                 writeBootstrapState = PumpSession.WriteBootstrapState.valueOf(r.getString("writeBootstrapState")),
                 counterRecoveryExponent = r.getInt("counterRecoveryExponent"),
@@ -95,18 +95,7 @@ class SessionJournal internal constructor(
         ).also(PumpSession::validate)
     }
 
-    /**
-     * Version 17 journals also carry records of the retired write-qualification bench: extra
-     * per-epoch fields and selector writes under bench-only candidates. Those writes were all
-     * non-therapy selectors and are already reflected in the retained `write` high-water mark, so
-     * dropping their records cannot lower the next counter. A version 18 journal never contains them.
-     */
-    private fun isRetiredBenchWrite(value: JSONObject, version: Int): Boolean =
-        version == MIGRATED_VERSION && value.getString("candidate") !in CANDIDATES
-
-    private fun reservation(value: JSONObject, version: Int): PumpSession.Reservation? {
-        if (isRetiredBenchWrite(value, version)) return null
-        requireNoBenchBindings(value)
+    private fun reservation(value: JSONObject): PumpSession.Reservation {
         return PumpSession.Reservation(
             id = value.getString("id"),
             counter = value.getLong("counter"),
@@ -120,9 +109,7 @@ class SessionJournal internal constructor(
         )
     }
 
-    private fun writeEvidence(value: JSONObject, version: Int): PumpSession.WriteEvidence? {
-        if (isRetiredBenchWrite(value, version)) return null
-        requireNoBenchBindings(value)
+    private fun writeEvidence(value: JSONObject): PumpSession.WriteEvidence {
         return PumpSession.WriteEvidence(
             operationId = value.getString("operationId"),
             reservationId = value.getString("reservationId"),
@@ -137,10 +124,6 @@ class SessionJournal internal constructor(
             detail = value.getString("detail"),
         )
     }
-
-    /** Only bench candidates ever carried these bindings; on a production write they mean corruption. */
-    private fun requireNoBenchBindings(value: JSONObject) =
-        require(BENCH_BINDINGS.all { !value.has(it) || value.isNull(it) }) { "Unexpected bench binding on a production write" }
 
     private fun availability(value: JSONObject): PumpSession.Availability {
         val causes = value.getJSONArray("causes")
@@ -340,9 +323,6 @@ class SessionJournal internal constructor(
         private const val TRANSITION_VERSION = 1
         private const val IV_SIZE = 12
         private const val VERSION = 18
-        private const val MIGRATED_VERSION = 17
-        private val CANDIDATES = PumpSession.WriteCandidate.entries.map { it.name }.toSet()
-        private val BENCH_BINDINGS = setOf("historyBinding", "acceptedPredecessor", "unresolvedPredecessor")
     }
 
     internal class AnchorMismatch(val count: Int, val containsCurrent: Boolean) : IllegalStateException("Incomplete or restored session journal")

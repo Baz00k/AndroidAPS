@@ -4,7 +4,6 @@ import app.aaps.pump.ypsopump.YpsoPumpFragment
 import app.aaps.pump.ypsopump.YpsoPumpPlugin
 import app.aaps.pump.ypsopump.YpsoProvisioningActivity
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
-import app.aaps.pump.ypsopump.crypto.KeyExchange
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import dagger.Module
@@ -21,7 +20,6 @@ abstract class YpsoPumpModule {
     //   - YpsoPumpPlugin
     //   - YpsoBleManager
     //   - SessionCrypto
-    //   - KeyExchange
     //   - YpsoPumpState
 
     // YpsoPumpPlugin declares .fragmentClass(YpsoPumpFragment), so opening the pump tab attaches a

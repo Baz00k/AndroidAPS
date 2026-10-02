@@ -8,33 +8,12 @@ import java.util.UUID
  */
 object YpsoPumpConst {
 
-    // -- BLE Service UUIDs --
-    val SCAN_FILTER_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-ffffffffffff")
-    val GENERAL_SERVICE_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-eeeeeeeeeeee")
-    val DATA_CHAR_A_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff0000000a")
-    val DATA_CHAR_B_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff0000000b")
-    val CONTROL_CHAR_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
-    val PUMP_SPECIFIC_UUID: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb0147bc5")
-    val SECONDARY_SCAN_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000")
-    val SECONDARY_DATA_UUID: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
-
     // Standard BLE CCCD for notifications
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-    // -- Device Name Pattern --
-    const val DEVICE_NAME_PREFIX = "mylife YpsoPump"
 
     // -- Crypto Constants --
     const val KEY_SIZE = 32           // Curve25519 / XChaCha20 key size
     const val NONCE_SIZE = 24         // XChaCha20 extended nonce
     const val TAG_SIZE = 16           // Poly1305 auth tag
     const val COUNTER_DATA_SIZE = 12  // rebootCounter(4) + writeCounter(8)
-    const val KEY_EXCHANGE_READ_SIZE = 64   // challenge(32) + pumpPubKey(32)
-    const val KEY_EXCHANGE_WRITE_SIZE = 116 // encrypted payload from backend
-    const val KEY_EXPIRY_DAYS = 28
-
-    // -- Connection Timeouts --
-    const val CONNECT_TIMEOUT_MS = 30_000L
-    const val COMMAND_TIMEOUT_MS = 10_000L
-    const val SCAN_TIMEOUT_MS = 30_000L
 }

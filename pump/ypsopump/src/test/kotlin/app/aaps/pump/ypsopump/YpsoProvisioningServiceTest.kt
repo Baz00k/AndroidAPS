@@ -1149,7 +1149,7 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `hash gated read only recovery rejects a changed session document`() {
+    fun `hash gated identity only recovery rejects a changed session document`() {
         val service = YpsoProvisioningService(
             PumpSession(object : PumpSession.Store {
                 override fun load(): PumpSession.State = error("lost journal")
@@ -1171,7 +1171,7 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `hash gated read only recovery imports no counter evidence`() {
+    fun `hash gated identity only recovery imports no counter evidence`() {
         val service = YpsoProvisioningService(
             PumpSession(object : PumpSession.Store {
                 override fun load(): PumpSession.State = error("lost journal")

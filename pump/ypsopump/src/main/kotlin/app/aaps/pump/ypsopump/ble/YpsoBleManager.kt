@@ -42,11 +42,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BLE manager for authenticated status, profile/history selector acquisition and bolus dispatch.
- * An unknown write floor is reconciled from zero through pump-confirmed counter errors. Pump
- * configuration and temporary-basal mutations remain blocked by policy.
- *
- * Set the captured session key with [setSharedKey] before connecting.
+ * BLE manager for authenticated status, profile/history selector acquisition and therapy writes
+ * (bolus, extended bolus and temporary basal). An unknown write floor is reconciled from zero
+ * through pump-confirmed counter errors. Pump configuration is never written.
  */
 @Singleton
 class YpsoBleManager @Inject constructor(
@@ -177,7 +175,7 @@ class YpsoBleManager @Inject constructor(
         private const val ERR_NO_SHARED_KEY = 140
     }
 
-    /** Test/bench seam; normal builds load the key only through [configureInstalledSession]. */
+    /** Test seam; normal builds load the key only through [configureInstalledSession]. */
     internal fun setSharedKey(hex: String) {
         require(hex.length == 64 && hex.all { it.digitToIntOrNull(16) != null }) {
             disconnect()
@@ -248,7 +246,7 @@ class YpsoBleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private fun connect(macAddress: String, configured: YpsoProvisioningService.ConnectionSession?) {
-        // The null branch is retained exclusively for the internal test/bench setSharedKey seam.
+        // The null branch is retained exclusively for the internal test setSharedKey seam.
         val directTestSession = configured == null && configuredKey != null && configuredGeneration != null
         // A stale or mismatched immutable snapshot must have no side effects: recording here would write
         // an unconfigured condition into whatever session superseded it. Record only a genuinely absent

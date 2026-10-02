@@ -72,7 +72,10 @@ class YpsoProvisioningService internal constructor(
     class ManualValidationException(val field: ManualField, message: String, cause: Throwable? = null) :
         IllegalArgumentException(message, cause)
 
-    @Synchronized
+    // installed(), availability() and notificationRequired() deliberately skip the service monitor: this
+    // service publishes availability to the plugin while holding it, and the plugin's notification
+    // publisher reads these three while holding its own monitor. The owner and pump state are
+    // thread-safe on their own, and neither calls back out.
     fun installed(): InstalledSession? = owner.committedRecord()?.toInstalled(owner.availability())
 
     /** Public candidate metadata for UI; never contains raw key material. */
@@ -85,7 +88,6 @@ class YpsoProvisioningService internal constructor(
     @Synchronized
     fun isConfigured(): Boolean = owner.activeRecord()?.let { it.keyHex != null && it.serial.isNotBlank() && it.pump.isNotBlank() } == true
 
-    @Synchronized
     fun availability(): PumpSession.Availability = pumpState.availability
 
     @Synchronized
@@ -550,7 +552,6 @@ class YpsoProvisioningService internal constructor(
         verificationAttemptRequested = true
     }
 
-    @Synchronized
     fun notificationRequired(): Boolean {
         val value = pumpState.availability
         val actionable = value.causes - PumpSession.AvailabilityCause.COUNTER_UNCERTAIN
