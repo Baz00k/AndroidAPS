@@ -88,8 +88,7 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * AndroidAPS pump plugin for the Ypsomed YpsoPump.
  *
- * Exposes connection/status data, durable immediate/square boluses and verified temporary basals. The
- * pump's basal schedule is programmed by hand and only compared, never written.
+ * Exposes connection/status data, immediate/square boluses and temporary basals.
  */
 @Singleton
 class YpsoPumpPlugin @Inject constructor(
@@ -1140,22 +1139,9 @@ class YpsoPumpPlugin @Inject constructor(
 
     /**
      * Reservoir surveillance.
-     *
-     * The pump running dry is the one failure this app used to be completely silent about: the loop kept
-     * commanding basal and boluses, the reservoir pill on Home *disappeared* at zero (it was only drawn
-     * when `> 0`), and the first sign anything was wrong was the glucose curve. So: warn while there is
-     * still time to act, alarm when there isn't.
-     *
-     * Gated on a status read having actually succeeded — [YpsoPumpState.reservoirUnits] is 0.0 before the
-     * first read and after [YpsoPumpState.reset], and alarming on "not read yet" would train the alarm out.
      */
     private fun checkReservoir() {
         val units = pumpState.reservoirUnitsIfFresh() ?: return
-        // Reuse the app's existing reservoir thresholds rather than inventing a second set of numbers
-        // nobody can find.
-        //
-        // Only CRITICAL raises a notification. "Warning" is the level the status lights always meant —
-        // a colour, not a nag — and it stays a colour, on the Home reservoir pill.
         val level = when {
             units <= RESERVOIR_EMPTY_UNITS                  -> ReservoirLevel.EMPTY
             units <= preferences.get(IntKey.OverviewResCritical) -> ReservoirLevel.LOW
