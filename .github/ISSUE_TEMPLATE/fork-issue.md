@@ -19,8 +19,8 @@ assignees: ''
 
 ## Are you looping with this build?
 
-<!-- This fork delivers insulin. Whether you were in closed loop, open loop, or reading status only
-     changes what a report means — please say which. -->
+<!-- This fork delivers insulin. Whether you were in closed loop or open loop changes what a report
+     means — please say which. -->
 
 ## Version
 

@@ -14,7 +14,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains t
 
 | Area                                | Summary                                                            |
 | ----------------------------------- | ------------------------------------------------------------------ |
-| [YpsoPump](#ypsopump-status-viewer) | Authenticated status viewer; therapy disabled                      |
+| [YpsoPump](#ypsopump-driver)        | Full pump driver: status, history, boluses and temporary basals    |
 | Delivery safeguards                 | Stopped/empty-pump checks and insulin-record repair tools          |
 | Infusion-site handling              | Fresh-cannula state, wizard guidance and back-dated recording      |
 | Compose UI                          | Material 3 screens and file-based skins                            |
