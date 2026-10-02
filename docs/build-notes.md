@@ -5,7 +5,7 @@ app data. If KSP reports stale generated types after a large refactor, run `./gr
 
 ## Repeatable validation evidence
 
-From a committed checkout with JDK 21 and the Android SDK installed, run
+From a committed checkout with Python 3.11+, JDK 21 and the Android SDK installed, run
 `python3 tools/validation/baseline.py --output /absolute/new/evidence-directory`.
 Use `--help` for diagnostic dirty-tree runs, emulator ABI/metadata and Gradle resource limits.
 The runner cleans module outputs, builds the FullDebug/FullLoop phone/watch APKs and FullLoop

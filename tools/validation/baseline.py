@@ -140,6 +140,8 @@ def sdk_packages(sdk):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    if sys.version_info < (3, 11):
+        parser.error("Python 3.11 or newer is required")
     parser.add_argument("--output", required=True, type=Path, help="New evidence directory outside the checkout")
     parser.add_argument("--allow-dirty", action="store_true", help="Diagnostic only; record a non-clean source snapshot")
     parser.add_argument("--abi", choices=("arm64-v8a", "x86_64"), default="arm64-v8a")
@@ -179,7 +181,7 @@ def main():
     recorder.run("gradle-version", [ROOT / "gradlew", "--version"])
     if args.emulator_serial:
         recorder.run("emulator-properties", [sdk / "platform-tools/adb", "-s", args.emulator_serial, "shell", "getprop"])
-        recorder.run("emulator-version", [sdk / "emulator/emulator", "-version"])
+        recorder.run("emulator-version", [sdk / "emulator/emulator", "-no-window", "-version"])
         report["emulator_serial"] = args.emulator_serial
     gradle = [ROOT / "gradlew", "--console=plain", "--no-build-cache", "--max-workers=3", *args.gradle_arg]
     # Separate clean invocation: none of its output can be confused with cached reports.

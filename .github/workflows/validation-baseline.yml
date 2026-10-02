@@ -18,7 +18,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
       - name: Evidence collector tests
         run: python3 -m unittest discover -s tools/validation -v
       - name: Install build prerequisites
@@ -29,6 +28,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Clean build and unit evidence
+        id: build-evidence
         run: >-
           python3 tools/validation/baseline.py
           --output "$RUNNER_TEMP/aaps-baseline"
@@ -36,7 +36,7 @@ jobs:
           --gradle-arg='-Dorg.gradle.jvmargs=-Xmx3g -XX:+UseParallelGC -Xss4m'
           --gradle-arg=-Dkotlin.daemon.jvm.options=-Xmx1g
       - name: Fresh-emulator cold-start harness
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build-evidence.outcome != 'skipped' }}
         uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           # One bounded tooling configuration, not oldest/latest or Samsung qualification.
@@ -48,10 +48,10 @@ jobs:
           script: |
             cat "$ANDROID_HOME/system-images/android-35/google_apis/x86_64/source.properties" > "$RUNNER_TEMP/aaps-baseline/emulator-image.log"
             adb shell getprop > "$RUNNER_TEMP/aaps-baseline/emulator-properties.log"
-            "$ANDROID_HOME/emulator/emulator" -version > "$RUNNER_TEMP/aaps-baseline/emulator-version.log" 2>&1
+            "$ANDROID_HOME/emulator/emulator" -no-window -version > "$RUNNER_TEMP/aaps-baseline/emulator-version.log" 2>&1
             ./gradlew :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --console=plain --max-workers=2 -Dorg.gradle.jvmargs='-Xmx3g -XX:+UseParallelGC -Xss4m' > "$RUNNER_TEMP/aaps-baseline/emulator-test.log" 2>&1
       - name: Upload diagnostic evidence only
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build-evidence.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
           name: validation-evidence-${{ github.sha }}
