@@ -23,10 +23,9 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains t
 
 ## YpsoPump driver
 
-The YpsoPump integration connects to an already paired pump, reads status and event history, and
-delivers boluses, square extended boluses and temporary basals for open and closed loop. Basal
-schedules are programmed on the pump by hand; AAPS only compares them with its profile. The
-characterized firmware is V05.00.52.
+The YpsoPump integration connects to a pump, reads status and event history,
+delivers boluses and temporary basals for open and closed loop. Basal
+schedules are programmed on the pump by hand, AAPS only compares them with its profile.
 
 Setup uses the release-build **Pump connection setup** screen with manual real serial/MAC/key entry or
 canonical `ypso-keys` session-file import. Credentials must still be obtained through the documented
