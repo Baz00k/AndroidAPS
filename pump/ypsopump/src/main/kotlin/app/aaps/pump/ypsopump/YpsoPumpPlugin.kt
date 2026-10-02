@@ -377,7 +377,7 @@ class YpsoPumpPlugin @Inject constructor(
         pumpState.connectionState == ConnectionState.DISCOVERING || pumpState.connectionState == ConnectionState.READY
 
     private fun resolvedMac(): String = bleManager.installedPumpMac()
-    /** A legacy replay tombstone without protected credentials is intentionally not connectable. */
+    /** A journal without protected credentials is intentionally not connectable. */
     private fun configured(): Boolean = provisioning.isConfigured() && resolvedMac().isNotEmpty()
 
     private fun seedAndConnect() {
@@ -409,10 +409,7 @@ class YpsoPumpPlugin @Inject constructor(
                 LTag.PUMP,
                 "YpsoPump: no protected pump session configured — skipping connect (${provisioning.ownershipStatus()})",
             )
-            // A failed replacement whose only fallback is the retained legacy bundle is being restored
-            // asynchronously; do not overwrite its recorded failure with an unconfigured condition.
-            if (!provisioning.isSessionRestorePending())
-                provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
+            provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect")
             return
         }
         if (reason == "Connection needed" &&

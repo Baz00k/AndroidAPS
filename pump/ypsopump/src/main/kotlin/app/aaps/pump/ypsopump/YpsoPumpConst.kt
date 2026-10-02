@@ -37,18 +37,4 @@ object YpsoPumpConst {
     const val CONNECT_TIMEOUT_MS = 30_000L
     const val COMMAND_TIMEOUT_MS = 10_000L
     const val SCAN_TIMEOUT_MS = 30_000L
-
-    // -- SharedPreferences Keys --
-    const val PREF_SHARED_KEY = "ypso_shared_key"
-    const val PREF_PRIVATE_KEY = "ypso_private_key"
-    const val PREF_PUMP_PUBLIC_KEY = "ypso_pump_public_key"
-    const val PREF_WRITE_COUNTER = "ypso_write_counter"
-    const val PREF_READ_COUNTER = "ypso_read_counter"
-    const val PREF_REBOOT_COUNTER = "ypso_reboot_counter"
-    const val PREF_KEY_DATE = "ypso_key_date"
-    const val PREF_PUMP_SERIAL = "ypso_pump_serial"
-    const val PREF_PUMP_MAC = "ypso_pump_mac"
-
-    // Legacy credential names are retained solely for one-time protected migration. Normal setup never
-    // reads credentials directly from preferences, build constants, ADB or configuration exports.
 }

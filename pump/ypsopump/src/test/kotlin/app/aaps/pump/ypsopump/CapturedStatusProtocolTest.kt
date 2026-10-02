@@ -9,7 +9,7 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Target captures transformed by tests/transform-status-capture.py, not the driver encoder. */
+/** Captures from a real pump, independent of the driver encoder. */
 class CapturedStatusProtocolTest {
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     private fun crypto() = SessionCrypto()

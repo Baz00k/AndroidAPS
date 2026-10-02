@@ -16,7 +16,7 @@ Keep plaintext keys and import files private. AAPS stores the installed key in i
 4. Start verification. The driver checks the serial independently against the bonded pump name or GATT serial and requires an accepted encrypted status from that pump. Successful file parsing, BLE authentication or decryption alone does not install a verified session.
 5. Check the reported result and pump status. Failure or cancellation leaves the previous installed session intact. Keep the other controller quiescent while using AAPS.
 
-The importer validates schema, timestamps, key and supported pump identity; a serial is never synthesized from a MAC. A legacy raw credential triple can migrate into protected storage; a MAC/key pair additionally requires the bonded name to supply the real serial. Previously persisted replay floors are retained during migration and same-key imports.
+The importer validates schema, timestamps, key and supported pump identity; a serial is never synthesized from a MAC. Manual entry and file import are the only ways to provision a pump. Previously persisted replay floors are retained on same-key imports.
 
 ## Handoff and session loss
 

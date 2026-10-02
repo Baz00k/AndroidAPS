@@ -39,19 +39,10 @@ class YpsoProvisioningServiceTest {
         override fun commit(state: PumpSession.State) { check(!unavailable); commits++; saved = state }
     }
 
-    private class Legacy(
-        var credentials: YpsoProvisioningService.LegacyCredentials = YpsoProvisioningService.LegacyCredentials(null, null, null)
-    ) : YpsoProvisioningService.LegacyStore {
-        var clears = 0
-        override fun load() = credentials
-        override fun clear(): Boolean { clears++; credentials = YpsoProvisioningService.LegacyCredentials(null, null, null); return true }
-    }
-
     private fun service(
         store: MemoryStore = MemoryStore(),
-        state: YpsoPumpState = YpsoPumpState(),
-        legacy: Legacy = Legacy()
-    ) = Triple(YpsoProvisioningService(PumpSession(store), state, legacy), store, legacy)
+        state: YpsoPumpState = YpsoPumpState()
+    ) = YpsoProvisioningService(PumpSession(store), state) to store
 
     private fun install(service: YpsoProvisioningService, key: ByteArray = this.key) = service.installManual(
         YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(1_000)
@@ -161,7 +152,7 @@ class YpsoProvisioningServiceTest {
         assertTrue(service.owner.committedRecord()!!.generation != old.generation)
         assertArrayEquals(rotatedKey, service.keyBytes())
         assertNull(service.pending())
-        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
         assertArrayEquals(rotatedKey, restarted.keyBytes())
         assertEquals(Instant.ofEpochMilli(3_000), restarted.installed()!!.verifiedAt)
     }
@@ -602,7 +593,7 @@ class YpsoProvisioningServiceTest {
     @Test
     fun `unresolved accounting refuses same key rotation and pump switch without mutation`() {
         val base = MemoryStore()
-        val first = YpsoProvisioningService(PumpSession(base), YpsoPumpState(), Legacy())
+        val first = YpsoProvisioningService(PumpSession(base), YpsoPumpState())
         install(first)
         acceptFirst(first.owner, mac, key)
         base.saved =
@@ -612,7 +603,7 @@ class YpsoProvisioningServiceTest {
                         it.copy(write = 41, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
                     },
             )
-        val service = YpsoProvisioningService(PumpSession(base), YpsoPumpState(), Legacy())
+        val service = YpsoProvisioningService(PumpSession(base), YpsoPumpState())
         val token = service.owner.open(mac, key)
         val transaction = service.owner.begin(token)
         service.owner.reserve(token, transaction)
@@ -688,30 +679,6 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `legacy MAC key waits for real serial then upgrades the existing replay generation`() {
-        val legacyRecord = PumpSession.Record(mac, PumpSession.fingerprint(key), "legacy-generation", 8, 77, null)
-        val store = MemoryStore(PumpSession.State(records = listOf(legacyRecord)))
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(null, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        assertNull(service.installed())
-        assertFalse(service.isConfigured())
-        assertEquals(0, legacy.clears)
-
-        assertEquals(
-            PumpSession.Installation.SAME_KEY,
-            service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, null), Instant.ofEpochMilli(2_000))
-        )
-        val installed = service.owner.activeRecord()!!
-        assertTrue(installed.generation != "legacy-generation")
-        assertEquals("legacy-generation", store.saved.candidateReplacesGeneration)
-        assertEquals(77L, installed.read)
-        assertEquals(serial, installed.serial)
-        assertArrayEquals(key, service.connectionSession()!!.key)
-        assertTrue(service.isConfigured())
-        assertEquals(0, legacy.clears)
-    }
-
-    @Test
     fun `installation quiesce never holds the service monitor`() {
         val (service) = service()
         install(service)
@@ -779,35 +746,10 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `failed candidate over retained legacy credentials keeps the session connectable`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val firstCandidate = service.connectionSession()!!
-
-        assertTrue(firstCandidate.candidate)
-        assertEquals(0, legacy.clears)
-        assertTrue(service.failCandidateOrRecord(
-            firstCandidate.generation, firstCandidate.attemptId,
-            setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), "identity", now = 2_000
-        ))
-        service.awaitPendingSessionRestore()
-
-        val restored = service.connectionSession()!!
-        assertFalse(restored.candidate)
-        assertArrayEquals(key, restored.key)
-        assertEquals(serial, restored.serial)
-        assertTrue(service.isConfigured())
-        assertTrue(service.isCurrentConnection(restored))
-        assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
-        assertEquals(key.hex(), legacy.credentials.key)
-    }
-
-    @Test
-    fun `cancelling a legacy replacement keeps the retained session connectable`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
+    fun `cancelling a replacement keeps the committed session connectable`() {
+        val (service) = service()
+        install(service)
+        service.markVerified(serial, 1_500)
 
         service.installManual(
             YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
@@ -820,28 +762,7 @@ class YpsoProvisioningServiceTest {
         assertArrayEquals(key, restored.key)
         assertFalse(PumpSession.AvailabilityCause.UNCONFIGURED in service.availability().causes)
         assertTrue(service.isCurrentConnection(restored))
-        assertEquals(0, legacy.clears)
     }
-
-    @Test
-    fun `failed legacy candidate restores with its recorded backoff`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val candidate = service.connectionSession()!!
-
-        assertTrue(service.failCandidateOrRecord(
-            candidate.generation, candidate.attemptId,
-            setOf(PumpSession.AvailabilityCause.TRANSPORT), "read", now = 2_000
-        ))
-        service.awaitPendingSessionRestore()
-
-        val restored = service.connectionSession()!!
-        assertFalse(restored.candidate)
-        assertEquals(1, service.availability().failures)
-        assertEquals(7_000L, service.availability().retryAt)
-    }
-
     @Test
     fun `unscoped owner promotion and non-selected open are rejected`() {
         val (service) = service()
@@ -854,30 +775,6 @@ class YpsoProvisioningServiceTest {
 
         assertEquals(committed.generation, service.owner.committedRecord()!!.generation)
         assertThrows(SecurityException::class.java) { service.owner.open(mac, key) }
-    }
-
-    @Test
-    fun `delayed retained restore keeps the failure recorded before scheduling`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val candidate = service.connectionSession()!!
-        val pending = mutableListOf<() -> Unit>()
-        service.dispatchSessionRestore = { pending.add(it) }
-
-        assertTrue(service.failCandidateOrRecord(
-            candidate.generation, candidate.attemptId,
-            setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
-        ))
-        val failure = service.availability()
-        // Normal polling can observe an unconfigured session before the deferred restore runs.
-        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), operation = "connect", now = 2_500)
-        assertTrue(PumpSession.AvailabilityCause.UNCONFIGURED in service.availability().causes)
-
-        pending.forEach { it() }
-
-        assertEquals(failure, service.availability())
-        assertFalse(service.isSessionRestorePending())
     }
 
     @Test
@@ -909,83 +806,8 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `a superseded deferred restore cannot replace newer failure evidence`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val pending = mutableListOf<() -> Unit>()
-        service.dispatchSessionRestore = { pending.add(it) }
-
-        val firstCandidate = service.connectionSession()!!
-        assertTrue(service.failCandidateOrRecord(
-            firstCandidate.generation, firstCandidate.attemptId,
-            setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
-        ))
-        service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_000))
-        val secondCandidate = service.connectionSession()!!
-        assertTrue(service.failCandidateOrRecord(
-            secondCandidate.generation, secondCandidate.attemptId,
-            setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), "auth", now = 4_000, code = 140
-        ))
-
-        pending.forEach { it() }
-
-        assertEquals(2, pending.size)
-        assertTrue(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in service.availability().causes)
-        assertFalse(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in service.availability().causes)
-        assertEquals(140, service.availability().code)
-    }
-
-    @Test
-    fun `failed dispatch does not disarm a newer restore reservation already in place`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-        val captured = mutableListOf<() -> Unit>()
-        var firstDispatch = true
-        service.dispatchSessionRestore = { task ->
-            if (firstDispatch) {
-                firstDispatch = false
-                // A newer reservation is already current when the older dispatch fails. The check and
-                // clear share the service monitor, so the failing dispatch must not disarm it. (The
-                // instruction-level read/write interleaving itself has no injectable point in the
-                // previous implementation; the monitor closes that window structurally.)
-                service.installManual(
-                    YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
-                    Instant.ofEpochMilli(3_000)
-                )
-                val newer = service.connectionSession()!!
-                assertTrue(
-                    service.failCandidateOrRecord(
-                        newer.generation, newer.attemptId,
-                        setOf(PumpSession.AvailabilityCause.TRANSPORT), "connect", now = 3_500
-                    )
-                )
-                throw IllegalStateException("dispatch rejected")
-            }
-            captured.add(task)
-        }
-
-        val first = service.connectionSession()!!
-        assertTrue(
-            service.failCandidateOrRecord(
-                first.generation, first.attemptId,
-                setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH), "identity-read", now = 2_000
-            )
-        )
-
-        assertTrue(service.isSessionRestorePending(), "the newer reservation must stay armed")
-        assertEquals(1, captured.size)
-        captured.forEach { it() }
-        assertFalse(service.isSessionRestorePending())
-        val restored = service.availability().causes
-        assertTrue(PumpSession.AvailabilityCause.TRANSPORT in restored, "newer evidence must survive the stale dispatch failure")
-        assertFalse(PumpSession.AvailabilityCause.IDENTITY_MISMATCH in restored)
-    }
-
-    @Test
     fun `candidate failure never blocks on a held provisioning transaction`() {
-        val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), Legacy())
+        val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState())
         install(service)
         val candidate = service.connectionSession()!!
 
@@ -1046,7 +868,7 @@ class YpsoProvisioningServiceTest {
         ))
         assertEquals(PumpSession.AttemptStatus.FAILED, service.verificationState()!!.status)
 
-        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
 
         assertNull(restarted.verificationState())
     }
@@ -1089,35 +911,6 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `legacy MAC key migrates when bonded pump name independently supplies the real serial`() {
-        val store = MemoryStore()
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(null, mac, key.hex()))
-
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy, bondedSerialForMac = { observedMac ->
-            serial.takeIf { observedMac == mac }
-        })
-
-        assertNull(service.installed())
-        assertEquals(serial, service.pending()!!.serial)
-        assertEquals(mac, service.pending()!!.mac)
-        assertArrayEquals(key, service.connectionSession()!!.key)
-        assertEquals("legacy-preferences", service.pending()!!.source["profile"])
-        assertEquals(0, legacy.clears)
-    }
-
-    @Test
-    fun `complete validated legacy identity migrates automatically without inventing key age`() {
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-        val service = YpsoProvisioningService(PumpSession(MemoryStore()), YpsoPumpState(), legacy)
-
-        assertNull(service.installed())
-        assertEquals(serial, service.pending()!!.serial)
-        assertNull(service.pending()!!.createdAt)
-        assertEquals("legacy-preferences", service.pending()!!.source["profile"])
-        assertEquals(0, legacy.clears)
-    }
-
-    @Test
     fun `repeated unconfigured polls do not rewrite the protected journal`() {
         val (service, store) = service()
 
@@ -1128,24 +921,6 @@ class YpsoProvisioningServiceTest {
         assertEquals(0, store.commits)
         assertEquals(setOf(PumpSession.AvailabilityCause.UNCONFIGURED), service.availability().causes)
         assertTrue(service.notificationRequired())
-    }
-
-    @Test
-    fun `first protected migration does not inherit unconfigured retry delay`() {
-        val delayed = PumpSession.Availability(
-            causes = setOf(PumpSession.AvailabilityCause.UNCONFIGURED),
-            since = 1_000,
-            failures = 5,
-            retryAt = 301_000
-        )
-        val store = MemoryStore(PumpSession.State(availability = delayed))
-        val legacy = Legacy(YpsoProvisioningService.LegacyCredentials(serial, mac, key.hex()))
-
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), legacy)
-
-        assertEquals(0, service.availability().failures)
-        assertNull(service.availability().retryAt)
-        assertTrue(service.retryAllowed(2_000))
     }
 
     @Test
@@ -1165,7 +940,7 @@ class YpsoProvisioningServiceTest {
         )
         val store = MemoryStore(PumpSession.State(listOf(record), record.generation, staleAvailability))
 
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
 
         assertTrue(service.retryAllowed(2_000))
     }
@@ -1186,7 +961,7 @@ class YpsoProvisioningServiceTest {
     @Test
     fun `availability and notification decision survive service restart`() {
         val store = MemoryStore()
-        val first = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val first = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
         install(first)
         first.recordUnavailable(
             setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED),
@@ -1196,7 +971,7 @@ class YpsoProvisioningServiceTest {
             now = 2_000
         )
 
-        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val restarted = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
 
         assertTrue(restarted.notificationRequired())
         assertEquals(140, restarted.availability().code)
@@ -1326,7 +1101,6 @@ class YpsoProvisioningServiceTest {
                 override fun replaceUnavailable(state: PumpSession.State) { store.unavailable = false; store.saved = state }
             }),
             YpsoPumpState(),
-            Legacy(),
             durableBolusRecoveryEvidence = {
                 YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt(), evidence.copyOf())
             },
@@ -1356,7 +1130,7 @@ class YpsoProvisioningServiceTest {
             override fun commit(state: PumpSession.State) { store.saved = state }
             override fun replaceUnavailable(state: PumpSession.State) { store.saved = state }
         }
-        val service = YpsoProvisioningService(PumpSession(replacementStore), YpsoPumpState(), Legacy())
+        val service = YpsoProvisioningService(PumpSession(replacementStore), YpsoPumpState())
         val document = service.reviewDocument(
             ByteArrayInputStream(validDocument().toByteArray()),
             Instant.parse("2026-09-20T04:00:00Z"),
@@ -1383,7 +1157,6 @@ class YpsoProvisioningServiceTest {
                 override fun replaceUnavailable(state: PumpSession.State) = Unit
             }),
             YpsoPumpState(),
-            Legacy(),
         )
         val document = validDocument().toByteArray()
 
@@ -1407,7 +1180,6 @@ class YpsoProvisioningServiceTest {
                 var saved = PumpSession.State()
             }),
             YpsoPumpState(),
-            Legacy(),
         )
         val document = validDocument().toByteArray()
 
@@ -1433,7 +1205,7 @@ class YpsoProvisioningServiceTest {
             override fun commit(state: PumpSession.State) { saved = state }
             override fun replaceUnavailable(state: PumpSession.State) { saved = state }
         }
-        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState(), Legacy())
+        val service = YpsoProvisioningService(PumpSession(store), YpsoPumpState())
         val document = validDocument().toByteArray()
         service.recoverLostJournalIdentityOnly(
             ByteArrayInputStream(document),
@@ -1467,7 +1239,6 @@ class YpsoProvisioningServiceTest {
                 override fun replaceUnavailable(state: PumpSession.State) = Unit
             }),
             YpsoPumpState(),
-            Legacy(),
         )
         val document = YpsoSessionDocument(
             serial,
@@ -1492,7 +1263,6 @@ class YpsoProvisioningServiceTest {
                 override fun commit(state: PumpSession.State) = Unit
             }),
             YpsoPumpState(),
-            Legacy(),
             durableBolusRecoveryEvidence = {
                 YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt(), evidence.copyOf())
             },
@@ -1519,7 +1289,6 @@ class YpsoProvisioningServiceTest {
                 override fun replaceUnavailable(state: PumpSession.State) = Unit
             }),
             YpsoPumpState(),
-            Legacy(),
             durableBolusRecoveryEvidence = {
                 YpsoBolusAttemptFileStore.RecoveryEvidence(recoveryAttempt().copy(sessionKeyId = null), evidence.copyOf())
             },

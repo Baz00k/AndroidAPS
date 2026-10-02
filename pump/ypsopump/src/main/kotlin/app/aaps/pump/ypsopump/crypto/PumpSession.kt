@@ -453,52 +453,6 @@ class PumpSession(private val store: Store) {
         return true
     }
 
-    /**
-     * Re-establish a retained bundle as the active, still-unverified session after a replacement
-     * failed. The supplied availability (including a failure's retry backoff when present) is
-     * preserved; promotion still requires an independent read. Never call while a candidate or
-     * committed session remains.
-     */
-    @Synchronized
-    fun activateUnverified(provisioning: Provisioning, availability: Availability) {
-        require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
-        require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
-        val current = state ?: throw SecurityException("Session storage unavailable")
-        check(current.activeGeneration == null && current.candidateGeneration == null) { "A session is already active" }
-        val id = fingerprint(provisioning.sharedKey)
-        val existing = current.records.singleOrNull { it.keyId == id }
-        if (existing != null) check(existing.pump == provisioning.pump) { "Key belongs to another pump" }
-        val retained = existing?.copy(
-            serial = provisioning.serial,
-            keyHex = provisioning.sharedKey.toHex(),
-            createdAt = provisioning.createdAt ?: existing.createdAt,
-            importedAt = provisioning.importedAt,
-            source = provisioning.source,
-            verifiedAt = null,
-            verifiedSerial = null
-        ) ?: Record(
-            pump = provisioning.pump,
-            keyId = id,
-            generation = UUID.randomUUID().toString(),
-            reboot = null,
-            read = null,
-            write = null,
-            serial = provisioning.serial,
-            keyHex = provisioning.sharedKey.toHex(),
-            createdAt = provisioning.createdAt,
-            importedAt = provisioning.importedAt,
-            source = provisioning.source
-        )
-        persist(
-            current.copy(
-                records = current.records.filterNot { it.generation == retained.generation } + retained,
-                activeGeneration = retained.generation,
-                availability = availability
-            )
-        )
-        quiesce()
-    }
-
     /** Atomically rejects precisely this candidate and retains its actionable failure on the restored bundle. */
     @Synchronized
     fun failCandidate(generation: String, attemptId: String?, availability: Availability): Boolean {
