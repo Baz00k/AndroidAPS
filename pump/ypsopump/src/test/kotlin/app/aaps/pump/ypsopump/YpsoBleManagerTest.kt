@@ -834,23 +834,6 @@ class YpsoBleManagerTest {
     }
 
     @Test
-    fun `explicit diagnostic gate logs decrypted status only at debug level`() {
-        val fixture = connectedGatt()
-        stubStatus()
-        manager.diagnosticLoggingEnabled = { true }
-
-        manager.readStatus()
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        val debugMessages = argumentCaptor<String>()
-        verify(logger, org.mockito.kotlin.atLeastOnce()).debug(eq(LTag.PUMP), debugMessages.capture())
-        assertTrue(debugMessages.allValues.any { it.contains("reservoir=5.5U") && it.contains("raw=") })
-        val infoMessages = argumentCaptor<String>()
-        verify(logger, org.mockito.kotlin.atLeastOnce()).info(eq(LTag.PUMP), infoMessages.capture())
-        assertFalse(infoMessages.allValues.any { it.contains("reservoir=") || it.contains("basal=") || it.contains("raw=") })
-    }
-
-    @Test
     fun `successful decryption cannot publish when independent serial verification is unavailable`() {
         val fixture = connectedGatt()
         stubStatus()

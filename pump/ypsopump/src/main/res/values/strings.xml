@@ -83,7 +83,6 @@
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
     <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>
     <string name="ypsopump_value_unavailable">Unavailable</string>
-    <string name="ypso_protocol_capture_reason">YpsoPump bench protocol capture</string>
     <string name="ypsopump_connection_setup">Pump connection setup</string>
     <string name="ypsopump_not_configured">Not set up</string>
     <string name="ypsopump_configured_summary">Serial %1$s</string>

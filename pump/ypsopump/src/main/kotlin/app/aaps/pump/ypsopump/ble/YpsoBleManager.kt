@@ -225,7 +225,6 @@ class YpsoBleManager @Inject constructor(
         connect(configured.mac, configured)
     }
 
-    private val ypsoPrefs by lazy { context.getSharedPreferences("ypso_ble_state", Context.MODE_PRIVATE) }
     private val profileStore by lazy {
         app.aaps.pump.ypsopump.data.YpsoProfileConfigurationStore(context.getSharedPreferences("ypso_profile_configuration", Context.MODE_PRIVATE))
     }
@@ -356,12 +355,7 @@ class YpsoBleManager @Inject constructor(
         }
         readIdentity(originGatt) {
             if (!attempt.isActive) return@readIdentity
-            // Diagnostic bolus capture stays behind the firmware + control-protocol gate:
-            // unknown versions get raw diagnostics only, never parsed measurements.
-            val eligible = hasCompatibleStatusProtocol()
-            if (protocolCaptureEnabled && eligible && findChar(originGatt, CHAR_BOLUS_STATUS) != null)
-                readBolusStatus { readStatusInternal(originGatt, ownership, attempt, onDone) }
-            else readStatusInternal(originGatt, ownership, attempt, onDone)
+            readStatusInternal(originGatt, ownership, attempt, onDone)
         }
         return attempt
     }
@@ -433,14 +427,6 @@ class YpsoBleManager @Inject constructor(
         }
         step(0)
     }
-
-    /** Explicit local bench capture; unavailable in non-debuggable installed artifacts. */
-    private val protocolCaptureEnabled: Boolean
-        get() = (context.applicationInfo?.flags?.and(android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) ?: 0) != 0 &&
-            ypsoPrefs.getBoolean("ypso_protocol_capture", false)
-
-    /** Test seam around the explicit, debug-build-only protocol capture preference. */
-    internal var diagnosticLoggingEnabled: () -> Boolean = { protocolCaptureEnabled }
 
     class StatusReadAttempt internal constructor() {
         private val active = AtomicBoolean(true)
@@ -851,8 +837,6 @@ class YpsoBleManager @Inject constructor(
             return true
         }
         fun step(now: UUID, expectedFrame: Int): Unit = readOp(originGatt, now, bolusOwner) { gatt, v, s ->
-            if (diagnosticLoggingEnabled())
-                aapsLogger.debug(LTag.PUMP, "YpsoPump frame[${frames.size}] from $now: status=$s ${v?.joinToString("") { "%02x".format(it) } ?: "null"}")
             val reportedTotal = v?.let { YpsoFraming.validateFrame(it, expectedFrame, totalFrames) }
             val invalidFrame = v != null && reportedTotal == null
             if (gatt !== originGatt || s != BluetoothGatt.GATT_SUCCESS || v == null || invalidFrame) {
@@ -968,24 +952,18 @@ class YpsoBleManager @Inject constructor(
                 if (!attempt.isActive) return@synchronized null
                 val decoded = runCatching {
                     val body = decryptOwned(frame)
-                    val payload = YpsoCrc.validatedPayload(body)
-                        ?: throw SecurityException(
-                            if (diagnosticLoggingEnabled()) "invalid status CRC raw=${body.toHex()}" else "invalid status CRC"
-                        )
+                    val payload = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid status CRC")
                     val status = StatusCommand().apply { decode(payload) }
-                    if (!status.success) throw IllegalArgumentException(
-                        if (diagnosticLoggingEnabled()) "status decode failed (${payload.size}B) raw=${payload.toHex()}"
-                        else "status decode failed (${payload.size}B)"
-                    )
+                    if (!status.success) throw IllegalArgumentException("status decode failed (${payload.size}B)")
                     if (!hasCompatibleStatusProtocol())
                         throw IllegalArgumentException("Unknown or unsupported pump firmware/control protocol")
-                    status to payload
+                    status
                 }.onFailure { decodeFailure = it }.getOrNull()
                 completionClaimed = attempt.tryComplete()
                 if (!completionClaimed || decoded == null) return@synchronized null
                 decoded
             }
-            val success = decoded?.let { (status, payload) ->
+            val success = decoded?.let { status ->
                 runCatching {
                     synchronized(opLock) {
                         check(bluetoothGatt === gatt && sessionToken?.generation == ownership.generation) { "Stale status callback" }
@@ -996,15 +974,6 @@ class YpsoBleManager @Inject constructor(
                     )
                     publishDecodedStatus(status)
                     aapsLogger.info(LTag.PUMP, "YpsoPump encrypted status accepted")
-                    if (diagnosticLoggingEnabled()) {
-                        // Explicit local protocol capture only: decrypted values and bytes stay out of normal logs.
-                        aapsLogger.debug(
-                            LTag.PUMP,
-                            "YpsoPump diagnostic status: reservoir=${status.reservoirUnits}U batteryBars=${status.batteryBars} " +
-                                "basal=${status.basalRate}U/h mode=${status.deliveryMode}(${status.deliveryModeName}) " +
-                                "suspended=${status.isSuspended} raw=${payload.toHex()}"
-                        )
-                    }
                     if (promotedCandidate) disconnect(preserveStatus = true)
                     true
                 }.onFailure { publicationFailure = it }.isSuccess
@@ -1039,8 +1008,6 @@ class YpsoBleManager @Inject constructor(
                 .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump status callback failed: ${it.message}") }
         }
     }
-
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun publishDecodedStatus(status: StatusCommand) {
         pumpState.publishStatus(
@@ -1840,7 +1807,6 @@ class YpsoBleManager @Inject constructor(
             val cmd = runCatching {
                 val body = decryptOwned(f)
                 val p = YpsoCrc.validatedPayload(body) ?: throw SecurityException("invalid bolus-status CRC")
-                if (diagnosticLoggingEnabled()) aapsLogger.debug(LTag.PUMP, "YpsoPump diagnostic bolus-status (${p.size}B): ${p.toHex()}")
                 BolusCommand(0.0).apply { decode(p); require(success) { "invalid bolus-status layout" } }
             }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus-status decode failed: ${it.message}") }
                 .getOrNull()
