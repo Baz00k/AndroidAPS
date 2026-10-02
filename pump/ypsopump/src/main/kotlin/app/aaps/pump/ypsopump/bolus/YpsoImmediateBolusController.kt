@@ -286,7 +286,7 @@ internal class YpsoImmediateBolusController(
                 durationMinutes = request.durationMinutes,
                 immediateCentiUnits = request.immediateCentiUnits,
             )
-            journal.prepare(attempt, now(), OBSERVATION_WINDOW_MS, EXTENDED_RECONCILIATION_MARGIN_MS)
+            journal.prepare(attempt)
             if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
 
             val outcome = runCatching { awaitWrite { callback ->

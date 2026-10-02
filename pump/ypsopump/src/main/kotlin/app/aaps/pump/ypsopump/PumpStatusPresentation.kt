@@ -4,7 +4,6 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 
-/** One display snapshot for the pump tab and overview; it conveys no therapy readiness. */
 internal data class PumpStatusPresentation(
     val snapshot: YpsoPumpState.StatusSnapshot?,
     val battery: Int?,

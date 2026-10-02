@@ -98,7 +98,7 @@ class SessionEvidenceRetentionTest {
             evidence(1).copy(purpose = "TBR"),
             evidence(2).copy(resolution = null),
             evidence(3).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED),
-            evidence(4).copy(candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR),
+            evidence(4).copy(candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR),
             evidence(5).copy(characteristic = "another-characteristic"),
         )
         val history = (10 until 1010).map(::evidence)
@@ -165,7 +165,7 @@ class SessionEvidenceRetentionTest {
             therapyEvidence(1).copy(resolution = null),
             therapyEvidence(2).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_CONSUMED),
             therapyEvidence(3).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED),
-            therapyEvidence(4).copy(candidate = PumpSession.WriteCandidate.BENCH_STRICT_NEXT_SELECTOR),
+            evidence(4).copy(candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR),
             therapyEvidence(5).copy(characteristic = "another-characteristic"),
             therapyEvidence(6).copy(purpose = "BOLUS"),
         )

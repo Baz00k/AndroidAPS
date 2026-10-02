@@ -29,7 +29,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `interrupted selector recovers on reconnect without knowing whether pump consumed counter`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
             it.copy(write = 4_280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
         })
@@ -60,7 +60,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `pump counter error automatically redispatches with the next exponential candidate`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
             it.copy(write = 4_280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
         })
@@ -104,7 +104,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `unrelated status neither advances the search nor retries`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
             it.copy(write = 4_280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
         })
@@ -129,8 +129,8 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `unknown floor reconciles the first selector from zero`() {
         val store = MemoryStore()
+        store.saved = readBaseline("pump", key, 21, 100, store.saved)
         val session = PumpSession(store)
-        session.provisionReadBaseline("pump", key, 21, 100)
         val token = session.open("pump", key)
         val frames = mutableListOf<ByteArray>()
         val outcomes = mutableListOf<YpsoWriteOutcome>()
@@ -162,7 +162,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `lower bound recovery state permits profile selectors above the seeded floor`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(records = store.saved.records.map {
             it.copy(
                 write = 9_035,
@@ -192,7 +192,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `strict next selector remains blocking until exact readback reconciliation`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(
             records = store.saved.records.map {
                 it.copy(write = 4_153, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
@@ -238,7 +238,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `ambiguous callback ownership cannot reconcile selector identity`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(
             records = store.saved.records.map {
                 it.copy(write = 4_153, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
@@ -276,7 +276,7 @@ class YpsoProfileSelectorCoordinatorTest {
     @Test
     fun `profile selector rejects settings outside active and schedule allowlist`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, 21, 100)
+        store.saved = readBaseline("pump", key, 21, 100)
         store.saved = store.saved.copy(
             records = store.saved.records.map {
                 it.copy(write = 4_153, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)

@@ -1,12 +1,12 @@
 <resources>
     <string name="ypsopump_basal_configuration">Basal configuration</string>
-    <string name="ypsopump_read_profile_started">Reading both schedules from the pump. This takes one to two minutes.</string>
+    <string name="ypsopump_read_profile_started">Reading both schedules from the pump. This takes one to three minutes.</string>
     <string name="ypsopump_check_program_started">Checking which schedule the pump has active…</string>
     <string name="ypsopump_profile_read_not_queued">Not queued. Wait for the current pump command to finish and try again.</string>
     <string name="ypsopump_profile_read_matches">Pump profile %1$s matches the active AAPS profile.</string>
     <string name="ypsopump_profile_read_mismatch">Pump profile %1$s does NOT match the active AAPS profile.</string>
     <string name="ypsopump_read_profile">Read pump basal profiles</string>
-    <string name="ypsopump_read_profile_summary">Read both schedules after setup or manual pump edits. Takes about one minute.</string>
+    <string name="ypsopump_read_profile_summary">Run after setup and after every basal edit on the pump. Takes one to three minutes.</string>
     <string name="ypsopump_check_program_summary">Check which stored schedule is active after manually switching A/B on the pump. Takes a few seconds.</string>
     <string name="ypsopump_check_program">Check active pump profile</string>
     <string name="ypsopump_last_read_program">Last observed pump profile</string>
@@ -15,8 +15,7 @@
     <string name="ypsopump_profile_read_incomplete">Not completed; previous schedules retained</string>
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
-    <string name="ypsopump_description">YpsoPump status, standard and extended bolus delivery.</string>
-    <string name="ypsopump_description_read_only">YpsoPump status only. Insulin delivery is disabled in this build.</string>
+    <string name="ypsopump_description">YpsoPump status, bolus, extended bolus and temporary basal delivery.</string>
     <string name="ypsopump_last_status">Last updated</string>
     <string name="ypsopump_serial">Serial</string>
     <string name="ypsopump_firmware">Firmware</string>
@@ -30,7 +29,6 @@
     <string name="ypsopump_profile_unread_action">The YpsoPump programs its basal profile by hand. AAPS cannot send this profile. Program it on the pump, then use YpsoPump Preferences → Basal configuration → Read pump basal profiles to confirm they agree.</string>
     <string name="ypsopump_profile_mismatch_action">The pump\'s basal profile (%1$s) does not match the profile AAPS is using. Insulin is being delivered by the pump\'s schedule, not this one. Correct it on the pump, or switch AAPS to a matching profile.</string>
     <string name="ypsopump_profile_mismatch_notification">Pump basal profile %1$s does not match the active AAPS profile. The pump is delivering its own schedule. Fix it on the pump or switch AAPS profiles.</string>
-    <string name="ypsopump_read_only_bolus_blocked">Insulin delivery is disabled: bolus blocked</string>
     <string name="ypsopump_bolus_invalid">Bolus rejected: %1$s</string>
     <string name="ypsopump_bolus_failed">Bolus not delivered: %1$s</string>
     <string name="ypsopump_bolus_uncertain">Bolus delivery is uncertain. Check the pump and glucose before giving more insulin: %1$s</string>
@@ -69,8 +67,6 @@
     <string name="ypsopump_bolus_extended_cancel_not_saved">The extended bolus cancellation was not confirmed and its record could not be saved.</string>
     <string name="ypsopump_reservoir_empty_notification">Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.</string>
     <string name="ypsopump_reservoir_low_notification">Pump reservoir low: %1$.0f U left. Change the cartridge soon.</string>
-    <string name="ypsopump_read_only_tbr_blocked">Insulin delivery is disabled: temporary basal blocked</string>
-    <string name="ypsopump_read_only_tbr_cancel_blocked">Insulin delivery is disabled: temporary basal cancellation not sent</string>
     <string name="ypsopump_tbr_invalid">Temporary basal not sent: %1$s</string>
     <string name="ypsopump_tbr_failed">Temporary basal not changed: %1$s</string>
     <string name="ypsopump_tbr_uncertain">Temporary basal state is uncertain: %1$s</string>
@@ -87,7 +83,6 @@
     <string name="ypsopump_short_status">Reservoir %1$.2f U Battery %2$d%%</string>
     <string name="ypsopump_short_status_reservoir">Reservoir %1$.2f U</string>
     <string name="ypsopump_value_unavailable">Unavailable</string>
-    <string name="ypsopump_status_only_note">Insulin delivery is disabled.</string>
     <string name="ypso_protocol_capture_reason">YpsoPump bench protocol capture</string>
     <string name="ypsopump_connection_setup">Pump connection setup</string>
     <string name="ypsopump_not_configured">Not set up</string>
@@ -113,13 +108,6 @@
     <string name="ypsopump_import_review">From file: %1$s · %2$s</string>
     <string name="ypsopump_apply_import">Use these details</string>
     <string name="ypsopump_import_invalid">That file isn’t a valid ypso-keys file.</string>
-    <string name="ypsopump_ownership_handoff_explanation">Advanced: transfer the complete reviewed selector-counter journal from the qualification bench. This does not accept a numeric counter by itself.</string>
-    <string name="ypsopump_ownership_handoff_hash">Reviewed ownership file SHA-256</string>
-    <string name="ypsopump_import_ownership_handoff">Choose ownership handoff file</string>
-    <string name="ypsopump_ownership_import_invalid">The ownership handoff, pump identity, authentication, or reviewed SHA-256 is invalid.</string>
-    <string name="ypsopump_ownership_handoff_review">Reviewed epoch: reboot %1$d · read %2$d · write %3$d · journal %4$s…</string>
-    <string name="ypsopump_apply_ownership_handoff">Transfer reviewed ownership</string>
-    <string name="ypsopump_ownership_install_failed">Couldn’t transfer ownership. The previous journal is unchanged.</string>
     <string name="ypsopump_invalid_serial">Check the serial number on your pump.</string>
     <string name="ypsopump_invalid_mac">Use the form AA:BB:CC:11:22:33.</string>
     <string name="ypsopump_invalid_key">Paste the 64-character key from ypso-keys.</string>

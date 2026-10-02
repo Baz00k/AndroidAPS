@@ -62,10 +62,10 @@ class YpsoStatusIntegrationTest {
             }
             val rh: ResourceHelper = mock()
             manager.session = PumpSession(object : PumpSession.Store {
-                var saved = PumpSession.State()
+                var saved = readBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0)
                 override fun load() = saved
                 override fun commit(state: PumpSession.State) { saved = state }
-            }).apply { provisionReadBaseline(state.pumpAddress, ByteArray(32) { 1 }, 8, 0) }
+            })
             whenever(provisioning.connectionSession()).thenReturn(
                 YpsoProvisioningService.ConnectionSession(
                     manager.session!!.activeRecord()!!.generation, null, "10000001", state.pumpAddress, ByteArray(32) { 1 }, false

@@ -23,7 +23,7 @@ import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
 /**
- * YpsoPump driver tab: read-only Compose status view over [YpsoPumpState] + [CommandQueue].
+ * YpsoPump driver tab: Compose status view over [YpsoPumpState] + [CommandQueue].
  */
 class YpsoPumpFragment : DaggerFragment() {
 
@@ -123,6 +123,5 @@ internal fun buildPumpStatusState(
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
         queue = queue,
-        note = if (YpsoPumpConst.READ_ONLY_MODE) rh.gs(R.string.ypsopump_status_only_note) else ""
     )
 }

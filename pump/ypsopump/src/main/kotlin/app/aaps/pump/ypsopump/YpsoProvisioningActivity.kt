@@ -48,7 +48,6 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
-import app.aaps.pump.ypsopump.provisioning.YpsoOwnershipHandoff
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.core.interfaces.queue.CommandQueue
 import kotlinx.coroutines.Dispatchers
@@ -160,8 +159,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     private fun handleShellOwnershipAction(): Boolean {
         if (intent.action !in setOf(
                 ACTION_INSPECT_OWNERSHIP,
-                ACTION_IMPORT_OWNERSHIP,
-                ACTION_RECOVER_LOST_JOURNAL_READ_ONLY,
+                ACTION_RECOVER_LOST_JOURNAL_IDENTITY_ONLY,
                 ACTION_RECOVER_LOST_JOURNAL,
                 ACTION_RECOVER_HISTORY_SELECTOR,
             )
@@ -171,15 +169,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 runCatching {
                     when (intent.action) {
                         ACTION_INSPECT_OWNERSHIP -> "${provisioning.ownershipStatus()},readiness={${plugin.readinessStatus()}}"
-                        ACTION_IMPORT_OWNERSHIP -> {
-                            val path = intent.getStringExtra(EXTRA_HANDOFF_PATH)?.takeIf(String::isNotBlank)
-                                ?: error("ownership handoff path is required")
-                            val expected = intent.getStringExtra(EXTRA_HANDOFF_SHA256)?.lowercase()
-                                ?: error("ownership handoff SHA-256 is required")
-                            val reviewed = File(path).inputStream().use { provisioning.reviewOwnershipHandoff(it, expected) }
-                            provisioning.installOwnershipHandoff(reviewed)
-                            provisioning.ownershipStatus()
-                        }
                         ACTION_RECOVER_LOST_JOURNAL -> {
                             val path = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_PATH)?.takeIf(String::isNotBlank)
                                 ?: error("session document path is required")
@@ -192,13 +181,13 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                             }
                             provisioning.ownershipStatus()
                         }
-                        ACTION_RECOVER_LOST_JOURNAL_READ_ONLY -> {
+                        ACTION_RECOVER_LOST_JOURNAL_IDENTITY_ONLY -> {
                             val path = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_PATH)?.takeIf(String::isNotBlank)
                                 ?: error("session document path is required")
                             val documentHash = intent.getStringExtra(EXTRA_SESSION_DOCUMENT_SHA256)?.lowercase()
                                 ?: error("session document SHA-256 is required")
                             File(path).inputStream().use {
-                                provisioning.recoverLostJournalReadOnly(it, documentHash)
+                                provisioning.recoverLostJournalIdentityOnly(it, documentHash)
                             }
                             plugin.onAppVisibilityChanged(true)
                             "REQUESTED:${provisioning.ownershipStatus()}"
@@ -221,10 +210,8 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private var selectedDocument by mutableStateOf<YpsoSessionDocument?>(null)
-    private var selectedOwnershipHandoff by mutableStateOf<YpsoOwnershipHandoff.Reviewed?>(null)
     private var importError by mutableStateOf<String?>(null)
     private var importingDocument by mutableStateOf(false)
-    private var importingOwnership by mutableStateOf(false)
 
     private fun openDocument(uri: Uri?) {
         if (uri == null) return
@@ -255,31 +242,9 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         }
     }
 
-    private fun openOwnershipHandoff(uri: Uri?, expectedSha256: String) {
-        if (uri == null) return
-        selectedOwnershipHandoff = null
-        importError = null
-        importingOwnership = true
-        lifecycleScope.launch {
-            val reviewed = withContext(NonCancellable + Dispatchers.IO) {
-                runCatching {
-                    contentResolver.openInputStream(uri)?.use { provisioning.reviewOwnershipHandoff(it, expectedSha256) }
-                        ?: throw IllegalArgumentException()
-                }
-            }
-            currentCoroutineContext().ensureActive()
-            reviewed.onSuccess {
-                selectedOwnershipHandoff = it
-                importError = null
-            }.onFailure { importError = getString(R.string.ypsopump_ownership_import_invalid) }
-            importingOwnership = false
-        }
-    }
-
     override fun onDestroy() {
         selectedDocument?.sharedKey?.fill(0)
         selectedDocument = null
-        selectedOwnershipHandoff = null
         super.onDestroy()
     }
 
@@ -298,12 +263,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         var keyError by remember { mutableStateOf<String?>(null) }
         var generalError by remember { mutableStateOf<String?>(null) }
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
-        var ownershipHash by remember { mutableStateOf("") }
-        val ownershipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
-            openOwnershipHandoff(it, ownershipHash.trim().lowercase())
-        }
         val selected = selectedDocument
-        val selectedOwnership = selectedOwnershipHandoff
         val verificationStarter = remember(service, commandQueue) {
             ProvisioningVerificationStarter(service, commandQueue, getString(R.string.ypsopump_provisioning_verify_reason))
         }
@@ -358,7 +318,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             ),
         )
         val busyMessage = when {
-            importingDocument || importingOwnership -> R.string.ypsopump_importing
+            importingDocument -> R.string.ypsopump_importing
             installing -> R.string.ypsopump_saving
             verification == VerificationPresentation.CHECKING -> R.string.ypsopump_verifying
             else -> null
@@ -518,89 +478,14 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     }
                 }
             }
-            if (installed != null) {
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            getString(R.string.ypsopump_ownership_handoff_explanation),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.textSecondary,
-                        )
-                        OutlinedTextField(
-                            value = ownershipHash,
-                            onValueChange = {
-                                ownershipHash = it.filterNot(Char::isWhitespace).lowercase()
-                                selectedOwnershipHandoff = null
-                                importError = null
-                            },
-                            label = { Text(getString(R.string.ypsopump_ownership_handoff_hash)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !busy,
-                            isError = ownershipHash.isNotEmpty() && !ownershipHash.matches(Regex("[0-9a-f]{64}")),
-                            colors = fieldColors,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done, autoCorrectEnabled = false),
-                        )
-                        OutlinedButton(
-                            onClick = {
-                                generalError = null
-                                importError = null
-                                ownershipPicker.launch(arrayOf("application/json", "text/json", "text/plain"))
-                            },
-                            enabled = !busy && ownershipHash.matches(Regex("[0-9a-f]{64}")),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(getString(R.string.ypsopump_import_ownership_handoff)) }
-                        selectedOwnership?.let { reviewed ->
-                            Text(
-                                getString(
-                                    R.string.ypsopump_ownership_handoff_review,
-                                    reviewed.record.reboot,
-                                    reviewed.record.read,
-                                    reviewed.record.write,
-                                    reviewed.source.journalSha256.take(16),
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colors.textPrimary,
-                            )
-                            Button(
-                                onClick = {
-                                    installing = true
-                                    generalError = null
-                                    lifecycleScope.launch {
-                                        val result = withContext(NonCancellable + Dispatchers.IO) {
-                                            runCatching { service.installOwnershipHandoff(reviewed) }
-                                        }
-                                        installing = false
-                                        result.onSuccess {
-                                            selectedOwnershipHandoff = null
-                                            ownershipHash = ""
-                                            installed = service.installed()
-                                            pending = service.pending()
-                                            verificationState = service.verificationState()
-                                        }.onFailure {
-                                            selectedOwnershipHandoff = null
-                                            generalError = getString(R.string.ypsopump_ownership_install_failed)
-                                        }
-                                    }
-                                },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text(getString(R.string.ypsopump_apply_ownership_handoff)) }
-                        }
-                    }
-                }
-            }
         }
     }
 
     companion object {
         const val ACTION_INSPECT_OWNERSHIP = "app.aaps.pump.ypsopump.action.INSPECT_OWNERSHIP"
-        const val ACTION_IMPORT_OWNERSHIP = "app.aaps.pump.ypsopump.action.IMPORT_REVIEWED_OWNERSHIP"
-        const val ACTION_RECOVER_LOST_JOURNAL_READ_ONLY = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL_READ_ONLY"
+        const val ACTION_RECOVER_LOST_JOURNAL_IDENTITY_ONLY = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL_IDENTITY_ONLY"
         const val ACTION_RECOVER_LOST_JOURNAL = "app.aaps.pump.ypsopump.action.RECOVER_LOST_JOURNAL"
         const val ACTION_RECOVER_HISTORY_SELECTOR = "app.aaps.pump.ypsopump.action.RECOVER_HISTORY_SELECTOR"
-        const val EXTRA_HANDOFF_PATH = "ownership_handoff_path"
-        const val EXTRA_HANDOFF_SHA256 = "ownership_handoff_sha256"
         const val EXTRA_SESSION_DOCUMENT_PATH = "session_document_path"
         const val EXTRA_SESSION_DOCUMENT_SHA256 = "session_document_sha256"
         const val EXTRA_BOLUS_EVIDENCE_SHA256 = "bolus_evidence_sha256"

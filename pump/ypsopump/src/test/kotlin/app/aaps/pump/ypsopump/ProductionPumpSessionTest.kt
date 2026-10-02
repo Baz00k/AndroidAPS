@@ -27,7 +27,10 @@ class ProductionPumpSessionTest {
         }
     }
 
-    private fun initialized(store: MemoryStore) = PumpSession(store).apply { provisionReadBaseline(pump, key, 8, 100) }
+    private fun initialized(store: MemoryStore): PumpSession {
+        store.saved = readBaseline(pump, key, 8, 100)
+        return PumpSession(store)
+    }
     private fun accept(owner: PumpSession, token: PumpSession.Token, counter: Long, reboot: Int = 8) {
         val transaction = owner.begin(token)
         try { owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(0), reboot, counter)) }
@@ -133,20 +136,6 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `same key import preserves floor and wrong pump cannot reuse key`() {
-        val store = MemoryStore()
-        val owner = initialized(store)
-        val token = owner.open(pump, key)
-        accept(owner, token, 101)
-        assertThrows(IllegalStateException::class.java) { owner.provisionReadBaseline(pump, key, 8, 100) }
-        owner.provisionReadBaseline(pump, key, 8, 101)
-        assertEquals(token.generation, owner.open(pump, key).generation)
-        assertThrows(SecurityException::class.java) { owner.open("other", key) }
-        assertThrows(IllegalStateException::class.java) { owner.provisionReadBaseline("other", key, 8, 102) }
-        assertThrows(IllegalStateException::class.java) { owner.begin(token) }
-    }
-
-    @Test
     fun `new key isolates generation and quiesces outstanding transactions`() {
         val store = MemoryStore()
         val owner = initialized(store)
@@ -154,7 +143,7 @@ class ProductionPumpSessionTest {
         val transaction = owner.begin(old)
         assertThrows(IllegalStateException::class.java) { owner.begin(old) }
         val nextKey = ByteArray(32) { 42 }
-        owner.provisionReadBaseline(pump, nextKey, 0, 0)
+        owner.install(PumpSession.Provisioning(pump, "10000001", nextKey, 1, 2, emptyMap()))
         val next = owner.open(pump, nextKey)
         assertNotEquals(old.generation, next.generation)
         assertThrows(IllegalStateException::class.java) { owner.accept(old, transaction, SessionCrypto.Message(byteArrayOf(), 8, 102)) }
@@ -170,7 +159,7 @@ class ProductionPumpSessionTest {
         store.fault = 3
         val unavailable = PumpSession(store)
         assertThrows(SecurityException::class.java) { unavailable.open(pump, key) }
-        assertThrows(SecurityException::class.java) { unavailable.provisionReadBaseline(pump, key, 8, Long.MAX_VALUE) }
+        assertThrows(SecurityException::class.java) { unavailable.install(PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap())) }
     }
 
     @Test
@@ -204,14 +193,14 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `read only journal recovery authenticates reads and reconciles writes from zero`() {
+    fun `identity only journal recovery authenticates reads and reconciles writes from zero`() {
         val store = MemoryStore()
         initialized(store)
         store.fault = 3
         val unavailable = PumpSession(store)
         store.fault = 0
 
-        unavailable.recoverLostJournalReadOnly(
+        unavailable.recoverLostJournalIdentityOnly(
             PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
             documentHash = "cd".repeat(32),
         )
@@ -225,7 +214,7 @@ class ProductionPumpSessionTest {
         assertEquals(1, record.read)
         assertNull(record.write)
         assertEquals(PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH, record.writeBootstrapState)
-        assertEquals("cd".repeat(32), record.source["journal_loss_read_only_document_sha256"])
+        assertEquals("cd".repeat(32), record.source["journal_loss_identity_document_sha256"])
 
         val transaction = restarted.begin(token)
         val reservation = restarted.reserve(
@@ -240,134 +229,12 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `matching identity only record can enter selector lower bound recovery without adopting ownership`() {
-        val store = MemoryStore()
-        initialized(store)
-        store.fault = 3
-        val unavailable = PumpSession(store)
-        store.fault = 0
-        unavailable.recoverLostJournalReadOnly(
-            PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
-            documentHash = "cd".repeat(32),
-        )
-        val readable = PumpSession(store)
-        val token = readable.open(pump, key)
-        accept(readable, token, 73051, reboot = 21)
-        readable.markVerified("10000001", 3)
-        readable.quiesce()
-        val imported = readable.committedRecord()!!.copy(
-            generation = "handoff-generation",
-            read = 2_998,
-            write = 4_280,
-            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-            lowerBoundRecoveryReboot = null,
-        )
-
-        readable.recoverIdentityOnlyLowerBound(
-            imported,
-            importedAt = 4,
-            source = mapOf("ownership_handoff_sha256" to "ab".repeat(32)),
-        )
-
-        val recovered = readable.committedRecord()!!
-        assertEquals(21, recovered.reboot)
-        assertEquals(73051, recovered.read)
-        assertEquals(4_280, recovered.write)
-        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, recovered.writeBootstrapState)
-        assertEquals(21, recovered.lowerBoundRecoveryReboot)
-        assertEquals("ab".repeat(32), recovered.source["ownership_handoff_sha256"])
-        assertNull(recovered.reservation)
-        assertTrue(recovered.writeEvidence.isEmpty())
-    }
-
-    @Test
-    fun `identity only lower bound recovery rejects another pump key epoch or exact ownership state`() {
-        fun recovered(): Pair<PumpSession, PumpSession.Record> {
-            val store = MemoryStore()
-            initialized(store)
-            store.fault = 3
-            val unavailable = PumpSession(store)
-            store.fault = 0
-            unavailable.recoverLostJournalReadOnly(
-                PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
-                documentHash = "cd".repeat(32),
-            )
-            val owner = PumpSession(store)
-            val token = owner.open(pump, key)
-            accept(owner, token, 100, reboot = 21)
-            owner.markVerified("10000001", 3)
-            owner.quiesce()
-            return owner to owner.committedRecord()!!.copy(
-                generation = "handoff-generation",
-                read = 90,
-                write = 4_280,
-                writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-            )
-        }
-
-        recovered().let { (owner, imported) ->
-            assertThrows(IllegalStateException::class.java) {
-                owner.recoverIdentityOnlyLowerBound(imported.copy(pump = "EC:2A:F0:00:00:02"), 4, emptyMap())
-            }
-        }
-        recovered().let { (owner, imported) ->
-            assertThrows(IllegalStateException::class.java) {
-                owner.recoverIdentityOnlyLowerBound(imported.copy(keyId = "00".repeat(32)), 4, emptyMap())
-            }
-        }
-        recovered().let { (owner, imported) ->
-            assertThrows(IllegalStateException::class.java) {
-                owner.recoverIdentityOnlyLowerBound(imported.copy(reboot = 22), 4, emptyMap())
-            }
-        }
-        recovered().let { (owner, imported) ->
-            owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
-            assertThrows(IllegalStateException::class.java) {
-                owner.recoverIdentityOnlyLowerBound(imported, 5, emptyMap())
-            }
-        }
-    }
-
-    @Test
-    fun `legacy identity only record without provenance marker can enter selector recovery`() {
-        val store = MemoryStore()
-        initialized(store)
-        store.saved = store.saved.copy(
-            records = store.saved.records.map {
-                it.copy(
-                    reboot = 21,
-                    read = 73_051,
-                    write = null,
-                    serial = "10000001",
-                    verifiedAt = 3,
-                    verifiedSerial = "10000001",
-                    source = emptyMap(),
-                    writeBootstrapState = PumpSession.WriteBootstrapState.UNKNOWN_MID_EPOCH,
-                )
-            },
-        )
-        val owner = PumpSession(store)
-        val imported = owner.committedRecord()!!.copy(
-            generation = "handoff-generation",
-            read = 2_998,
-            write = 4_280,
-            writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-        )
-
-        owner.recoverIdentityOnlyLowerBound(imported, 4, emptyMap())
-
-        assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, owner.committedRecord()!!.writeBootstrapState)
-        assertEquals(4_280, owner.committedRecord()!!.write)
-        assertEquals(73_051, owner.committedRecord()!!.read)
-    }
-
-    @Test
-    fun `healthy journal cannot enter read only disaster recovery`() {
+    fun `healthy journal cannot enter identity only disaster recovery`() {
         val store = MemoryStore()
         val owner = initialized(store)
 
         assertThrows(IllegalStateException::class.java) {
-            owner.recoverLostJournalReadOnly(
+            owner.recoverLostJournalIdentityOnly(
                 PumpSession.Provisioning(pump, "10000001", key, 1, 2, emptyMap()),
                 documentHash = "cd".repeat(32),
             )
@@ -447,7 +314,7 @@ class ProductionPumpSessionTest {
         for (phase in PumpSession.Phase.entries) for (fault in 0..2) {
             val store = MemoryStore()
             initialized(store)
-            // Injected bench contract only: production provisioning always leaves write=null.
+            // Production provisioning leaves write=null; inject an established write floor directly.
             store.saved = store.saved.copy(records = store.saved.records.map { it.established(write = 42) })
             val owner = PumpSession(store)
             val token = owner.open(pump, key)
@@ -745,49 +612,6 @@ class ProductionPumpSessionTest {
     }
 
     @Test
-    fun `completed legacy alarm recovery retires without blocking strict next reservation`() {
-        val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline(pump, key, 21, 2_596)
-        val legacyReservation = PumpSession.Reservation(
-            id = "historical-alarm-cursor",
-            counter = 33,
-            phase = PumpSession.Phase.VERIFIED,
-            operationId = "alarm-cursor-1789567816",
-            characteristic = "669a0c20-0008-969e-e211-fcbec93b7bc5",
-            purpose = "HISTORY_SELECTOR",
-            payloadHash = "ab".repeat(32),
-            priorWrite = 32,
-            candidate = PumpSession.WriteCandidate.LEGACY_BENCH_ALARM_CURSOR_RECOVERY_SELECTOR,
-        )
-        val legacyEvidence = PumpSession.WriteEvidence(
-            operationId = checkNotNull(legacyReservation.operationId),
-            reservationId = legacyReservation.id,
-            counter = legacyReservation.counter,
-            characteristic = checkNotNull(legacyReservation.characteristic),
-            purpose = checkNotNull(legacyReservation.purpose),
-            payloadHash = checkNotNull(legacyReservation.payloadHash),
-            priorWrite = checkNotNull(legacyReservation.priorWrite),
-            candidate = legacyReservation.candidate,
-            resolution = PumpSession.WriteResolution.ACCEPTED,
-            evidenceHash = "cd".repeat(32),
-            detail = "completed historical alarm cursor recovery",
-        )
-        store.saved = store.saved.copy(
-            records = store.saved.records.map {
-                it.established(write = 33).copy(reservation = legacyReservation, writeEvidence = listOf(legacyEvidence))
-            },
-        )
-        val owner = PumpSession(store)
-        val token = owner.open(pump, key)
-
-        val reserved = owner.reserve(token, owner.begin(token))
-
-        assertEquals(34, reserved.counter)
-        assertEquals(legacyReservation, owner.snapshot()!!.retiredLegacyBenchAlarmCursorRecovery)
-        assertTrue(owner.snapshot()!!.writeEvidence.contains(legacyEvidence))
-    }
-
-    @Test
     fun `only an ordinary selector left by a lost connection is retired, above its counter`() {
         val selector = "669a0c20-0008-969e-e211-fcbecc3b7bc5"
         val setting = "669a0c20-0008-969e-e211-fcbeb3147bc5"
@@ -860,7 +684,7 @@ class ProductionPumpSessionTest {
     fun `a lower-bound recovery selector is never retired as abandoned`() {
         val reservation = PumpSession.Reservation(
             "id", 43, PumpSession.Phase.POSSIBLY_SENT, "history-lost", "669a0c20-0008-969e-e211-fcbecc3b7bc5", "HISTORY_SELECTOR",
-            candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
+            priorWrite = 42, candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR,
         )
         assertFalse(PumpSession(MemoryStore()).isAbandonableSelector(reservation))
         assertTrue(PumpSession(MemoryStore()).isAbandonableSelector(reservation.copy(candidate = PumpSession.WriteCandidate.STANDARD)))

@@ -13,7 +13,6 @@ import android.content.Context
 import android.os.Build
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.pump.ypsopump.YpsoPumpConst
 import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
@@ -43,11 +42,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BLE manager for authenticated status, profile/history selector acquisition and bolus dispatch.
- * An unknown write floor is reconciled from zero through pump-confirmed counter errors. Pump
- * configuration and temporary-basal mutations remain blocked by policy.
- *
- * Set the captured session key with [setSharedKey] before connecting.
+ * BLE manager for authenticated status, profile/history selector acquisition and therapy writes
+ * (bolus, extended bolus and temporary basal). An unknown write floor is reconciled from zero
+ * through pump-confirmed counter errors. Pump configuration is never written.
  */
 @Singleton
 class YpsoBleManager @Inject constructor(
@@ -178,7 +175,7 @@ class YpsoBleManager @Inject constructor(
         private const val ERR_NO_SHARED_KEY = 140
     }
 
-    /** Test/bench seam; normal builds load the key only through [configureInstalledSession]. */
+    /** Test seam; normal builds load the key only through [configureInstalledSession]. */
     internal fun setSharedKey(hex: String) {
         require(hex.length == 64 && hex.all { it.digitToIntOrNull(16) != null }) {
             disconnect()
@@ -234,25 +231,6 @@ class YpsoBleManager @Inject constructor(
     }
     internal var persistProfile: (YpsoProfileReadback.VerifiedReadback) -> Unit = { profileStore.save(it) }
 
-    /** Debug/test migration seam retained for independently captured replay evidence. */
-    internal fun importReadBaseline(mac: String, hex: String, reboot: Int, read: Long) = synchronized(opLock) {
-        require(mac.matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")))
-        require(hex.length == 64 && hex.all { it.digitToIntOrNull(16) != null })
-        disconnect()
-        val key = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        try {
-            val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
-            owner.provisionReadBaseline(mac.uppercase(java.util.Locale.ROOT), key, reboot, read)
-        } finally {
-            key.fill(0)
-        }
-    }
-
-    /** Legacy imported counters are diagnostics, never replay recovery or write readiness. */
-    internal fun setCounters(writeCounter: Long, rebootCounter: Int) {
-        aapsLogger.debug(LTag.PUMP, "YpsoPump ignoring legacy counter seeds ($writeCounter/$rebootCounter); durable session required")
-    }
-
     val writeCounter: Long get() = session?.snapshot()?.write ?: 0L
 
     /**
@@ -268,7 +246,7 @@ class YpsoBleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private fun connect(macAddress: String, configured: YpsoProvisioningService.ConnectionSession?) {
-        // The null branch is retained exclusively for the internal test/bench setSharedKey seam.
+        // The null branch is retained exclusively for the internal test setSharedKey seam.
         val directTestSession = configured == null && configuredKey != null && configuredGeneration != null
         // A stale or mismatched immutable snapshot must have no side effects: recording here would write
         // an unconfigured condition into whatever session superseded it. Record only a genuinely absent
@@ -306,7 +284,6 @@ class YpsoBleManager @Inject constructor(
                 val owner = session ?: PumpSession(SessionJournal(context)).also { session = it }
                 val key = configured?.key ?: checkNotNull(configuredKey)
                 val generation = configured?.generation ?: checkNotNull(configuredGeneration)
-                importDebugBaseline(owner, macAddress, key)
                 sessionToken = owner.openGeneration(generation, macAddress.uppercase(java.util.Locale.ROOT), key)
             } catch (e: Exception) {
                 pumpState.invalidateStatus(preserveDisplay = true)
@@ -966,19 +943,6 @@ class YpsoBleManager @Inject constructor(
         } finally {
             owner.finish(origin, transaction)
         }
-    }
-
-    /** ADB migration input is private to the app and is never consumed by distributed artifacts. */
-    private fun importDebugBaseline(owner: PumpSession, mac: String, key: ByteArray) {
-        if (((context.applicationInfo?.flags ?: 0) and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) return
-        val input = java.io.File(context.filesDir, "ypso-read-baseline.json")
-        if (!input.exists()) return
-        val baseline = org.json.JSONObject(input.readText())
-        require(baseline.getString("pump").equals(mac, ignoreCase = true)) { "Baseline pump mismatch" }
-        require(baseline.getString("keyId") == PumpSession.fingerprint(key)) { "Baseline key mismatch" }
-        owner.provisionReadBaseline(mac.uppercase(java.util.Locale.ROOT), key, baseline.getInt("reboot"), baseline.getLong("read"))
-        check(input.delete()) { "Cannot remove consumed baseline" }
-        aapsLogger.info(LTag.PUMP, "YpsoPump independently captured read baseline imported")
     }
 
     private fun authPassword(mac: String): ByteArray = YpsoAuthentication.password(mac)
@@ -1953,22 +1917,6 @@ class YpsoBleManager @Inject constructor(
         beforeDispatch: (PumpSession.Reservation) -> Unit,
         onOutcome: (YpsoWriteOutcome, BolusCommandOwner?) -> Unit,
     ) {
-        if (YpsoPumpConst.READ_ONLY_MODE) {
-            onOutcome(
-                YpsoWriteOutcome.NotSent(
-                    writeId,
-                    null,
-                    YpsoWriteFailure(
-                        YpsoWriteFailure.Layer.POLICY,
-                        YpsoWritePolicy.BOLUS_START_STOP_UUID,
-                        pumpState.masterVersion.takeIf(String::isNotBlank),
-                        detail = "therapy is disabled by READ_ONLY_MODE",
-                    ),
-                ),
-                null,
-            )
-            return
-        }
         val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
         val gatt = captured.first
         val token = captured.second
@@ -2073,7 +2021,6 @@ class YpsoBleManager @Inject constructor(
             ),
             null,
         )
-        if (YpsoPumpConst.READ_ONLY_MODE) return notSent(YpsoWriteFailure.Layer.POLICY, "therapy is disabled by READ_ONLY_MODE")
         val captured = synchronized(opLock) { Triple(bluetoothGatt, sessionToken, UUID.randomUUID().toString()) }
         writeReadinessFailure()?.let { return notSent(YpsoWriteFailure.Layer.READINESS, it) }
         val gatt = checkNotNull(captured.first)
@@ -2246,10 +2193,6 @@ class YpsoBleManager @Inject constructor(
                         aapsLogger.info(LTag.PUMP, "YpsoPump discovered service $serviceUuid custom characteristics=$characteristicUuids")
                     }
                 val auth = findChar(g, CHAR_AUTH) ?: return@synchronized "AUTH characteristic not found"
-                if (!YpsoWritePolicy.allows(YpsoRemoteWrite.AUTHENTICATION)) {
-                    cause = null
-                    return@synchronized "authentication write blocked by safety policy"
-                }
                 pumpState.connectionState = ConnectionState.READY
                 armHandshakeTimeout(g, ConnectionState.READY)
                 aapsLogger.info(LTag.PUMP, "YpsoPump connected; writing MD5 auth")
@@ -2274,8 +2217,7 @@ class YpsoBleManager @Inject constructor(
                     retireAbandonedSelector()
                     aapsLogger.info(
                         LTag.PUMP,
-                        if (YpsoPumpConst.READ_ONLY_MODE) "YpsoPump authenticated; therapy writes remain disabled"
-                        else writeReadinessFailure()?.let { "YpsoPump authenticated; writes are not ready: $it" }
+                        writeReadinessFailure()?.let { "YpsoPump authenticated; writes are not ready: $it" }
                             ?: "YpsoPump authenticated; durable write prerequisites are currently satisfied",
                     )
                     null
@@ -2467,10 +2409,8 @@ class YpsoBleManager @Inject constructor(
             } else if (remoteWrite == YpsoRemoteWrite.HISTORY_SELECTOR) {
                 characteristic.uuid == YpsoWritePolicy.EVENT_INDEX_UUID && authorizedHistoryFrame === value
             } else if (remoteWrite == YpsoRemoteWrite.THERAPY_COMMAND) {
-                !YpsoPumpConst.READ_ONLY_MODE && (
-                    characteristic.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID && authorizedBolusFrame === value ||
-                        characteristic.uuid == YpsoWritePolicy.TBR_START_STOP_UUID && authorizedTbrFrame === value
-                    )
+                characteristic.uuid == YpsoWritePolicy.BOLUS_START_STOP_UUID && authorizedBolusFrame === value ||
+                    characteristic.uuid == YpsoWritePolicy.TBR_START_STOP_UUID && authorizedTbrFrame === value
             } else YpsoWritePolicy.allowsCharacteristic(
                 remoteWrite, characteristic.uuid, value,
                 runCatching { authPassword(pumpState.pumpAddress) }.getOrDefault(byteArrayOf()),

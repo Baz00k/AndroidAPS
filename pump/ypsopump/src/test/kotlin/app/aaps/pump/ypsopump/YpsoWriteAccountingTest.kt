@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump.ble
 
+import app.aaps.pump.ypsopump.readBaseline
 import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -16,7 +17,7 @@ class YpsoWriteAccountingTest {
     @Test
     fun `duplicate live write ID is rejected before durable state changes`() {
         val store = MemoryStore()
-        PumpSession(store).provisionReadBaseline("pump", key, reboot = 8, read = 100)
+        store.saved = readBaseline("pump", key, reboot = 8, read = 100)
         store.saved = store.saved.copy(
             records = store.saved.records.map {
                 it.copy(write = 42, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)
@@ -63,8 +64,8 @@ class YpsoWriteAccountingTest {
         store.saved = PumpSession.State(
             availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
         )
+        store.saved = readBaseline("pump", key, reboot = 8, read = 100, store.saved)
         val session = PumpSession(store)
-        session.provisionReadBaseline("pump", key, reboot = 8, read = 100)
         assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in session.availability().causes)
         val token = session.open("pump", key)
         val gatt = Any()
@@ -147,8 +148,8 @@ class YpsoWriteAccountingTest {
     @Test
     fun `counter search exhaustion surfaces a proven rejection with a resolved reservation`() {
         val store = MemoryStore()
+        store.saved = readBaseline("pump", key, reboot = 8, read = 100, store.saved)
         val session = PumpSession(store)
-        session.provisionReadBaseline("pump", key, reboot = 8, read = 100)
         val token = session.open("pump", key)
         val gatt = Any()
         val transport = YpsoSerializedWriteTransport({ _, _ -> }, {})

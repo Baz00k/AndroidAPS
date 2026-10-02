@@ -4,7 +4,6 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
-import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import java.time.Instant
 import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -197,23 +196,6 @@ class YpsoPumpStateTest {
         assertEquals(YpsoPumpState.ProfileComparison.UNREAD, state.profileComparison)
     }
 
-    @Test
-    fun `historical rows do not erase explicit last read configuration`() {
-        val state = YpsoPumpState().apply {
-            elapsedRealtime = { 2_001L }
-            currentZone = { ZoneId.of("Europe/Warsaw") }
-        }
-        val matching = listOf(YpsoBasalSchedule.EffectiveSegment(0, 0.5))
-        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
-        state.observeHistory(YpsoHistoryKind.BOLUS_STEP_CHANGED)
-        assertTrue(state.profileMatches(matching))
-        state.observeHistory(YpsoHistoryKind.BASAL_PROFILE_CHANGED)
-        assertTrue(state.profileMatches(matching))
-
-        state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
-        state.observeHistory(YpsoHistoryKind.TIME_CHANGED)
-        assertTrue(state.profileMatches(matching))
-    }
     @Test
     fun `idle sample expires at five minutes and reconnect does not refresh it`() {
         var elapsed = 20_000L

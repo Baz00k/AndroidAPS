@@ -99,8 +99,6 @@ fun PumpStatusScreen(state: PumpStatusState) {
                 }
             }
         }
-
-        if (state.note.isNotBlank()) Text(state.note, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp))
     }
 }
 

@@ -21,14 +21,12 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains t
 | HovorkaMPC                          | Experimental nonlinear model-predictive controller                 |
 | Slim build                          | Reduced modules/locales/ABIs and an AOT compilation eligible build |
 
-## YpsoPump status viewer
+## YpsoPump driver
 
-The YpsoPump integration is a **status viewer only**. It connects to an already paired pump and displays
-provisional reservoir and battery measurements. Readings become unavailable when communication fails
-or they are more than five minutes old. A connection alone does not mean a reading succeeded.
-
-Insulin delivery, temporary basal, profile changes and automated dosing are disabled. Delivery details
-and history are unavailable, and firmware support is not yet qualified.
+The YpsoPump integration connects to an already paired pump, reads status and event history, and
+delivers boluses, square extended boluses and temporary basals for open and closed loop. Basal
+schedules are programmed on the pump by hand; AAPS only compares them with its profile. The
+characterized firmware is V05.00.52.
 
 Setup uses the release-build **Pump connection setup** screen with manual real serial/MAC/key entry or
 canonical `ypso-keys` session-file import. Credentials must still be obtained through the documented
@@ -51,7 +49,7 @@ See [YpsoPump setup and limitations](pump/ypsopump/README.md).
 ## Build
 
 ```bash
-./gradlew :app:assembleFullLoop   # non-debuggable/AOT-eligible; YpsoPump remains status-only
+./gradlew :app:assembleFullLoop   # non-debuggable/AOT-eligible
 ./gradlew :app:assembleFullDebug  # debuggable development build
 ```
 

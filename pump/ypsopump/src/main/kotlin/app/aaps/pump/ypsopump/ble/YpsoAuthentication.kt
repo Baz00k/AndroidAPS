@@ -2,7 +2,7 @@ package app.aaps.pump.ypsopump.ble
 
 import java.security.MessageDigest
 
-/** Protocol-defined authentication password derivation shared by production and bench artifacts. */
+/** Protocol-defined authentication password derivation. */
 internal object YpsoAuthentication {
     private val salt =
         byteArrayOf(

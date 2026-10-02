@@ -83,7 +83,7 @@ class YpsoPumpPluginTest {
     @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {
         state.publishStatus(80.0, 90, false, 100, 4000L)
-        // With therapy enabled every request reads fresh status first; an unreadable pump must fail closed.
+        // Every therapy request reads fresh status first; an unreadable pump must fail closed.
         whenever(manager.readStatus(any())).thenAnswer {
             it.getArgument<(Boolean) -> Unit>(0)(false)
             YpsoBleManager.StatusReadAttempt()
@@ -101,9 +101,9 @@ class YpsoPumpPluginTest {
         )
         results.forEach { assertFalse(it.success); assertFalse(it.enacted); assertEquals(0.0, it.bolusDelivered) }
         assertEquals(0.0, plugin.baseBasalRate)
-        assertEquals(!YpsoPumpConst.READ_ONLY_MODE, plugin.pumpDescription.isTempBasalCapable)
+        assertTrue(plugin.pumpDescription.isTempBasalCapable)
         verifyNoInteractions(sync)
-        if (!YpsoPumpConst.READ_ONLY_MODE) verify(manager, atLeastOnce()).readStatus(any())
+        verify(manager, atLeastOnce()).readStatus(any())
         verify(manager, never()).startBolus(any(), any(), any(), any(), any())
         verify(manager, never()).writeTbr(any(), any(), any(), any(), any())
     }

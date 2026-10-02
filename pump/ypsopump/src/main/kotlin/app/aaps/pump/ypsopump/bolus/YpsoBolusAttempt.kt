@@ -292,12 +292,7 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     }
 
     @Synchronized
-    fun prepare(
-        attempt: YpsoBolusAttempt,
-        now: Long = attempt.createdAt,
-        immediateWindowMs: Long = 90_000L,
-        extendedMarginMs: Long = 90_000L,
-    ): YpsoBolusAttempt {
+    fun prepare(attempt: YpsoBolusAttempt): YpsoBolusAttempt {
         require(attempt.outcome == YpsoBolusOutcome.NOT_SENT && attempt.dispatchCounter == null)
         store.commit(attempt)
         return attempt
