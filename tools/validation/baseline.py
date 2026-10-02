@@ -69,7 +69,9 @@ def manifest_identity(xml):
 
 
 def signer_fingerprints(text):
-    return sorted(set(re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$", text, re.MULTILINE)))
+    # Build-tools 35 numbers signers; 37 labels each verified signing scheme.
+    pattern = r"^(?:Signer #\d+|V\d+(?:\.\d+)? Signer(?: #\d+)?:) certificate SHA-256 digest: ([0-9a-fA-F]{64})$"
+    return sorted({digest.lower() for digest in re.findall(pattern, text, re.MULTILINE)})
 
 
 def evidence_errors(report):

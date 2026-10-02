@@ -70,6 +70,14 @@ class TestEvidence(unittest.TestCase):
         self.assertEqual(list(certificates), baseline.signer_fingerprints(text))
         self.assertEqual([], baseline.signer_fingerprints('DOES NOT VERIFY'))
 
+    def test_scheme_labelled_certificates_from_newer_build_tools(self):
+        certificate = 'c1af47f88bc6b3caab7f7bd842949aeee035b2c7f0f21afb65b4e725e37c167a'
+        text = ('V2 Signer: certificate SHA-256 digest: ' + certificate + '\n'
+                'V3.1 Signer: certificate SHA-256 digest: ' + certificate.upper() + '\n'
+                'V2 Signer: public key SHA-256 digest: ' + 'a' * 64 + '\n'
+                'Source Stamp Signer: certificate SHA-256 digest: ' + 'b' * 64)
+        self.assertEqual([certificate], baseline.signer_fingerprints(text))
+
     def successful_build(self):
         apks = []
         for module, variant, debuggable in [('app', 'debug', True), ('app', 'loop', False),
