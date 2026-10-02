@@ -16,6 +16,8 @@ are listed; source-file counts are not test-discovery counts. It does not run do
 other flavors or the entire existing Android instrumentation suite.
 
 The `Validation evidence` CI workflow also exercises cold launch on a fresh API-35 emulator.
+Benchmarks stop/relaunch the app and reset its compilation. Use only an isolated emulator or
+verified non-patient-connected test hardware, never a daily-therapy installation.
 For an isolated test emulator, run `:benchmark:connectedFullLoopAndroidTest` with
 `-PaapsTargetAbi=x86_64`. Only on an emulator, add
 `-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR`.

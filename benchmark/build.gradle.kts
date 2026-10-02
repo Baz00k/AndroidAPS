@@ -19,6 +19,8 @@ android {
         create("loop") {
             isDebuggable = true
             signingConfig = getByName("debug").signingConfig
+            // The app has a loop variant; its library dependencies expose release variants.
+            matchingFallbacks += listOf("release")
         }
     }
 
