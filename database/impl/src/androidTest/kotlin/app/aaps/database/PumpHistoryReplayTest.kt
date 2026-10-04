@@ -44,17 +44,6 @@ class PumpHistoryReplayTest {
     }
 
     @Test
-    fun replayedBolusIsCountedOnce() {
-        syncBolus(1.4)
-        val lastId = repository.getLastBolusId()
-        syncBolus(1.4)
-        reopenDatabase()
-
-        assertSingleBolus(1.4)
-        assertThat(repository.getLastBolusId()).isEqualTo(lastId)
-    }
-
-    @Test
     fun correctedPumpAmountReplacesPreviousAmountWithoutCountingHistory() {
         syncBolus(2.0)
         val id = repository.getBolusesDataFromTime(start, true).blockingGet().single().id

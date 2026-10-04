@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       emulator:
-        description: Run database fixtures and startup benchmark on a fresh emulator
+        description: Run database instrumentation tests and startup benchmark on a fresh emulator
         type: boolean
         default: false
       api-level:
@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -57,7 +57,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Isolated database fixtures and startup benchmark
+      - name: Isolated database instrumentation tests and startup benchmark
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.emulator }}
         uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
