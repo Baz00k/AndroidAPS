@@ -248,7 +248,6 @@ class YpsoBleManagerTest {
         val template = YpsoProfileReadbackTest.verified()
         val record = manager.session!!.snapshot()!!
         pumpState.elapsedRealtime = { 2001L }
-        pumpState.currentZone = { ZoneId.systemDefault() }
         return YpsoProfileReadback.VerifiedReadback(
             record.generation, record.reboot!!, "connection", template.activeProgram,
             template.profileA, template.profileB, 2000L, zone, 3000,

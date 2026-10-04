@@ -1,4 +1,3 @@
-import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 buildscript {
@@ -62,8 +61,8 @@ tasks.register("unitTest") {
     group = "verification"
     description = "Run FullDebug/Debug Android unit tests and JVM module tests."
     dependsOn(subprojects.map { project ->
-        project.tasks.withType<Test>().matching {
-            it.name in setOf("testFullDebugUnitTest", "testDebugUnitTest", "test")
+        project.tasks.withType<Test>().named {
+            it in setOf("testFullDebugUnitTest", "testDebugUnitTest", "test")
         }
     })
 }
