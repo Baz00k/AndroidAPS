@@ -2,13 +2,12 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
       emulator:
-        description: Run the startup benchmark on a fresh emulator
+        description: Run database fixtures and startup benchmark on a fresh emulator
         type: boolean
         default: false
       api-level:
@@ -58,7 +57,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Isolated startup benchmark
+      - name: Isolated database fixtures and startup benchmark
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.emulator }}
         uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
@@ -67,7 +66,7 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: true
-          script: ./gradlew :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --console=plain
+          script: ./gradlew :database:impl:connectedFullDebugAndroidTest :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --console=plain
       - name: Upload test reports
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -76,6 +75,6 @@ jobs:
           path: |
             **/build/test-results/**
             **/build/reports/tests/**
-            benchmark/build/outputs/androidTest-results/**
-            benchmark/build/reports/androidTests/**
+            **/build/outputs/androidTest-results/**
+            **/build/reports/androidTests/**
             benchmark/build/outputs/connected_android_test_additional_output/**
