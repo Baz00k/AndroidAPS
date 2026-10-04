@@ -32,6 +32,7 @@ dependencies {
 
     testImplementation(project(":shared:tests"))
     testImplementation(project(":implementation"))
+    androidTestImplementation(project(":implementation"))
 
     //WorkManager
     api(libs.androidx.work.runtime)

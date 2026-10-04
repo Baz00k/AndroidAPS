@@ -102,10 +102,9 @@ class EncryptedPrefsFormat @Inject constructor(
                 if (secureEncrypt.isValidDataString(masterPassword)) {
                     // Password contains valid data string so assuming this is a valid encrypted password
                     val decryptionResult = secureEncrypt.decrypt(masterPassword!!)
-                    if (decryptionResult.isNotEmpty()) {
-                        // Password could be decrypted
-                        masterPasswordUnencrypted = decryptionResult
-                    }
+                    if (decryptionResult.isEmpty())
+                        throw PrefIOError(rh.gs(R.string.preferences_export_password_unavailable))
+                    masterPasswordUnencrypted = decryptionResult
                 }
 
                 val contentAttempt = cryptoUtil.encrypt(masterPasswordUnencrypted!!, salt, rawContent)
@@ -180,7 +179,10 @@ class EncryptedPrefsFormat @Inject constructor(
                     if (security.has("algorithm") && security.get("algorithm") == "v1") {
                         if (security.has("salt") && security.has("content_hash")) {
 
-                            val salt = security.getString("salt").hexStringToByteArray()
+                            val saltHex = security.getString("salt")
+                            if (saltHex.length % 2 != 0 || saltHex.any { it !in "0123456789abcdefABCDEF" })
+                                throw PrefFormatError("Invalid encryption salt")
+                            val salt = saltHex.hexStringToByteArray()
                             val decrypted = cryptoUtil.decrypt(masterPassword!!, salt, container.getString("content"))
 
                             if (decrypted != null) {

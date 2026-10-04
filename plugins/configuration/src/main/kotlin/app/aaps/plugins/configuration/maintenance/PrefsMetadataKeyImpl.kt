@@ -38,7 +38,7 @@ enum class PrefsMetadataKeyImpl(override val key: String, @DrawableRes override 
         return when (this) {
             FILE_FORMAT -> when (value) {
                 PrefsFormat.FORMAT_KEY_ENC   -> context.getString(R.string.metadata_format_new)
-                else                         -> context.getString(R.string.metadata_format_other)
+                else                         -> value
             }
 
             CREATED_AT  -> value.replace("T", " ").replace("Z", " (UTC)")

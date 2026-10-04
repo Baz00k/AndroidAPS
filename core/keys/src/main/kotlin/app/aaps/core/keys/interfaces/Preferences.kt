@@ -450,11 +450,6 @@ interface Preferences {
      */
     fun allMatchingInts(key: ComposedKey): List<Int>
 
-    /**
-     * Check if the key string looks like a valid registered key and is set exportable
-     * ie it does match exactly
-     * or has a valid registered prefix
-     * @return true if exportable key
-     */
-    fun isExportableKey(key: String): Boolean
+    /** Resolve an exportable exact key before considering composed-key prefixes. */
+    fun exportableKey(key: String): NonPreferenceKey?
 }
