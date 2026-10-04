@@ -8,8 +8,12 @@ If KSP reports stale generated types after a large refactor, run `./gradlew :app
 
 With JDK 21 and the Android SDK, run `./gradlew unitTest` for Android FullDebug/Debug and JVM
 module tests, then `./gradlew -p buildSrc test` for build-tool tests. CI archives native Gradle reports.
-For an isolated x86_64 emulator, run `./gradlew :benchmark:connectedFullLoopAndroidTest
--PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR`.
+Select the dedicated emulator by its serial (for example, `emulator-5554`):
+
+```bash
+ANDROID_SERIAL=emulator-5554 ./gradlew :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 \
+  -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR
+```
 The connected task installs/uninstalls the target package: use a fresh dedicated emulator, never an
 installation with patient records or pairing credentials. It measures five unconfigured FullLoop
 cold launches; emulator timing checks the harness, not hardware performance or clinical safety.
