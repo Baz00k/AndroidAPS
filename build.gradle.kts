@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
@@ -61,4 +62,15 @@ apply(from = "jacoco_aggregation.gradle.kts")
 
 tasks.register<Delete>("clean").configure {
     delete(rootProject.layout.buildDirectory)
+}
+
+// Android modules use variant-specific tests; plain JVM modules use test.
+tasks.register("unitTest") {
+    group = "verification"
+    description = "Run FullDebug/Debug Android unit tests and JVM module tests."
+    dependsOn(subprojects.map { project ->
+        project.tasks.withType<Test>().matching {
+            it.name in setOf("testFullDebugUnitTest", "testDebugUnitTest", "test")
+        }
+    })
 }

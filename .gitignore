@@ -44,6 +44,3 @@ libre3/src/test/kotlin/app/aaps/libre3/Libre3SecuritySessionTest.kt
 **/libre3-credentials.json
 **/l3-credentials.json
 realdata/
-
-# Python validation tooling
-__pycache__/
