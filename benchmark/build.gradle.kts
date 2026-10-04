@@ -15,11 +15,10 @@ android {
     }
 
     buildTypes {
-        // Match the actual sideloaded FullLoop artifact; the instrumentation APK itself is debuggable.
         create("loop") {
             isDebuggable = true
             signingConfig = getByName("debug").signingConfig
-            // The app has a loop variant; its library dependencies expose release variants.
+            // Libraries do not have a loop variant.
             matchingFallbacks += listOf("release")
         }
     }

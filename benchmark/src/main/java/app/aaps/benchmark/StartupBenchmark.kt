@@ -9,10 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Cold launch of an unconfigured install or a configured virtual-pump fixture.
- * Keep permission state and compilation mode explicit; emulator timing is harness evidence, not a hardware baseline.
- */
+/** Use a disposable emulator: connected tests can remove the app and its data. */
 @RunWith(AndroidJUnit4::class)
 class StartupBenchmark {
 

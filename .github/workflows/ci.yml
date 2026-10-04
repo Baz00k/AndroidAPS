@@ -12,7 +12,7 @@ on:
         type: boolean
         default: false
       api-level:
-        description: Android emulator API level (no OS matrix)
+        description: Android emulator API level
         type: string
         default: '35'
 
