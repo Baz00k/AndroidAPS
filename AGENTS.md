@@ -21,12 +21,20 @@ Development is fast-moving, with no legacy-support commitment. Prefer removing o
 - Discover build tasks and setup requirements from the Gradle configuration and project tooling.
 - Use Conventional Commits: `type: brief summary`, with an optional scope. Use the basic types `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `ci`, `perf`, `style`, and `chore`; keep commit messages brief.
 
+## Issues and pull requests
+
+- Keep each pull request to one concern, and make its type match its content. Production changes discovered during test, CI, or build work belong in a separate pull request.
+- Agents may narrow, defer, or split the scope of an issue and should say so. Adding requirements or blocking dependencies to an issue needs maintainer agreement; record other follow-ups as separate, non-blocking issues.
+- If the plan or the issue turns out to be wrong, stop and report with a proposed correction instead of working around it.
+- Describe in the pull request what changed, why, how it was verified, and known gaps. CI is the record of builds and test results: do not post command logs, test counts, hashes, or toolchain inventories in issues or pull requests. Resolve an issue by linking its pull request, with one line on anything decided or deferred.
+
 ## Verification
 
 - Test quality matters more than test count or coverage percentage. Choose coverage by behavioral risk, with particular attention to dosing boundaries and failure handling.
 - Tests should catch plausible regressions using independently justified expectations. Avoid tautological assertions, implementation-mirroring tests, redundant cases, and tests of external libraries themselves; test our integration behavior where it matters.
+- A bug fix includes a regression test when the failure can be reproduced in a test; a new test must fail without the change it covers.
 - Run the checks relevant to the change. For therapy logic, include applicable boundary, invalid-input, and failure-path cases; for low-impact changes, keep verification proportionate.
-- Use available simulators, Android emulators, and real devices connected through ADB to exercise changed behavior autonomously. For UI changes, interact with the affected flow and inspect the rendered result; use logs to investigate failures.
+- Use simulators and Android emulators to exercise changed behavior autonomously. Use real devices connected through ADB for hardware-dependent behavior, such as pumps, BLE, or sensors; no particular personal device is a reference or baseline. For UI changes, interact with the affected flow and inspect the rendered result; use logs to investigate failures.
 - Keep manual testing isolated from live therapy: use simulated pumps or a verified non-patient-connected test setup for delivery actions. Preserve therapy settings and records on real devices.
 - Report what was actually verified and any gaps, including unavailable devices or simulations.
 
