@@ -52,8 +52,6 @@ See [YpsoPump setup and limitations](pump/ypsopump/README.md).
 ./gradlew :app:assembleFullDebug  # debuggable development build
 ```
 
-See the [build notes](docs/build-notes.md) for signing and troubleshooting details.
-
 ## Licence
 
 Licensed under AGPL-3.0; see [LICENSE.txt](LICENSE.txt). No warranty is provided.
