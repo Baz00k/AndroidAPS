@@ -66,7 +66,9 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: true
-          script: ./gradlew :database:impl:connectedFullDebugAndroidTest :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --console=plain
+          script: |
+            adb shell getprop ro.build.fingerprint
+            ./gradlew :database:impl:connectedFullDebugAndroidTest :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --no-parallel --continue --console=plain
       - name: Upload test reports
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

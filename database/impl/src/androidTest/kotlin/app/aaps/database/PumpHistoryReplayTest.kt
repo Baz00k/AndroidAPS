@@ -72,6 +72,7 @@ class PumpHistoryReplayTest {
     fun provisionalBolusAndConfirmedHistoryHaveOneIdentity() {
         repository.runTransactionForResult(InsertBolusWithTempIdTransaction(bolus(2.0, pumpId = null, temporaryId = 701))).blockingGet()
         repository.runTransactionForResult(SyncBolusWithTempIdTransaction(bolus(1.4, temporaryId = 701), null)).blockingGet()
+        assertSingleBolus(1.4)
         syncBolus(1.4)
         reopenDatabase()
 
@@ -84,6 +85,7 @@ class PumpHistoryReplayTest {
         repository.runTransactionForResult(InsertBolusWithTempIdTransaction(bolus(2.0, pumpId = null, temporaryId = 701))).blockingGet()
         syncBolus(1.4)
         repository.runTransactionForResult(SyncBolusWithTempIdTransaction(bolus(1.4, temporaryId = 701), null)).blockingGet()
+        assertSingleBolus(1.4)
         syncBolus(1.4)
         reopenDatabase()
 
@@ -107,8 +109,9 @@ class PumpHistoryReplayTest {
 
     @Test
     fun provisionalTemporaryBasalReconcilesWithConfirmedHistory() {
-        repository.runTransactionForResult(InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))).blockingGet()
+        repository.runTransactionForResult(InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 1.0, duration = 1_200_000))).blockingGet()
         repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+        assertSingleBasal()
         syncBasal()
         reopenDatabase()
 
@@ -167,12 +170,12 @@ class PumpHistoryReplayTest {
         interfaceIDs_backing = ids(pumpId, temporaryId)
     )
 
-    private fun basal(pumpId: Long? = 802, temporaryId: Long? = null) = TemporaryBasal(
+    private fun basal(pumpId: Long? = 802, temporaryId: Long? = null, rate: Double = 0.8, duration: Long = this.duration) = TemporaryBasal(
         timestamp = start,
         utcOffset = 3_600_000,
         type = TemporaryBasal.Type.NORMAL,
         isAbsolute = true,
-        rate = 0.8,
+        rate = rate,
         duration = duration,
         interfaceIDs_backing = ids(pumpId, temporaryId)
     )
