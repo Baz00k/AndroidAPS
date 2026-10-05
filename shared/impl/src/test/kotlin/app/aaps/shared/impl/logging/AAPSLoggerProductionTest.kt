@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory
 
 class AAPSLoggerProductionTest {
     @Test
-    fun `production adapter retains error details through the Android logging provider`() {
+    fun `error logs the message and exception`() {
         val context = LoggerFactory.getILoggerFactory() as LoggerContext
         val logger = context.getLogger(LTag.PUMP.tag)
         val originalLevel = logger.level
