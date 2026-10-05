@@ -6,8 +6,8 @@ kotlin = "2.2.21"
 wearable = "2.9.0"
 room = "2.8.4"
 dagger = "2.57.2"
-mockito = "5.21.0"
-junit = "6.0.1"
+mockito = "5.24.0"
+junit = "6.1.3"
 okhttp = "5.3.2"
 retrofit = "3.0.0"
 kotlinx-serialization = "1.9.0"
@@ -144,8 +144,8 @@ org-mozilla-rhino = { group = "org.mozilla", name = "rhino", version = "1.9.0" }
 
 org-mockito-android = { group = "org.mockito", name = "mockito-android", version.ref = "mockito" }
 org-mockito-junit-jupiter = { group = "org.mockito", name = "mockito-junit-jupiter", version.ref = "mockito" }
-org-mockito-kotlin = { group = "org.mockito.kotlin", name = "mockito-kotlin", version = "6.1.0" }
-org-slf4j-api = { group = "org.slf4j", name = "slf4j-api", version = "2.0.17" }
+org-mockito-kotlin = { group = "org.mockito.kotlin", name = "mockito-kotlin", version = "6.4.0" }
+org-slf4j-api = { group = "org.slf4j", name = "slf4j-api", version = "2.0.20" }
 com-github-tony19-logback-android = { group = "com.github.tony19", name = "logback-android", version = "3.0.0" }
 
 org-junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "junit" }
@@ -189,4 +189,3 @@ androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lif
 androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 androidx-compose-navigation = { group = "androidx.navigation", name = "navigation-compose", version.ref="navigationCompose" }
 androidx-compose-runtime-livedata = { group = "androidx.compose.runtime", name = "runtime-livedata" }
-

@@ -5,6 +5,9 @@ plugins {
 
 android {
     compileSdk = Versions.compileSdk
+    testCoverage {
+        jacocoVersion = Versions.jacoco
+    }
     defaultConfig {
         multiDexEnabled = true
         versionCode = Versions.versionCode
