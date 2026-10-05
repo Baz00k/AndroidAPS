@@ -15,7 +15,8 @@ enum class PrefsMetadataKeyImpl(override val key: String, @DrawableRes override 
     AAPS_FLAVOUR("aaps_flavour", R.drawable.ic_meta_flavour, R.string.metadata_label_aaps_flavour),
     DEVICE_NAME("device_name", R.drawable.ic_meta_name, R.string.metadata_label_device_name),
     DEVICE_MODEL("device_model", R.drawable.ic_meta_model, R.string.metadata_label_device_model),
-    ENCRYPTION("encryption", R.drawable.ic_meta_encryption, R.string.metadata_label_encryption);
+    ENCRYPTION("encryption", R.drawable.ic_meta_encryption, R.string.metadata_label_encryption),
+    SETTINGS("settings", R.drawable.ic_meta_format, R.string.metadata_label_settings);
 
     companion object {
 
@@ -38,7 +39,7 @@ enum class PrefsMetadataKeyImpl(override val key: String, @DrawableRes override 
         return when (this) {
             FILE_FORMAT -> when (value) {
                 PrefsFormat.FORMAT_KEY_ENC   -> context.getString(R.string.metadata_format_new)
-                else                         -> context.getString(R.string.metadata_format_other)
+                else                         -> value
             }
 
             CREATED_AT  -> value.replace("T", " ").replace("Z", " (UTC)")

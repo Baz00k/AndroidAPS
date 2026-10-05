@@ -303,16 +303,7 @@ class SecureEncryptImpl @Inject constructor(
             println("Encryption, decrypted text OK")
         }
         catch (e: Exception) {
-            when (e) {
-                is KeyStoreException,
-                is NoSuchAlgorithmException,
-                is InvalidKeyException,
-                is UnrecoverableKeyException,
-                is NoSuchProviderException,
-                is IOException -> {
-                    log.error(LTag.CORE, "$MODULE: keyStoreDecrypt, msg: ${e.message}, $e")
-                }
-            }
+            log.error(LTag.CORE, "$MODULE: keyStoreDecrypt failed", e)
         }
         return decryptedDataString
     }

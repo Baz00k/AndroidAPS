@@ -1,0 +1,6 @@
+{
+  "format": "aaps_encrypted",
+  "metadata": {"device_name": "Synthetic fixture", "aaps_flavour": "full", "created_at": "2026-10-04T00:00:00Z"},
+  "security": {"algorithm": "v1", "salt": "09135fbc1e153682cfd3275d589ed177ebf2f7ec37262d64c7607f75bb793b09", "content_hash": "37876a71dcc89c5b5f6f361cfb916098e23727dd70c3ba71f359c2c4563cfb1b", "file_hash": "1fc82a4fb9c83e605bc5aff3685cdedfe60e1a9fbef8876df51ab2b8431fe886"},
+  "content": "DJx05Mg8vLckXux4O6iyQv6HfT/t4gWOQ5bmOzGpYm4DO1y1OaANCMJNzBcKWnbPf1v6EF7pb0YP3CXrba1sl3HLsXT3kbkKIj/DI21z58CHlfXgRiJuDRKPno6VMkz7HkIatuacLNooFT6Zh2l0rBwaitOtmzMosobIQn67nIE4FX9jNSgQ9APs9u71eSW6VFEhYlRGYLjCW1dxJBHiaEvWgalAuutq5jjDe9ufXQiLtnguKFblMig0UoRaVF/l1UZeg9fe72q35dJZNW2lngwvD8mHxAdDrlmUA9Ux4UQ7UGwGuYQKLywfPPk7U6C6xk8TJIKrkNZSLRHcxTCoSoQi87AIO+el+qfFMwCj78qZoOI6Az8AGBAL+CR6XRORV64PpQRVJ67wYJE+OidMx+f6u+JlQglu0fpwV6DzPJL+D0SnrPY5LrTnHRascDCeeY5mlM+/WCdZDscbZVHUTTT5L7TaTtYoLz0DOeL6V15GtUdBR/BC8l7o2IECiPnS89g="
+}

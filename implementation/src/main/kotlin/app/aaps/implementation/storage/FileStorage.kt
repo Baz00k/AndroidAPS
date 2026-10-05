@@ -5,7 +5,7 @@ import androidx.documentfile.provider.DocumentFile
 import app.aaps.core.interfaces.storage.Storage
 import java.io.BufferedReader
 import java.io.File
-import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStreamReader
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -36,10 +36,9 @@ class FileStorage @Inject constructor() : Storage {
     }
 
     override fun putFileContents(contentResolver: ContentResolver, file: DocumentFile, contents: String) {
-        val output = FileOutputStream(contentResolver.openFileDescriptor(file.uri, "w")?.fileDescriptor)
-        output.write(contents.toByteArray())
-        output.flush()
-        output.close()
+        val output = contentResolver.openOutputStream(file.uri, "wt")
+            ?: throw IOException("Cannot open output: ${file.uri}")
+        output.use { it.write(contents.toByteArray()) }
     }
 
 }

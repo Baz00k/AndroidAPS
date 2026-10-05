@@ -3,11 +3,13 @@ package app.aaps.plugins.configuration.maintenance
 import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
@@ -44,7 +46,6 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDiaconnG8PumpLogReset
 import app.aaps.core.interfaces.rx.weardata.CwfData
 import app.aaps.core.interfaces.rx.weardata.CwfMetadataKey
-import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.storage.Storage
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.userEntry.UserEntryPresentationHelper
@@ -65,7 +66,6 @@ import app.aaps.plugins.configuration.activities.DaggerAppCompatActivityWithResu
 import app.aaps.plugins.configuration.maintenance.data.PrefFileNotFoundError
 import app.aaps.plugins.configuration.maintenance.data.PrefIOError
 import app.aaps.plugins.configuration.maintenance.data.Prefs
-import app.aaps.plugins.configuration.maintenance.data.PrefsFormat
 import app.aaps.plugins.configuration.maintenance.data.PrefsStatusImpl
 import app.aaps.plugins.configuration.maintenance.dialogs.PrefImportSummaryDialog
 import app.aaps.plugins.configuration.maintenance.formats.EncryptedPrefsFormat
@@ -86,19 +86,10 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import javax.inject.Inject
 
-// Added for dialog callback explicit types
-import android.content.DialogInterface
-import androidx.appcompat.app.AlertDialog
-
-/**
- * Created by mike on 03.07.2016.
- */
-
 @Reusable
 class ImportExportPrefsImpl @Inject constructor(
     private var aapsLogger: AAPSLogger,
     private val rh: ResourceHelper,
-    private val sp: SP,
     private val preferences: Preferences,
     private val config: Config,
     private val persistenceLayer: PersistenceLayer,
@@ -116,7 +107,8 @@ class ImportExportPrefsImpl @Inject constructor(
     private val configBuilder: ConfigBuilder,
     private val cloudStorageManager: CloudStorageManager,
     private val exportOptionsDialog: ExportOptionsDialog,
-    private val importSourceDialog: ImportSourceDialog
+    private val importSourceDialog: ImportSourceDialog,
+    private val settingsImport: SettingsImport
 ) : ImportExportPrefs {
 
     companion object {
@@ -285,7 +277,7 @@ class ImportExportPrefsImpl @Inject constructor(
         if (!assureMasterPasswordSet(activity, R.string.import_setting)) return
         TwoMessagesAlertDialog.showAlert(
             activity, rh.gs(R.string.import_setting),
-            rh.gs(R.string.import_from) + " " + fileToImport.name + "?",
+            rh.gs(R.string.import_from) + " " + fileToImport.name + "?\n\n" + rh.gs(R.string.preferences_import_replaces_settings),
             rh.gs(app.aaps.core.ui.R.string.password_preferences_decrypt_prompt), {
                 askForMasterPass(activity, R.string.preferences_import_canceled, then)
             }, null, R.drawable.ic_header_import
@@ -293,28 +285,15 @@ class ImportExportPrefsImpl @Inject constructor(
     }
 
     private fun promptForDecryptionPasswordIfNeeded(
-        activity: FragmentActivity, prefs: Prefs, importOk: Boolean,
-        format: PrefsFormat, importFile: PrefsFile, then: ((prefs: Prefs, importOk: Boolean) -> Unit)
+        activity: FragmentActivity, checked: SettingsImport.Check, importFile: PrefsFile, then: (SettingsImport.Check) -> Unit
     ) {
-
-        // current master password was not the one used for decryption, so we prompt for old password...
-        if (!importOk && (prefs.metadata[PrefsMetadataKeyImpl.ENCRYPTION]?.status == PrefsStatusImpl.ERROR)) {
+        if (!checked.importOk && checked.prefs.metadata[PrefsMetadataKeyImpl.ENCRYPTION]?.status == PrefsStatusImpl.ERROR) {
             askForEncryptionPass(
                 activity, R.string.preferences_import_canceled, R.string.old_master_password,
                 R.string.different_password_used, R.string.master_password_will_be_replaced
-            ) { password ->
-
-                // ...and use it to load & decrypt file again
-                val prefsReloaded = format.loadPreferences(importFile.content, password)
-                prefsReloaded.metadata = prefFileList.checkMetadata(prefsReloaded.metadata)
-
-                // import is OK when we do not have errors (warnings are allowed)
-                val importOkCheckedAgain = checkIfImportIsOk(prefsReloaded)
-
-                then(prefsReloaded, importOkCheckedAgain)
-            }
+            ) { password -> then(settingsImport.check(importFile.content, password)) }
         } else {
-            then(prefs, importOk)
+            then(checked)
         }
     }
 
@@ -325,14 +304,7 @@ class ImportExportPrefsImpl @Inject constructor(
         var resultOk = false // Assume result was not OK unless acknowledged
 
         try {
-            val entries: MutableMap<String, String> = mutableMapOf()
-            for ((key, value) in sp.getAll()) {
-                if (preferences.isExportableKey(key))
-                    entries[key] = value.toString()
-                else
-                    aapsLogger.warn(LTag.CORE, "Not exportable key: $key $value")
-            }
-            val prefs = Prefs(entries, prepareMetadata(context))
+            val prefs = Prefs(settingsImport.exportValues(), prepareMetadata(context))
             encryptedPrefsFormat.savePreferences(newFile, prefs, password)
             resultOk = true // Assuming export was executed successfully (or it would have thrown an exception)
 
@@ -847,55 +819,23 @@ class ImportExportPrefsImpl @Inject constructor(
         ZipWatchfaceFormat.saveCustomWatchface(context.contentResolver, newFile, customWatchface)
     }
 
-    // Do not pass full file through intent. It crash on large file
-    // override fun importSharedPreferences(activity: FragmentActivity, importFile: PrefsFile) {
     override fun doImportSharedPreferences(activity: FragmentActivity) {
-
-        // File should be prepared here
         val importFile = selectedImportFile ?: return
-
         askToConfirmImport(activity, importFile) { password ->
-
-            val format: PrefsFormat = encryptedPrefsFormat
-
             try {
-
-                val prefsAttempted = format.loadPreferences(importFile.content, password)
-                prefsAttempted.metadata = prefFileList.checkMetadata(prefsAttempted.metadata)
-
-                // import is OK when we do not have errors (warnings are allowed)
-                val importOkAttempted = checkIfImportIsOk(prefsAttempted)
-
-                promptForDecryptionPasswordIfNeeded(activity, prefsAttempted, importOkAttempted, format, importFile) { prefs, importOk ->
-
-                    // if at end we allow to import preferences
-                    val importPossible = (importOk || config.isEngineeringMode()) && (prefs.values.isNotEmpty())
-
-                    PrefImportSummaryDialog.showSummary(activity, importOk, importPossible, prefs, {
-                        if (importPossible) {
+                val checked = settingsImport.check(importFile.content, password)
+                promptForDecryptionPasswordIfNeeded(activity, checked, importFile) { result ->
+                    PrefImportSummaryDialog.showSummary(activity, result.importOk, result.importPossible, result.prefs, {
+                        if (result.importPossible) {
                             activePlugin.beforeImport()
-                            sp.clear()
-                            for ((key, value) in prefs.values) {
-                                if (value == "true" || value == "false") {
-                                    sp.putBoolean(key, value.toBoolean())
-                                } else {
-                                    sp.putString(key, value)
-                                }
-                            }
-                            
-                            // All settings including Google Drive settings and export destination preferences
-                            // are now imported from backup file. If tokens are invalid, user can re-authorize.
-                            
+                            settingsImport.apply(result)
                             activePlugin.afterImport()
                             restartAppAfterImport(activity)
                         } else {
-                            // for impossible imports it should not be called
                             ToastUtils.errorToast(activity, rh.gs(R.string.preferences_import_impossible))
                         }
                     })
-
                 }
-
             } catch (e: PrefFileNotFoundError) {
                 ToastUtils.errorToast(activity, rh.gs(R.string.filenotfound) + " " + importFile)
                 aapsLogger.error(LTag.CORE, "Unhandled exception", e)
@@ -904,16 +844,6 @@ class ImportExportPrefsImpl @Inject constructor(
                 ToastUtils.errorToast(activity, e.message)
             }
         }
-    }
-
-    private fun checkIfImportIsOk(prefs: Prefs): Boolean {
-        var importOk = true
-
-        for ((_, value) in prefs.metadata) {
-            if (value.status == PrefsStatusImpl.ERROR)
-                importOk = false
-        }
-        return importOk
     }
 
     private fun restartAppAfterImport(context: Context) {

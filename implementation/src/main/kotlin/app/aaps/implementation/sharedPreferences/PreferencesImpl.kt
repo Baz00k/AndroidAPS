@@ -287,14 +287,11 @@ class PreferencesImpl @Inject constructor(
                 if (singleKey.startsWith(key.key)) it.add(SafeParse.stringToInt(singleKey.split(key.key)[1]))
         }
 
-    override fun isExportableKey(key: String): Boolean {
-        prefsList
-            .flatMap { it.enumConstants!!.asIterable() }
-            .forEach {
-                if (it.key == key && it.exportable) return true
-                if (it is ComposedKey && key.startsWith(it.key) && it.exportable) return true
-            }
-        return false
+    override fun exportableKey(key: String): NonPreferenceKey? {
+        val keys = prefsList.flatMap { it.enumConstants!!.asIterable() }
+        val exact = keys.firstOrNull { it.key == key }
+        if (exact != null) return exact.takeIf { it.exportable }
+        return keys.filter { it is ComposedKey && key.startsWith(it.key) }.maxByOrNull { it.key.length }?.takeIf { it.exportable }
     }
 
     private fun calculatedDefaultValue(key: IntPreferenceKey): Int =
