@@ -1,49 +1,36 @@
 # AndroidAPS experimental fork
 
-> ## 🛑 READ THIS FIRST
->
-> This fork contains highly experimental insulin-dosing code that is not part of upstream
-> AndroidAPS, has not completed the AAPS review process and is **not clinically validated**.
-> It is not affiliated with or endorsed by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab.
-> For supported AndroidAPS, use [the upstream project](https://github.com/nightscout/AndroidAPS).
+> [!WARNING]
+> This fork contains highly experimental insulin-dosing code that is not part of upstream AndroidAPS,
+> has not been through the AAPS review process and is **not clinically validated**. It is not affiliated
+> with or endorsed by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab.
+> If you need a supported system, use [upstream AndroidAPS](https://github.com/nightscout/AndroidAPS).
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). `main` contains the active fork;
-`master` is the unchanged upstream mirror at the fork point.
+This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) that modernizes the app with a
+native Android UI and develops a closed-loop insulin-delivery algorithm.
 
-## What this fork adds
+## What this fork changes
 
-| Area                                | Summary                                                            |
-| ----------------------------------- | ------------------------------------------------------------------ |
-| [YpsoPump](#ypsopump-driver)        | Full pump driver: status, history, boluses and temporary basals    |
-| Delivery safeguards                 | Stopped/empty-pump checks and insulin-record repair tools          |
-| Infusion-site handling              | Fresh-cannula state, wizard guidance and back-dated recording      |
-| Compose UI                          | Material 3 screens and file-based skins                            |
-| HovorkaMPC                          | Experimental nonlinear model-predictive controller                 |
-| Slim build                          | Reduced modules/locales/ABIs and an AOT compilation eligible build |
+- [YpsoPump](pump/ypsopump/README.md): a pump driver with status, event history, boluses and temporary
+  basals, usable in open and closed loop. Basal schedules are programmed on the pump by hand; AAPS only
+  compares them with its profile. Credentials come from an external source-device workflow. The AAPS
+  device needs neither root nor ADB.
+- [HovorkaMPC](hovorka-mpc/README.md): an experimental nonlinear model-predictive controller based on the
+  published Hovorka model, with optional adaptive layers. It has been validated in silico and by replay only.
+- Infusion sites: SITE-GUARD suppresses SMB after a recorded cannula change. The bolus wizard shows a
+  fresh-site advisory and accepts back-dated site events.
+- Compose UI: Material 3 screens for home, dosing, loop, history, statistics, profile, configuration and
+  pump status, plus file-based skins. Dosing still goes through the existing constraint and confirmation
+  paths.
+- Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
+- Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
 
-## YpsoPump driver
+## Upstream AndroidAPS
 
-The YpsoPump integration connects to a pump, reads status and event history,
-delivers boluses and temporary basals for open and closed loop. Basal
-schedules are programmed on the pump by hand, AAPS only compares them with its profile.
-
-Setup uses the release-build **Pump connection setup** screen with manual real serial/MAC/key entry or
-canonical `ypso-keys` session-file import. Credentials must still be obtained through the documented
-external source-device workflow; the AAPS target does not require root or ADB.
-See [YpsoPump setup and limitations](pump/ypsopump/README.md).
-
-## Other fork changes
-
-- **HovorkaMPC:** receding-horizon control based on the published Hovorka model, with optional adaptive
-  layers. Validation is in-silico/replay only; see [`hovorka-mpc/`](hovorka-mpc/README.md).
-- **Infusion-site handling:** SITE-GUARD suppresses SMB after a recorded cannula change; the wizard shows
-  a fresh-site advisory and supports back-dated site events.
-- **Compose UI:** redesigned home, dosing, loop, history, statistics, profile, configuration and pump
-  status screens. Dosing still uses the existing constraint and confirmation paths.
-- **Slim build:** removes unused modules and assets for this installation and supports Android AOT
-  compilation. This is a packaging choice, not a safety qualification.
-- **Private-network Nightscout:** permits explicitly configured cleartext hosts for VPN/mesh use. Never
-  expose a plain-HTTP Nightscout endpoint to the public internet or an untrusted LAN.
+Most of the app is still AndroidAPS. For concepts, setup guides and everything this fork has not changed,
+see the [AndroidAPS documentation](https://wiki.aaps.app/en/latest/) and the
+[upstream repository](https://github.com/nightscout/AndroidAPS). The upstream documentation describes
+upstream behavior, so it may not match the changes listed above.
 
 ## Build
 
