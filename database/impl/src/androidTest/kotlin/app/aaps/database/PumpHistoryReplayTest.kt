@@ -97,8 +97,28 @@ class PumpHistoryReplayTest {
     }
 
     @Test
+    fun replayDoesNotExtendTemporaryBasalReplacedByNewerHistory() {
+        val replacementTime = start + 10 * 60_000L
+        syncBasal()
+        repository.runTransactionForResult(
+            SyncPumpTemporaryBasalTransaction(basal(pumpId = 803, rate = 0.6).copy(timestamp = replacementTime), null)
+        ).blockingGet()
+        syncBasal()
+        reopenDatabase()
+
+        val records = repository.getTemporaryBasalsActiveBetweenTimeAndTime(start, start + duration - 1).blockingGet()
+        assertThat(records).hasSize(2)
+        val replaced = records.single { it.interfaceIDs.pumpId == 802L }
+        assertThat(replaced.duration).isEqualTo(10 * 60_000L)
+        assertThat(repository.getTemporaryBasalActiveAt(replacementTime - 1).blockingGet()!!.interfaceIDs.pumpId).isEqualTo(802L)
+        assertThat(repository.getTemporaryBasalActiveAt(replacementTime).blockingGet()!!.interfaceIDs.pumpId).isEqualTo(803L)
+    }
+
+    @Test
     fun provisionalTemporaryBasalReconcilesWithConfirmedHistory() {
-        repository.runTransactionForResult(InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 1.0, duration = 1_200_000))).blockingGet()
+        repository.runTransactionForResult(
+            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 1.0, duration = 1_200_000))
+        ).blockingGet()
         repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
         assertSingleBasal()
         syncBasal()
