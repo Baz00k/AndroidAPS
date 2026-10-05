@@ -1,4 +1,5 @@
 import org.gradle.testing.jacoco.plugins.JacocoPluginExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 buildscript {
@@ -22,7 +23,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.compose.compiler) apply false
     id(libs.plugins.android.test.get().pluginId) apply false
-    id(libs.plugins.kotlin.android.get().pluginId) apply false
+    alias(libs.plugins.legacy.kapt) apply false
 }
 
 allprojects {
@@ -35,8 +36,7 @@ allprojects {
         compilerOptions {
             freeCompilerArgs.add("-opt-in=kotlin.RequiresOptIn")
             freeCompilerArgs.add("-opt-in=kotlin.ExperimentalUnsignedTypes")
-            freeCompilerArgs.add("-Xannotation-default-target=param-property")
-            freeCompilerArgs.add("-Xjvm-default=all")
+            jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY)
             jvmTarget.set(Versions.jvmTarget)
         }
     }
@@ -52,8 +52,7 @@ allprojects {
     apply(plugin = "jacoco")
 }
 
-// AGP 8.13 resets the Gradle JaCoCo version while configuring its transforms.
-// Align agents and reports after that, matching the Android coverage DSL.
+// Align Gradle's coverage agents and reports with the Android coverage DSL after AGP configuration.
 gradle.projectsEvaluated {
     allprojects {
         extensions.configure<JacocoPluginExtension> {

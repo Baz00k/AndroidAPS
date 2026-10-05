@@ -1,6 +1,5 @@
 plugins {
     id("com.android.library")
-    id("kotlin-android")
 }
 
 android {
@@ -10,16 +9,18 @@ android {
     }
     defaultConfig {
         minSdk = Versions.minSdk
-        @Suppress("DEPRECATION")
-        targetSdk = Versions.targetSdk
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    testOptions {
+        // Library targetSdk moved here in AGP 9; keep the standalone test APK's target unchanged.
+        targetSdk = Versions.targetSdk
     }
 
     buildTypes {
         named("release") {
             isMinifyEnabled = false
-            setProguardFiles(listOf(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"))
+            setProguardFiles(listOf(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"))
         }
         named("debug") {
             enableUnitTestCoverage = true
@@ -38,11 +39,8 @@ android {
         targetCompatibility = Versions.javaVersion
     }
 
-    kotlinOptions {
-        freeCompilerArgs = freeCompilerArgs + "-opt-in=kotlin.time.ExperimentalTime"
-    }
-
     lint {
+        targetSdk = Versions.targetSdk
         checkReleaseBuilds = false
         disable += "MissingTranslation"
         disable += "ExtraTranslation"
@@ -69,5 +67,11 @@ android {
         // disable for modules here
         buildConfig = false
         viewBinding = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
     }
 }
