@@ -31,7 +31,7 @@ Development is fast-moving, with no legacy-support commitment. Prefer removing o
 ## Verification
 
 - Test quality matters more than test count or coverage percentage. Choose coverage by behavioral risk, with particular attention to dosing boundaries and failure handling.
-- Tests should catch plausible regressions using independently justified expectations. Avoid tautological assertions, implementation-mirroring tests, redundant cases, and tests of external libraries themselves; test our integration behavior where it matters.
+- Tests should catch plausible regressions using independently justified expectations. Avoid tautological assertions, implementation-mirroring tests, redundant cases, and tests of external libraries themselves; test our integration behavior where it matters. Tests should be implementation agnostic.
 - A bug fix includes a regression test when the failure can be reproduced in a test; a new test must fail without the change it covers.
 - Run the checks relevant to the change. For therapy logic, include applicable boundary, invalid-input, and failure-path cases; for low-impact changes, keep verification proportionate.
 - Use simulators and Android emulators to exercise changed behavior autonomously. Use real devices connected through ADB for hardware-dependent behavior, such as pumps, BLE, or sensors; no particular personal device is a reference or baseline. For UI changes, interact with the affected flow and inspect the rendered result; use logs to investigate failures.
