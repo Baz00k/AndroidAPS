@@ -66,8 +66,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          # Adoptium's SemVer alias for Temurin 21.0.12.1+1, also used by mise.
-          java-version: '21.0.12+101.0.LTS'
+          java-version-file: .tool-versions
           cache: gradle
       - name: Install native build prerequisites
         run: >-
