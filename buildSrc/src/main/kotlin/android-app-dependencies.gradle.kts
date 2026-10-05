@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
 }
 
 android {
@@ -19,12 +18,13 @@ android {
 
     buildFeatures {
         viewBinding = true
+        resValues = true
     }
 
     buildTypes {
         named("release") {
             isMinifyEnabled = false
-            setProguardFiles(listOf(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"))
+            setProguardFiles(listOf(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"))
         }
         named("debug") {
             enableUnitTestCoverage = true
@@ -55,13 +55,15 @@ android {
         targetCompatibility = Versions.javaVersion
     }
 
-    kotlinOptions {
-        freeCompilerArgs = freeCompilerArgs + "-opt-in=kotlin.time.ExperimentalTime"
-    }
-
     lint {
         checkReleaseBuilds = false
         disable += "MissingTranslation"
         disable += "ExtraTranslation"
+    }
+}
+
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
     }
 }

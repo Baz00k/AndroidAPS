@@ -5,7 +5,6 @@ import java.util.Date
 plugins {
     alias(libs.plugins.ksp)
     id("com.android.application")
-    id("kotlin-android")
     id("android-app-dependencies")
     id("test-app-dependencies")
     id("jacoco-app-dependencies")
@@ -265,4 +264,3 @@ if (!gitAvailable()) {
 if (isMaster() && !allCommitted()) {
     throw GradleException("There are uncommitted changes. Clone sources again as described in wiki and do not allow gradle update")
 }
-

@@ -3,13 +3,13 @@ import org.gradle.api.tasks.testing.logging.TestLogEvent
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
 }
 
 dependencies {
     testImplementation(kotlin("test"))
     testImplementationFromCatalog("org-junit-jupiter")
     testImplementationFromCatalog("org-junit-jupiter-api")
+    testRuntimeOnlyFromCatalog("org-junit-platform-launcher")
     testImplementationFromCatalog("org-mockito-junit-jupiter")
     testImplementationFromCatalog("org-mockito-kotlin")
     testImplementationFromCatalog("joda-time")
