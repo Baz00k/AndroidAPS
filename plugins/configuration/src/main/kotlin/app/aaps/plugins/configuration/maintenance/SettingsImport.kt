@@ -47,28 +47,28 @@ class SettingsImport @Inject constructor(
         }
         prefs.metadata = fileList.checkMetadata(prefs.metadata)
         val values = mutableMapOf<String, Any>()
-        var invalidBoolean: String? = null
+        val invalidBooleans = mutableListOf<String>()
         for ((key, value) in prefs.values) {
             val registered = preferences.exportableKey(key)
             when {
                 registered == null -> logger.warn(LTag.CORE, "Skipping unknown or non-exportable settings key: $key")
                 registered is BooleanNonPreferenceKey || registered is BooleanComposedNonPreferenceKey -> {
                     val boolean = value.toBooleanStrictOrNull()
-                    if (boolean == null) invalidBoolean = key else values[key] = boolean
+                    if (boolean == null) invalidBooleans.add(key) else values[key] = boolean
                 }
                 else -> values[key] = value
             }
         }
         val error = when {
-            invalidBoolean != null -> rh.gs(R.string.preferences_import_invalid_boolean, invalidBoolean)
+            invalidBooleans.isNotEmpty() -> rh.gs(R.string.preferences_import_invalid_boolean, invalidBooleans.joinToString(", "))
             values.isEmpty() && prefs.metadata.values.none { it.status == PrefsStatusImpl.ERROR } -> rh.gs(R.string.preferences_import_no_settings)
             else -> null
         }
         if (error != null) {
-            prefs.metadata = prefs.metadata + (PrefsMetadataKeyImpl.FILE_FORMAT to PrefMetadata(error, PrefsStatusImpl.ERROR))
+            prefs.metadata = prefs.metadata + (PrefsMetadataKeyImpl.SETTINGS to PrefMetadata(error, PrefsStatusImpl.ERROR))
         }
         val importOk = values.isNotEmpty() && prefs.metadata.values.none { it.status == PrefsStatusImpl.ERROR }
-        val importPossible = values.isNotEmpty() && invalidBoolean == null && (importOk || config.isEngineeringMode())
+        val importPossible = values.isNotEmpty() && invalidBooleans.isEmpty() && (importOk || config.isEngineeringMode())
         return Check(prefs, importOk, importPossible, values.toMap())
     }
 

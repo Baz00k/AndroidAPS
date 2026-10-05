@@ -249,6 +249,6 @@ class PreferencesImpl @Inject constructor(
         val keys = prefsList.flatMap { it.enumConstants!!.asIterable() }
         val exact = keys.firstOrNull { it.key == key }
         if (exact != null) return exact.takeIf { it.exportable }
-        return keys.filter { it is ComposedKey && key.startsWith(it.key) && it.exportable }.maxByOrNull { it.key.length }
+        return keys.filter { it is ComposedKey && key.startsWith(it.key) }.maxByOrNull { it.key.length }?.takeIf { it.exportable }
     }
 }

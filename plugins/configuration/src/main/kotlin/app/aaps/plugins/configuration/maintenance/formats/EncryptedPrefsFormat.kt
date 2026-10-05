@@ -103,7 +103,7 @@ class EncryptedPrefsFormat @Inject constructor(
                     // Password contains valid data string so assuming this is a valid encrypted password
                     val decryptionResult = secureEncrypt.decrypt(masterPassword!!)
                     if (decryptionResult.isEmpty())
-                        throw PrefIOError(rh.gs(R.string.preferences_export_password_unavailable))
+                        throw PrefIOError("Cannot decrypt cached export password")
                     masterPasswordUnencrypted = decryptionResult
                 }
 
@@ -281,7 +281,8 @@ class EncryptedPrefsFormat @Inject constructor(
                 metadata[PrefsMetadataKeyImpl.FILE_FORMAT] = PrefMetadata(fileFormat, PrefsStatusImpl.OK)
                 for (key in meta.keys()) {
                     val metaKey = PrefsMetadataKeyImpl.fromKey(key)
-                    if (metaKey != null) {
+                    // Import validation and encryption status are computed locally, never trusted from a file.
+                    if (metaKey != null && metaKey != PrefsMetadataKeyImpl.SETTINGS && metaKey != PrefsMetadataKeyImpl.ENCRYPTION) {
                         metadata[metaKey] = PrefMetadata(meta.getString(key), PrefsStatusImpl.OK)
                     }
                 }

@@ -2,6 +2,9 @@ package app.aaps.plugins.configuration.maintenance
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.datastore.preferences.core.PreferencesSerializer
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.documentfile.provider.DocumentFile
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -13,6 +16,7 @@ import app.aaps.core.interfaces.maintenance.FileListProvider
 import app.aaps.core.interfaces.maintenance.PrefMetadata
 import app.aaps.core.interfaces.maintenance.PrefsMetadataKey
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanComposedKey
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
@@ -25,6 +29,7 @@ import app.aaps.core.keys.interfaces.BooleanComposedNonPreferenceKey
 import app.aaps.core.objects.crypto.CryptoUtil
 import app.aaps.implementation.profile.ProfileUtilImpl
 import app.aaps.implementation.protection.SecureEncryptImpl
+import app.aaps.implementation.protection.ExportPasswordDataStoreImpl
 import app.aaps.implementation.sharedPreferences.PreferencesImpl
 import app.aaps.implementation.storage.FileStorage
 import app.aaps.implementation.utils.DecimalFormatterImpl
@@ -36,6 +41,9 @@ import app.aaps.shared.impl.sharedPreferences.SPImpl
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import dagger.Lazy
+import kotlinx.coroutines.runBlocking
+import okio.buffer
+import okio.source
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
@@ -59,6 +67,7 @@ class SettingsImportTest {
     private lateinit var preferences: PreferencesImpl
     private lateinit var config: Config
     private lateinit var format: EncryptedPrefsFormat
+    private lateinit var crypto: CryptoUtil
     private lateinit var secureEncrypt: SecureEncryptImpl
     private lateinit var settingsImport: SettingsImport
     private lateinit var profileUtil: ProfileUtilImpl
@@ -80,6 +89,15 @@ class SettingsImportTest {
         override val exportable = false
     }
 
+    private enum class PrivateWidgetKey : BooleanComposedNonPreferenceKey {
+        Token;
+
+        override val key = "appwidget_token_"
+        override val format = "%d"
+        override val defaultValue = false
+        override val exportable = false
+    }
+
     @Before
     fun setUp() {
         stored = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
@@ -92,7 +110,7 @@ class SettingsImportTest {
         preferences.registerPreferences(PrivateKey::class.java)
         profileUtil = ProfileUtilImpl(preferences, DecimalFormatterImpl(rh))
         val logger = mock<AAPSLogger>()
-        val crypto = CryptoUtil(logger)
+        crypto = CryptoUtil(logger)
         format = EncryptedPrefsFormat(rh, crypto, FileStorage(), context)
         secureEncrypt = SecureEncryptImpl(logger, crypto)
         format.secureEncrypt = secureEncrypt
@@ -180,7 +198,16 @@ class SettingsImportTest {
         val content = JSONObject(fixture("settings-mgdl.json"))
         val encrypted = content.getString("content")
         content.put("content", encrypted.replaceRange(20, 21, if (encrypted[20] == 'A') "B" else "A"))
-        assertRejected(content.toString())
+        // The public file hash remains valid: rejection must come from encrypted-content authentication.
+        content.getJSONObject("security").put("file_hash", "--to-be-calculated--")
+        val unsigned = content.toString()
+        val hash = crypto.hmac256(unsigned, "if you remove/change this, please make sure you know the consequences!")
+        val tampered = unsigned.replace("--to-be-calculated--", hash)
+        val loaded = format.loadPreferences(tampered, password)
+        assertThat(loaded.values).isEmpty()
+        assertThat(loaded.metadata[PrefsMetadataKeyImpl.ENCRYPTION]?.info)
+            .doesNotContain(context.getString(app.aaps.plugins.configuration.R.string.prefdecrypt_issue_modified))
+        assertRejected(tampered)
     }
 
     @Test
@@ -256,6 +283,72 @@ class SettingsImportTest {
             encrypt(mapOf(StringKey.GeneralPatientName.key to "new backup"), wrappedPassword)
         }
         assertThat(file.readText()).isEqualTo(existing)
+    }
+
+    @Test
+    fun lostCachedPasswordKeyClearsCacheAndAllowsPasswordRenewal() {
+        preferences.put(BooleanKey.MaintenanceEnableExportSettingsAutomation, true)
+        val cache = ExportPasswordDataStoreImpl(mock(), preferences, config).apply {
+            dateUtil = mock<DateUtil>().also { whenever(it.now()).thenReturn(1_800_000_000_000L) }
+            secureEncrypt = this@SettingsImportTest.secureEncrypt
+        }
+        val alias = ExportPasswordDataStoreImpl.KEYSTORE_ALIAS
+        val keyName = ExportPasswordDataStoreImpl.PASSWORD_PREFERENCE_NAME
+        try {
+            val wrapped = cache.putPasswordToDataStore(context, password)
+            assertThat(cache.getPasswordFromDataStore(context)).isEqualTo(Triple(wrapped, false, false))
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
+
+            assertThat(cache.getPasswordFromDataStore(context)).isEqualTo(Triple("", true, true))
+            val persisted = runBlocking {
+                context.preferencesDataStoreFile(ExportPasswordDataStoreImpl.DATASTORE_NAME).source().buffer().use {
+                    PreferencesSerializer.readFrom(it)
+                }
+            }
+            assertThat(persisted[stringPreferencesKey("$keyName.key")]).isEmpty()
+            assertThat(persisted[stringPreferencesKey("$keyName.ts")]).isEqualTo("0")
+
+            val renewed = cache.putPasswordToDataStore(context, password)
+            assertThat(cache.getPasswordFromDataStore(context)).isEqualTo(Triple(renewed, false, false))
+            assertThat(secureEncrypt.decrypt(renewed)).isEqualTo(password)
+        } finally {
+            cache.clearPasswordDataStore(context)
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
+        }
+    }
+
+    @Test
+    fun nonExportableNestedPrefixCannotFallBackToAnExportableParent() {
+        preferences.registerPreferences(PrivateWidgetKey::class.java)
+        val key = PrivateWidgetKey.Token.composeKey(7)
+        preferences.put(PrivateWidgetKey.Token, 7, value = true)
+        assertThat(settingsImport.exportValues()).doesNotContainKey(key)
+        assertRejected(encrypt(mapOf(key to "true")))
+    }
+
+    @Test
+    fun invalidBooleanSummaryListsEveryKeyAndPreservesTheFormatRow() {
+        val content = encrypt(mapOf(
+            BooleanKey.GeneralSimpleMode.key to "invalid",
+            BooleanComposedKey.Log.composeKey("CORE") to "invalid"
+        ))
+        val checked = settingsImport.check(content, password)
+        assertThat(checked.prefs.metadata[PrefsMetadataKeyImpl.FILE_FORMAT]?.status).isEqualTo(PrefsStatusImpl.OK)
+        val error = checked.prefs.metadata[PrefsMetadataKeyImpl.SETTINGS]
+        assertThat(error?.status).isEqualTo(PrefsStatusImpl.ERROR)
+        assertThat(error?.value).contains(BooleanKey.GeneralSimpleMode.key)
+        assertThat(error?.value).contains(BooleanComposedKey.Log.composeKey("CORE"))
+        assertThat(checked.importPossible).isFalse()
+    }
+
+    @Test
+    fun fileMetadataCannotSupplyLocallyComputedValidationRows() {
+        val content = JSONObject(fixture("settings-mgdl.json"))
+        content.getJSONObject("metadata").put("settings", "File claims settings are valid").put("encryption", "File claims encryption is valid")
+
+        val metadata = format.loadMetadata(content.toString())
+        assertThat(metadata).doesNotContainKey(PrefsMetadataKeyImpl.SETTINGS)
+        assertThat(metadata).doesNotContainKey(PrefsMetadataKeyImpl.ENCRYPTION)
     }
 
     @Test

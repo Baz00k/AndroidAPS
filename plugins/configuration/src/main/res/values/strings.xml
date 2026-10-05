@@ -97,9 +97,9 @@
     <string name="preferences_export_canceled">Export canceled! Preferences were NOT exported!</string>
     <string name="preferences_import_canceled">Import canceled! Preferences were NOT imported!</string>
     <string name="preferences_import_replaces_settings">Import replaces your current settings. Settings missing from the file, including safety limits, reset to defaults. Unknown settings are skipped.</string>
-    <string name="preferences_import_invalid_boolean">Invalid Boolean value for setting: %1$s</string>
+    <string name="preferences_import_invalid_boolean">Invalid Boolean values for settings: %1$s</string>
+    <string name="metadata_label_settings">Settings</string>
     <string name="preferences_import_no_settings">The file contains no settings recognized by this build.</string>
-    <string name="preferences_export_password_unavailable">Cannot decrypt the cached export password. Enter your master password again before exporting.</string>
     <string name="preferences_import_impossible">Cannot import preferences!</string>
     <string name="check_preferences_details_btn">Explain import issues…</string>
     <string name="check_preferences_details_title">Import issues details</string>

@@ -151,6 +151,11 @@ class ExportPasswordDataStoreImpl @Inject constructor(
         val passwordData = this.retrievePassword(context)
         with(passwordData) {
             if (password.isNotEmpty()) {  // And not expired
+                if (secureEncrypt.decrypt(password).isEmpty()) {
+                    // A restored cache can outlive its Keystore key. Reuse the expired-password recovery flow.
+                    clearPassword(context)
+                    return Triple("", true, true)
+                }
                 log.debug(LTag.CORE, "$MODULE: getPasswordFromDataStore")
                 return Triple(password, isExpired, isAboutToExpire)
             }
