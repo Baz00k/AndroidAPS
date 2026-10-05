@@ -1,3 +1,4 @@
+import org.gradle.testing.jacoco.plugins.JacocoPluginExtension
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 buildscript {
@@ -49,6 +50,16 @@ allprojects {
 
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
     apply(plugin = "jacoco")
+}
+
+// AGP 8.13 resets the Gradle JaCoCo version while configuring its transforms.
+// Align agents and reports after that, matching the Android coverage DSL.
+gradle.projectsEvaluated {
+    allprojects {
+        extensions.configure<JacocoPluginExtension> {
+            toolVersion = Versions.jacoco
+        }
+    }
 }
 
 apply(from = "jacoco_aggregation.gradle.kts")
