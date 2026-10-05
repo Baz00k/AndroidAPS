@@ -12,7 +12,6 @@ import org.mockito.kotlin.mock
 import org.slf4j.LoggerFactory
 
 class AAPSLoggerProductionTest {
-
     @Test
     fun `production adapter retains error details through the Android logging provider`() {
         val context = LoggerFactory.getILoggerFactory() as LoggerContext
@@ -20,14 +19,15 @@ class AAPSLoggerProductionTest {
         val originalLevel = logger.level
         val originalAdditivity = logger.isAdditive
         val events = mutableListOf<ILoggingEvent>()
-        val appender = object : AppenderBase<ILoggingEvent>() {
-            override fun append(event: ILoggingEvent) {
-                events += event
+        val appender =
+            object : AppenderBase<ILoggingEvent>() {
+                override fun append(event: ILoggingEvent) {
+                    events += event
+                }
+            }.apply {
+                this.context = context
+                start()
             }
-        }.apply {
-            this.context = context
-            start()
-        }
         logger.level = Level.ERROR
         logger.isAdditive = false
         logger.addAppender(appender)
