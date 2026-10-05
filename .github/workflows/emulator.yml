@@ -1,0 +1,99 @@
+name: Emulator tests
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      api-level:
+        description: Android emulator API level
+        type: string
+        default: '35'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emulator-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GRADLE_OPTS: >-
+    -Dorg.gradle.jvmargs="-Xmx3g -XX:+UseParallelGC -Xss4m"
+    -Dkotlin.daemon.jvm.options=-Xmx1g
+    -Dorg.gradle.workers.max=2
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run-tests: ${{ steps.changes.outputs.run-tests }}
+    steps:
+      - name: Check for changes since the previous scheduled run
+        id: changes
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('run-tests', true);
+              return;
+            }
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo,
+              workflow_id: 'emulator.yml',
+              branch: 'main',
+              event: 'schedule',
+              per_page: 2
+            });
+            // Include skipped/failed runs; manual runs must not advance this checkpoint.
+            const previous = data.workflow_runs.find(run => run.run_number < context.runNumber);
+            const changed = !previous || previous.head_sha !== context.sha;
+            core.info(changed ? 'Main changed or no previous scheduled run exists.' : 'Main unchanged; skipping emulator tests.');
+            core.setOutput('run-tests', changed);
+
+  emulator:
+    needs: changes
+    if: ${{ needs.changes.outputs.run-tests == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install native build prerequisites
+        run: >-
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Isolated database instrumentation tests and startup benchmark
+        uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: ${{ inputs.api-level || '35' }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            adb shell getprop ro.build.fingerprint
+            ./gradlew :database:impl:connectedFullDebugAndroidTest :benchmark:connectedFullLoopAndroidTest -PaapsTargetAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --no-parallel --continue --console=plain
+      - name: Upload emulator test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: emulator-test-reports-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            **/build/outputs/androidTest-results/**
+            **/build/reports/androidTests/**
+            benchmark/build/outputs/connected_android_test_additional_output/**
