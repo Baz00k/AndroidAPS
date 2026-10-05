@@ -95,7 +95,8 @@ class IobCobCalculatorPlugin @Inject constructor(
     private var iobTable = LongSparseArray<IobTotal>() // oldest at index 0
     private var basalDataTable = LongSparseArray<BasalData>() // oldest at index 0
 
-    override var ads: AutosensDataStore = AutosensDataStoreObject()
+    // Workers publish a replacement store; readers on other threads must see the initialized result.
+    @Volatile override var ads: AutosensDataStore = AutosensDataStoreObject()
 
     private val dataLock = Any()
     private var thread: Thread? = null
