@@ -36,17 +36,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.AbsorptionCard
 import app.aaps.core.compose.components.AmountStepper
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.aapsSwitchColors
@@ -92,6 +95,7 @@ fun WizardScreen(
     // Inputs survive recreation; the review step does not, so a restored screen always needs a fresh review.
     var inputs by rememberSaveable(stateSaver = WizardInputs.Saver) { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
     var reviewing by remember { mutableStateOf(false) }
+    var mealDetailsExpanded by rememberSaveable { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -135,7 +139,7 @@ fun WizardScreen(
             label = "calculator-step"
         ) { onReview ->
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-                if (!onReview) InputCards(inputs, result, carbControls, colors, ::onInputs)
+                if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded, { mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs)
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }
         }
@@ -148,18 +152,12 @@ private fun InputCards(
     result: WizardResult,
     carbControls: WizardCarbControls,
     colors: AapsColors,
+    mealDetailsExpanded: Boolean,
+    onToggleMealDetails: () -> Unit,
     onInputs: (WizardInputs) -> Unit
 ) {
     GlucoseCard(inputs, result, colors, onInputs)
-    CarbsCard(inputs, carbControls, onInputs)
-    if (inputs.carbs > 0) {
-        if (result.advisorAvailable) AdvisorCard(inputs, onInputs)
-        // Eating later means the carbs are not logged now: when and how they absorb is decided then.
-        if (!inputs.eatLater) {
-            EatingCard(inputs, onInputs)
-            AbsorptionCard(inputs.carbDurationHours, { onInputs(inputs.copy(carbDurationHours = it)) }, MAX_ABSORPTION_H)
-        }
-    }
+    CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs)
     AapsCard {
         Column {
             SectionLabel("INCLUDED", colors, Modifier.padding(bottom = 4.dp))
@@ -291,7 +289,14 @@ private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: Aaps
 }
 
 @Composable
-private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, onInputs: (WizardInputs) -> Unit) {
+private fun CarbsCard(
+    inputs: WizardInputs,
+    carbControls: WizardCarbControls,
+    advisorAvailable: Boolean,
+    detailsExpanded: Boolean,
+    onToggleDetails: () -> Unit,
+    onInputs: (WizardInputs) -> Unit
+) {
     EntryCard("Carbs") {
         AmountStepper(
             value = inputs.carbs.toDouble(),
@@ -307,40 +312,83 @@ private fun CarbsCard(inputs: WizardInputs, carbControls: WizardCarbControls, on
                 ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
             }
         }
+        // Only a collapsed header advertises the advisor; once open, the advisor's own row is in view.
+        val advisorHint = advisorAvailable && !inputs.eatLater && !detailsExpanded
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(AapsTheme.shape.cardSmall)
+                .clickable(role = Role.Button, onClickLabel = if (detailsExpanded) "Hide meal details" else "Edit meal details", onClick = onToggleDetails)
+                .semantics {
+                    stateDescription = when {
+                        detailsExpanded -> "Expanded"
+                        advisorHint     -> "Collapsed, bolus advisor available"
+                        else            -> "Collapsed"
+                    }
+                }
+                .heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Meal details", style = AapsTheme.type.listTitle, color = AapsTheme.colors.textOnSurfaceStrong)
+                val summary = if (inputs.eatLater) "Carbs not logged · eat once glucose falls" else listOfNotNull(
+                    "Carbs ${EntryTime.relative(inputs.carbTime).replaceFirstChar { it.lowercase() }}",
+                    if (inputs.carbDurationHours == 0) "Normal absorption" else "Absorption ${inputs.carbDurationHours} h",
+                    "Eat reminder".takeIf { inputs.remindToEat && inputs.carbTime > 0 }
+                ).joinToString(" · ")
+                Text(summary,
+                     style = if (inputs.eatLater) AapsTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else AapsTheme.type.caption,
+                     color = if (inputs.eatLater) AapsTheme.colors.accent else AapsTheme.colors.textSecondary,
+                     maxLines = if (inputs.eatLater) 2 else 1, overflow = TextOverflow.Ellipsis)
+            }
+            // A horizontal marker cannot grow the sheet if the advisor becomes available on a carb tap.
+            if (advisorHint) {
+                Text("Advisor", style = AapsTheme.type.label, color = AapsTheme.colors.accent, modifier = Modifier.padding(horizontal = 8.dp))
+            }
+            Icon(
+                AapsIcons.ExpandLess,
+                contentDescription = null, tint = AapsTheme.colors.textSecondary,
+                modifier = Modifier.size(24.dp).rotate(if (detailsExpanded) 0f else 180f)
+            )
+        }
+        // The accordion body shares the carb card's surface; only its header toggles expansion.
+        // Groups are separated by space alone: a small label above each control, a larger gap between groups.
+        if (detailsExpanded) Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Eating later means the carbs are not logged now: timing and absorption are decided then.
+            if (!inputs.eatLater) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    MealDetailLabel("When")
+                    TimeStepper(
+                        offsetMin = inputs.carbTime,
+                        onOffset = { onInputs(inputs.copy(carbTime = it)) },
+                        minOffsetMin = -60, maxOffsetMin = 60
+                    )
+                    if (inputs.carbTime > 0)
+                        ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    MealDetailLabel("Absorption")
+                    AmountStepper(
+                        value = inputs.carbDurationHours.toDouble(), onValue = { onInputs(inputs.copy(carbDurationHours = it.toInt())) },
+                        step = 1.0, min = 0.0, max = MAX_ABSORPTION_H.toDouble(), decimals = 0,
+                        unit = "h", name = "of carb absorption", zeroLabel = "Normal"
+                    )
+                }
+            }
+            // Put data-driven advice last so it does not push the timing controls when it refreshes.
+            if (advisorAvailable) {
+                ToggleRow(
+                    "Eat once glucose falls", inputs.eatLater, { onInputs(inputs.copy(eatLater = it, carbTime = 0)) },
+                    sub = "Glucose is high. Bolus now and log the carbs when the reminder comes."
+                )
+            }
+        }
     }
 }
 
-/**
- * Bolus advisor: with glucose high, bolus now and eat once it has come down. The carbs are not logged
- * now; a reminder fires when glucose is falling, and the Calculator is run again for the meal (active
- * insulin then accounts for this bolus).
- */
 @Composable
-private fun AdvisorCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
-    EntryCard("Bolus advisor") {
-        ToggleRow(
-            "Eat once glucose falls", inputs.eatLater, { onInputs(inputs.copy(eatLater = it, carbTime = 0)) },
-            sub = "Glucose is high. Bolus now and log the carbs when the reminder comes."
-        )
-    }
-}
-
-/**
- * When the carbs are eaten. The bolus always goes in now; this tells the loop when the carbs land
- * (a pre-bolus, or carbs already eaten).
- */
-@Composable
-private fun EatingCard(inputs: WizardInputs, onInputs: (WizardInputs) -> Unit) {
-    EntryCard("When") {
-        TimeStepper(
-            offsetMin = inputs.carbTime,
-            onOffset = { onInputs(inputs.copy(carbTime = it)) },
-            minOffsetMin = -60, maxOffsetMin = 60
-        )
-        if (inputs.carbTime > 0)
-            ToggleRow("Remind me to eat", inputs.remindToEat, { onInputs(inputs.copy(remindToEat = it)) })
-    }
-}
+private fun MealDetailLabel(text: String) =
+    Text(text, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
 
 /**
  * Review: exactly what the hold (or the carbs button) will commit. The numbers stay live; when they
