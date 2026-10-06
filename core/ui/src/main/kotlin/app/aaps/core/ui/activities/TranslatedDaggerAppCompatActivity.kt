@@ -37,6 +37,11 @@ open class TranslatedDaggerAppCompatActivity : DaggerAppCompatActivity() {
         menuProvider?.let { addMenuProvider(it) }
     }
 
+    override fun onPostCreate(savedInstanceState: Bundle?) {
+        super.onPostCreate(savedInstanceState)
+        fitContentToSystemBars()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         menuProvider?.let { removeMenuProvider(it) }
