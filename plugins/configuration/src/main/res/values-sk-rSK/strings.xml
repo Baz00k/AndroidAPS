@@ -20,7 +20,6 @@
     <string name="need_system_window_permission">Aplikácia vyžaduje pre oznámenia systémové oprávnenie</string>
     <string name="need_location_permission">Aplikácia vyžaduje oprávnenie polohy, pre vyhľadávanie BT a identifikáciu WiFi</string>
     <string name="need_background_location_permission">Aplikácia potrebuje povolenie na zisťovanie polohy na pozadí pre automatizáciu</string>
-    <string name="need_storage_permission">Aby bolo možné nahrávať logy a exportovať nastavenia, je nutné pre aplikáciu povoliť oprávnenie prístupu k úložisku</string>
     <string name="askforpermission">Vyžiadať si povolenie</string>
     <string name="need_whitelisting">%1$s potrebuje vypnúť optimalizáciu batérie pre optimálny výkon</string>
     <string name="storedsettingsfound">Nájdené uložené nastavenia</string>

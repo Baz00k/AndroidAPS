@@ -13,9 +13,6 @@ plugins {
 
 android {
     namespace = "app.aaps.pump.ypsopump"
-    defaultConfig {
-        minSdk = 31
-    }
     buildFeatures {
         compose = true
     }

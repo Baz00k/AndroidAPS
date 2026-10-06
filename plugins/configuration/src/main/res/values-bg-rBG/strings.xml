@@ -19,7 +19,6 @@
     <string name="permission">Разрешение</string>
     <string name="need_system_window_permission">ААПС изисква разрешение, за да може да Ви уведомява</string>
     <string name="need_location_permission">Приложението се нуждае от достъп до местоположението Ви, за BT сканиране и WiFi идентификация</string>
-    <string name="need_storage_permission">Приложението се нуждае от разрешение да съхранява данни, за да може да съхранява лог файлове и експортира настройки</string>
     <string name="askforpermission">Питане за разрешение</string>
     <string name="need_whitelisting">%1$s се нуждае от одобрение на оптимизацията на батерията за правилна работа</string>
     <string name="storedsettingsfound">Открити са предишни настройки</string>

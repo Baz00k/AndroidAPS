@@ -100,8 +100,8 @@ class MaintenanceFragment : DaggerFragment() {
                 app.aaps.core.compose.theme.AapsTheme {
                     app.aaps.plugins.configuration.maintenance.compose.MaintenanceScreen(
                         state = maintState.value,
-                        onExport = { importExportPrefs.verifyStoragePermissions(this@MaintenanceFragment) { importExportPrefs.exportSharedPreferences(this@MaintenanceFragment) } },
-                        onImport = { importExportPrefs.verifyStoragePermissions(this@MaintenanceFragment) { importExportPrefs.importSharedPreferences(requireActivity() as FragmentActivity) } },
+                        onExport = { importExportPrefs.exportSharedPreferences(this@MaintenanceFragment) },
+                        onImport = { importExportPrefs.importSharedPreferences(requireActivity() as FragmentActivity) },
                         onExportLogs = { maintenancePlugin.sendLogs() },
                         onMore = { visibility = View.GONE }
                     )
@@ -199,17 +199,11 @@ class MaintenanceFragment : DaggerFragment() {
         }
         binding.navExport.setOnClickListener {
             uel.log(Action.EXPORT_SETTINGS, Sources.Maintenance)
-            // start activity for checking permissions...
-            importExportPrefs.verifyStoragePermissions(this) {
-                importExportPrefs.exportSharedPreferences(this)
-            }
+            importExportPrefs.exportSharedPreferences(this)
         }
         binding.navImport.setOnClickListener {
             uel.log(Action.IMPORT_SETTINGS, Sources.Maintenance)
-            // start activity for checking permissions...
-            importExportPrefs.verifyStoragePermissions(this) {
-                importExportPrefs.importSharedPreferences(activity as FragmentActivity)
-            }
+            importExportPrefs.importSharedPreferences(activity as FragmentActivity)
         }
         // Local directory: only used for selecting AAPS base folder
         binding.directory.setOnClickListener {

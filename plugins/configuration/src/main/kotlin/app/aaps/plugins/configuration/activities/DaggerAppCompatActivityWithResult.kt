@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
@@ -115,6 +116,12 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
                             androidPermission.notifyForLocationPermissions(this)
                             ToastUtils.errorToast(this, getString(app.aaps.core.ui.R.string.location_permission_not_granted))
                         }
+
+                    // Once the user has denied it twice the system stops showing the dialog, so the
+                    // app's notification settings are the only place left to allow alarms.
+                    Manifest.permission.POST_NOTIFICATIONS         ->
+                        if (!it.value && !ActivityCompat.shouldShowRequestPermissionRationale(this, it.key))
+                            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
                 }
             }
             updateButtons()

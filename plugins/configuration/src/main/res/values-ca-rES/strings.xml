@@ -18,7 +18,6 @@
     <string name="permission">Permís</string>
     <string name="need_system_window_permission">L\'aplicació necessita permisos a la finestra del sistema pels avisos</string>
     <string name="need_location_permission">L\'aplicació necessita permisos de localització per poder utilitzar Bluetooth i identificació WiFi</string>
-    <string name="need_storage_permission">L\'aplicació necessita permisos d\'emmagatzematge per poder desar fitxers de registres i exportar la configuració</string>
     <string name="askforpermission">Demanar permís</string>
     <string name="storedsettingsfound">Trobada configuració emmagatzemada</string>
     <string name="master_password_summary">La clau mestra es fa servir per encriptar la còpia de seguretat i per editar la seguretat a l\'aplicació. Recordeu-la o emmagatzemeu-la en un lloc segur.</string>

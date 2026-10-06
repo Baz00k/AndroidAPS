@@ -263,7 +263,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                 startActivity(Intent(this, SetupWizardActivity::class.java).setAction("info.nightscout.androidaps.MainActivity"))
             })
         }
-        androidPermission.notifyForStoragePermission(this)
+        androidPermission.notifyForNotificationPermission(this)
         androidPermission.notifyForBatteryOptimizationPermission(this)
         if (!config.AAPSCLIENT) androidPermission.notifyForLocationPermissions(this)
         if (config.PUMPDRIVERS) {
@@ -330,6 +330,8 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
     override fun onResume() {
         super.onResume()
         if (config.appInitialized) binding.splash.visibility = View.GONE
+        // Tapping Request dismisses the card, so check again on return: a denial brings it back.
+        if (config.appInitialized) androidPermission.notifyForNotificationPermission(this)
         if (!isProtectionCheckActive) {
             isProtectionCheckActive = true
             protectionCheck.queryProtection(this, ProtectionCheck.Protection.APPLICATION, UIRunnable { isProtectionCheckActive = false },

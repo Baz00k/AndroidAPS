@@ -19,7 +19,6 @@
     <string name="permission">Behörighet</string>
     <string name="need_system_window_permission">Applikationen behöver förhöjd behörighet för aviseringar</string>
     <string name="need_location_permission">Appen behöver platsåtkomst för bluetooth- och WiFi-identifiering</string>
-    <string name="need_storage_permission">Applikationen behöver lagringsbehörighet för att kunna lagra loggfiler och exportinställningar</string>
     <string name="askforpermission">Be om behörighet</string>
     <string name="need_whitelisting">%1$s behöver kunna kringgå batterisparfunktionerna för att fungera korrekt</string>
     <string name="storedsettingsfound">Tidigare sparade inställningar hittade</string>

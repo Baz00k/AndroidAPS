@@ -13,7 +13,7 @@ import app.aaps.core.compose.R
 
 /**
  * Hanken Grotesk is vendored as a single variable font (`res/font/hanken_grotesk.ttf`).
- * We derive each static weight via [FontVariation] (`wght` axis) — requires API 26+ (app minSdk is 31).
+ * We derive each static weight via [FontVariation] (`wght` axis) — requires API 26+, below every module minSdk.
  */
 @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
 private fun hanken(weight: FontWeight) =

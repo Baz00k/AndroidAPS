@@ -11,6 +11,7 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import android.widget.AdapterView
 import android.widget.AdapterView.OnItemClickListener
 import android.widget.BaseAdapter
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -65,6 +67,18 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
     val bluetoothAdapter: BluetoothAdapter? get() = (context.getSystemService(BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter
     var scanning = false
     private val devicesMap: MutableMap<String, BluetoothDevice> = kotlin.collections.HashMap()
+
+    // Apps can't switch Bluetooth on themselves, so the user is asked to. A refusal ends the screen
+    // rather than asking again on every resume.
+    private var bluetoothEnableRequested = false
+    private val enableBluetooth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            bluetoothEnableRequested = false
+        } else {
+            ToastUtils.errorToast(context, context.getString(app.aaps.core.ui.R.string.ble_not_enabled))
+            finish()
+        }
+    }
 
     private val stopScanAfterTimeoutRunnable = Runnable {
         if (scanning) {
@@ -197,7 +211,13 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
         bleSelector.onResume()
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-            if (bluetoothAdapter?.isEnabled != true) bluetoothAdapter?.enable()
+            if (bluetoothAdapter?.isEnabled != true) {
+                if (!bluetoothEnableRequested) {
+                    bluetoothEnableRequested = true
+                    enableBluetooth.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }
+                return
+            }
             prepareForScanning()
             updateCurrentlySelectedBTDevice()
         } else {

@@ -45,10 +45,10 @@ interface AndroidPermission {
     fun notifyForBatteryOptimizationPermission(activity: FragmentActivity)
 
     /**
-     * Check for storage permission. Raise Overview notification if missing.
+     * Check that notifications can be posted. Raise Overview notification if not.
      * @param activity context of caller
      */
-    fun notifyForStoragePermission(activity: FragmentActivity)
+    fun notifyForNotificationPermission(activity: FragmentActivity)
 
     /**
      * Check for location permission. Raise Overview notification if missing.

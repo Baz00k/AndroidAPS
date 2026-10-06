@@ -61,11 +61,7 @@ class WearFragment : DaggerFragment() {
         binding.resend.setOnClickListener { rxBus.send(EventData.ActionResendData("WearFragment")) }
         binding.openSettings.setOnClickListener { rxBus.send(EventMobileToWear(EventData.OpenSettings(dateUtil.now()))) }
 
-        binding.loadCustom.setOnClickListener {
-            importExportPrefs.verifyStoragePermissions(this) {
-                importExportPrefs.importCustomWatchface(this)
-            }
-        }
+        binding.loadCustom.setOnClickListener { importExportPrefs.importCustomWatchface(this) }
         binding.moreCustom.setOnClickListener {
             val intent = Intent().apply { action = Intent.ACTION_VIEW; data = Uri.parse(rh.gs(R.string.wear_link_to_more_cwf_doc)) }
             startActivity(intent)

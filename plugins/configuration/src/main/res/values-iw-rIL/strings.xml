@@ -19,7 +19,6 @@
     <string name="permission">הרשאה</string>
     <string name="need_system_window_permission">האפליקציה צריכה הרשאת מערכת של חלונות לצורך התראות</string>
     <string name="need_location_permission">דרושה הרשאת מיקום עבור סריקת בלוטות\' וזיהוי WiFi</string>
-    <string name="need_storage_permission">דרושה הרשאת אחסון כדי שתוכלו לאחסן קובצי יומן והגדרות יצוא.</string>
     <string name="askforpermission">מבקש הרשאה</string>
     <string name="need_whitelisting">%1$s צריך ביטול אופטימיזציית סוללה בשביל תפקוד תקין</string>
     <string name="storedsettingsfound">נמצאו הגדרות שמורות</string>

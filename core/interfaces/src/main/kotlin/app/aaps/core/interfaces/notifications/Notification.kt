@@ -89,7 +89,7 @@ open class Notification {
         const val MINIMAL_BASAL_VALUE_REPLACED = 29
         const val BASAL_PROFILE_NOT_ALIGNED_TO_HOURS = 30
         const val WRONG_PUMP_PASSWORD = 34
-        const val PERMISSION_STORAGE = 35
+        const val PERMISSION_NOTIFICATIONS = 35
         const val PERMISSION_LOCATION = 36
         const val PERMISSION_BATTERY = 37
         const val PERMISSION_SMS = 38
