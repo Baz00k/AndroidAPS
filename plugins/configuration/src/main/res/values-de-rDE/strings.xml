@@ -19,7 +19,6 @@
     <string name="permission">Berechtigung</string>
     <string name="need_system_window_permission">Die App benötigt die Systemberechtigung für App-Benachrichtigungen</string>
     <string name="need_location_permission">Die App benötigt die Berechtigung für den Standort, um Bluetooth und WLAN nutzen zu können</string>
-    <string name="need_storage_permission">Die App benötigt Zugriffsrechte für den Speicher um Log-Dateien zu sichern und die Einstellungen zu exportieren.</string>
     <string name="askforpermission">Nach Berechtigung fragen</string>
     <string name="need_whitelisting">%1$s benötigt eine deaktivierte Akku-Leistungsoptimierung, um korrekt arbeiten zu können.</string>
     <string name="storedsettingsfound">Gespeicherte Einstellungen gefunden</string>

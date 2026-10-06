@@ -19,7 +19,6 @@
     <string name="permission">Permissão</string>
     <string name="need_system_window_permission">Aplicação precisa de permissão de janela do sistema para notificações</string>
     <string name="need_location_permission">O aplicativo precisa de permissão de localização para o scan de Bluetooth e identificação da rede Wi-Fi</string>
-    <string name="need_storage_permission">O aplicativo precisa de permissão de armazenamento para gravar os log files e para exportar configurações</string>
     <string name="askforpermission">Pedir permissão</string>
     <string name="need_whitelisting">Necessário autorização para otimização de bateria para desempenho adequado.</string>
     <string name="storedsettingsfound">Configurações encontradas</string>

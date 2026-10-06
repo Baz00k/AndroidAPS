@@ -20,7 +20,6 @@
     <string name="need_system_window_permission">Приложению требуется разрешение системного окна для уведомлений</string>
     <string name="need_location_permission">Приложению требуется разрешение на доступ к местоположению для сканирования BT и идентификации WiFi</string>
     <string name="need_background_location_permission">Приложению необходим доступ к геолокации в любое время для автоматизаций</string>
-    <string name="need_storage_permission">Приложение требует разрешения на доступ к записи в память, чтобы хранить файлы журналов и настройки экспорта</string>
     <string name="askforpermission">Запросить права доступа</string>
     <string name="need_whitelisting">для корректной работы %1$s необходимо включить в белый список оптимизации батареи</string>
     <string name="storedsettingsfound">Найдены сохраненные параметры</string>

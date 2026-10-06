@@ -2,7 +2,6 @@ package app.aaps
 
 import android.annotation.SuppressLint
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.rule.GrantPermissionRule
 import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.model.SourceSensor
@@ -36,7 +35,6 @@ import com.google.common.truth.Truth.assertThat
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import javax.inject.Inject
 
@@ -53,9 +51,6 @@ class LoopTest @Inject constructor() {
     @Inject lateinit var repository: AppRepository
     @Inject lateinit var objectivesPlugin: ObjectivesPlugin
     @Inject lateinit var persistenceLayer: PersistenceLayer
-
-    @get:Rule
-    var runtimePermissionRule = GrantPermissionRule.grant(android.Manifest.permission.READ_EXTERNAL_STORAGE)!!
 
     private val context = ApplicationProvider.getApplicationContext<TestApplication>()
 

@@ -5,7 +5,6 @@
     <string name="permission">Dozvola</string>
     <string name="need_system_window_permission">Aplikacija treba dopuštenje sustava za obavijesti</string>
     <string name="need_location_permission">Aplikaciji je potrebna dozvola za lokaciju za BT skeniranje i WiFi identifikaciju</string>
-    <string name="need_storage_permission">Aplikaciji je potrebno dopuštenje za pohranu kako bi mogla pohranjivati datoteke dnevnika i izvoziti postavke</string>
     <string name="need_whitelisting">%1$s potrebno stavljanje na popis dopuštenih za optimizaciju baterije za pravilan rad</string>
     <string name="profile">Profil</string>
     <!-- Provider-agnostic cloud export/import strings -->

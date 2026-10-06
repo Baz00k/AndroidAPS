@@ -19,7 +19,6 @@
     <string name="permission">Άδεια</string>
     <string name="need_system_window_permission">Η εφαρμογή χρειάζεται άδεια παραθύρου συστήματος για ειδοποιήσεις</string>
     <string name="need_location_permission">Η εφαρμογή χρειάζεται άδεια τοποθεσίας για τη σάρωση Bluetooth και τη σύνδεση σε δίκτυο WiFi</string>
-    <string name="need_storage_permission">Η εφαρμογή απαιτεί πρόσβαση στη μνήμη για την αποθήκευση αρχείων καταγραφής και εξαγωγή των ρυθμίσεων</string>
     <string name="askforpermission">Ζητείστε άδεια</string>
     <string name="need_whitelisting">Το %1$s πρέπει να απενεργοποιήσει τη βελτιστοποίηση της μπαταρίας για βέλτιστη απόδοση</string>
     <string name="storedsettingsfound">Βρέθηκαν αποθηκευμένες ρυθμίσεις</string>

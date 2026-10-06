@@ -3,7 +3,6 @@ package app.aaps.plugins.main.general.overview
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.IntentFilter
-import android.os.Build
 import android.widget.TextView
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceManager
@@ -316,13 +315,9 @@ class OverviewPlugin @Inject constructor(
 
     private val dismissReceiver = DismissNotificationReceiver()
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerLocalBroadcastReceiver() {
         val filter = IntentFilter().apply { addAction(DismissNotificationReceiver.ACTION) }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-            context.registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else
-            context.registerReceiver(dismissReceiver, filter)
+        context.registerReceiver(dismissReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
     private fun unregisterLocalBroadcastReceiver() {

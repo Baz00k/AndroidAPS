@@ -6,7 +6,6 @@
     <string name="display_settings">Megjelenítési beállítások</string>
     <string name="permission">Engedély</string>
     <string name="need_location_permission">Az applikációnak helymeghatázozási engedélyre van szüksége a BT keresés és WiFi azonosítás használatához</string>
-    <string name="need_storage_permission">Az applikációnak tárhely hozzáférési engedélyre van szüksége, hogy napló fájlokat tárolhasson és hogy a beállításokat exportálni tudja</string>
     <string name="need_whitelisting">%1$s igényli a megfelelő működéshez, hogy az akkumulátor optimalizálás ne vonatkozzon rá</string>
     <string name="current_master_password">Jelenlegi mesterjelszó</string>
     <string name="status">Állapot:</string>

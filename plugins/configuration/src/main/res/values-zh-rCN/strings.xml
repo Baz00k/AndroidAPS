@@ -18,7 +18,6 @@
     <string name="permission">权限</string>
     <string name="need_system_window_permission">应用程序需要悬浮窗权限用于发送通知。</string>
     <string name="need_location_permission">应用程序需要定位权限，才能进行蓝牙扫描及WIFI识别。</string>
-    <string name="need_storage_permission">应用程序需要文件存储权限，才能存储日志文件及导出设置。</string>
     <string name="askforpermission">请求权限</string>
     <string name="storedsettingsfound">发现曾经保存过的设置</string>
     <string name="master_password_summary">主密码用于备份和安全性加密，它优先于其他功能模块的密码，请牢记它或储存在安全的地方。</string>

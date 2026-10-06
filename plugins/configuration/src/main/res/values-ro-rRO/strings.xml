@@ -20,7 +20,6 @@
     <string name="need_system_window_permission">Aplicația are nevoie de permisiune la fereastra sistemului pentru a afișa notificări</string>
     <string name="need_location_permission">Aplicația are nevoie sa acceseze locația pentru scanare Bluetooth și identificare WiFi</string>
     <string name="need_background_location_permission">Aplicația necesită permisiune de localizare în fundal pentru automatizări</string>
-    <string name="need_storage_permission">Aplicația are nevoie de permisiunea de a accesa unitatea de stocare pentru a scrie fișierele registru și pentru a exporta setările</string>
     <string name="askforpermission">Solicitați permisiunea</string>
     <string name="need_whitelisting">%1$s necesită excluderea din lista de optimizare a bateriei pentru o funcționare corespunzătoare</string>
     <string name="storedsettingsfound">Au fost găsite setări stocate</string>

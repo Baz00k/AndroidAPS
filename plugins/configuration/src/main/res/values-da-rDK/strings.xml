@@ -19,7 +19,6 @@
     <string name="permission">Tilladelse</string>
     <string name="need_system_window_permission">Applikationen mangler system vindues tilladelse til notifikationer</string>
     <string name="need_location_permission">Applikationen mangler lokations tilladelse til BT scanning og WIFI identifikation</string>
-    <string name="need_storage_permission">Applikationen mangler lagerstyrings tilladelse for at gemme logfiler og exporteringsindstillinger</string>
     <string name="askforpermission">Anmod om tilladelse</string>
     <string name="need_whitelisting">%1$s har brug for batterioptimeringstilladelse for at opnå den rette ydeevne</string>
     <string name="storedsettingsfound">Gemte indstillinger fundet</string>

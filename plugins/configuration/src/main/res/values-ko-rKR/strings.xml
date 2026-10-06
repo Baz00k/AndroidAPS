@@ -19,7 +19,6 @@
     <string name="permission">권한</string>
     <string name="need_system_window_permission">알림에 대한 시스템 창 권한이 필요합니다</string>
     <string name="need_location_permission">어플은 BT scan과 WiFi 식별을 위해 \"위치 허용\"이 요구됩니다.</string>
-    <string name="need_storage_permission">어플은 로그 파일 저장과 설정 내보내기를 위해 \"저장공간 허용\"이 요구됩니다.</string>
     <string name="askforpermission">권한 요청하기</string>
     <string name="need_whitelisting">%1$s를 사용하기 위해서는 배터리 최적화 화이트리스팅이 필요합니다</string>
     <string name="storedsettingsfound">저장된 설정이 있습니다.</string>
