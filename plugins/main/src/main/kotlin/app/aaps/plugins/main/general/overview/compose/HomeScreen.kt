@@ -79,7 +79,6 @@ fun HomeScreen(
     additionalGraphs: @Composable () -> Unit = {}
 ) {
     val colors = AapsTheme.colors
-    var showDetails by remember { mutableStateOf(false) }
     var showCarbs by remember { mutableStateOf(false) }
     var showInsulin by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
@@ -102,12 +101,10 @@ fun HomeScreen(
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
                 additionalGraphs()
-                DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }
             ActionBar(state.actions, state.calculatorEnabled, actions)
         }
-        if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
         if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
     }
@@ -359,59 +356,6 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
                 )
             }
             graph()
-        }
-    }
-}
-
-@Composable
-private fun DetailsHandle(onClick: () -> Unit) {
-    val colors = AapsTheme.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.pill)
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(AapsIcons.ExpandLess, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.padding(end = 6.dp))
-        Text("Details — status, sensitivity & graphs", style = AapsTheme.type.caption, color = colors.textTertiary)
-    }
-}
-
-@Composable
-private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
-    val colors = AapsTheme.colors
-    HomeSheet(onClose) { close ->
-        SheetSurface(title = "Details", onClose = { close {} }) {
-            // Supplies & status
-            if (state.supplies.isNotEmpty()) {
-                Text("SUPPLIES & STATUS", style = AapsTheme.type.label, color = colors.textSecondary)
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column {
-                        state.supplies.forEachIndexed { i, s ->
-                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Dot(s.dotTone.color(), size = 9.dp)
-                                Text(s.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                                Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                            }
-                        }
-                    }
-                }
-            }
-            // Loop algorithm & sensitivity
-            Text("LOOP & SENSITIVITY", style = AapsTheme.type.label, color = colors.textSecondary)
-            AapsCard(Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    DetailRow("Algorithm", state.algorithmName.ifBlank { "—" })
-                    DetailRow("Sensitivity", state.sensitivity.ifBlank { "—" })
-                    DetailRow("Profile", state.profileName.ifBlank { "—" })
-                    if (!state.tempTarget.isNullOrBlank()) DetailRow("Temporary target", state.tempTarget)
-                }
-            }
-            Box(Modifier.height(8.dp))
         }
     }
 }

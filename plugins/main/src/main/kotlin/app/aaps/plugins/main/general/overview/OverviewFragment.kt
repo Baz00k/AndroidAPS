@@ -29,7 +29,6 @@ import app.aaps.core.interfaces.overview.LastBgData
 import app.aaps.core.interfaces.overview.Overview
 import app.aaps.core.interfaces.overview.OverviewData
 import app.aaps.core.interfaces.plugin.ActivePlugin
-import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
@@ -555,7 +554,6 @@ class OverviewFragment : DaggerFragment() {
 
         // Stats
         val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
-        val autosensRatio = iobCobCalculator.ads.getLastAutosensData("Overview", aapsLogger, dateUtil)?.autosensResult?.ratio
 
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
         // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
@@ -667,9 +665,6 @@ class OverviewFragment : DaggerFragment() {
             iobBolus = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob),
             iobBasal = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, basalIob().basaliob),
             graphRangeHours = overviewData.rangeToDisplay,
-            algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
-            sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
-            profileName = profileFunction.getProfileName(),
             tempTarget = tempTarget,
             ready = true,
             actions = actionLayout,
