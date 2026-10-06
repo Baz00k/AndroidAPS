@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application>
 
@@ -31,7 +32,16 @@
             </intent-filter>
         </service>
 
-        <service android:name=".general.persistentNotification.DummyService" />
+        <!-- No standard type fits keeping the whole loop process alive; specialUse also stays
+             startable from BOOT_COMPLETED and has no runtime limit. -->
+        <service
+            android:name=".general.persistentNotification.DummyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the insulin-delivery loop and pump and CGM connections running in the background" />
+        </service>
 
         <!--
           Exported so a .aapsskin tapped in a mail app or file manager opens here directly, instead of

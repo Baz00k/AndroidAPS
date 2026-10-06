@@ -1,10 +1,13 @@
 package app.aaps.plugins.automation.services
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.IBinder
+import androidx.core.content.ContextCompat
 import app.aaps.core.interfaces.notifications.NotificationHolder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,6 +27,9 @@ class LocationServiceHelper @Inject constructor(
 ) {
 
     fun startService(context: Context) {
+        // Android refuses to start a location foreground service the app can't use, and the
+        // service only reads location with background access, so without it there is nothing to run.
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 // The binder of the service that returns the instance that is created.
