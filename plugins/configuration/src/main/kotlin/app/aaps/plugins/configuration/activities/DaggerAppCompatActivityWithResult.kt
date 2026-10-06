@@ -20,6 +20,7 @@ import app.aaps.core.interfaces.rx.events.EventAAPSDirectorySelected
 import app.aaps.core.interfaces.rx.events.EventThemeSwitch
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.ui.activities.fitContentToSystemBars
 import app.aaps.core.ui.dialogs.WarningDialog
 import app.aaps.core.ui.locale.LocaleHelper
 import app.aaps.core.ui.toast.ToastUtils
@@ -126,6 +127,11 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
             }
             updateButtons()
         }
+    }
+
+    override fun onPostCreate(savedInstanceState: Bundle?) {
+        super.onPostCreate(savedInstanceState)
+        fitContentToSystemBars()
     }
 
     override fun onDestroy() {
