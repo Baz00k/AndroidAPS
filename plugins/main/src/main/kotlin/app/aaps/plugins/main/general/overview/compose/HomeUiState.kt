@@ -60,10 +60,7 @@ data class HomeUiState(
     // Graph range control (hours shown) — mirrors overviewData.rangeToDisplay
     val graphRangeHours: Int = 6,
 
-    // Details sheet
-    val algorithmName: String = "",
-    val sensitivity: String = "",
-    val profileName: String = "",
+    // Active temporary target, displayed in the hero and the treatment menu.
     val tempTarget: String? = null,
 
     val ready: Boolean = false,            // becomes true once first real refresh has run
