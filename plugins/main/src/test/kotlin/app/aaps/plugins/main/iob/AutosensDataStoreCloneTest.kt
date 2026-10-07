@@ -65,7 +65,7 @@ class AutosensDataStoreCloneTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `new one minute measurement survives clone publication and rebuild`() {
+    fun `one minute measurements advance retained grid across clone publications`() {
         val end = T.hours(2).msecs()
         val history = (0L..15L).map { minute ->
             GV(timestamp = end - T.mins(minute).msecs(), value = 100.0 + 10 * minute,
@@ -75,20 +75,28 @@ class AutosensDataStoreCloneTest : TestBaseWithProfile() {
             it.bgReadings = history
             it.createBucketedData(aapsLogger, dateUtil)
         }
-        val published = original.clone()
-        val newest = history.first().copy(timestamp = end + T.mins(1).msecs(), value = 90.0)
-        published.bgReadings = listOf(newest) + history
-        published.createBucketedData(aapsLogger, dateUtil)
+        var published = original.clone()
+        var updatedHistory = history
+        for (minute in 1L..5L) {
+            val newest = history.first().copy(timestamp = end + T.mins(minute).msecs(), value = 100.0 - 10 * minute)
+            updatedHistory = listOf(newest) + updatedHistory
+            published.bgReadings = updatedHistory
+            published.createBucketedData(aapsLogger, dateUtil)
+            published = published.clone()
 
-        // Unlike the same-store test, the current publication flow establishes a fresh
-        // grid on the latest measurement. Pin values/timestamps, not reference internals.
-        // This does not claim cached autosens entries on the old grid were invalidated.
-        assertThat(published.bucketedData!!.map { it.timestamp to it.value }).containsExactly(
-            newest.timestamp to 90.0,
-            (end - T.mins(4).msecs()) to 140.0,
-            (end - T.mins(9).msecs()) to 190.0,
-            (end - T.mins(14).msecs()) to 240.0
-        ).inOrder()
+            // Incoming samples do not shift existing slots. The next slot contains its
+            // measured value once the feed reaches five minutes, including after publication.
+            val expected = listOf(
+                end to 100.0,
+                (end - T.mins(5).msecs()) to 150.0,
+                (end - T.mins(10).msecs()) to 200.0,
+                (end - T.mins(15).msecs()) to 250.0
+            )
+            assertThat(published.bucketedData!!.map { it.timestamp to it.value }).containsExactlyElementsIn(
+                if (minute < 5) expected else listOf((end + T.mins(5).msecs()) to 50.0) + expected
+            ).inOrder()
+            assertThat(published.bucketedData!!.any { it.filledGap }).isFalse()
+        }
         assertThat(original.bucketedData!!.first().timestamp).isEqualTo(end)
         assertThat(original.bucketedData!!.first().value).isEqualTo(100.0)
     }
