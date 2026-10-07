@@ -18,7 +18,7 @@ import app.aaps.core.compose.theme.AapsTone
 data class HomeUiState(
     // Loop
     val loopStateLabel: String = "",
-    val loopSubLabel: String = "",         // e.g. "· looping" / countdown
+    val loopSubLabel: String = "",         // last calculation age / suspension countdown
     val loopTone: AapsTone? = null,
     val looping: Boolean = false,
 

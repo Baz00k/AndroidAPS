@@ -35,6 +35,14 @@ class HomeChartDataTest {
         assertTrue(data.latest!!.time < data.now)
     }
 
+    @Test fun `latest marker uses the sensor value even when the bucket at that timestamp is smoothed`() {
+        val readings = listOf(p(5, 110.0), p(0, 99.0))
+        val bucketed = listOf(p(5, 115.0), p(0, 105.0))
+        val data = HomeChartData(from = now - HOUR_MS, now = now, readings = readings, bucketed = bucketed)
+        assertEquals(p(0, 99.0), data.latest)
+        assertEquals(bucketed, data.trace)
+    }
+
     @Test fun `without a usable bucketed series the readings are the trace`() {
         val readings = listOf(p(10), p(5), p(0))
         assertEquals(readings, mergeTrace(readings, emptyList()))

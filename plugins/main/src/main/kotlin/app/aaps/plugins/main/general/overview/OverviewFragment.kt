@@ -19,13 +19,11 @@ import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
-import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.nsclient.NSSettingsStatus
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
-import app.aaps.core.interfaces.overview.LastBgData
 import app.aaps.core.interfaces.overview.Overview
 import app.aaps.core.interfaces.overview.OverviewData
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -41,6 +39,8 @@ import app.aaps.core.interfaces.rx.events.EventAcceptOpenLoopChange
 import app.aaps.core.interfaces.rx.events.EventBucketedDataCreated
 import app.aaps.core.interfaces.rx.events.EventEffectiveProfileSwitchChanged
 import app.aaps.core.interfaces.rx.events.EventExtendedBolusChange
+import app.aaps.core.interfaces.rx.events.EventLoopUpdateGui
+import app.aaps.core.interfaces.rx.events.EventNewBG
 import app.aaps.core.interfaces.rx.events.EventNewOpenLoopNotification
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
@@ -58,7 +58,6 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.workflow.CalculationWorkflow
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
-import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.BooleanNonKey
@@ -97,6 +96,7 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.TE
+import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.plugins.main.general.overview.compose.HomeActions
 import app.aaps.plugins.main.general.overview.compose.HomeScreen
@@ -115,6 +115,7 @@ import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
+import app.aaps.plugins.main.general.overview.compose.HomeGlucose
 import app.aaps.plugins.main.general.overview.compose.recentInsulinEntries
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
@@ -148,14 +149,11 @@ class OverviewFragment : DaggerFragment() {
     @Inject lateinit var config: Config
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var fabricPrivacy: FabricPrivacy
-    @Inject lateinit var trendCalculator: TrendCalculator
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var persistenceLayer: PersistenceLayer
-    @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Inject lateinit var overviewData: OverviewData
     @Inject lateinit var overview: Overview
-    @Inject lateinit var lastBgData: LastBgData
     @Inject lateinit var bgQualityCheck: BgQualityCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
@@ -173,6 +171,7 @@ class OverviewFragment : DaggerFragment() {
     private val graphSettings = mutableStateOf(HomeGraphSettings())
     private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
+    private var sensorGlucose = HomeGlucose()
     // The visible range is UI state: switching it re-windows the loaded snapshot immediately, with
     // no rebuild. The horizontal position is shared by every graph panel and never read off-thread.
     private val chartRangeHours = mutableStateOf(6)
@@ -277,6 +276,14 @@ class OverviewFragment : DaggerFragment() {
                            rxBus.send(EventPreferenceChange(IntNonKey.RangeToDisplay.key))
                            preferences.put(BooleanNonKey.ObjectivesScaleUsed, true)
                        }, fabricPrivacy::logException)
+        disposable += rxBus
+            .toObservable(EventLoopUpdateGui::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ scheduleUpdateGUI() }, fabricPrivacy::logException)
+        disposable += rxBus
+            .toObservable(EventNewBG::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ scheduleUpdateGUI() }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventBucketedDataCreated::class.java)
             .debounce(1L, TimeUnit.SECONDS)
@@ -485,11 +492,11 @@ class OverviewFragment : DaggerFragment() {
         val ctx = context ?: return
         val units = profileFunction.getUnits()
         val unitsStr = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
-        val lastBg = lastBgData.lastBg()
-        val isActual = lastBgData.isActualBg()
-        val gs = glucoseStatusProvider.glucoseStatusData
+        val now = dateUtil.now()
+        val lastBg = sensorGlucose.reading
+        val isActual = sensorGlucose.isFresh(now)
         val profile = profileFunction.getProfile()
-        val bgMgdl = lastBg?.recalculated
+        val bgMgdl = lastBg?.value
         // Colour the BG value against the display HYPO/HYPER thresholds (Overview Low/High marks —
         // the same thresholds AAPS uses for BG colouring elsewhere), NOT the tighter profile target
         // band, so a BG just above target isn't alarmingly amber. The state line below still describes
@@ -522,9 +529,14 @@ class OverviewFragment : DaggerFragment() {
             RM.Mode.SUPER_BOLUS       -> rh.gs(app.aaps.core.ui.R.string.superbolus)
             else                      -> rh.gs(app.aaps.core.ui.R.string.pumpsuspended)
         }
-        val loopSub = if (loopActive) "· looping"
-        else if (mode == RM.Mode.SUSPENDED_BY_USER || mode == RM.Mode.DISCONNECTED_PUMP || mode == RM.Mode.SUSPENDED_BY_DST)
-            dateUtil.age(loop.minutesToEndOfSuspend() * 60000L, true, rh) else ""
+        val loopSub = when {
+            loopActive || mode == RM.Mode.OPEN_LOOP -> loop.lastRun?.lastAPSRun
+                ?.takeIf { it > 0 && it <= now }
+                ?.let { "· ${dateUtil.minOrSecAgo(rh, it)}" }.orEmpty()
+            mode == RM.Mode.SUSPENDED_BY_USER || mode == RM.Mode.DISCONNECTED_PUMP || mode == RM.Mode.SUSPENDED_BY_DST ->
+                dateUtil.age(loop.minutesToEndOfSuspend() * 60000L, true, rh)
+            else -> ""
+        }
 
         // Eventual BG = the algorithm's own output (APSResult.eventualBG via RT). The ONLY forward-
         // looking number on the hero. Hidden when null (open loop / no run yet).
@@ -532,7 +544,6 @@ class OverviewFragment : DaggerFragment() {
         val eventualMgdl = if (config.APS) rt?.eventualBG else null
 
         // Read once so the range, comparison and inline target status describe the same target.
-        val now = dateUtil.now()
         val target = TargetDisplay.at(
             now, persistenceLayer.getTemporaryTargetActiveAt(now),
             profile?.getTargetLowMgdl(), profile?.getTargetHighMgdl()
@@ -643,12 +654,12 @@ class OverviewFragment : DaggerFragment() {
             loopSubLabel = loopSub,
             loopTone = loopTone,
             looping = loopActive,
-            bg = profileUtil.fromMgdlToStringInUnits(lastBg?.recalculated),
+            bg = bgMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "--",
             bgTone = bgTone,
             bgStale = !isActual,
             units = unitsStr,
-            trendArrow = trendSymbol(trendCalculator.getTrendArrow(iobCobCalculator.ads)),
-            delta = gs?.let { profileUtil.fromMgdlToSignedStringInUnits(it.delta) } ?: "",
+            trendArrow = if (isActual) trendSymbol(sensorGlucose.trend) else "",
+            delta = if (isActual) sensorGlucose.deltaMgdl?.let { profileUtil.fromMgdlToSignedStringInUnits(it) }.orEmpty() else "",
             timeAgo = dateUtil.minOrSecAgo(rh, lastBg?.timestamp),
             eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
             stateLine = stateLine,
@@ -685,23 +696,44 @@ class OverviewFragment : DaggerFragment() {
     /** Refresh providers off the UI thread; panning only reuses the published snapshot. */
     private fun refreshChart() {
         handler.post {
-            val d = try { buildChartData() } catch (e: Exception) { fabricPrivacy.logException(e); HomeChartData() }
-            runOnUiThread { if (composeHome != null) chartData.value = d }
+            val now = dateUtil.now()
+            val from = now - CHART_HISTORY_MS
+            try {
+                val snapshot = HomeGlucoseSnapshot.load(persistenceLayer, from, now)
+                val chart = try { buildChartData(snapshot.readings, from, now) } catch (e: Exception) {
+                    fabricPrivacy.logException(e)
+                    HomeChartData()
+                }
+                runOnUiThread {
+                    if (composeHome != null) {
+                        sensorGlucose = snapshot.glucose
+                        chartData.value = chart
+                        buildHomeState()
+                    }
+                }
+            } catch (e: Exception) {
+                fabricPrivacy.logException(e)
+                // Do not retain a seemingly fresh value when the database snapshot cannot be read.
+                runOnUiThread {
+                    if (composeHome != null) {
+                        sensorGlucose = HomeGlucose()
+                        chartData.value = HomeChartData()
+                        buildHomeState()
+                    }
+                }
+            }
         }
     }
 
     /** Load the full pan budget off the UI thread; viewport changes reuse this snapshot. */
-    private fun buildChartData(): HomeChartData {
+    private fun buildChartData(sensorReadings: List<GV>, from: Long, now: Long): HomeChartData {
         profileFunction.getProfile() ?: return HomeChartData()
         val units = profileFunction.getUnits()
-        val now = dateUtil.now()
-        val from = now - CHART_HISTORY_MS
 
         // Straight from the database rather than the legacy graph worker's array, whose span follows
         // the old hour-aligned range. Invalidated and nonsensical values are not drawn; a reading
         // stamped in the future (phone/sensor clock skew) waits until its time has come.
-        val readings = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true)
-            .filter { it.isValid && it.value.isFinite() && it.value > 0.0 && it.timestamp in from..now }
+        val readings = sensorReadings
             .sortedBy { it.timestamp }
             .map { GlucosePoint(it.timestamp, profileUtil.fromMgdlToUnits(it.value, units)) }
         if (readings.isEmpty()) return HomeChartData()
