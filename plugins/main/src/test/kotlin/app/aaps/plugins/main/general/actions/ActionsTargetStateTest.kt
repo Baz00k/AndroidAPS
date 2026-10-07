@@ -32,6 +32,8 @@ class ActionsTargetStateTest : TestBaseWithProfile() {
         whenever(activePlugin.activeProfileSource).thenReturn(source)
         whenever(loop.runningMode).thenReturn(RM.Mode.DISABLED_LOOP)
         whenever(profileFunction.getUnits()).thenReturn(GlucoseUnit.MGDL)
+        whenever(profileFunction.getProfileName()).thenReturn("Daily")
+        whenever(rh.gs(app.aaps.core.ui.R.string.no_profile_set)).thenReturn("No profile set")
         whenever(dateUtil.now()).thenReturn(start)
         whenever(dateUtil.untilString(tt.end, rh)).thenReturn("30m")
         fragment = ActionsFragment().also {
@@ -54,7 +56,7 @@ class ActionsTargetStateTest : TestBaseWithProfile() {
         assertThat(card.cancelable).isFalse() // Tap opens the protected dialog; no direct cancellation.
         assertThat(card.sub).isEqualTo("108 - 144 mg/dL · 30m")
         whenever(profileFunction.getUnits()).thenReturn(GlucoseUnit.MMOL)
-        assertThat(fragment.buildActionsState().therapy.single().sub).isEqualTo("6.0 - 8.0 mmol/L · 30m")
+        assertThat(fragment.buildActionsState().therapy.single { it.id == ActionId.TEMP_TARGET }.sub).isEqualTo("6.0 - 8.0 mmol/L · 30m")
     }
 
     @Test fun `cancel or expiry clears active card and preserves creation availability`() {
