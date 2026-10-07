@@ -1,6 +1,6 @@
 ---
 name: Issue with something this fork adds
-about: The YpsoPump driver, the HovorkaMPC algorithm, the Compose UI and skins, or the loop build
+about: The YpsoPump driver, the Compose UI and skins, or the loop build
 title: ''
 labels: ''
 assignees: ''
@@ -10,7 +10,7 @@ assignees: ''
 
 ## Which part
 
-<!-- YpsoPump driver / HovorkaMPC / UI + skins / build + packaging / docs -->
+<!-- YpsoPump driver / UI + skins / build + packaging / docs -->
 
 ## What happened
 

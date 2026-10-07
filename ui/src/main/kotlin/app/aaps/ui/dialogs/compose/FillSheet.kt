@@ -42,11 +42,8 @@ data class FillInputs(
      * therapy events -- any prime bolus is still delivered now, because insulin cannot be given
      * retroactively.
      *
-     * Exists because a cannula change is routinely made away from the phone and recorded later, and
-     * until now this sheet stamped `dateUtil.now()` with no way to correct it. An hours-late
-     * timestamp is not a cosmetic problem: site age drives the post-change analysis and the
-     * HovorkaMPC site guard, and a change that is never recorded at all (as happened 2026-08-04 and
-     * 2026-08-13) is invisible to both.
+     * A cannula change may be made away from the phone and recorded later. Preserve its actual
+     * timestamp because site age drives post-change analysis.
      */
     val minutesAgo: Int
 )
