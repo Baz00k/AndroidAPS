@@ -29,8 +29,7 @@ class AutosensDataStoreObject : AutosensDataStore {
         const val DENSE_DATA_MIN_READINGS = 6
     }
 
-    // we need to make sure that bucketed_data will always have the same timestamp for correct use of cached values
-    // once referenceTime != null all bucketed data should be (x * 5min) from referenceTime
+    // Keep bucket timestamps stable so successive calculations can reuse cached autosens data.
     var referenceTime: Long = -1
 
     override var bgReadings: List<GV> = listOf() // newest at index 0
@@ -48,6 +47,8 @@ class AutosensDataStoreObject : AutosensDataStore {
     override fun clone(): AutosensDataStore =
         AutosensDataStoreObject().also {
             synchronized(dataLock) {
+                // IOB/COB workers publish this clone as the live store after every calculation.
+                it.referenceTime = this.referenceTime
                 // Workers publish the clone; retain mode history for the next cache-invalidation check.
                 it.lastUsed5minCalculation = this.lastUsed5minCalculation
                 it.bgReadings = this.bgReadings.toMutableList()
@@ -165,9 +166,10 @@ class AutosensDataStoreObject : AutosensDataStore {
             referenceTime = someTime
             return someTime
         }
-        var diff = abs(someTime - referenceTime)
-        diff %= T.mins(5).msecs()
-        return if (diff > T.mins(2).plus(T.secs(30)).msecs()) someTime + abs(diff - T.mins(5).msecs()) // Adjust to the future
+        // Preserve direction for readings older than the anchor too (upstream ef87883a).
+        val fiveMin = T.mins(5).msecs()
+        val diff = ((someTime - referenceTime) % fiveMin + fiveMin) % fiveMin
+        return if (diff > T.mins(2).plus(T.secs(30)).msecs()) someTime + (fiveMin - diff) // Adjust to the future
         else someTime - diff // adjust to the past
     }
 
@@ -333,11 +335,18 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         val lastBg = readings[0]
         val newBucketedData = ArrayList<InMemoryGlucoseValue>()
-        var currentTime = readings[0].timestamp
-        val adjustedTime = adjustToReferenceTime(currentTime)
-        // after adjusting time may be newer. In this case use T-5min
-        currentTime = if (adjustedTime > currentTime) adjustedTime - T.mins(5).msecs() else adjustedTime
+        val adjustedTime = adjustToReferenceTime(lastBg.timestamp)
+        // A retained grid can sit just after the newest reading because of sensor jitter.
+        // Keep that measured sample within the existing 30-second tolerance instead of
+        // dropping a whole five-minute bucket (upstream 6300e492). Larger shifts step back.
+        // The bucket timestamp can consequently be up to 30 seconds newer than the sample.
+        var currentTime = if (adjustedTime - lastBg.timestamp > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs() else adjustedTime
         aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(currentTime))
+        val firstBucket = if (currentTime > lastBg.timestamp) {
+            val bucket = InMemoryGlucoseValue.fromGv(lastBg).copy(timestamp = currentTime)
+            currentTime -= T.mins(5).msecs()
+            bucket
+        } else null
         while (true) {
             // test if current value is older than current time
             val newer = findNewer(currentTime)
@@ -356,6 +365,8 @@ class AutosensDataStoreObject : AutosensDataStore {
             }
             currentTime -= T.mins(5).msecs()
         }
+        // Do not invent a lone flat trend when there is no historical bucket to support it.
+        if (firstBucket != null && newBucketedData.isNotEmpty()) newBucketedData.add(0, firstBucket)
         bucketedData = newBucketedData
     }
 
@@ -413,7 +424,17 @@ class AutosensDataStoreObject : AutosensDataStore {
 
         // Normalize bucketed data
         val oldest = bData[bData.size - 1]
+        // A sensor change can put five-minute readings on a different phase. Keeping a
+        // process-long anchor that far away would move them off their measured times.
+        if (referenceTime != -1L && abs(adjustToReferenceTime(oldest.timestamp) - oldest.timestamp) > T.secs(90).msecs()) {
+            aapsLogger.debug(LTag.AUTOSENS, "Reference time out of phase with current data. Re-anchoring.")
+            referenceTime = -1
+        }
+        val rawOldest = oldest.timestamp
         oldest.timestamp = adjustToReferenceTime(oldest.timestamp)
+        // The accumulated adjustment below includes the anchor shift. Remove that part
+        // so the existing 90-second fallback still measures only sensor jitter.
+        val anchorShift = (oldest.timestamp - rawOldest) / 1000
         aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(oldest.timestamp))
         for (i in bData.size - 2 downTo 0) {
             val current = bData[i]
@@ -425,7 +446,7 @@ class AutosensDataStoreObject : AutosensDataStore {
                     dateUtil.dateAndTimeAndSecondsString(previous.timestamp + T.mins(5).msecs())
                 } by $adjusted sec"
             }
-            if (abs(adjusted) > 90) {
+            if (abs(adjusted + anchorShift) > 90) {
                 // too big adjustment, fallback to non 5 min data
                 aapsLogger.debug(LTag.AUTOSENS, "Fallback to non 5 min data")
                 createBucketedDataRecalculated(aapsLogger, dateUtil)
