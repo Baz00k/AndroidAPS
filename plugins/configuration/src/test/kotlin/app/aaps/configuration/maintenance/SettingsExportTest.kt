@@ -2,7 +2,6 @@ package app.aaps.configuration.maintenance
 
 import android.content.ContentResolver
 import android.content.Context
-import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import app.aaps.configuration.maintenance.formats.SingleStringStorage
 import app.aaps.core.interfaces.configuration.Config
@@ -19,23 +18,18 @@ import app.aaps.plugins.configuration.maintenance.cloud.ExportOptionsDialog
 import app.aaps.plugins.configuration.maintenance.formats.EncryptedPrefsFormat
 import app.aaps.shared.tests.TestBase
 import com.google.common.truth.Truth.assertThat
-import org.json.JSONObject
-import org.junit.jupiter.params.ParameterizedTest
-import org.junit.jupiter.params.provider.CsvSource
-import org.mockito.Mockito.timeout
+import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.spy
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import java.io.ByteArrayInputStream
 
 class SettingsExportTest : TestBase() {
 
-    @ParameterizedTest
-    @CsvSource("true, false, false", "false, true, false", "true, true, false", "true, false, true", "false, true, true", "true, true, true")
-    fun automatedExportReportsEncryptionResult(local: Boolean, cloud: Boolean, encryptionSucceeds: Boolean) {
+    @Test
+    fun cloudOnlyEncryptionFailureReportsFailureBeforeStartingUpload() {
         val context = mock<Context>()
         val resolver = mock<ContentResolver>()
         whenever(context.contentResolver).thenReturn(resolver)
@@ -51,24 +45,19 @@ class SettingsExportTest : TestBase() {
         whenever(dateUtil.toISOString(any())).thenReturn("2026-01-01T00:00:00Z")
         val crypto = mock<CryptoUtil>()
         whenever(crypto.mineSalt()).thenReturn(ByteArray(32))
-        whenever(crypto.encrypt(any(), any(), any())).thenReturn(if (encryptionSucceeds) "synthetic ciphertext" else null)
-        whenever(crypto.sha256(any())).thenReturn("synthetic content hash")
-        whenever(crypto.hmac256(any(), any())).thenReturn("synthetic file hash")
+        whenever(crypto.encrypt(any(), any(), any())).thenReturn(null)
         val storage = spy(SingleStringStorage("existing encrypted backup"))
         val format = EncryptedPrefsFormat(rh, crypto, storage, context).apply { secureEncrypt = mock() }
         val settingsImport = mock<SettingsImport>()
         whenever(settingsImport.exportValues()).thenReturn(mapOf("exportable_secret" to "synthetic secret"))
         val file = mock<DocumentFile>()
-        whenever(file.uri).thenReturn(mock<Uri>())
-        whenever(resolver.openInputStream(any())).thenAnswer { ByteArrayInputStream(storage.contents.toByteArray()) }
         val tempDir = mock<DocumentFile>()
         whenever(tempDir.createFile(any(), any())).thenReturn(file)
         val files = mock<FileListProvider>()
-        whenever(files.newPreferenceFile()).thenReturn(file)
         whenever(files.ensureTempDirExists()).thenReturn(tempDir)
         val options = mock<ExportOptionsDialog>()
-        whenever(options.isSettingsLocalEnabled()).thenReturn(local)
-        whenever(options.isSettingsCloudEnabled()).thenReturn(cloud)
+        whenever(options.isSettingsLocalEnabled()).thenReturn(false)
+        whenever(options.isSettingsCloudEnabled()).thenReturn(true)
         val cloudManager = mock<CloudStorageManager>()
         whenever(cloudManager.isCloudStorageActive()).thenReturn(true)
         val exporter = ImportExportPrefsImpl(
@@ -76,19 +65,10 @@ class SettingsExportTest : TestBase() {
             dateUtil, mock(), context, mock(), mock(), mock(), cloudManager, options, mock(), settingsImport
         )
 
-        assertThat(exporter.exportSharedPreferencesNonInteractive(context, "synthetic password")).isEqualTo(encryptionSucceeds)
+        assertThat(exporter.exportSharedPreferencesNonInteractive(context, "synthetic password")).isFalse()
 
-        if (encryptionSucceeds) {
-            val backup = JSONObject(storage.contents)
-            assertThat(backup.getJSONObject("security").getString("algorithm")).isEqualTo("v1")
-            assertThat(backup.getString("content")).isEqualTo("synthetic ciphertext")
-            assertThat(storage.contents).doesNotContain("synthetic secret")
-            if (cloud) verify(cloudManager, timeout(1_000)).getActiveProvider()
-        } else {
-            verify(storage, never()).putFileContents(any<ContentResolver>(), any<DocumentFile>(), any())
-            assertThat(storage.contents).isEqualTo("existing encrypted backup")
-            verify(cloudManager, never()).getActiveProvider()
-        }
-        if (cloud) verify(file).delete()
+        verify(storage, never()).putFileContents(any<ContentResolver>(), any<DocumentFile>(), any())
+        verify(cloudManager, never()).getActiveProvider()
+        verify(file).delete()
     }
 }

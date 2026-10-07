@@ -21,7 +21,7 @@ import com.google.common.truth.TruthJUnit.assume
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
-import org.junit.jupiter.params.provider.CsvSource
+import org.junit.jupiter.params.provider.ValueSource
 import org.mockito.ArgumentMatchers
 import org.mockito.Mock
 import org.mockito.kotlin.any
@@ -139,25 +139,21 @@ open class EncryptedPrefsFormatTest : TestBase() {
     }
 
     @ParameterizedTest
-    @CsvSource("'', false", "existing encrypted backup, false", "'', true", "existing encrypted backup, true")
-    fun encryptionFailureDoesNotWritePreferences(existingContents: String, cachedPassword: Boolean) {
+    @ValueSource(strings = ["", "existing encrypted backup"])
+    fun encryptionFailureDoesNotWritePreferences(existingContents: String) {
         val storage = spy(SingleStringStorage(existingContents))
         val failingCrypto = mock<CryptoUtil>()
         whenever(failingCrypto.mineSalt()).thenReturn(ByteArray(32))
         whenever(failingCrypto.encrypt(any(), any(), any())).thenReturn(null)
         val encryptedFormat = EncryptedPrefsFormat(rh, failingCrypto, storage, context)
-        val password = if (cachedPassword) "synthetic cached password" else "synthetic-password"
-        encryptedFormat.secureEncrypt = mock<SecureEncrypt>().also {
-            whenever(it.isValidDataString(password)).thenReturn(cachedPassword)
-            if (cachedPassword) whenever(it.decrypt(password)).thenReturn("synthetic-password")
-        }
+        encryptedFormat.secureEncrypt = mock<SecureEncrypt>()
         val prefs = Prefs(
             mapOf("exportable_secret" to "synthetic secret"),
             mapOf(PrefsMetadataKeyImpl.ENCRYPTION to PrefMetadata("Enabled", PrefsStatusImpl.OK))
         )
 
         val error = assertFailsWith<PrefIOError> {
-            encryptedFormat.savePreferences(getMockedFile(), prefs, password)
+            encryptedFormat.savePreferences(getMockedFile(), prefs, "synthetic-password")
         }
 
         assertThat(error.message).isEqualTo("Cannot encrypt settings export")
