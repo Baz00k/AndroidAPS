@@ -158,7 +158,7 @@ class AutosensDataStoreBucketingReplayTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `later off-grid reading does not rewrite an existing measured bucket`() {
+    fun `later off-grid reading does not rewrite an existing measured bucket within the same store`() {
         val readings = (0L..15L).map { reading(it, 100.0 + 10 * it) }
         val store = AutosensDataStoreObject().also {
             it.bgReadings = readings
@@ -169,6 +169,7 @@ class AutosensDataStoreBucketingReplayTest : TestBaseWithProfile() {
         store.bgReadings = listOf(reading(-1, 90.0)) + readings
         store.createBucketedData(aapsLogger, dateUtil)
 
+        // Same-instance only: a production clone does not retain the reference time.
         // The established grid still starts at minute 0. Its measurement remains 100,
         // rather than changing as the new minute joins a centered averaging window.
         assertThat(store.bucketedData?.first()).isEqualTo(bucket(0, 100.0, trendArrow = TrendArrow.FLAT))
