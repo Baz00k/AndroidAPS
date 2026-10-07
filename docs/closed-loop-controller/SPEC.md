@@ -1,36 +1,32 @@
 # Independent fully closed-loop controller: engineering specification
 
-## Goal and design latitude
+## Goal
 
 Engineer a from-scratch insulin-only controller for AAPS with no required routine meal announcement, glucose-trend response and bounded adaptation of insulin needs, including time-of-day behavior. Preserve manual/rescue treatment accounting. Use the practical behavioral and verification standard of Oref0/Oref1. Numerical equality with an existing algorithm is not a goal.
 
-This is a sufficient engineering basis, not a selected or completed algorithm. Two public foundations are available: Basis A supplies a physiological predictor/plant; Basis B supplies a simulated MPC/MHE formulation. Choose the estimator, objective, supervisor, solver/discretization, initialization, bounded tuning and adaptation. Record assumptions and independent tests. Public literature describes subsystems, not a ready-to-deploy controller. Historical parameter values are not patient defaults or approved dose limits.
+Basis A supplies a physiological predictor/plant; Basis B supplies a simulated MPC/MHE formulation. Choose the estimator, objective, supervisor, solver/discretization, initialization, bounded tuning and adaptation. Record assumptions and independent tests. Historical parameter values are not patient defaults or dose limits.
 
 Therapy safety overrides speed and simplification. Trace inputs through decisions, constraints, commands and delivery records. Preserve safeguards and confirmations. Distinguish recommendations from acknowledged/confirmed delivery; app/driver uncertainty must not lead to duplicated insulin. No simulation or source review constitutes clinical validation.
 
-Read `equations.jsonl` for the complete symbol/unit/parameter/initialization records. `claims.jsonl` distinguishes PUBLIC facts from INFERENCE; `sources.jsonl` identifies public documents and exact source locators. Inferred publication corrections are not publisher-confirmed errata. Evaluate numerical diagnostics independently: the supporting calculations are not executable fixtures or proof of controller safety. `CHK-nn` labels name those calculations; their worksheets are not distributed. The citing records state the model assumptions, but the sampled Hessian diagnostics omit the complete sampling grid and cannot be exactly reproduced from this package. They establish no solver guarantee or design-critical threshold; perform independent convergence and failure checks for the chosen implementation.
+Full symbols, units, parameters and initialization are in `equations.jsonl`; citations and source identities are in `claims.jsonl` and `sources.jsonl`. Inferred corrections are not confirmed errata. `CHK-nn` denotes numerical diagnostics, not proofs. The sampled Hessian diagnostics lack a complete sampling grid; establish convergence and failure behavior independently.
 
-## Required behavior and practical benchmark
+## Required behavior
 
-### Behavioral acceptance obligations
-
-These are project requirements for engineering and verification, not claims that a commercial controller or the current app passes them. Numerical thresholds remain profile/constraint inputs or explicit justified implementation choices; values quoted from Oref or historical trials are not adopted defaults.
+Numerical thresholds come from profile/constraint inputs or justified design choices.
 
 | Property | Required specification and independent check |
 |---|---|
 | Input validity | Required glucose/profile/time/insulin data must be finite, unit-labelled and have declared quality/age rules. Missing data cannot produce a guessed dose. Test both controller rejection and the composed app response, including any high TBR already running: returning no result is not automatically cancellation or a safe basal fallback. |
-| Low-glucose protection | Define current/predicted-low quantities and their relationship to the predictor and safety supervisor. Test that invalid permissions or a declared low-risk condition suppress additional automated bolus delivery and trigger the stated basal-reduction action; do not infer a clinical guarantee from a finite scenario. |
+| Low-glucose protection | Define current/predicted-low quantities and their relationship to the predictor and safety supervisor. Test that invalid permissions or a declared low-glucose risk suppress additional automated bolus delivery and trigger the stated basal-reduction action. |
 | Exposure and rate bounds | State the accounting domain (total versus basal-relative, bolus versus basal), units and time window of each limit. A basal rate is U/h; convert its contribution through the stated duration and scheduled-basal reference before comparing an amount limit. Evaluate combined TBR/SMB consequences and insulin effect beyond the prediction horizon, not a dimensionally undefined `IOB + request`. Preserve app constraints after command quantization. Define and test behavior at app max-IOB zero (LGS), including whether above-scheduled-basal rates are allowed when basal-deviation IOB is negative. |
 | Dosing permission and fallback | Closed-loop/LGS/SMB permissions and `tempBasalFallback` must be honored. Fallback disables SMB and recomputes a temp-only decision from current accounting; it is not a retry or addition of a failed amount. Controller/app validity signals may inhibit dosing when accounting cannot be trusted. |
 | Delivery boundary | No controller pump commands, delivery retries, reconciliation writes or parallel pending-insulin ledger. Source-recorded provisional insulin is accounted conservatively, not relabelled physically confirmed. Exercise queue rejection, partial/uncertain delivery representation and delayed history in the integration; transport-only metadata does not alter the mathematical decision unless accounting or safety permissions change. |
 | Partial enactment | Test TBR-only, skipped commands, failed TBR, failed SMB and unchanged-success callbacks. TBR-first ordering is not proof of a newly applied protective zero temp. Do not assume an automated bolus is always paired with basal reduction; the chosen strategy must specify its own protection. |
-| Unannounced meals and adaptation | Demonstrate response without carb entry, back-off when a rise stops, meal/sensor/sensitivity confounding, sensitivity shifts and bounded learning/time-of-day behavior. Optional carb/manual/rescue records must not double-count insulin or disturbances. Any deferred capability must be explicitly outside the declared implementation scope, not quietly called unnecessary. |
+| Unannounced meals and adaptation | Demonstrate response without carb entry, back-off when a rise stops, meal/sensor/sensitivity confounding, sensitivity shifts and bounded learning/time-of-day behavior. Optional carb/manual/rescue records must not double-count insulin or disturbances. State any deferred capability explicitly. |
 | Time, replay and lifecycle | Inject one evaluation time; same complete snapshot/configuration/initial state/time gives the same mathematical result. Replay equality is not permission to enact twice. Rebuild or restore estimator state with explicit expiry/corruption/startup rules; restart must not erase app history or shorten bolus spacing. Cold-versus-warm dose ordering and global dose monotonicity are not universal laws for adaptive/MPC controllers. |
 | Numerical failure | Bound computational work, detect nonfinite/infeasible/nonconvergent results, and test timeout/invalid-result handling through the actual app contract. No plausible dose or solver success code substitutes for validated finite outputs and active constraints. |
 
-The implementer chooses the numerical method and concrete design within this contract and records its evidence, assumptions and tests. Research sufficiency does not require code-level detail for every choice. Implementation readiness does require applicable regression/boundary/failure checks and dosing simulation or replay; live-therapy authorization is not granted by either milestone.
-
-### Reviewed Oref0/Oref1 benchmark
+## Oref0/Oref1 benchmark
 
 The comparison uses public source at `openaps/oref0@d219baf9559d62a8bb0bd42014192a2d7c0839ef` and upstream `nightscout/AndroidAPS@598e2eb39c7e15876e4c42876a2162bffcb4fe5f`. Source URLs, hashes and locators are in the ledgers. Upstream facts are not automatically facts about the integration baseline.
 
@@ -38,14 +34,12 @@ The comparison uses public source at `openaps/oref0@d219baf9559d62a8bb0bd4201419
 |---|---|---|
 | Oref1 SMB/UAM logic is within the Oref0 codebase; its per-call algorithm derives timing/state from inputs. | Inject evaluation time and declare estimator state explicitly. Deterministic replay is useful; no requirement to imitate its heuristic equations. | `CLM-PUB-OREF-0001–0002` |
 | Rig pump-loop checks and AAPS Loop/queue/pump-sync surround the algorithm. Failed SMB fallback is an app-triggered bolus-disabled recomputation. | Keep transport, reconciliation and pump retries outside the controller. Preserve permissions and fallback at the new adapter boundary. | `CLM-PUB-OREF-0003,0005–0007,0017` |
-| TBR callback success can mean no new TBR was enacted. Oref can return an SMB plus a high TBR rather than invariably a protective low TBR. | Verify combined and partial actions; do not claim that sequencing alone ensures basal reduction or confirms delivery. These are source-reading facts, not accepted safe-dose observations. | `CLM-PUB-OREF-0006,0011` |
+| TBR callback success can mean no new TBR was enacted. Oref can return an SMB plus a high TBR rather than invariably a protective low TBR. | Verify combined and partial actions; sequencing alone does not ensure basal reduction or confirm delivery. | `CLM-PUB-OREF-0006,0011` |
 | Input guards and app early returns interact: a no-result path may leave a prior high TBR active. | Test the composed stale/missing-input response. Specify existing-temp handling separately from the absence of a new recommendation; do not guess a fallback basal. | `CLM-PUB-OREF-0008,0015` |
 | Oref has predictor-specific low protection, decision-time insulin limits, per-bolus caps and pump rounding. Its IOB is basal-relative, not total physiological insulin mass. | Supply independently justified low/exposure protection and explicit units/domains for the new model. Keep app constraints and define the combined TBR/SMB exposure window. Oref constants are benchmark facts, not new clinical defaults. | `CLM-PUB-OREF-0009–0011` |
 | Oref predicts four hours even when the insulin-action curve extends longer. | State treatment of delayed effects beyond the chosen horizon; the Oref horizon is not evidence of adequacy for another controller. | `CLM-PUB-OREF-0014` |
-| Source tests express missing-input handling, but the inspected guard order cannot reach some asserted error returns. Tests are not proof that all paths are covered. | Test finite/invalid/missing input behavior directly with independently justified expected properties. No test-execution results are supplied. | `CLM-PUB-OREF-0013,0019` |
+| Source tests express missing-input handling, but the inspected guard order cannot reach some asserted error returns. | Test finite/invalid/missing input behavior directly with independently justified expected properties. | `CLM-PUB-OREF-0013,0019` |
 | Kotlin and JavaScript ports differ; restart assumptions depend on when drivers persist boluses. | Numerical equality is not the goal. Exercise history lag, repeated invocation, process restart and estimator reconstruction; a replay-equal request must not be enacted twice. | `CLM-PUB-OREF-0016,0018,0020` |
-
-The benchmark is an engineering comparison, not a formal certification. Solver, horizon, tuning and state-format choices remain implementation-owned, with the verification duties below.
 
 ## Public mathematical foundations
 
@@ -61,7 +55,7 @@ Evidence: `EQ-PUB-MATH-0001,0014,0016`; `CLM-PUB-MATH-0029`; `CLM-PUB-MATH-REVIE
 
 ### Basis A: public physiological prediction
 
-The following public compartment structure is transcribed from open restatements, with the sign/notation/scale inferences recorded separately (`EQ-PUB-MATH-0002–0009`; `SRC-PUB-MATH-0007–0010`; `SRC-PUB-MATH-REVIEW-0001–0002`). It is not any commercial controller's disclosed model or control code.
+Compartment structure from public restatements (`EQ-PUB-MATH-0002–0009`; `SRC-PUB-MATH-0007–0010`; `SRC-PUB-MATH-REVIEW-0001–0002`):
 
 ```text
 dS1/dt = u − S1/t_maxI
@@ -101,7 +95,7 @@ Q1,b = V_G·G*,       Q2,b = x1,b·Q1,b/(k12+x2,b)
 
 Use the clamped EGP term outside that region. One basal/glucose equilibrium constrains a parameter combination, not all individual sensitivities (`EQ-PUB-MATH-0009,0015`). Clinical/AAPS IOB cannot be equated to `S1+S2+V_I·I`: absorption mass and delayed remote action differ; the reported x1-channel calculation is an arithmetic diagnostic, not observed glucose behavior or a clinical action curve.
 
-**Controller design left to the implementer:** published Cambridge descriptions support Kalman-type model-mismatch flux/bioavailability updates, competing models, asymmetric target trajectories and time-of-day adaptation, but do not provide exact cost/weights/priors/model mixing/learning rules. Define and test an independent estimator/objective/controller, with delayed insulin, CGM-only observability and unannounced meals in mind. Meal appearance and a free corrective glucose flux enter additively; unconstrained joint adaptation can confuse meal/sensor/sensitivity effects. Historical horizons and thresholds are publication facts, not new defaults (`EQ-PUB-MATH-0010–0015`).
+Published Cambridge descriptions support Kalman-type model-mismatch flux/bioavailability updates, competing models, asymmetric target trajectories and time-of-day adaptation, but do not provide exact cost/weights/priors/model mixing/learning rules. Define and test the estimator/objective/controller for delayed insulin, CGM-only observability and unannounced meals. Meal appearance and a free corrective glucose flux enter additively; unconstrained joint adaptation can confuse meal/sensor/sensitivity effects (`EQ-PUB-MATH-0010–0015`).
 
 ### Basis B: published MPC with moving-horizon estimation
 
@@ -138,25 +132,25 @@ The absolute-glucose argument `c(Cx+y_s)` is an **INFERENCE** from the plotted c
 
 The published comparator observer has a gain/sign-convention inconsistency (**INFERENCE**, arithmetic), with a scoped stability check. Re-derive any chosen observer under its predictor/filter convention; no numerical radius proves clinical closed-loop stability. Diurnal zone and IOB-constrained extensions are separate published work; figure-only IOB curves cannot be guessed, and meal-announcement bolus logic is not a fully closed-loop mechanism (`EQ-PUB-MATH-0023–0024`).
 
-The source's quantization/carry example is not an AAPS delivery rule. Each quantized command remains within active limits; no rounding residual authorizes make-up insulin across missed, suspended, partial or uncertain delivery, and discarding residuals is compliant. Delivery recording/reconciliation remains app-owned (`EQ-PUB-MATH-0022`; `CLM-PUB-MATH-REVIEW-0008`).
+Keep each quantized command within active limits. Rounding residuals must not make up insulin across missed, suspended, partial or uncertain delivery; they may be discarded. Delivery recording/reconciliation remains app-owned (`EQ-PUB-MATH-0022`; `CLM-PUB-MATH-REVIEW-0008`).
 
-### Desired capability and implementation choices
+### Adaptation
 
-The intended algorithm operates without compulsory routine meal announcement, responds to glucose trends, and includes explicitly bounded adaptation of insulin-need estimates, including time-of-day evaluation. For either basis, the implementer chooses the estimator, representation, rates/cadence, parameter bounds, objective, solver/discretization and startup/state strategy, documents why the selected quantities are identifiable enough, and tests meal/exercise/sensor confounding and inappropriate learning. Unknown commercial formulas do not block this work and do not justify silently dropping adaptation (`EQ-PUB-MATH-0015,0026`; the project adaptation requirement).
+For either basis, choose the adaptation representation, rate/cadence and parameter bounds. Justify identifiability, evaluate time-of-day needs, and test meal/exercise/sensor confounding and inappropriate learning (`EQ-PUB-MATH-0015,0026`).
 
-Safety/exposure/input-validity requirements above are mandatory behavior, not an optional supervisor merely because the research candidate omitted clinical augmentations. The implementer may choose where those checks live, but must preserve the composed protections and finite outputs. Closed original papers and further commercial characterization are optional corroboration, not a dependency of independent design.
+Preserve the required safety, exposure and input-validity checks regardless of the chosen model or adaptation method.
 
-### Evaluation options and remaining uncertainty
+### Evaluation
 
 Pinned simglucose code is MIT-licensed, but its virtual-cohort provenance/redistribution rights remain unresolved. It is a research S2008 reimplementation, not the FDA-accepted commercial simulator or a validated plant by virtue of downloading it. ReplayBG is GPL-3.0 and expects data in a prescribed format; use with purely synthetic inputs remains unverified here. A plant built from Basis A shares structure with Basis A control and cannot alone rule out shared-model bias (`SRC-PUB-MATH-0021–0024`).
 
-Before an implementation is considered ready, preregister meaningful scenarios and independently justified criteria for unannounced meals, stalled rises, low/falling glucose, sensitivity shifts, noise/gaps/stale clocks, recent manual/provisional insulin, state loss/corruption, repeated triggers, failed/partial/uncertain/skipped delivery and optimizer invalid/timeout outcomes. Compare behavior and risk boundaries, not numerical dose equality with Oref or any other controller. Build/review any required public-source simulation tooling on the isolated public side, verify plant/cohort provenance and check model mismatch or state the limitation. Passing simulation/replay is not clinical validation. Android timing/timeout and current integration paths need actual implementation tests; none are claimed performed by this research.
+Before implementation testing, define scenarios and independently justified criteria for unannounced meals, stalled rises, low/falling glucose, sensitivity shifts, noise/gaps/stale clocks, recent manual/provisional insulin, state loss/corruption, repeated triggers, failed/partial/uncertain/skipped delivery and optimizer invalid/timeout outcomes. Evaluate behavior and risk boundaries. Verify simulation-tool and cohort provenance, check model mismatch, and measure Android timing/timeout behavior through the actual integration.
 
 ## AAPS integration
 
 ### Controller input/output contract
 
-Source inspection is pinned to `27057fee47a9c06694cf8af24f1c07f36fa523c9`; path/hash identities are in `aaps-sources.json`. These describe existing integration seams, not a requirement to retain Oref-shaped interfaces. Revalidate them when a separately sanitized source baseline is supplied.
+Integration source identities are pinned in `aaps-sources.json`. Recheck these contracts when the source changes; interfaces may be redesigned for the new controller.
 
 | Input | Units / semantics | Adapter responsibility |
 |---|---|---|
@@ -176,13 +170,13 @@ Source inspection is pinned to `27057fee47a9c06694cf8af24f1c07f36fa523c9`; path/
 | Set TBR | Finite nonnegative absolute U/h and positive minutes | Apply constraints; test current equivalent-temp let-run deduplication. Reject nonzero rate with zero/negative duration; do not rely on current Loop to validate it. Choose durations supported by the active pump; assess exposure over the full commanded duration because a missed later cycle leaves the temp running. |
 | Automated bolus | Finite nonnegative U, capped and permission-gated | Existing platform may zero/reject it, and attempts it only after a TBR callback reports success/enacted. That can be a no-op, not proof of protective delivery. |
 | No valid decision | No APS result; no new command, previous temp persists | Document each composed invalid-input outcome and surfaced signal. Cancellation requires a tested trusted app/reference path; never invent a fallback profile or dose. |
-| Diagnostics and identity | Truthful new algorithm identity, source/evaluation timestamps, typed input echo, reasons/limiting factors and optional unit-labelled predictions | Add an honest result/input serialization path or clean independent interface; round-trip it and isolate existing Oref readers. No impersonation of an existing algorithm. |
+| Diagnostics and identity | New algorithm identity, source/evaluation timestamps, typed input echo, reasons/limiting factors and optional unit-labelled predictions | Add a dedicated result/input serialization path; round-trip it and isolate existing Oref readers. |
 
-The proposed replacement interface may express these as explicit variants instead of nullable Oref fields. Solver state may be persisted or rebuilt from history; no requirement to serialize warm starts or retain legacy plugin APIs. Fresh IOB, workflow-derived data ages and source timestamps must not be confused with refreshed command deadlines.
+Express recommendation intents explicitly. Solver state may be persisted or rebuilt from history. Keep source timestamps and derived-data ages separate from command deadlines.
 
 ### Integration verification checklist
 
-The implementer exercises these on isolated simulation/mocks, never a patient-connected pump. They are behavioral expectations, not exact Oref output comparisons or requirements to finish testing before an implementation exists:
+Exercise these with simulation/mocks, never a patient-connected pump:
 
 1. Active finite exposure/rate limits and applicable zero constraints; mode/SMB preference/fallback denial produces no bolus.
 2. No-change/cancel/set/let-run intents survive result cloning and truthful typed persistence round-trips; nonfinite data and serialization failure are rejected, surfaced and have an observed composed outcome.

@@ -1,6 +1,6 @@
 {
-  "revision": "27057fee47a9c06694cf8af24f1c07f36fa523c9",
-  "scope": "Source inspection at this revision only. Revalidate on the separately sanitized integration baseline.",
+  "revision": "21bfeeae8431b229361db8836ccdc57c62880de5",
+  "scope": "Integration source baseline. Recheck contracts when these files change.",
   "sources": [
     {
       "id": "SRC-AAPS-REVIEW-001",
@@ -85,7 +85,7 @@
     {
       "id": "SRC-AAPS-REVIEW-027",
       "path": "plugins/main/src/main/kotlin/app/aaps/plugins/main/iob/iobCobCalculator/IobCobCalculatorPlugin.kt",
-      "sha256": "87cdfa309437c3be3a7290ce9ac18d947a790bafb5d9b49635649567f66da68f"
+      "sha256": "b6662efb3e661f8e12fb782858d789d88913e020866d51888aedbb8042fed120"
     },
     {
       "id": "SRC-AAPS-REVIEW-028",
@@ -150,7 +150,7 @@
     {
       "id": "SRC-AAPS-REVIEW-047",
       "path": "gradle/libs.versions.toml",
-      "sha256": "366aea8b35473d43d0759781232240b07c366f36ec7e0c1344a0a7bc93577abd"
+      "sha256": "5d1659063b60fe30608eb2210f7cfea76d159a7b7486c9fe8d644cd8b6d007ae"
     },
     {
       "id": "SRC-AAPS-REVIEW-049",

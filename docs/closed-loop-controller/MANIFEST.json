@@ -3,33 +3,33 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 5960,
-      "sha256": "3e00b65368a761d1b81a0afd1199fe606d7d1531044cd9c5a669e987d63cc9b9"
+      "bytes": 1454,
+      "sha256": "2a6bbdd188899e101993b19063f0a04875a0ec1e00e5399ed38544154975f670"
     },
     {
       "path": "SPEC.md",
-      "bytes": 28511,
-      "sha256": "807f0fe723454f6c327f88cee20035b96e3febaef7a6dac7dd22726a751f30f5"
+      "bytes": 24632,
+      "sha256": "f3d09cf7c58fa4ee2539ddb649819ba63900cc4e96c61b0dff015fd2ea85aa42"
     },
     {
       "path": "aaps-sources.json",
-      "bytes": 7829,
-      "sha256": "2ada41b6522ba6fac2775d6893f8cdb4a99f2fd4206b85c65caeb1132e697e94"
+      "bytes": 7799,
+      "sha256": "79f65de07829684814783ad2859b32b73b29e7a79ccbe6184f2d2378e6d116be"
     },
     {
       "path": "claims.jsonl",
-      "bytes": 94196,
-      "sha256": "148962cf2c733077016927db1f826c9a4d8fe0872753cdd070669e5f35df1e96"
+      "bytes": 82676,
+      "sha256": "922c21783806a2ec2cc3e9a8472a68336101c58a8bb175fe623fe00558922ab0"
     },
     {
       "path": "equations.jsonl",
-      "bytes": 86924,
-      "sha256": "35da9316aaa1678ae86804313d2ad081dbb97867c047337e5ef59473e33b9af5"
+      "bytes": 83596,
+      "sha256": "ab9cc6f544b16afc6c08985e0a269209849fbafc14eb83d257dd6bb8380c53cc"
     },
     {
       "path": "sources.jsonl",
-      "bytes": 99564,
-      "sha256": "df79acca9cc22a794138fedd3155b36cf8f683e80fd791495b54e34d376f4d1d"
+      "bytes": 89068,
+      "sha256": "5debe3f1f85ffd8bbf21fef20828b1966e08564930cbe16a4868184176202235"
     }
   ],
   "scope": "Documentation-only transfer; no repository history/source code or research archives. Manifest excludes itself."
