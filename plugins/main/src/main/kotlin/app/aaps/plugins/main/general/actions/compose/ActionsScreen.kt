@@ -1,6 +1,5 @@
 package app.aaps.plugins.main.general.actions.compose
 
-import android.widget.Toast
 import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,6 +33,7 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.TintIcon
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.ui.toast.ToastUtils
 
 /**
  * Redesigned Actions & Careportal screen (handoff Section 3): Therapy 2-col cards, a "Log an event"
@@ -110,7 +110,7 @@ private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionI
         color = if (accent) colors.accentTint else colors.surface,
         onClick = when {
             t.enabled -> ({ onAction(t.id) })
-            explainUnavailable -> ({ Toast.makeText(context, t.unavailableReason, Toast.LENGTH_SHORT).show() })
+            explainUnavailable -> ({ ToastUtils.infoToast(context, t.unavailableReason) })
             else -> null
         },
     ) {

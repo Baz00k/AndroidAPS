@@ -6,7 +6,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.Toast
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -53,6 +52,7 @@ import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.elements.SingleClickButton
 import app.aaps.core.ui.extensions.toVisibility
+import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.plugins.main.R
 import app.aaps.plugins.main.databinding.ActionsFragmentBinding
 import app.aaps.plugins.main.general.actions.compose.ActionId
@@ -294,7 +294,7 @@ class ActionsFragment : DaggerFragment() {
 
             ActionId.PROFILE_SWITCH -> {
                 val reason = profileSwitchUnavailableReason()
-                if (reason != null) Toast.makeText(activity, rh.gs(reason), Toast.LENGTH_SHORT).show()
+                if (reason != null) ToastUtils.infoToast(activity, rh.gs(reason))
                 else bolusProtected { uiInteraction.runProfileSwitchDialog(childFragmentManager) }
             }
             ActionId.FILL          -> bolusProtected { uiInteraction.runFillDialog(childFragmentManager) }
