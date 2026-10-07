@@ -13,11 +13,16 @@ data class HomeGlucose(
     fun isFresh(now: Long): Boolean = reading?.timestamp?.let { it <= now && it > now - 9 * 60_000L } == true
 
     companion object {
+        /** Prefer the later-inserted database record when sensor sources share a timestamp. */
+        fun sensorReadings(readings: List<GV>, now: Long): List<GV> = readings
+            .filter { it.isValid && it.value.isFinite() && it.value >= 39 && it.timestamp in 0..now }
+            .sortedWith(compareByDescending<GV> { it.timestamp }.thenByDescending { it.id })
+            .distinctBy { it.timestamp }
+            .reversed()
+
         fun from(readings: List<GV>, now: Long): HomeGlucose {
             // The database's glucose-history query excludes sensor error values below 39 mg/dL.
-            val samples = readings.filter { it.isValid && it.value.isFinite() && it.value >= 39 && it.timestamp <= now }
-                .sortedByDescending { it.timestamp }
-                .distinctBy { it.timestamp }
+            val samples = sensorReadings(readings, now).asReversed()
             val latest = samples.firstOrNull() ?: return HomeGlucose()
             // Keep delta in mg/dL per five minutes regardless of the sensor's reporting interval.
             // Use an actual sample nearest five minutes ago; do not bridge a large gap or invent zero.

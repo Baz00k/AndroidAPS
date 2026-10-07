@@ -68,6 +68,16 @@ class HomeGlucoseTest {
         assertEquals(-11.0, glucose.deltaMgdl)
     }
 
+    @Test fun `later inserted sensor record wins timestamp ties independent of input order`() {
+        val firstSource = reading(0, 120.0, TrendArrow.SINGLE_UP).copy(id = 2, sourceSensor = SourceSensor.LIBRE_2)
+        val laterSource = reading(0, 99.0, TrendArrow.SINGLE_DOWN).copy(id = 3)
+        for (samples in listOf(listOf(firstSource, laterSource), listOf(laterSource, firstSource))) {
+            val glucose = HomeGlucose.from(samples, now)
+            assertEquals(laterSource, glucose.reading)
+            assertEquals(TrendArrow.SINGLE_DOWN, glucose.trend)
+        }
+    }
+
     @Test fun `irregular timestamps normalize the delta by actual elapsed time`() {
         val previous = reading(5, 110.0).copy(timestamp = now - 330_000L)
         assertEquals(-10.0, HomeGlucose.from(listOf(reading(0, 99.0), previous), now).deltaMgdl)

@@ -699,19 +699,14 @@ class OverviewFragment : DaggerFragment() {
             val now = dateUtil.now()
             val from = now - CHART_HISTORY_MS
             try {
-                val readings = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true)
-                    .filter { it.isValid && it.value.isFinite() && it.value > 0.0 && it.timestamp in from..now }
-                // Keep the last reading visible as stale even after it leaves the chart's 24h window.
-                val glucose = HomeGlucose.from(
-                    readings.ifEmpty { listOfNotNull(persistenceLayer.getLastGlucoseValue()) }, now
-                )
-                val chart = try { buildChartData(readings, from, now) } catch (e: Exception) {
+                val snapshot = HomeGlucoseSnapshot.load(persistenceLayer, from, now)
+                val chart = try { buildChartData(snapshot.readings, from, now) } catch (e: Exception) {
                     fabricPrivacy.logException(e)
                     HomeChartData()
                 }
                 runOnUiThread {
                     if (composeHome != null) {
-                        sensorGlucose = glucose
+                        sensorGlucose = snapshot.glucose
                         chartData.value = chart
                         buildHomeState()
                     }
