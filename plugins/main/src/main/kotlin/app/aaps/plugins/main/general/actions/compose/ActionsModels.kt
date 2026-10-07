@@ -18,6 +18,7 @@ data class TherapyAction(
     val enabled: Boolean = true,
     val disabledSub: String = "",
     val active: Boolean = false,
+    val unavailableReason: String = "",
 )
 
 @Immutable

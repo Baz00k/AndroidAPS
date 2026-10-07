@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.profile.ProfileSource
 import app.aaps.core.interfaces.pump.Pump
+import app.aaps.plugins.main.R
 import app.aaps.plugins.main.general.actions.compose.ActionId
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -18,26 +19,26 @@ import org.mockito.kotlin.whenever
 
 class ActionsProfileStateTest : TestBaseWithProfile() {
 
+    enum class Availability { READY, UNSUPPORTED, SOURCE_UNAVAILABLE, UNINITIALIZED, DISCONNECTED, SUSPENDED }
+
     private val pump: Pump = mock()
     private val source: ProfileSource = mock()
     private val loop: Loop = mock()
-    private val persistence: PersistenceLayer = mock()
     private lateinit var fragment: ActionsFragment
-    private lateinit var description: PumpDescription
-    private val customizedName = "Daily (80%, +1h)"
+    private val description = PumpDescription().apply {
+        isTempBasalCapable = false
+        isExtendedBolusCapable = false
+        isSetBasalProfileCapable = true
+    }
 
     @BeforeEach fun setupState() {
-        description = PumpDescription().apply {
-            isTempBasalCapable = false
-            isExtendedBolusCapable = false
-            isSetBasalProfileCapable = true
-        }
         whenever(pump.pumpDescription).thenReturn(description)
         whenever(pump.isInitialized()).thenReturn(true)
         whenever(activePlugin.activePump).thenReturn(pump)
         whenever(activePlugin.activeProfileSource).thenReturn(source)
         whenever(source.profile).thenReturn(profileStoreProvider.get())
-        whenever(profileFunction.getProfileName()).thenReturn(customizedName)
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        whenever(profileFunction.getProfileName()).thenReturn("Daily (80%, +1h)")
         whenever(loop.runningMode).thenReturn(RM.Mode.CLOSED_LOOP)
         fragment = ActionsFragment().also {
             it.activePlugin = activePlugin
@@ -46,54 +47,51 @@ class ActionsProfileStateTest : TestBaseWithProfile() {
             it.dateUtil = dateUtil
             it.config = config
             it.loop = loop
-            it.persistenceLayer = persistence
+            it.persistenceLayer = mock<PersistenceLayer>()
             it.rh = rh
         }
     }
 
-    @Test fun `profile switch button displays the active customized profile`() {
-        val action = fragment.buildActionsState().therapy.single { it.id == ActionId.PROFILE_SWITCH }
-        assertThat(action.sub).isEqualTo(customizedName)
-        assertThat(action.enabled).isTrue()
-    }
-
     @ParameterizedTest
-    @EnumSource(RM.Mode::class)
-    fun `profile switch follows original AAPS loop mode visibility`(mode: RM.Mode) {
-        whenever(loop.runningMode).thenReturn(mode)
-        val state = fragment.buildActionsState()
-        assertThat(state.therapy.any { it.id == ActionId.PROFILE_SWITCH }).isEqualTo(mode != RM.Mode.DISCONNECTED_PUMP)
+    @EnumSource(Availability::class)
+    fun `profile stays visible and unavailable switching has a reason`(availability: Availability) {
+        val reasonResource = when (availability) {
+            Availability.READY -> null
+            Availability.UNSUPPORTED -> {
+                description.isSetBasalProfileCapable = false
+                R.string.actions_profile_switch_unsupported
+            }
+            Availability.SOURCE_UNAVAILABLE -> {
+                whenever(source.profile).thenReturn(null)
+                R.string.actions_profile_source_unavailable
+            }
+            Availability.UNINITIALIZED -> {
+                whenever(pump.isInitialized()).thenReturn(false)
+                R.string.actions_profile_pump_not_initialized
+            }
+            Availability.DISCONNECTED -> {
+                whenever(loop.runningMode).thenReturn(RM.Mode.DISCONNECTED_PUMP)
+                app.aaps.core.ui.R.string.pump_disconnected
+            }
+            Availability.SUSPENDED -> {
+                whenever(pump.isSuspended()).thenReturn(true)
+                app.aaps.core.ui.R.string.pump_suspended
+            }
+        }
+        reasonResource?.let { whenever(rh.gs(it)).thenReturn("Unavailable reason") }
+
+        val profile = fragment.buildActionsState().therapy.single { it.id == ActionId.PROFILE_SWITCH }
+        assertThat(profile.sub).isEqualTo("Daily (80%, +1h)")
+        assertThat(profile.enabled).isEqualTo(availability == Availability.READY)
+        assertThat(profile.unavailableReason).isEqualTo(if (availability == Availability.READY) "" else "Unavailable reason")
     }
 
-    @Test fun `profile switch is hidden while pump is suspended`() {
-        whenever(pump.isSuspended()).thenReturn(true)
-        val state = fragment.buildActionsState()
-        assertThat(state.therapy.none { it.id == ActionId.PROFILE_SWITCH }).isTrue()
-    }
+    @Test fun `missing active profile is explicit and permits an initial switch`() {
+        whenever(profileFunction.getProfile()).thenReturn(null)
+        whenever(rh.gs(app.aaps.core.ui.R.string.no_profile_set)).thenReturn("No profile set")
 
-    @Test fun `profile switch is hidden before pump initialization`() {
-        whenever(pump.isInitialized()).thenReturn(false)
-        val state = fragment.buildActionsState()
-        assertThat(state.therapy.none { it.id == ActionId.PROFILE_SWITCH }).isTrue()
-    }
-
-    @Test fun `profile switch is hidden when pump cannot set a basal profile`() {
-        description.isSetBasalProfileCapable = false
-        val state = fragment.buildActionsState()
-        assertThat(state.therapy.none { it.id == ActionId.PROFILE_SWITCH }).isTrue()
-    }
-
-    @Test fun `profile switch is hidden when profile source is unavailable`() {
-        whenever(source.profile).thenReturn(null)
-        val state = fragment.buildActionsState()
-        assertThat(state.therapy.none { it.id == ActionId.PROFILE_SWITCH }).isTrue()
-    }
-
-    @Test fun `missing active profile is explicit and does not prevent selecting an initial profile`() {
-        whenever(profileFunction.getProfileName()).thenReturn("No profile set")
-        val state = fragment.buildActionsState()
-        val action = state.therapy.single { it.id == ActionId.PROFILE_SWITCH }
-        assertThat(action.sub).isEqualTo("No profile set")
-        assertThat(action.enabled).isTrue()
+        val profile = fragment.buildActionsState().therapy.single { it.id == ActionId.PROFILE_SWITCH }
+        assertThat(profile.sub).isEqualTo("No profile set")
+        assertThat(profile.enabled).isTrue()
     }
 }

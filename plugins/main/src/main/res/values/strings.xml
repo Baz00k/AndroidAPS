@@ -146,6 +146,9 @@
     <string name="value_system_theme" translatable="false">system</string>
 
     <!-- Profile -->
+    <string name="actions_profile_switch_unsupported">This pump does not support basal profile programming from AAPS.</string>
+    <string name="actions_profile_source_unavailable">Profile source unavailable</string>
+    <string name="actions_profile_pump_not_initialized">Pump not initialized</string>
     <string name="localprofile">Profile</string>
     <string name="localprofile_shortname">LP</string>
     <string name="description_profile_local">Define a profile describing your insulin needs.</string>

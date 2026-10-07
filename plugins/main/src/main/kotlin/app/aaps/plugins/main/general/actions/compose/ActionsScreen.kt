@@ -22,6 +22,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,6 +33,7 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.TintIcon
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.ui.toast.ToastUtils
 
 /**
  * Redesigned Actions & Careportal screen (handoff Section 3): Therapy 2-col cards, a "Log an event"
@@ -94,17 +99,27 @@ private fun SectionLabel(text: String) =
 private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionId) -> Unit) {
     val colors = AapsTheme.colors
     val accent = t.cancelable || t.active
+    val context = LocalContext.current
+    val explainUnavailable = !t.enabled && t.unavailableReason.isNotBlank()
     AapsCard(
-        modifier = modifier,
+        modifier = when {
+            explainUnavailable -> modifier.semantics { stateDescription = t.unavailableReason }
+            !t.enabled -> modifier.semantics(mergeDescendants = true) { disabled() }
+            else -> modifier
+        },
         color = if (accent) colors.accentTint else colors.surface,
-        onClick = if (t.enabled) ({ onAction(t.id) }) else null,
+        onClick = when {
+            t.enabled -> ({ onAction(t.id) })
+            explainUnavailable -> ({ ToastUtils.infoToast(context, t.unavailableReason) })
+            else -> null
+        },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TintIcon(iconFor(t.id), tint = if (accent) colors.accentOnLight else colors.accent, background = colors.controlFill)
+            TintIcon(iconFor(t.id), tint = if (!t.enabled) colors.textTertiary else if (accent) colors.accentOnLight else colors.accent, background = colors.controlFill)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                Text(t.label, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.label, style = AapsTheme.type.listTitle, color = if (t.enabled) colors.textPrimary else colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    if (!t.enabled) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
+                    if (!t.enabled && t.disabledSub.isNotBlank()) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
                     style = AapsTheme.type.caption,
                     color = if (accent) colors.accentOnLight else colors.textTertiary,
                     maxLines = if (t.active) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis
