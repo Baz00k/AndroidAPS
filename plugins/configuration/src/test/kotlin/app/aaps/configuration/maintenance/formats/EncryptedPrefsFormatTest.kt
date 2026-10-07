@@ -4,11 +4,13 @@ import android.content.ContentResolver
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import app.aaps.core.interfaces.maintenance.PrefMetadata
+import app.aaps.core.interfaces.protection.SecureEncrypt
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.objects.crypto.CryptoUtil
 import app.aaps.implementation.protection.SecureEncryptImpl
 import app.aaps.plugins.configuration.maintenance.PrefsMetadataKeyImpl
 import app.aaps.plugins.configuration.maintenance.data.PrefFormatError
+import app.aaps.plugins.configuration.maintenance.data.PrefIOError
 import app.aaps.plugins.configuration.maintenance.data.Prefs
 import app.aaps.plugins.configuration.maintenance.data.PrefsFormat
 import app.aaps.plugins.configuration.maintenance.data.PrefsStatusImpl
@@ -18,8 +20,15 @@ import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.TruthJUnit.assume
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.mockito.ArgumentMatchers
 import org.mockito.Mock
+import org.mockito.kotlin.any
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.spy
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import kotlin.test.assertFailsWith
 
@@ -127,6 +136,34 @@ open class EncryptedPrefsFormatTest : TestBase() {
         assertThat(prefsOut.metadata[PrefsMetadataKeyImpl.FILE_FORMAT]!!.status).isEqualTo(PrefsStatusImpl.OK)
         assertThat(prefsOut.metadata[PrefsMetadataKeyImpl.FILE_FORMAT]!!.value).isEqualTo(PrefsFormat.FORMAT_KEY_ENC)
         assertThat(prefsOut.metadata[PrefsMetadataKeyImpl.ENCRYPTION]!!.status).isEqualTo(PrefsStatusImpl.OK)
+    }
+
+    @ParameterizedTest
+    @CsvSource("'', false", "existing encrypted backup, false", "'', true", "existing encrypted backup, true")
+    fun encryptionFailureDoesNotWritePreferences(existingContents: String, cachedPassword: Boolean) {
+        val storage = spy(SingleStringStorage(existingContents))
+        val failingCrypto = mock<CryptoUtil>()
+        whenever(failingCrypto.mineSalt()).thenReturn(ByteArray(32))
+        whenever(failingCrypto.encrypt(any(), any(), any())).thenReturn(null)
+        val encryptedFormat = EncryptedPrefsFormat(rh, failingCrypto, storage, context)
+        val password = if (cachedPassword) "synthetic cached password" else "synthetic-password"
+        encryptedFormat.secureEncrypt = mock<SecureEncrypt>().also {
+            whenever(it.isValidDataString(password)).thenReturn(cachedPassword)
+            if (cachedPassword) whenever(it.decrypt(password)).thenReturn("synthetic-password")
+        }
+        val prefs = Prefs(
+            mapOf("exportable_secret" to "synthetic secret"),
+            mapOf(PrefsMetadataKeyImpl.ENCRYPTION to PrefMetadata("Enabled", PrefsStatusImpl.OK))
+        )
+
+        val error = assertFailsWith<PrefIOError> {
+            encryptedFormat.savePreferences(getMockedFile(), prefs, password)
+        }
+
+        assertThat(error.message).isEqualTo("Cannot encrypt settings export")
+        verify(failingCrypto).encrypt(any(), any(), any())
+        verify(storage, never()).putFileContents(any<ContentResolver>(), any<DocumentFile>(), any())
+        assertThat(storage.contents).isEqualTo(existingContents)
     }
 
     @Test
