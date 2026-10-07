@@ -17,7 +17,6 @@ android {
 
 dependencies {
     implementation(project(":core:compose"))
-    api(project(":libre3"))
     implementation(project(":core:data"))
     implementation(project(":core:interfaces"))
     implementation(project(":core:keys"))

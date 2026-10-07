@@ -9,6 +9,9 @@ import app.aaps.plugins.main.iob.iobCobCalculator.data.AutosensDataStoreObject
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
+import org.mockito.kotlin.whenever
 
 class AutosensDataStoreBucketingReplayTest : TestBaseWithProfile() {
 
@@ -64,24 +67,111 @@ class AutosensDataStoreBucketingReplayTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `dense replay includes duplicate readings in centered means`() {
+    fun `one minute replay preserves grid samples rather than averaging nearby duplicates`() {
         val readings = (0L..11).map { reading(it, 100.0 + 10 * it) }.toMutableList()
         readings.add(6, reading(5, 250.0))
 
-        // Newest slot has 3 samples; the middle has 6 including the duplicate; the oldest has 4.
+        // All three grid timestamps have measured values. An off-grid reading or a second
+        // record at minute 5 must not replace those values with a centered-window mean.
         assertThat(replay(readings)).containsExactly(
-            bucket(0, 110.0), bucket(5, 1000.0 / 6), bucket(10, 195.0)
+            bucket(0, 100.0, trendArrow = TrendArrow.FLAT),
+            bucket(5, 150.0, trendArrow = TrendArrow.FLAT),
+            bucket(10, 200.0, trendArrow = TrendArrow.FLAT)
         ).inOrder()
     }
 
     @Test
-    fun `dense replay bridges empty slot without changing sample provenance`() {
+    fun `one minute replay marks interpolated gap slots and preserves measured slots`() {
         val readings = (0L..5).map { reading(it, 100.0 + 10 * it) } +
             (17L..22).map { reading(it, 100.0 + 10 * it) }
 
         assertThat(replay(readings)).containsExactly(
-            bucket(0, 110.0), bucket(5, 140.0), bucket(10, 200.0, true), bucket(15, 270.0), bucket(20, 300.0)
+            bucket(0, 100.0, trendArrow = TrendArrow.FLAT),
+            bucket(5, 150.0, trendArrow = TrendArrow.FLAT),
+            bucket(10, 200.0, true), bucket(15, 250.0, true),
+            bucket(20, 300.0, trendArrow = TrendArrow.FLAT)
         ).inOrder()
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = [1, 2, 3, 5])
+    fun `reporting frequency does not add a centered average`(intervalMinutes: Int) {
+        val readings = (0L..30L step intervalMinutes.toLong()).map { reading(it, 100.0 + 2 * it) }
+
+        // The same linear signal has the same grid values at every reporting frequency:
+        // exact samples for one/five-minute feeds, interpolation where two/three-minute
+        // feeds have no measurement at a grid timestamp.
+        assertThat(replay(readings)?.map { it.timestamp to it.value }).containsExactlyElementsIn(
+            (0L..30L step 5).map { reading(it, 100.0 + 2 * it).let { gv -> gv.timestamp to gv.value } }
+        ).inOrder()
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `one minute replay passes recent rise or fall to dosing glucose status`(rising: Boolean) {
+        val latest = if (rising) 180.0 else 140.0
+        val older = if (rising) 140.0 else 180.0
+        val readings = (0L..45L).map { minute ->
+            reading(minute, when (minute) {
+                0L   -> latest
+                1L   -> if (rising) 170.0 else 150.0
+                2L   -> 160.0
+                else -> older
+            })
+        }
+        val store = AutosensDataStoreObject().also {
+            it.bgReadings = readings
+            it.createBucketedData(aapsLogger, dateUtil)
+        }
+        whenever(iobCobCalculator.ads).thenReturn(store)
+        whenever(dateUtil.now()).thenReturn(readings.first().timestamp)
+
+        val status = glucoseStatusCalculatorSMB.getGlucoseStatusData(false)!!
+
+        // The previous five-minute reading is the old plateau, so the last delta is
+        // exactly +/-40 mg/dL per five minutes. A centered newest mean would soften it.
+        assertThat(status.glucose).isEqualTo(latest)
+        assertThat(status.delta).isEqualTo(latest - older)
+        assertThat(status.date).isEqualTo(readings.first().timestamp)
+
+        whenever(dateUtil.now()).thenReturn(readings.first().timestamp + T.mins(7).msecs() + 1)
+        assertThat(glucoseStatusCalculatorSMB.getGlucoseStatusData(false)).isNull()
+    }
+
+    @Test
+    fun `five minute samples stay measured with older one minute history`() {
+        val readings = listOf(reading(0, 140.0), reading(5, 150.0), reading(10, 160.0)) +
+            (11L..30L).map { reading(it, 180.0) }
+
+        assertThat(replay(readings)?.take(3)).containsExactly(
+            bucket(0, 140.0, trendArrow = TrendArrow.FLAT),
+            bucket(5, 150.0, trendArrow = TrendArrow.FLAT),
+            bucket(10, 160.0, trendArrow = TrendArrow.FLAT)
+        ).inOrder()
+    }
+
+    @Test
+    fun `low error reading is not hidden by averaging adjacent valid readings`() {
+        val readings = (0L..10L).map { reading(it, if (it == 0L) 38.0 else 150.0) }
+
+        assertThat(replay(readings)?.first()).isEqualTo(bucket(0, 38.0, trendArrow = TrendArrow.FLAT))
+    }
+
+    @Test
+    fun `later off-grid reading does not rewrite an existing measured bucket`() {
+        val readings = (0L..15L).map { reading(it, 100.0 + 10 * it) }
+        val store = AutosensDataStoreObject().also {
+            it.bgReadings = readings
+            it.createBucketedData(aapsLogger, dateUtil)
+        }
+        assertThat(store.bucketedData?.first()).isEqualTo(bucket(0, 100.0, trendArrow = TrendArrow.FLAT))
+
+        store.bgReadings = listOf(reading(-1, 90.0)) + readings
+        store.createBucketedData(aapsLogger, dateUtil)
+
+        // The established grid still starts at minute 0. Its measurement remains 100,
+        // rather than changing as the new minute joins a centered averaging window.
+        assertThat(store.bucketedData?.first()).isEqualTo(bucket(0, 100.0, trendArrow = TrendArrow.FLAT))
     }
 
     @Test

@@ -37,8 +37,8 @@ wear/pumpcontrol/*
 # Native (NDK) build intermediates
 .cxx/
 
-# --- Libre 3 native CGM: keep live-sensor secrets out of the public repo ---
-# This test embeds a REAL sensor's BLE PIN + derived session keys (see libre3/README.md).
+# Keep any local secrets/captures from the removed native CGM out of the repo.
+# This test embeds a real sensor's BLE PIN and derived session keys.
 libre3/src/test/kotlin/app/aaps/libre3/Libre3SecuritySessionTest.kt
 # Per-sensor credentials + capture traces (these also live outside the repo, in realdata/):
 **/libre3-credentials.json

@@ -160,7 +160,7 @@ data class UserEntry(
         Glunovo,
         Intelligo,
         Xdrip,
-        Libre3,
+        Libre3,             // Retained to decode historical entries from the removed native BG source
         LocalProfile,       //From LocalProfile plugin
         Loop,               //From Loop plugin
         Maintenance,        //From Maintenance plugin
