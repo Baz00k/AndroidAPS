@@ -130,23 +130,33 @@ class GlucoseInputDosingReplayTest : TestBaseWithProfile() {
             whenever(dateUtil.now()).thenReturn(clock)
             store.bgReadings = history.toList()
             store.createBucketedData(aapsLogger, dateUtil)
-            assertThat(store.bucketedData!!.first().value).isEqualTo(glucose)
+            // The retained slots sample the excursion at 100, 150, 200, 150, 100
+            // mg/dL, then the recovered plateau. Intermediate readings must not re-anchor.
+            val slotMinute = minute / 5 * 5
+            val slotTime = now + T.mins(slotMinute).msecs()
+            val slotGlucose = when (slotMinute) {
+                5L, 15L -> 150.0
+                10L     -> 200.0
+                else    -> 100.0
+            }
+            assertThat(store.bucketedData!!.first().timestamp).isEqualTo(slotTime)
+            assertThat(store.bucketedData!!.first().value).isEqualTo(slotGlucose)
             assertThat(store.bucketedData!!.first().filledGap).isFalse()
             store.bucketedData = smoothing.smooth(store.bucketedData!!)
 
-            // Production computes on a clone and publishes it. The reference/grid is not
-            // retained by clone today: do not turn same-instance stability into a claim
-            // about worker replacement, or adopt the deferred reference-time fix here.
+            // Production computes on a clone and publishes it, retaining the grid.
+            // Replay proposals on every calculation; automatic loop eligibility is tested separately.
             store = store.clone() as AutosensDataStoreObject
             whenever(iobCobCalculator.ads).thenReturn(store)
             val status = autoStatus.getGlucoseStatusData(false)!!
             val smbStatus = glucoseStatusCalculatorSMB.getGlucoseStatusData(false)!!
-            assertThat(status.date).isEqualTo(clock)
+            assertThat(status.date).isEqualTo(slotTime)
+            assertThat(smbStatus.date).isEqualTo(slotTime)
             assertThat(status.glucose).isEqualTo(smbStatus.glucose)
             assertThat(status.delta).isEqualTo(smbStatus.delta)
             assertThat(status.glucose.isFinite()).isTrue()
             assertThat(status.bgAcceleration.isFinite()).isTrue()
-            if (smoothingName != "exponential") assertThat(status.glucose).isEqualTo(glucose)
+            if (smoothingName != "exponential") assertThat(status.glucose).isEqualTo(slotGlucose)
             if (minute == 10L) {
                 assertThat(status.delta).isGreaterThan(0.0)
                 if (smoothingName != "exponential") assertThat(status.delta).isEqualTo(50.0)
