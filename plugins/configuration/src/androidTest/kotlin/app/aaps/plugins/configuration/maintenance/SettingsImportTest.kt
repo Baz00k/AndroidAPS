@@ -6,16 +6,22 @@ import androidx.datastore.preferences.core.PreferencesSerializer
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.documentfile.provider.DocumentFile
+import androidx.fragment.app.FragmentActivity
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.aaps.core.data.model.GlucoseUnit
+import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.configuration.Config
+import app.aaps.core.interfaces.configuration.ConfigBuilder
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.maintenance.FileListProvider
 import app.aaps.core.interfaces.maintenance.PrefMetadata
 import app.aaps.core.interfaces.maintenance.PrefsMetadataKey
+import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanComposedKey
 import app.aaps.core.keys.BooleanKey
@@ -51,7 +57,11 @@ import org.junit.Test
 import org.junit.Assert.assertThrows
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import java.io.File
 import java.security.KeyStore
@@ -72,6 +82,8 @@ class SettingsImportTest {
     private lateinit var settingsImport: SettingsImport
     private lateinit var profileUtil: ProfileUtilImpl
     private lateinit var file: File
+    private var importCommitAttempts = 0
+    private val blockedPreferenceFiles = mutableListOf<File>()
 
     private enum class PluginBooleanKey : BooleanComposedNonPreferenceKey {
         NestedWidgetFlag;
@@ -101,7 +113,13 @@ class SettingsImportTest {
     @Before
     fun setUp() {
         stored = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
-        val sp = SPImpl(stored, context)
+        val delegate = SPImpl(stored, context)
+        val sp = object : SP by delegate {
+            override fun commit(block: SP.Editor.() -> Unit): Boolean {
+                importCommitAttempts++
+                return delegate.commit(block)
+            }
+        }
         val rh = mock<ResourceHelper>()
         whenever(rh.gs(any())).thenAnswer { context.getString(it.arguments[0] as Int) }
         whenever(rh.gs(any(), any<String>())).thenAnswer { context.getString(it.arguments[0] as Int, it.arguments[1]) }
@@ -122,6 +140,11 @@ class SettingsImportTest {
 
     @After
     fun tearDown() {
+        // Remove only the UUID-named paths created by the disk-failure tests.
+        blockedPreferenceFiles.forEach { blocked ->
+            File(blocked, "blocker").delete()
+            blocked.delete()
+        }
         context.deleteSharedPreferences(preferencesName)
         file.delete()
         KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(preferencesName) }
@@ -238,7 +261,7 @@ class SettingsImportTest {
     fun replacementResetsOmittedSafetySettingsToDeclaredDefaults() {
         seedExistingSettings()
         val checked = settingsImport.check(encrypt(mapOf(StringKey.GeneralPatientName.key to "replacement")), password)
-        settingsImport.apply(checked)
+        assertThat(settingsImport.apply(checked)).isTrue()
 
         assertThat(preferences.get(StringKey.GeneralPatientName)).isEqualTo("replacement")
         assertThat(stored.contains(DoubleKey.SafetyMaxBolus.key)).isFalse()
@@ -246,6 +269,41 @@ class SettingsImportTest {
         assertThat(preferences.get(DoubleKey.SafetyMaxBolus)).isWithin(0.000001).of(3.0)
         assertThat(preferences.get(StringKey.SafetyAge)).isEqualTo("adult")
         assertThat(preferences.get(BooleanKey.GeneralSimpleMode)).isTrue()
+    }
+
+    @Test
+    fun failedImportExitsWithoutSuccessHooksHousekeepingOrRetry() {
+        val checked = prepareFailedWrite()
+        val activePlugin = mock<ActivePlugin>()
+        val configBuilder = mock<ConfigBuilder>()
+        val rxBus = mock<RxBus>()
+        val activity = mock<FragmentActivity>()
+        val rh = mock<ResourceHelper>()
+        whenever(rh.gs(any())).thenAnswer { context.getString(it.arguments[0] as Int) }
+        val importer = ImportExportPrefsImpl(
+            aapsLogger = mock(), rh = rh, preferences = preferences, config = config,
+            persistenceLayer = mock(), rxBus = rxBus, passwordCheck = mock(), exportPasswordDataStore = mock(),
+            encryptedPrefsFormat = format, prefFileList = mock(), dateUtil = mock(), uiInteraction = mock(),
+            context = context, dataWorkerStorage = mock(), activePlugin = activePlugin, configBuilder = configBuilder,
+            cloudStorageManager = mock(), exportOptionsDialog = mock(), importSourceDialog = mock(), settingsImport = settingsImport
+        )
+
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            importer.applyImportedSettings(activity, checked)
+        }
+
+        inOrder(activePlugin, activity, configBuilder) {
+            verify(activePlugin).beforeImport()
+            verify(activity).finish()
+            verify(configBuilder).exitApp("Import persistence failure", Sources.Maintenance, false)
+        }
+        verify(activePlugin, never()).afterImport()
+        verify(rh, never()).gs(app.aaps.plugins.configuration.R.string.setting_imported)
+        verify(rh).gs(app.aaps.plugins.configuration.R.string.preferences_import_persistence_failed)
+        verifyNoInteractions(rxBus)
+        assertThat(stored.contains(BooleanKey.GeneralSetupWizardProcessed.key)).isFalse()
+        assertUnpersistedReplacementIsActive()
+        assertThat(importCommitAttempts).isEqualTo(1)
     }
 
     @Test
@@ -371,6 +429,30 @@ class SettingsImportTest {
         preferences.put(LongNonKey.LocalProfileLastChange, 1_600_000_000_321L)
     }
 
+    private fun prepareFailedWrite(): SettingsImport.Check {
+        seedExistingSettings()
+        assertThat(stored.edit().commit()).isTrue() // Flush outstanding apply() writes before blocking disk access.
+        val checked = settingsImport.check(encrypt(mapOf(StringKey.GeneralPatientName.key to "unpersisted replacement")), password)
+        assertThat(checked.importPossible).isTrue()
+        // Real Android commitToMemory still runs, but FileOutputStream cannot write
+        // to the non-empty directories at the XML and backup paths.
+        for (suffix in listOf(".xml", ".xml.bak")) {
+            val blocked = File(context.applicationInfo.dataDir, "shared_prefs/$preferencesName$suffix")
+            if (blocked.exists()) assertThat(blocked.delete()).isTrue()
+            assertThat(blocked.mkdir()).isTrue()
+            blockedPreferenceFiles.add(blocked)
+            File(blocked, "blocker").writeText("synthetic write failure")
+        }
+        return checked
+    }
+
+    private fun assertUnpersistedReplacementIsActive() {
+        assertThat(preferences.get(StringKey.GeneralPatientName)).isEqualTo("unpersisted replacement")
+        assertThat(stored.contains(DoubleKey.SafetyMaxBolus.key)).isFalse()
+        assertThat(preferences.get(DoubleKey.SafetyMaxBolus)).isWithin(0.000001).of(3.0)
+        assertThat(preferences.get(StringKey.SafetyAge)).isEqualTo("adult")
+    }
+
     private fun assertRejected(content: String, importPassword: String = password) {
         seedExistingSettings()
         val before = stored.all.toMap()
@@ -387,7 +469,7 @@ class SettingsImportTest {
         val checked = settingsImport.check(fixture(name), password)
         assertWithMessage(checked.prefs.toString()).that(checked.importOk).isTrue()
         assertThat(checked.importPossible).isTrue()
-        settingsImport.apply(checked)
+        assertThat(settingsImport.apply(checked)).isTrue()
     }
 
     // Frozen synthetic v1 backups guard compatibility independently of the current exporter.

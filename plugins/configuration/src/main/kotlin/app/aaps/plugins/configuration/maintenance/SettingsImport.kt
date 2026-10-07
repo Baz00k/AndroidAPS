@@ -72,10 +72,10 @@ class SettingsImport @Inject constructor(
         return Check(prefs, importOk, importPossible, values.toMap())
     }
 
-    fun apply(check: Check) {
+    fun apply(check: Check): Boolean {
         require(check.importPossible) { "Settings import was rejected" }
         // One write prevents observers from seeing a cleared or partially restored preference set.
-        sp.edit(commit = true) {
+        return sp.commit {
             clear()
             for ((key, value) in check.values) {
                 if (value is Boolean) putBoolean(key, value)
