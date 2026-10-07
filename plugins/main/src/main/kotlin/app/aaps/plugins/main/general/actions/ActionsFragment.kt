@@ -6,6 +6,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -230,8 +231,16 @@ class ActionsFragment : DaggerFragment() {
                 )
                 else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended bolus"))
             }
-            if (activePlugin.activeProfileSource.profile != null && pump.pumpDescription.isSetBasalProfileCapable && pump.isInitialized() && notDisconnected && !pump.isSuspended())
-                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile switch", profileFunction.getProfileName()))
+            val unavailableReason = profileSwitchUnavailableReason()
+            add(
+                TherapyAction(
+                    ActionId.PROFILE_SWITCH,
+                    "Profile switch",
+                    if (profile != null) profileFunction.getProfileName() else rh.gs(app.aaps.core.ui.R.string.no_profile_set),
+                    enabled = unavailableReason == null,
+                    unavailableReason = unavailableReason?.let { rh.gs(it) }.orEmpty(),
+                )
+            )
         }
 
         val events = buildList {
@@ -250,6 +259,18 @@ class ActionsFragment : DaggerFragment() {
         }
 
         return ActionsUiState(therapy, events, tools)
+    }
+
+    private fun profileSwitchUnavailableReason(): Int? {
+        val pump = activePlugin.activePump
+        return when {
+            !pump.pumpDescription.isSetBasalProfileCapable -> R.string.actions_profile_switch_unsupported
+            activePlugin.activeProfileSource.profile == null -> R.string.actions_profile_source_unavailable
+            !pump.isInitialized() -> R.string.actions_profile_pump_not_initialized
+            loop.runningMode == RM.Mode.DISCONNECTED_PUMP -> app.aaps.core.ui.R.string.pump_disconnected
+            pump.isSuspended() -> app.aaps.core.ui.R.string.pump_suspended
+            else -> null
+        }
     }
 
     /** Dispatch a Compose Action to the SAME protected dialog / careportal / command-queue path. */
@@ -271,7 +292,11 @@ class ActionsFragment : DaggerFragment() {
 
             ActionId.EXTENDED_BOLUS_CANCEL -> confirmExtendedBolusCancellation()
 
-            ActionId.PROFILE_SWITCH -> bolusProtected { uiInteraction.runProfileSwitchDialog(childFragmentManager) }
+            ActionId.PROFILE_SWITCH -> {
+                val reason = profileSwitchUnavailableReason()
+                if (reason != null) Toast.makeText(activity, rh.gs(reason), Toast.LENGTH_SHORT).show()
+                else bolusProtected { uiInteraction.runProfileSwitchDialog(childFragmentManager) }
+            }
             ActionId.FILL          -> bolusProtected { uiInteraction.runFillDialog(childFragmentManager) }
             ActionId.SENSOR_INSERT -> care(UiInteraction.EventType.SENSOR_INSERT, app.aaps.core.ui.R.string.cgm_sensor_insert)
             ActionId.BATTERY_CHANGE -> care(UiInteraction.EventType.BATTERY_CHANGE, app.aaps.core.ui.R.string.pump_battery_change)
@@ -347,12 +372,7 @@ class ActionsFragment : DaggerFragment() {
         val profile = profileFunction.getProfile()
         val pump = activePlugin.activePump
 
-        binding.profileSwitch.visibility = (
-            activePlugin.activeProfileSource.profile != null &&
-                pump.pumpDescription.isSetBasalProfileCapable &&
-                pump.isInitialized() &&
-                loop.runningMode != RM.Mode.DISCONNECTED_PUMP &&
-                !pump.isSuspended()).toVisibility()
+        binding.profileSwitch.visibility = (profileSwitchUnavailableReason() == null).toVisibility()
 
         if (!pump.pumpDescription.isExtendedBolusCapable || !pump.isInitialized()  || pump.isSuspended() || loop.runningMode == RM.Mode.DISCONNECTED_PUMP || pump.isFakingTempsByExtendedBoluses || config.AAPSCLIENT) {
             binding.extendedBolus.visibility = View.GONE
