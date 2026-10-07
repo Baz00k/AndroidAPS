@@ -114,6 +114,7 @@ androidx-room-rxjava3 = { group = "androidx.room", name = "room-rxjava3", versio
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version = "1.2.0" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version = "1.7.0" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.7.0" }
 androidx-test-ext = { group = "androidx.test.ext", name = "junit-ktx", version = "1.3.0" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version = "2.3.0" }
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }

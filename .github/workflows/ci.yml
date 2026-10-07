@@ -73,12 +73,20 @@ jobs:
           'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: Build-tool tests
         run: ./gradlew -p buildSrc test --console=plain
+      - name: Native APK audit tests
+        run: python3 -m unittest discover -s .github/scripts -p 'test_check_native_apk.py'
       - name: Build and unit tests
         run: >-
           ./gradlew unitTest
           :app:assembleFullDebug :app:assembleFullLoop
           :wear:assembleFullDebug :wear:assembleFullLoop
-          :benchmark:assembleFullLoop --continue --console=plain
+          :benchmark:assembleFullLoop :native-tests:assembleFullLoop --continue --console=plain
+      - name: Audit shipped FullLoop native libraries
+        # Known 4 KB ELF dependency is tracked in #164; this does not certify pump compatibility.
+        run: >-
+          python3 .github/scripts/check_native_apk.py
+          app/build/outputs/apk/full/loop/app-full-loop.apk --abi arm64-v8a
+          --allow-unaligned lib/arm64-v8a/libsodium.so
       - name: Upload test reports
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
