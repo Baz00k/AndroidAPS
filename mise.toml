@@ -1,2 +1,6 @@
 [tools]
 android-sdk = "23.0"
+
+[tasks.test]
+description = "Run Android and JVM unit tests"
+run = "./gradlew unitTest"

@@ -18,15 +18,6 @@ enum class BooleanKey(
 ) : BooleanPreferenceKey {
 
     GeneralSimpleMode("simple_mode", true),
-    HovorkaTddAdaptation("hovorka_tdd_adaptation", false),
-    HovorkaImmBank("hovorka_imm_bank", false),
-    HovorkaEnableSmb("hovorka_enable_smb", false),
-    HovorkaMealDetection("hovorka_meal_detection", false),
-    HovorkaCarbAbsorptionByTod("hovorka_carb_absorption_by_tod", false),
-    HovorkaParamId("hovorka_param_id", false),
-    HovorkaSiteChangeGuard("hovorka_site_change_guard", false),
-    HovorkaDescentRateCap("hovorka_descent_rate_cap", false),
-    HovorkaHighCorrectionFloor("hovorka_high_correction_floor", true),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
     OverviewShowWizardButton("show_wizard_button", true, defaultedBySM = true),
