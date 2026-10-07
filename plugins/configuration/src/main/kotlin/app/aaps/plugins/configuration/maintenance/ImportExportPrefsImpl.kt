@@ -386,12 +386,14 @@ class ImportExportPrefsImpl @Inject constructor(
      * Perform local export without password prompt
      */
     private fun doExportToLocal(activity: FragmentActivity, newFile: DocumentFile, password: String) {
-        val exportResultMessage = if (savePreferences(newFile, password))
+        val saved = savePreferences(newFile, password)
+        val exportResultMessage = if (saved)
             rh.gs(R.string.exported)
         else
             rh.gs(R.string.exported_failed)
 
-        ToastUtils.okToast(activity, exportResultMessage)
+        if (saved) ToastUtils.okToast(activity, exportResultMessage)
+        else ToastUtils.errorToast(activity, exportResultMessage)
 
         disposable += persistenceLayer.insertPumpTherapyEventIfNewByTimestamp(
             therapyEvent = TE.asSettingsExport(error = exportResultMessage),
@@ -560,6 +562,8 @@ class ImportExportPrefsImpl @Inject constructor(
         
         // Export to cloud if enabled
         if (exportToCloud) {
+            // Prepare the encrypted backup before reporting that the async upload started.
+            val (fileName, fileContent) = prepareNonInteractiveCloudExport(context, password) ?: return false
             kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
                 try {
                     val provider = cloudStorageManager.getActiveProvider()
@@ -573,49 +577,18 @@ class ImportExportPrefsImpl @Inject constructor(
                         return@launch
                     }
                     
-                    val tempDir = prefFileList.ensureTempDirExists()
-                    if (tempDir == null) {
-                        aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_NO_TEMP_DIR")
-                        return@launch
+                    // Use uploadFileToPath for consistent folder structure
+                    var uploadedFileId = provider.uploadFileToPath(
+                        fileName, fileContent, "application/json", CloudConstants.CLOUD_PATH_SETTINGS
+                    )
+                    if (uploadedFileId == null) {
+                        uploadedFileId = provider.uploadFile(fileName, fileContent, "application/json")
                     }
-                    
-                    val timeLocal = org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
-                    val fileName = "${timeLocal}_${config.FLAVOR}.json"
-                    val tempDoc = tempDir.createFile("application/json", fileName)
-                    if (tempDoc == null) {
-                        aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CREATE_TEMP_FAIL")
-                        return@launch
-                    }
-                    
-                    val saved = savePreferences(tempDoc, password)
-                    if (!saved) {
-                        aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_SAVE_TEMP_FAIL")
-                        tempDoc.delete()
-                        return@launch
-                    }
-                    
-                    val fileContent = tempDoc.uri.let { uri ->
-                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    }
-                    
-                    tempDoc.delete()
-                    
-                    if (fileContent != null) {
-                        // Use uploadFileToPath for consistent folder structure
-                        var uploadedFileId = provider.uploadFileToPath(
-                            fileName, fileContent, "application/json", CloudConstants.CLOUD_PATH_SETTINGS
-                        )
-                        if (uploadedFileId == null) {
-                            uploadedFileId = provider.uploadFile(fileName, fileContent, "application/json")
-                        }
-                        
-                        if (uploadedFileId != null) {
-                            aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CLOUD_OK fileName=$fileName fileId=$uploadedFileId")
-                        } else {
-                            aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CLOUD_FAIL")
-                        }
+
+                    if (uploadedFileId != null) {
+                        aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CLOUD_OK fileName=$fileName fileId=$uploadedFileId")
                     } else {
-                        aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_READ_FILE_FAIL")
+                        aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CLOUD_FAIL")
                     }
                 } catch (e: Exception) {
                     aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_EXCEPTION", e)
@@ -630,6 +603,42 @@ class ImportExportPrefsImpl @Inject constructor(
             true // Cloud export started (async)
         } else {
             localResult // Only local export
+        }
+    }
+
+    private fun prepareNonInteractiveCloudExport(context: Context, password: String): Pair<String, ByteArray>? {
+        try {
+            val tempDir = prefFileList.ensureTempDirExists()
+            if (tempDir == null) {
+                aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_NO_TEMP_DIR")
+                return null
+            }
+
+            val timeLocal = org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+            val fileName = "${timeLocal}_${config.FLAVOR}.json"
+            val tempDoc = tempDir.createFile("application/json", fileName)
+            if (tempDoc == null) {
+                aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_CREATE_TEMP_FAIL")
+                return null
+            }
+
+            try {
+                if (!savePreferences(tempDoc, password)) {
+                    aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_SAVE_TEMP_FAIL")
+                    return null
+                }
+                val bytes = context.contentResolver.openInputStream(tempDoc.uri)?.use { it.readBytes() }
+                if (bytes == null) {
+                    aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_READ_FILE_FAIL")
+                    return null
+                }
+                return fileName to bytes
+            } finally {
+                tempDoc.delete()
+            }
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.CORE, "${CloudConstants.LOG_PREFIX} NONINTERACTIVE_EXPORT_EXCEPTION", e)
+            return null
         }
     }
 

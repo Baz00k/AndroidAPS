@@ -72,7 +72,7 @@ class EncryptedPrefsFormat @Inject constructor(
         val meta = JSONObject()
 
         val encStatus = prefs.metadata[PrefsMetadataKeyImpl.ENCRYPTION]?.status ?: PrefsStatusImpl.OK
-        var encrypted = encStatus == PrefsStatusImpl.OK && masterPassword != null
+        val encrypted = encStatus == PrefsStatusImpl.OK && masterPassword != null
 
         try {
             for ((key, value) in prefs.values.toSortedMap()) {
@@ -107,17 +107,11 @@ class EncryptedPrefsFormat @Inject constructor(
                     masterPasswordUnencrypted = decryptionResult
                 }
 
-                val contentAttempt = cryptoUtil.encrypt(masterPasswordUnencrypted!!, salt, rawContent)
-
-                if (contentAttempt != null) {
-                    encodedContent = contentAttempt
-                    security.put("algorithm", "v1")
-                    security.put("salt", salt.toHex())
-                    security.put("content_hash", cryptoUtil.sha256(rawContent))
-                } else {
-                    // fallback when encryption does not work
-                    encrypted = false
-                }
+                encodedContent = cryptoUtil.encrypt(masterPasswordUnencrypted!!, salt, rawContent)
+                    ?: throw PrefIOError("Cannot encrypt settings export")
+                security.put("algorithm", "v1")
+                security.put("salt", salt.toHex())
+                security.put("content_hash", cryptoUtil.sha256(rawContent))
             }
 
             if (!encrypted) {
