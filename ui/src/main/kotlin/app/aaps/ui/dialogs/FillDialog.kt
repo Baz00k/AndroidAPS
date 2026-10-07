@@ -130,8 +130,7 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
         val notes: String = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
-        // Surface the back-dated time in the confirmation. A silently back-dated record would be
-        // worse than none: site age feeds the post-change analysis and the HovorkaMPC site guard.
+        // Surface the back-dated time in the confirmation because site age feeds post-change analysis.
         if (inputs.minutesAgo > 0)
             actions.add(
                 (rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))

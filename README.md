@@ -15,10 +15,8 @@ native Android UI and develops a closed-loop insulin-delivery algorithm.
   basals, usable in open and closed loop. Basal schedules are programmed on the pump by hand; AAPS only
   compares them with its profile. Credentials come from an external source-device workflow. The AAPS
   device needs neither root nor ADB.
-- [HovorkaMPC](hovorka-mpc/README.md): an experimental nonlinear model-predictive controller based on the
-  published Hovorka model, with optional adaptive layers. It has been validated in silico and by replay only.
-- Infusion sites: SITE-GUARD suppresses SMB after a recorded cannula change. The bolus wizard shows a
-  fresh-site advisory and accepts back-dated site events.
+- Infusion sites: the bolus wizard shows a fresh-site advisory, and site-change recording accepts
+  back-dated events.
 - Compose UI: Material 3 screens for home, dosing, loop, history, statistics, profile, configuration and
   pump status, plus file-based skins. Dosing still goes through the existing constraint and confirmation
   paths.
