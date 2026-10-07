@@ -3,13 +3,13 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 1454,
-      "sha256": "2a6bbdd188899e101993b19063f0a04875a0ec1e00e5399ed38544154975f670"
+      "bytes": 2169,
+      "sha256": "e3b3c9cbaf93f4a4d08025df8a9f4bc0fabb5d009a42dce6f1c987430439a4b7"
     },
     {
       "path": "SPEC.md",
-      "bytes": 24632,
-      "sha256": "f3d09cf7c58fa4ee2539ddb649819ba63900cc4e96c61b0dff015fd2ea85aa42"
+      "bytes": 25533,
+      "sha256": "900abfffae96e732bf63189bab92b48c4a0647ef2a23f1d8ee28b9b8ad4d9fd8"
     },
     {
       "path": "aaps-sources.json",

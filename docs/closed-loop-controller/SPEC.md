@@ -146,6 +146,10 @@ Pinned simglucose code is MIT-licensed, but its virtual-cohort provenance/redist
 
 Before implementation testing, define scenarios and independently justified criteria for unannounced meals, stalled rises, low/falling glucose, sensitivity shifts, noise/gaps/stale clocks, recent manual/provisional insulin, state loss/corruption, repeated triggers, failed/partial/uncertain/skipped delivery and optimizer invalid/timeout outcomes. Evaluate behavior and risk boundaries. Verify simulation-tool and cohort provenance, check model mismatch, and measure Android timing/timeout behavior through the actual integration.
 
+Develop a simulation/testing harness alongside the controller. Exercise the implemented controller with explicit evaluation time, configuration and initial state, reproducible scenarios/seeds, and simulated CGM and pump delivery. Preserve scenario inputs and results so failures can be replayed and become regression tests. Expected safety properties and acceptance criteria must be justified independently of the controller's output.
+
+Cover both closed-loop response under model mismatch and the composed input-to-delivery failure paths above, including app constraints and requested, acknowledged and confirmed delivery accounting. Keep the harness isolated from live therapy. Run repeatable automated checks in CI and use the results, together with Android integration and timing checks, for the feature branch's readiness review; report the harness's assumptions and remaining verification gaps.
+
 ## AAPS integration
 
 ### Controller input/output contract
