@@ -1,6 +1,7 @@
 package app.aaps.shared.impl.sharedPreferences
 
 import android.content.Context
+import android.content.SharedPreferences
 import app.aaps.shared.impl.SharedPreferencesMock
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
@@ -10,6 +11,9 @@ import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.junit.jupiter.MockitoSettings
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.mockito.quality.Strictness
 
@@ -43,7 +47,7 @@ class SPImplTest {
         sut.edit { remove(someResource) }
         assertThat(sut.contains(someResource)).isFalse()
 
-        sut.edit(commit = true) { putDouble("test", 1.0) }
+        assertThat(sut.commit { putDouble("test", 1.0) }).isTrue()
         assertThat(sut.getDouble("test", 2.0)).isEqualTo(1.0)
         sut.edit { putDouble(someResource, 1.0) }
         assertThat(sut.getDouble(someResource, 2.0)).isEqualTo(1.0)
@@ -67,6 +71,33 @@ class SPImplTest {
         sut.edit { putString(someResource, "string") }
         assertThat(sut.getString(someResource, "a")).isEqualTo("string")
         sut.edit { clear() }
+    }
+
+    @Test
+    fun editRemainsAsynchronous() {
+        val stored = mock<SharedPreferences>()
+        val editor = mock<SharedPreferences.Editor>()
+        whenever(stored.edit()).thenReturn(editor)
+
+        SPImpl(stored, context).edit { putBoolean("test", true) }
+
+        verify(editor).putBoolean("test", true)
+        verify(editor).apply()
+        verify(editor, never()).commit()
+    }
+
+    @Test
+    fun commitReportsPersistenceFailureWithoutApplyingAgain() {
+        val stored = mock<SharedPreferences>()
+        val editor = mock<SharedPreferences.Editor>()
+        whenever(stored.edit()).thenReturn(editor)
+        whenever(editor.commit()).thenReturn(false)
+
+        assertThat(SPImpl(stored, context).commit { putBoolean("test", true) }).isFalse()
+
+        verify(editor).putBoolean("test", true)
+        verify(editor).commit()
+        verify(editor, never()).apply()
     }
 
     @Test

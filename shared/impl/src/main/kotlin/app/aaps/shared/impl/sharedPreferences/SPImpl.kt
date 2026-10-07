@@ -15,8 +15,14 @@ class SPImpl @Inject constructor(
     private val context: Context
 ) : SP {
 
+    override fun edit(block: SP.Editor.() -> Unit) {
+        editor(block).apply()
+    }
+
     @SuppressLint("ApplySharedPref")
-    override fun edit(commit: Boolean, block: SP.Editor.() -> Unit) {
+    override fun commit(block: SP.Editor.() -> Unit): Boolean = editor(block).commit()
+
+    private fun editor(block: SP.Editor.() -> Unit): SharedPreferences.Editor {
         val spEdit = sharedPreferences.edit()
 
         val edit = object : SP.Editor {
@@ -75,10 +81,7 @@ class SPImpl @Inject constructor(
 
         block(edit)
 
-        if (commit)
-            spEdit.commit()
-        else
-            spEdit.apply()
+        return spEdit
     }
 
     override fun getAll(): Map<String, *> = sharedPreferences.all
