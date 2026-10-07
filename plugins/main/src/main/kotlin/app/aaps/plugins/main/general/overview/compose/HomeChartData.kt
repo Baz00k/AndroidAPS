@@ -61,7 +61,7 @@ data class HomeChartData(
     val trace: List<GlucosePoint> = mergeTrace(readings, bucketed)
 
     /** The newest measured value, at its real timestamp. Never a forecast, never moved to "now". */
-    val latest: GlucosePoint? get() = trace.lastOrNull()
+    val latest: GlucosePoint? get() = readings.lastOrNull()
 
     /** True when raw and trace differ, i.e. there is a scatter worth drawing underneath. */
     val hasDenseScatter: Boolean = bucketed.size > 1 &&

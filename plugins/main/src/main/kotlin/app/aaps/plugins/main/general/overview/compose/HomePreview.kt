@@ -25,7 +25,7 @@ private fun HomeScreenPreview(@PreviewParameter(GlucoseFreshnessPreviewProvider:
         HomeScreen(
             state = HomeUiState(
                 loopStateLabel = "Closed loop",
-                loopSubLabel = "· looping",
+                loopSubLabel = "· 4m ago",
                 loopTone = AapsTone.InRange,
                 looping = true,
                 bg = "6.4",
