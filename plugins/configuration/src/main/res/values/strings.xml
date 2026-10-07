@@ -101,6 +101,7 @@
     <string name="metadata_label_settings">Settings</string>
     <string name="preferences_import_no_settings">The file contains no settings recognized by this build.</string>
     <string name="preferences_import_impossible">Cannot import preferences!</string>
+    <string name="preferences_import_persistence_failed">Settings save failed. AAPS is closing. Verify settings before resuming therapy.</string>
     <string name="check_preferences_details_btn">Explain import issues…</string>
     <string name="check_preferences_details_title">Import issues details</string>
     <string name="check_preferences_import_btn">Import</string>

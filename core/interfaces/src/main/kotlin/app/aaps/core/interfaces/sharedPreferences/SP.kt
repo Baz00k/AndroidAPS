@@ -10,7 +10,7 @@ interface SP {
 
     // Using a helper Editor interface to distinguish its
     // methods from SP's. The latter always run apply().
-    // The whole point of the edit() function below is to
+    // The whole point of the scoped edit()/commit() functions is to
     // _avoid_ unnecessary apply() / commit() calls, so
     // we cannot use SP's put* methods in edit().
     interface Editor {
@@ -35,19 +35,23 @@ interface SP {
     /**
      * Allows for editing shared preferences in a scoped manner.
      *
-     * This works just the same way as the androidx.core.content.edit
-     * extension does. An [Editor] instance is created and used as
-     * the receiver of [block]. When the block is done, either
-     * the shared preferences commit or apply functions are called,
-     * depending on the value of [commit].
+     * Applies the changes asynchronously. Persistence failures are not reported;
+     * use [commit] when the caller needs a persistence result.
      *
      * Example:
      *
-     *     sp.edit(commit = false) {
+     *     sp.edit {
      *         putString("my-key", "abc123")
      *     }
      */
-    fun edit(commit: Boolean = false, block: Editor.() -> Unit)
+    fun edit(block: Editor.() -> Unit)
+
+    /**
+     * Writes the changes synchronously and returns whether persistence succeeded.
+     * A false result does not roll back in-memory values: callers must treat the
+     * active preferences and their persisted state as potentially different.
+     */
+    fun commit(block: Editor.() -> Unit): Boolean
 
     fun getAll(): Map<String, *>
     fun clear()

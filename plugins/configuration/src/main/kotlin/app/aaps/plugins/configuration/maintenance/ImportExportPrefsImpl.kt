@@ -7,6 +7,7 @@ import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AlertDialog
@@ -812,10 +813,7 @@ class ImportExportPrefsImpl @Inject constructor(
                 promptForDecryptionPasswordIfNeeded(activity, checked, importFile) { result ->
                     PrefImportSummaryDialog.showSummary(activity, result.importOk, result.importPossible, result.prefs, {
                         if (result.importPossible) {
-                            activePlugin.beforeImport()
-                            settingsImport.apply(result)
-                            activePlugin.afterImport()
-                            restartAppAfterImport(activity)
+                            applyImportedSettings(activity, result)
                         } else {
                             ToastUtils.errorToast(activity, rh.gs(R.string.preferences_import_impossible))
                         }
@@ -829,6 +827,25 @@ class ImportExportPrefsImpl @Inject constructor(
                 ToastUtils.errorToast(activity, e.message)
             }
         }
+    }
+
+    internal fun applyImportedSettings(activity: FragmentActivity, result: SettingsImport.Check) {
+        activePlugin.beforeImport()
+        if (!settingsImport.apply(result)) {
+            // commit() has already replaced in-memory settings. Do not run hooks,
+            // retry the write, or keep therapy running with uncertain persistence.
+            aapsLogger.error(LTag.CORE, "Settings import persistence failed; exiting with uncertain preferences")
+            try {
+                // A system-rendered toast can remain visible after the process exits.
+                Toast.makeText(context, rh.gs(R.string.preferences_import_persistence_failed), Toast.LENGTH_LONG).show()
+                activity.finish()
+            } finally {
+                configBuilder.exitApp("Import persistence failure", Sources.Maintenance, false)
+            }
+            return
+        }
+        activePlugin.afterImport()
+        restartAppAfterImport(activity)
     }
 
     private fun restartAppAfterImport(context: Context) {
