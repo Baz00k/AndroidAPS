@@ -1,6 +1,22 @@
 [tools]
 android-sdk = "23.0"
 
+[tasks.build]
+description = "Build the phone APK"
+run = "./gradlew :app:assembleFullLoop"
+
+[tasks."build:debug"]
+description = "Build the phone APK with debugging enabled"
+run = "./gradlew :app:assembleFullDebug"
+
+[tasks."build:wear"]
+description = "Build the Wear OS APK"
+run = "./gradlew :wear:assembleFullLoop"
+
+[tasks."build:wear:debug"]
+description = "Build the Wear OS APK with debugging enabled"
+run = "./gradlew :wear:assembleFullDebug"
+
 [tasks.test]
 description = "Run Android and JVM unit tests"
 run = "./gradlew unitTest"
