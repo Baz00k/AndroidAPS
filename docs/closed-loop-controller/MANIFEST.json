@@ -1,0 +1,36 @@
+{
+  "schema": "independent-controller-docs/1",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 5960,
+      "sha256": "3e00b65368a761d1b81a0afd1199fe606d7d1531044cd9c5a669e987d63cc9b9"
+    },
+    {
+      "path": "SPEC.md",
+      "bytes": 28511,
+      "sha256": "807f0fe723454f6c327f88cee20035b96e3febaef7a6dac7dd22726a751f30f5"
+    },
+    {
+      "path": "aaps-sources.json",
+      "bytes": 7829,
+      "sha256": "2ada41b6522ba6fac2775d6893f8cdb4a99f2fd4206b85c65caeb1132e697e94"
+    },
+    {
+      "path": "claims.jsonl",
+      "bytes": 94196,
+      "sha256": "148962cf2c733077016927db1f826c9a4d8fe0872753cdd070669e5f35df1e96"
+    },
+    {
+      "path": "equations.jsonl",
+      "bytes": 86924,
+      "sha256": "35da9316aaa1678ae86804313d2ad081dbb97867c047337e5ef59473e33b9af5"
+    },
+    {
+      "path": "sources.jsonl",
+      "bytes": 99564,
+      "sha256": "df79acca9cc22a794138fedd3155b36cf8f683e80fd791495b54e34d376f4d1d"
+    }
+  ],
+  "scope": "Documentation-only transfer; no repository history/source code or research archives. Manifest excludes itself."
+}
