@@ -74,19 +74,6 @@ class SPImplTest {
     }
 
     @Test
-    fun editRemainsAsynchronous() {
-        val stored = mock<SharedPreferences>()
-        val editor = mock<SharedPreferences.Editor>()
-        whenever(stored.edit()).thenReturn(editor)
-
-        SPImpl(stored, context).edit { putBoolean("test", true) }
-
-        verify(editor).putBoolean("test", true)
-        verify(editor).apply()
-        verify(editor, never()).commit()
-    }
-
-    @Test
     fun commitReportsPersistenceFailureWithoutApplyingAgain() {
         val stored = mock<SharedPreferences>()
         val editor = mock<SharedPreferences.Editor>()

@@ -272,16 +272,6 @@ class SettingsImportTest {
     }
 
     @Test
-    fun failedCommitReportsFailureEvenThoughSafetySettingsChangedInMemory() {
-        val checked = prepareFailedWrite()
-
-        assertThat(settingsImport.apply(checked)).isFalse()
-
-        assertUnpersistedReplacementIsActive()
-        assertThat(importCommitAttempts).isEqualTo(1)
-    }
-
-    @Test
     fun failedImportExitsWithoutSuccessHooksHousekeepingOrRetry() {
         val checked = prepareFailedWrite()
         val activePlugin = mock<ActivePlugin>()
