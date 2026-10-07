@@ -26,7 +26,6 @@ materialPullRefresh = "1.2.0"
 [plugins]
 android-library = { id = "com.android.library" }
 klint = { id = "org.jlleitschuh.gradle.ktlint", version = "14.0.1" }
-moduleDependencyGraph = { id = "com.savvasdalkitsis.module-dependency-graph", version = "0.12" }
 ksp = { id = "com.google.devtools.ksp", version = "2.3.12" }
 android-test = { id = "com.android.test", version.ref = "gradlePlugin" }
 legacy-kapt = { id = "com.android.legacy-kapt", version.ref = "gradlePlugin" }

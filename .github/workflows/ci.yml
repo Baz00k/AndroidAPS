@@ -45,14 +45,10 @@ jobs:
             build:
               - '**'
               - '!**/*.md'
-              - '!_docs/**'
+              - '!docs/**'
               - '!.github/ISSUE_TEMPLATE/**'
               - '!.idea/**'
-              - '!.run/**'
-              - '!**/*.bat'
               - '!LICENSE.txt'
-              - '!codecov.yml'
-              - '!crowdin.yml'
 
   build:
     needs: changes
