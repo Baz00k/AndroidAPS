@@ -64,6 +64,7 @@ import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.components.HoldToConfirmButton
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.formatNumeric
 import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsSpacing
@@ -97,6 +98,11 @@ fun WizardScreen(
     // Inputs survive recreation; the review step does not, so a restored screen always needs a fresh review.
     var inputs by rememberSaveable(stateSaver = WizardInputs.Saver) { mutableStateOf(initialInputs.copy(carbs = carbControls.clamp(initialInputs.carbs))) }
     var reviewing by remember { mutableStateOf(false) }
+    var carbsValid by remember { mutableStateOf(false) }
+    var glucoseValid by remember { mutableStateOf(true) }
+    var absorptionValid by remember { mutableStateOf(true) }
+    // Validate even collapsed/restored fields against the current configuration.
+    val savedInputsValid = inputs.carbs in 0..carbControls.maxCarbs && inputs.carbDurationHours in 0..MAX_ABSORPTION_H
     var mealDetailsExpanded by rememberSaveable { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
@@ -106,6 +112,8 @@ fun WizardScreen(
         }
     }
     val result = remember(inputs, refresh) { compute(inputs) }
+    val manualBgValid = inputs.manualBg?.let { it.isFinite() && it in result.bgEntryMin..result.bgEntryMax } ?: true
+    val draftsValid = savedInputsValid && manualBgValid && carbsValid && glucoseValid && (inputs.eatLater || absorptionValid)
     // "Eat later" only exists while the advisor applies; drop it rather than act on a stale choice.
     LaunchedEffect(result.advisorAvailable) {
         if (!result.advisorAvailable && inputs.eatLater) inputs = inputs.copy(eatLater = false)
@@ -122,11 +130,17 @@ fun WizardScreen(
         onClose = onCancel,
         onBack = if (reviewing) ({ reviewing = false }) else null,
         footer = {
-            if (!reviewing) InputFooter(result, colors) {
-                reviewed = result
-                reviewing = true
+            if (!reviewing) InputFooter(result, colors, draftsValid) {
+                if (draftsValid) {
+                    reviewed = result
+                    reviewing = true
+                }
             }
             else ReviewFooter(inputs, result.outcome) {
+                if (!savedInputsValid || !manualBgValid) {
+                    reviewing = false
+                    return@ReviewFooter
+                }
                 // Not sent: data moved under the review. Re-read now so the new numbers are what is shown.
                 onCommit(inputs, result.outcome) {
                     refresh++
@@ -141,7 +155,9 @@ fun WizardScreen(
             label = "calculator-step"
         ) { onReview ->
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-                if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded, { mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs)
+                if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
+                                         { if (absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
+                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it })
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }
         }
@@ -156,10 +172,13 @@ private fun InputCards(
     colors: AapsColors,
     mealDetailsExpanded: Boolean,
     onToggleMealDetails: () -> Unit,
-    onInputs: (WizardInputs) -> Unit
+    onInputs: (WizardInputs) -> Unit,
+    onCarbsValidity: (Boolean) -> Unit,
+    onGlucoseValidity: (Boolean) -> Unit,
+    onAbsorptionValidity: (Boolean) -> Unit
 ) {
-    GlucoseCard(inputs, result, colors, onInputs)
-    CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs)
+    GlucoseCard(inputs, result, colors, onInputs, onGlucoseValidity)
+    CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs, onCarbsValidity, onAbsorptionValidity)
     AapsCard {
         Column {
             SectionLabel("Included", Modifier.padding(bottom = 4.dp))
@@ -194,10 +213,10 @@ private fun InputCards(
 
 /** The result as it stands, and the way to Review it. */
 @Composable
-private fun InputFooter(result: WizardResult, colors: AapsColors, onReview: () -> Unit) {
+private fun InputFooter(result: WizardResult, colors: AapsColors, draftsValid: Boolean, onReview: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         OutcomeSummary(result, colors, Modifier.weight(1f))
-        PrimaryButton("Review", onReview, Modifier.weight(1f), enabled = result.outcome.commit != CalculatorOutcome.Commit.NONE)
+        PrimaryButton("Review", onReview, Modifier.weight(1f), enabled = draftsValid && result.outcome.commit != CalculatorOutcome.Commit.NONE)
     }
 }
 
@@ -223,7 +242,7 @@ private fun OutcomeSummary(result: WizardResult, colors: AapsColors, modifier: M
  * screen's visual for the same thing) and switches BG correction off; the pencil enters a fingerstick.
  */
 @Composable
-private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: AapsColors, onInputs: (WizardInputs) -> Unit) {
+private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: AapsColors, onInputs: (WizardInputs) -> Unit, onValidity: (Boolean) -> Unit) {
     var editing by remember { mutableStateOf(false) }
     val manual = result.glucoseSource == GlucoseSource.MANUAL
     val valueColor = when {
@@ -271,9 +290,10 @@ private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: Aaps
                     IconBtn(Icons.Rounded.Close, "Use sensor glucose") {
                         onInputs(inputs.copy(manualBg = null))
                         editing = false
+                        onValidity(true)
                     }
                 else
-                    IconBtn(Icons.Rounded.Edit, "Enter glucose") { editing = !editing }
+                    IconBtn(Icons.Rounded.Edit, "Enter glucose") { editing = !editing; if (!editing) onValidity(true) }
             }
             if (editing || manual)
                 NumberField(
@@ -284,7 +304,8 @@ private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: Aaps
                     min = result.bgEntryMin,
                     max = result.bgEntryMax,
                     decimals = result.bgEntryDecimals,
-                    unit = result.bgUnitsLabel
+                    unit = result.bgUnitsLabel,
+                    onValidityChange = onValidity
                 )
         }
     }
@@ -297,13 +318,16 @@ private fun CarbsCard(
     advisorAvailable: Boolean,
     detailsExpanded: Boolean,
     onToggleDetails: () -> Unit,
-    onInputs: (WizardInputs) -> Unit
+    onInputs: (WizardInputs) -> Unit,
+    onCarbsValidity: (Boolean) -> Unit,
+    onAbsorptionValidity: (Boolean) -> Unit
 ) {
     EntryCard("Carbs") {
         AmountStepper(
             value = inputs.carbs.toDouble(),
             onValue = { onInputs(inputs.copy(carbs = carbControls.clamp(it.toInt()))) },
-            step = carbControls.step.toDouble(), min = 0.0, max = carbControls.maxCarbs.toDouble(), decimals = 0, unit = "g", name = "of carbs"
+            step = carbControls.step.toDouble(), min = 0.0, max = carbControls.maxCarbs.toDouble(), decimals = 0, unit = "g", name = "of carbs",
+            integerOnly = true, onValidityChange = onCarbsValidity
         )
         ChoiceRow {
             carbControls.quickIncrements.forEach { increment ->
@@ -375,7 +399,7 @@ private fun CarbsCard(
                     AmountStepper(
                         value = inputs.carbDurationHours.toDouble(), onValue = { onInputs(inputs.copy(carbDurationHours = it.toInt())) },
                         step = 1.0, min = 0.0, max = MAX_ABSORPTION_H.toDouble(), decimals = 0,
-                        unit = "h", name = "of carb absorption", zeroLabel = "Normal"
+                        unit = "h", name = "of carb absorption", zeroLabel = "Normal", integerOnly = true, onValidityChange = onAbsorptionValidity
                     )
                 }
             }
@@ -474,7 +498,7 @@ private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCom
     }
 }
 
-private fun units(v: Double) = String.format(Locale.getDefault(), "%.2f U", v)
+private fun units(v: Double) = "${formatNumeric(v, 2)} U"
 
 @Composable
 private fun Struck(text: String, colors: AapsColors) =

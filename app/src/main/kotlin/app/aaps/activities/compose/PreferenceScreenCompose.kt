@@ -179,7 +179,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
                     val c = nv.toInt().coerceIn(typed.min, typed.max)
                     if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
                 },
-                step = 1.0, min = typed.min.toDouble(), max = typed.max.toDouble(), decimals = 0
+                step = 1.0, min = typed.min.toDouble(), max = typed.max.toDouble(), decimals = 0, integerOnly = true
             )
             if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
         }

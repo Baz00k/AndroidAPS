@@ -8,11 +8,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -30,16 +26,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -48,7 +37,6 @@ import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Date
-import java.util.Locale
 
 /*
  * The building blocks every treatment entry screen (Calculator, Carbs, Insulin) is made of, so the
@@ -99,10 +87,7 @@ fun StepperValue(value: String, unit: String = "") {
 }
 
 /**
- * An amount that can be stepped with − / + or typed. The typed text is kept while it is being edited;
- * the value itself is always clamped to [min]..[max]. At a limit the button towards it disables and
- * the limit is named, so a number that stopped growing never looks like a missed tap. With a
- * [zeroLabel], zero is shown as that word ("Normal") rather than as a number.
+ * Treatment-entry presentation of [NumericInput]. Callers gate submission on [onValidityChange].
  */
 @Composable
 fun AmountStepper(
@@ -114,58 +99,13 @@ fun AmountStepper(
     decimals: Int,
     unit: String,
     name: String,
-    zeroLabel: String? = null
+    zeroLabel: String? = null,
+    onValidityChange: (Boolean) -> Unit = {},
+    onPrecisionInsufficient: (Boolean) -> Unit = {},
+    integerOnly: Boolean = false
 ) {
-    val colors = AapsTheme.colors
-    fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${decimals}f", v)
-    fun shown(v: Double) = if (zeroLabel != null && v == 0.0) "" else fmt(v)
-    fun parse(s: String) = s.replace(',', '.').toDoubleOrNull() ?: if (zeroLabel != null && s.isEmpty()) 0.0 else null
-    var text by remember { mutableStateOf(shown(value)) }
-    LaunchedEffect(value) { if (parse(text) != value) text = shown(value) }
-    val showsZeroLabel = zeroLabel != null && text.isEmpty()
-    val stepText = fmt(step)
-    // A text field fills whatever width it is given; size it to its text so the unit sits right after the number.
-    val style = entryValueStyle().copy(color = colors.textPrimary)
-    val measurer = rememberTextMeasurer()
-    val fieldWidth = with(LocalDensity.current) { measurer.measure(text.ifEmpty { zeroLabel ?: "0" }, style).size.width.toDp() + 2.dp }
-    val atMax = value >= max
-    val atMin = value <= min
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        StepperRow(
-            decreaseLabel = "Subtract $stepText $unit $name", onDecrease = { onValue((value - step).coerceIn(min, max)) },
-            increaseLabel = "Add $stepText $unit $name", onIncrease = { onValue((value + step).coerceIn(min, max)) },
-            decreaseEnabled = !atMin, increaseEnabled = !atMax
-        ) {
-            BasicTextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    onValue((parse(it) ?: 0.0).coerceIn(min, max))
-                },
-                singleLine = true,
-                textStyle = style,
-                cursorBrush = SolidColor(colors.accent),
-                keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0) KeyboardType.Decimal else KeyboardType.Number),
-                decorationBox = { field ->
-                    Box {
-                        if (showsZeroLabel) Text(zeroLabel.orEmpty(), style = style)
-                        field()
-                    }
-                },
-                modifier = Modifier
-                    .width(fieldWidth)
-                    .semantics { if (showsZeroLabel) stateDescription = zeroLabel.orEmpty() }
-            )
-            if (!showsZeroLabel) Text(" $unit", style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
-        }
-        // Zero is an obvious floor; a negative floor (a carb correction) and any ceiling are not.
-        val limit = when {
-            atMax            -> "Max ${fmt(max)} $unit"
-            atMin && min < 0 -> "Min ${fmt(min)} $unit"
-            else             -> null
-        }
-        if (limit != null) Text(limit, style = AapsTheme.type.caption, color = colors.textSecondary)
-    }
+    NumericInput(value, onValue, NumericSpec(min, max, step, decimals, integerOnly), unit, name,
+                 zeroLabel = zeroLabel, onValidityChange = onValidityChange, onPrecisionInsufficient = onPrecisionInsufficient)
 }
 
 /** The current time, refreshed every [periodMs], so a relative time on screen does not go stale. */
@@ -240,12 +180,12 @@ fun TimeStepper(
  * describe. Zero, the usual meal, reads "Normal".
  */
 @Composable
-fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int) {
+fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int, onValidityChange: (Boolean) -> Unit = {}) {
     EntryCard("Absorption") {
         AmountStepper(
             value = hours.toDouble(), onValue = { onHours(it.toInt()) },
             step = 1.0, min = 0.0, max = maxHours.toDouble(), decimals = 0,
-            unit = "h", name = "of carb absorption", zeroLabel = "Normal"
+            unit = "h", name = "of carb absorption", zeroLabel = "Normal", integerOnly = true, onValidityChange = onValidityChange
         )
     }
 }

@@ -59,13 +59,16 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
     var insulinChange by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
     var minutesAgo by remember { mutableStateOf(0.0) }
+    var insulinValid by remember { mutableStateOf(false) }
+    var timeValid by remember { mutableStateOf(false) }
+    val valid = insulinValid && (!(siteChange || insulinChange) || timeValid)
 
     SheetSurface(title = "Prime / Fill", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
             NumberField(
                 label = "Insulin", value = insulin, onValue = { insulin = it },
                 step = state.insulinStep, min = 0.0, max = state.maxInsulin, decimals = state.insulinDecimals, unit = "U",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(), onValidityChange = { insulinValid = it }
             )
             if (state.presets.isNotEmpty())
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
@@ -82,7 +85,7 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
                 NumberField(
                     label = "Changed", value = minutesAgo, onValue = { minutesAgo = it },
                     step = 5.0, min = 0.0, max = 1440.0, decimals = 0, unit = "min ago",
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { timeValid = it }
                 )
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                     listOf("now" to 0, "30m" to 30, "1h" to 60, "2h" to 120, "4h" to 240, "8h" to 480, "12h" to 720)
@@ -94,8 +97,9 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
 
             PrimaryButton(
                 label = "Confirm",
-                enabled = insulin > 0.0 || siteChange || insulinChange,
+                enabled = valid && (insulin > 0.0 || siteChange || insulinChange),
                 onClick = {
+                    if (!valid) return@PrimaryButton
                     onSubmit(
                         FillInputs(
                             insulin, siteChange, insulinChange, notes,

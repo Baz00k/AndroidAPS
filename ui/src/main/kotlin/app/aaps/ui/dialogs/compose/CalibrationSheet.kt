@@ -27,10 +27,11 @@ data class CalibrationSheetState(
 @Composable
 fun CalibrationSheet(state: CalibrationSheetState, onSend: (Double) -> Unit, onClose: () -> Unit) {
     var bg by remember { mutableStateOf(state.initial) }
+    var valid by remember { mutableStateOf(false) }
     SheetSurface(title = "Calibration", onClose = onClose) {
         Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            NumberField("Blood glucose", bg, { bg = it }, step = state.step, min = state.min, max = state.max, decimals = state.decimals, unit = state.unitLabel, modifier = Modifier.fillMaxWidth())
-            PrimaryButton("Send calibration", onClick = { onSend(bg) }, enabled = bg > 0.0)
+            NumberField("Blood glucose", bg, { bg = it }, step = state.step, min = state.min, max = state.max, decimals = state.decimals, unit = state.unitLabel, modifier = Modifier.fillMaxWidth(), onValidityChange = { valid = it })
+            PrimaryButton("Send calibration", onClick = { if (valid) onSend(bg) }, enabled = valid && bg > 0.0)
         }
     }
 }

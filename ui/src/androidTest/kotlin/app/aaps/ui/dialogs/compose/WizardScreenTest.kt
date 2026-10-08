@@ -47,8 +47,11 @@ class WizardScreenTest {
 
         details.performClick()
         compose.onNodeWithContentDescription("5 minutes later").performScrollTo().performClick()
+        compose.runOnIdle { assertThat(inputs.carbTime).isEqualTo(5) }
         absorptionPlus.performScrollTo().performClick()
+        compose.runOnIdle { assertThat(inputs).isEqualTo(WizardInputs(carbs = 5, carbTime = 5, carbDurationHours = 1)) }
         details.performScrollTo().performClick()
+        compose.runOnIdle { assertThat(inputs.carbTime).isEqualTo(5) }
         details.performClick()
         // Edit again after reopening: timing and absorption must not reset with the accordion body.
         absorptionPlus.performScrollTo().performClick()

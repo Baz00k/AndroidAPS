@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -22,6 +23,8 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.TimeStepper
 import app.aaps.core.compose.components.rememberNow
+import app.aaps.core.compose.components.formatNumeric
+import app.aaps.core.compose.components.NumericSpec
 import kotlin.math.roundToInt
 import app.aaps.core.compose.theme.AapsTheme
 
@@ -54,6 +57,8 @@ data class InsulinInputs(
 fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
     val colors = AapsTheme.colors
     var amount by rememberSaveable { mutableStateOf(0.0) }
+    var amountValid by remember { mutableStateOf(false) }
+    var submitted by rememberSaveable { mutableStateOf(false) }
     var intent by rememberSaveable { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
     // The picked time is a moment, not a distance from whenever the form is finally submitted; the
     // distance shown is derived from it.
@@ -63,7 +68,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
     var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
     var notes by rememberSaveable { mutableStateOf("") }
 
-    fun fmt(v: Double) = String.format(java.util.Locale.getDefault(), "%.${state.decimals}f", v)
+    fun fmt(v: Double) = formatNumeric(v, state.decimals)
 
     val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
     SheetSurface(
@@ -76,8 +81,13 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                     target != TargetPreset.NONE -> "Set target"
                     else                        -> verb
                 },
-                enabled = amount > 0.0 || target != TargetPreset.NONE,
-                onClick = { onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else "")) }
+                enabled = amountValid && !submitted && (amount > 0.0 || target != TargetPreset.NONE),
+                onClick = {
+                    if (amountValid && !submitted) {
+                        submitted = true
+                        onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else ""))
+                    }
+                }
             )
         }
     ) {
@@ -96,11 +106,11 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             }
         }
         EntryCard("Insulin") {
-            AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
+            AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin", onValidityChange = { amountValid = it })
             ChoiceRow {
                 state.quickIncrements.forEach { inc ->
-                    ActionChip((if (inc > 0) "+" else "") + fmt(inc) + " U", modifier = Modifier.weight(1f), enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0, onClick = {
-                        amount = (amount + inc).coerceIn(0.0, state.maxInsulin)
+                    ActionChip((if (inc > 0) "+" else "") + fmt(inc) + " U", modifier = Modifier.weight(1f), enabled = amountValid && (if (inc > 0) amount < state.maxInsulin else amount > 0.0), onClick = {
+                        if (amountValid) NumericSpec(0.0, state.maxInsulin, kotlin.math.abs(inc), state.decimals).increment(amount, inc > 0)?.let { amount = it }
                     })
                 }
             }

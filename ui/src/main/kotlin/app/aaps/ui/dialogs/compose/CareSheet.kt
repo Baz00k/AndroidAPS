@@ -68,6 +68,9 @@ fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: ()
     var meter by remember { mutableStateOf(CareMeter.SENSOR) }
     var duration by remember { mutableStateOf(0.0) }
     var notes by remember { mutableStateOf("") }
+    var bgValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
+    val valid = (!state.showBg || bgValid) && (!state.showDuration || durationValid)
 
     SheetSurface(title = state.title, onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
@@ -75,7 +78,7 @@ fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: ()
                 NumberField(
                     label = "Glucose", value = bg, onValue = { bg = it },
                     step = state.bgStep, min = state.bgMin, max = state.bgMax, decimals = state.bgDecimals, unit = state.bgUnit,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(), onValidityChange = { bgValid = it }
                 )
                 SectionLabel("Source")
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -89,14 +92,15 @@ fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: ()
                 NumberField(
                     label = "Duration", value = duration, onValue = { duration = it },
                     step = state.durationStep, min = 0.0, max = state.durationMax, decimals = 0, unit = "min",
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { durationValid = it }
                 )
 
             if (state.showNotes) NotesField(notes, { notes = it })
 
             PrimaryButton(
                 label = state.submitLabel,
-                onClick = { onSubmit(CareInputs(bg = bg, meter = meter, durationMin = duration.toInt(), notes = notes)) }
+                enabled = valid,
+                onClick = { if (valid) onSubmit(CareInputs(bg = bg, meter = meter, durationMin = duration.toInt(), notes = notes)) }
             )
         }
     }

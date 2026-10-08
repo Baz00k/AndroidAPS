@@ -19,7 +19,8 @@ native Android UI and develops a closed-loop insulin-delivery algorithm.
   back-dated events.
 - Compose UI: Material 3 screens for home, dosing, loop, history, statistics, profile, configuration and
   pump status, plus file-based skins. Dosing still goes through the existing constraint and confirmation
-  paths.
+  paths. Numeric entry accepts decimal dot or comma; incomplete or out-of-range entries block submission.
+  Extra typed precision is retained, and pump rounding is shown separately at confirmation.
 - Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
 - Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
 

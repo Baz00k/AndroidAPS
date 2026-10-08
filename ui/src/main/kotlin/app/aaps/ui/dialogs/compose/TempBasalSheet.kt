@@ -55,6 +55,8 @@ fun TempBasalSheet(state: TempBasalSheetState, onSubmit: (TempBasalInputs) -> Un
     var percent by remember { mutableStateOf(state.percentDefault) }
     var absolute by remember { mutableStateOf(state.absoluteDefault) }
     var duration by remember { mutableStateOf(state.durationDefault) }
+    var rateValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
 
     SheetSurface(title = "Temp basal", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
@@ -70,23 +72,24 @@ fun TempBasalSheet(state: TempBasalSheetState, onSubmit: (TempBasalInputs) -> Un
                 NumberField(
                     label = "Rate", value = percent, onValue = { percent = it },
                     step = state.percentStep, min = 0.0, max = state.percentMax, decimals = 0, unit = "%",
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { rateValid = it }
                 )
             } else {
                 NumberField(
                     label = "Rate", value = absolute, onValue = { absolute = it },
                     step = state.absoluteStep, min = 0.0, max = state.absoluteMax, decimals = state.absoluteDecimals, unit = "U/h",
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(), onValidityChange = { rateValid = it }
                 )
             }
             NumberField(
                 label = "Duration", value = duration, onValue = { duration = it },
                 step = state.durationStep, min = state.durationStep, max = state.durationMax, decimals = 0, unit = "min",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { durationValid = it }
             )
             PrimaryButton(
                 label = "Set temp basal",
-                onClick = { onSubmit(TempBasalInputs(isPercent, if (isPercent) percent else absolute, duration.toInt())) }
+                enabled = rateValid && durationValid,
+                onClick = { if (rateValid && durationValid) onSubmit(TempBasalInputs(isPercent, if (isPercent) percent else absolute, duration.toInt())) }
             )
         }
     }
