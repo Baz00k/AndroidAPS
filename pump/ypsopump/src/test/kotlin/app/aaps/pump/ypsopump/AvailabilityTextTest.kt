@@ -327,10 +327,9 @@ class AvailabilityTextTest {
             whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenAnswer {
                 enteredInstall.countDown()
                 check(releaseInstall.await(2, TimeUnit.SECONDS))
-                (it.arguments[2] as () -> Boolean).invoke()
+                (it.arguments[2] as () -> Unit).invoke()
                 PumpSession.Installation.FIRST_PUMP
             }
-            whenever(queue.readStatus("verification", null)).thenReturn(true)
             val starter = ProvisioningVerificationStarter(service, queue, "verification")
 
             val job = launch(kotlinx.coroutines.Dispatchers.IO) { starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key")) }
@@ -340,28 +339,7 @@ class AvailabilityTextTest {
             job.join()
 
             verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
-            verify(queue).readStatus("verification", null)
-        }
-    }
-
-    @Test
-    fun `rejected verification enqueue cancels the just staged candidate`() {
-        runBlocking {
-            val service = mock<YpsoProvisioningService>()
-            val queue = mock<CommandQueue>()
-            whenever(service.installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())).thenThrow(VerificationStartException())
-            whenever(queue.readStatus("verification", null)).thenReturn(false)
-            val starter = ProvisioningVerificationStarter(service, queue, "verification")
-
-            val error = try {
-                starter.installManual(YpsoProvisioningService.ManualDraft("serial", "AA:BB:CC:DD:EE:FF", "key"))
-                null
-            } catch (error: VerificationStartException) {
-                error
-            }
-
-            assertThat(error).isInstanceOf(VerificationStartException::class.java)
-            verify(service).installManualAndStartVerification(org.mockito.kotlin.any(), org.mockito.kotlin.any(), org.mockito.kotlin.any())
+            verify(queue).ensureStatusReadQueued("verification")
         }
     }
 }

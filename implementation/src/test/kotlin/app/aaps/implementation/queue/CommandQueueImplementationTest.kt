@@ -764,6 +764,35 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         assertThat(commandQueue.statusInQueue()).isTrue()
     }
 
+    @Test
+    fun ensureStatusReadQueuedReusesWaitingRead() {
+        commandQueue.readStatus("foreground", null)
+
+        repeat(3) { commandQueue.ensureStatusReadQueued("verification") }
+
+        assertThat(commandQueue.size()).isEqualTo(1)
+        commandQueue.pickup()
+        assertThat((commandQueue.performing() as CommandReadStatus).reason).isEqualTo("foreground")
+    }
+
+    @Test
+    fun ensureStatusReadQueuedKeepsRunningAndWaitingCommandsInOrder() {
+        commandQueue.readStatus("running", null)
+        commandQueue.pickup()
+        val running = commandQueue.performing()
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+
+        // A running read has already started, so it cannot stand in for the requested one.
+        repeat(2) { commandQueue.ensureStatusReadQueued("verification") }
+
+        assertThat(commandQueue.performing()).isSameInstanceAs(running)
+        assertThat(commandQueue.size()).isEqualTo(2)
+        commandQueue.pickup()
+        assertThat(commandQueue.performing()!!.commandType).isEqualTo(Command.CommandType.TEMPBASAL)
+        commandQueue.pickup()
+        assertThat((commandQueue.performing() as CommandReadStatus).reason).isEqualTo("verification")
+    }
+
     private class CustomCommand1 : CustomCommand {
 
         override val statusDescription: String
