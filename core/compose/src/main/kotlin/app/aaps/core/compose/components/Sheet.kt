@@ -47,11 +47,20 @@ val LocalSheetDragHandle = staticCompositionLocalOf<((LayoutCoordinates) -> Unit
 
 /**
  * Bottom-sheet surface: rounded-top panel with a grabber and a title row. Hosted by a native modal
- * bottom sheet ([LocalSheetDraggable] = true) or, for blocking content, a plain dialog.
+ * bottom sheet ([LocalSheetDraggable] = true): `DaggerBottomSheetFragment` for a fragment, [ModalSheet]
+ * inside a Compose screen. Blocking content (an alarm, a progress that must finish) sits in a plain
+ * dialog instead, which cannot be dragged and so shows no grabber.
  *
  * The title row is the same on every sheet: [onBack] (a step back within the sheet) leads, [onClose]
- * trails. Together with the grabber it is the sheet's handle. With a [footer] the content scrolls on its own and the footer, the sheet's action, stays
- * on screen; without one the caller lays out (and scrolls) everything itself.
+ * trails. Together with the grabber it is the sheet's handle.
+ *
+ * With [scrollContent] the sheet owns the scrolling: [content] scrolls between the header and the
+ * [footer], the sheet's action, which stays on screen however long the content grows. The content
+ * must not scroll itself, and the host must bound the sheet's height (both sheet hosts and a dialog
+ * window do). A footer implies this mode.
+ *
+ * Without it (the transitional mode, until #155 migrates the last callers) the content is laid out
+ * as given and the caller scrolls it itself; there is no footer.
  */
 @Composable
 fun SheetSurface(
@@ -60,8 +69,10 @@ fun SheetSurface(
     onClose: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
+    scrollContent: Boolean = footer != null,
     content: @Composable () -> Unit
 ) {
+    require(footer == null || scrollContent) { "A sheet footer is pinned below content the sheet scrolls" }
     val colors = AapsTheme.colors
     Column(
         modifier
@@ -100,27 +111,31 @@ fun SheetSurface(
                 if (onClose != null) SheetIconButton(Icons.Rounded.Close, "Close", onClose)
             }
         }
-        if (footer == null)
+        if (!scrollContent)
             Column(Modifier.padding(horizontal = AapsSpacing.screenH), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
                 content()
             }
         else {
+            // Takes only the height left over by the header and the footer, so a long body scrolls
+            // instead of pushing the action off screen.
             Column(
                 Modifier
                     .weight(1f, fill = false)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = AapsSpacing.screenH)
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = if (footer != null) 12.dp else 0.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) { content() }
-            // A hairline where the scrolling cards pass under the pinned action.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(AapsSpacing.hairlineWidth)
-                    .background(colors.hairline)
-            )
-            Box(Modifier.padding(start = AapsSpacing.screenH, end = AapsSpacing.screenH, top = 12.dp)) { footer() }
+            if (footer != null) {
+                // A hairline where the scrolling cards pass under the pinned action.
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(AapsSpacing.hairlineWidth)
+                        .background(colors.hairline)
+                )
+                Box(Modifier.padding(start = AapsSpacing.screenH, end = AapsSpacing.screenH, top = 12.dp)) { footer() }
+            }
         }
     }
 }
@@ -134,3 +149,14 @@ private fun SheetIconButton(icon: ImageVector, description: String, onClick: () 
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) { Icon(icon, contentDescription = description, tint = AapsTheme.colors.textSecondary) }
+
+@ComponentPreviews
+@Composable
+private fun SheetSurfacePreview() = PreviewSurface {
+    // The sheet scrolls a body taller than its host and keeps the footer on screen.
+    Box(Modifier.height(360.dp)) {
+        SheetSurface(title = "Temp basal", onClose = {}, footer = { PrimaryButton("Set temp basal", {}) }) {
+            repeat(8) { Text("Row ${it + 1}", style = AapsTheme.type.body, color = AapsTheme.colors.textPrimary) }
+        }
+    }
+}

@@ -68,7 +68,7 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
         dialog?.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)?.setBackgroundColor(Color.TRANSPARENT)
     }
 
-    /** The sheet's Compose content. Its scrolling stays its own; the header is the drag handle. */
+    /** The sheet's Compose content. Its scrolling never drags the sheet; the header is the drag handle. */
     protected fun sheetContent(content: @Composable () -> Unit): View = ComposeView(requireContext()).apply {
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         setContent {
