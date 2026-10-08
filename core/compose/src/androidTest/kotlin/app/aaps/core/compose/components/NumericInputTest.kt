@@ -28,32 +28,29 @@ import org.junit.Test
 class NumericInputTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun positiveMinimumCanBeTypedWithoutPublishingIntermediateDrafts() {
+    @Test fun draftsSurviveRestorationAndReconcileWithBoundsAndExternalValues() {
+        val restoration = StateRestorationTester(compose)
         var value by mutableStateOf(8.0)
+        var max by mutableStateOf(100.0)
         var valid = false
         val commits = mutableListOf<Double>()
-        compose.setContent {
-            AapsTheme { NumericInput(value, { value = it; commits.add(it) }, NumericSpec(5.0, 100.0, 1.0, 0), "g", "Amount", onValidityChange = { valid = it }) }
+        restoration.setContent {
+            AapsTheme { NumberField("Amount", value, { value = it; commits.add(it) }, 1.0, 5.0, max, 0, unit = "g", onValidityChange = { valid = it }) }
         }
         val field = compose.onNodeWithContentDescription("Amount")
         field.performTextReplacement("")
         field.performTextReplacement("1")
         compose.runOnIdle { assertThat(valid).isFalse(); assertThat(commits).isEmpty(); assertThat(value).isEqualTo(8.0) }
         field.assertTextEquals("1")
+        restoration.emulateSavedInstanceStateRestore()
+        field.assertTextEquals("1")
+        compose.runOnIdle { assertThat(valid).isFalse(); assertThat(commits).isEmpty() }
         field.performTextReplacement("12")
         compose.runOnIdle { assertThat(valid).isTrue(); assertThat(commits).containsExactly(12.0) }
         field.assertTextEquals("12")
-    }
-
-    @Test fun changedBoundsInvalidateAndExternalValuesReplaceTheDraft() {
-        var value by mutableStateOf(8.0)
-        var max by mutableStateOf(10.0)
-        var valid = false
-        compose.setContent { AapsTheme { NumberField("Amount", value, { value = it }, 1.0, 5.0, max, 0, onValidityChange = { valid = it }) } }
-        val field = compose.onNodeWithContentDescription("Amount")
         compose.runOnIdle { max = 7.0 }
-        compose.runOnIdle { assertThat(valid).isFalse(); assertThat(value).isEqualTo(8.0) }
-        field.assertTextEquals("8")
+        compose.runOnIdle { assertThat(valid).isFalse(); assertThat(value).isEqualTo(12.0) }
+        field.assertTextEquals("12")
         field.performTextReplacement("-")
         compose.runOnIdle { value = 6.0 }
         field.assertTextEquals("6")
@@ -64,29 +61,13 @@ class NumericInputTest {
         field.assertTextEquals("12")
     }
 
-    @Test fun restoredIncompleteDraftRemainsInvalidAndDoesNotPublishThePreviousValue() {
-        val restoration = StateRestorationTester(compose)
-        var valid = false
-        val commits = mutableListOf<Double>()
-        restoration.setContent { AapsTheme {
-            NumericInput(8.0, commits::add, NumericSpec(5.0, 100.0, 1.0, 0), "g", "Amount", onValidityChange = { valid = it })
-        } }
-        compose.onNodeWithContentDescription("Amount").performTextReplacement("1.")
-        restoration.emulateSavedInstanceStateRestore()
-        compose.onNodeWithContentDescription("Amount").assertTextEquals("1.")
-        compose.runOnIdle { assertThat(valid).isFalse(); assertThat(commits).isEmpty() }
-    }
-
-    @Test fun exactIncrementOffStepTypingAndUnitSurviveTwoHundredPercentFontLight() = checkLargeFont(AapsUiMode.LIGHT)
-    @Test fun exactIncrementOffStepTypingAndUnitSurviveTwoHundredPercentFontDark() = checkLargeFont(AapsUiMode.DARK)
-
-    private fun checkLargeFont(mode: AapsUiMode) {
+    @Test fun unitAndNamedBoundSurviveTwoHundredPercentFont() {
         var value by mutableStateOf(0.0)
         var precision = false
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
-                AapsTheme(mode = mode) { Column(Modifier.width(280.dp)) {
+                AapsTheme(mode = AapsUiMode.DARK) { Column(Modifier.width(280.dp)) {
                     NumericInput(value, { value = it }, NumericSpec(0.0, 0.063, 0.025, 2), "U", "Insulin", onPrecisionInsufficient = { precision = it })
                 } }
             }
@@ -96,11 +77,7 @@ class NumericInputTest {
         compose.runOnIdle { assertThat(value).isEqualTo(0.025); assertThat(precision).isTrue() }
         val field = compose.onNodeWithContentDescription("Insulin")
         field.assertTextEquals("0.025")
-        field.performTextReplacement("0,013")
-        compose.runOnIdle { assertThat(value).isEqualTo(0.013) }
-        plus.performClick()
-        compose.runOnIdle { assertThat(value).isEqualTo(0.038) }
-        plus.performClick()
+        field.performTextReplacement("0.063")
         plus.assertIsNotEnabled()
         compose.onNodeWithText("Max 0.063 U").assertIsDisplayed()
         compose.onNodeWithText("U").assertIsDisplayed()

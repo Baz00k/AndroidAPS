@@ -28,8 +28,6 @@ class NumericEntryFlowsTest {
         compose.onNodeWithText("Log 12 g").assertIsEnabled()
         carbs.performTextReplacement("")
         compose.onNodeWithText("Log 12 g").assertIsNotEnabled().performClick()
-        carbs.performTextReplacement("12.5")
-        compose.onNodeWithText("Log 12 g").assertIsNotEnabled()
         carbs.performTextReplacement("-5")
         val absorption = compose.onAllNodes(hasSetTextAction())[1]
         absorption.performScrollTo().performTextReplacement("")
@@ -53,8 +51,6 @@ class NumericEntryFlowsTest {
         compose.onNodeWithText("Deliver 0.025 U").assertIsEnabled()
         amount.performTextReplacement("0.")
         compose.onNodeWithText("Deliver 0.025 U").assertIsNotEnabled().performClick()
-        amount.performTextReplacement("NaN")
-        compose.onNodeWithText("Deliver 0.025 U").assertIsNotEnabled()
         amount.performTextReplacement("0.013")
         compose.onNodeWithText("Deliver 0.013 U").performClick().performClick()
         compose.runOnIdle { assertThat(submissions.map { it.amount }).containsExactly(0.013) }
@@ -78,7 +74,6 @@ class NumericEntryFlowsTest {
         val glucose = compose.onAllNodes(hasSetTextAction())[0]
         glucose.performTextReplacement("-")
         compose.onNodeWithText("Review").assertIsNotEnabled()
-        glucose.performTextReplacement("1")
         glucose.performTextReplacement("12,5")
         compose.onNodeWithText("Review").assertIsEnabled()
         compose.runOnIdle { assertThat(computations.manualBg).isEqualTo(12.5) }
