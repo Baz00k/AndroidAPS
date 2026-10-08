@@ -29,6 +29,23 @@ class YpsoProfileReadbackTest {
     }
 
     @Test
+    fun `clock offset is given only when the time read is fast enough to bound it`() {
+        val at = instant.toEpochMilli()
+        // Pump 2 s ahead, read in 1 s: the pump time was taken somewhere in that second.
+        assertEquals(2_000L, YpsoProfileReadback.clockOffset(local, zone, at - 2_500, at - 1_500))
+        val limit = YpsoProfileReadback.MAX_CLOCK_READ_MS
+        assertEquals(0L, YpsoProfileReadback.clockOffset(local, zone, at - limit / 2, at + limit / 2))
+        // A 40 s read could have sampled the pump anywhere in it; its midpoint can be 20 s off.
+        assertNull(YpsoProfileReadback.clockOffset(local, zone, at - limit / 2, at + limit / 2 + 1))
+        assertNull(YpsoProfileReadback.clockOffset(local, zone, at - 20_000, at + 20_000))
+        // The phone clock went back during the read.
+        assertNull(YpsoProfileReadback.clockOffset(local, zone, at, at - 1))
+        // The date was read before the time: around midnight they may belong to different days.
+        assertNull(YpsoProfileReadback.clockOffset(LocalDateTime.of(2026,9,16,23,59,55), zone, at, at + 100))
+        assertNull(YpsoProfileReadback.clockOffset(LocalDateTime.of(2026,9,17,0,0,5), zone, at, at + 100))
+    }
+
+    @Test
     fun `only complete same connection same program acquisition may publish`() {
         val read = acquisition()
         val result = finish(read)!!

@@ -1498,8 +1498,8 @@ class YpsoBleManager @Inject constructor(
             }
         }
         /**
-         * Pump clock offset from two plain reads (no selector write). A date change between the
-         * reads, or any read failure, leaves the offset unknown rather than failing the scan.
+         * Pump clock offset from two plain reads (no selector write). A slow time read, a date change
+         * between the reads, or any read failure leaves the offset unknown rather than failing the scan.
          */
         fun readPumpClockOffset(done: (Long?) -> Unit) {
             if (!attempt.isActive || !owned()) return done(null)
@@ -1512,14 +1512,7 @@ class YpsoBleManager @Inject constructor(
                 plain(CHAR_SYSTEM_TIME) { time ->
                     val after = System.currentTimeMillis()
                     val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
-                    val offset = local?.let {
-                        val phone = (before + after) / 2
-                        val pumpAsPhoneLocal = it.atZone(pumpState.historyZone).toInstant().toEpochMilli()
-                        pumpAsPhoneLocal - phone
-                    }
-                    // The time is read after the date; near midnight the pair may straddle two days.
-                    val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
-                    done(offset?.takeIf { !nearMidnight })
+                    done(local?.let { YpsoProfileReadback.clockOffset(it, pumpState.historyZone, before, after) })
                 }
             }
         }

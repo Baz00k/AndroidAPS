@@ -24,6 +24,22 @@ internal class YpsoProfileReadback(
                     time[0].toInt() and 255, time[1].toInt() and 255, time[2].toInt() and 255)
             }.getOrNull()
         }
+
+        /** Longest pump time read, on the phone clock, that still yields an offset. */
+        const val MAX_CLOCK_READ_MS = 4_000L
+
+        /**
+         * Pump clock minus phone clock, from [pumpTime] read between [before] and [after] on the phone
+         * clock. The pump reports whole seconds, so the result is exact to half the read time plus one
+         * second. A read slower than [MAX_CLOCK_READ_MS], a phone clock that went back during it, or a
+         * read that may straddle the pump's midnight (its date was read separately) gives none.
+         */
+        fun clockOffset(pumpTime: LocalDateTime, zone: ZoneId, before: Long, after: Long): Long? {
+            if (after < before || after - before > MAX_CLOCK_READ_MS) return null
+            val second = pumpTime.toLocalTime().toSecondOfDay()
+            if (second < 10 || second > 86_390) return null
+            return pumpTime.atZone(zone).toInstant().toEpochMilli() - (before + after) / 2
+        }
     }
 
     private val rows = mutableMapOf<Int, ByteArray>()
