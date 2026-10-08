@@ -36,6 +36,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -50,8 +56,9 @@ import kotlinx.coroutines.launch
  * Modal bottom sheet host for a [SheetSurface] inside a Compose screen, for places that are not a
  * `DaggerBottomSheetFragment`. It behaves like that host: the sheet slides up and is dismissed by
  * dragging its header down, the scrim or Back, and the only grabber is the surface's own. The drag is
- * attached to the header and nowhere else, so a tap, a drag or a scroll in the content never moves the
- * sheet, even while it is still sliding.
+ * attached to the header and nowhere else, and only once the sheet is up, so a tap, a drag or a scroll in
+ * the content never moves the sheet, even while it is still sliding. For accessibility services the
+ * scrim is a "Close sheet" button and the sheet offers a dismiss action, both through the same close.
  *
  * [content] receives `close`, which slides the sheet away and then runs what comes next, so an
  * action's own dialog does not open under a closing sheet. Every way out (an action, Back, the scrim,
@@ -65,6 +72,8 @@ fun ModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () 
     val scope = rememberCoroutineScope()
     val currentOnDismissed by rememberUpdatedState(onDismissed)
     var closing by remember { mutableStateOf(false) }
+    // The header drags only once the sheet is up: a drag would cut the opening slide short.
+    var opened by remember { mutableStateOf(false) }
     val close: (() -> Unit) -> Unit = { after ->
         if (!closing) {
             closing = true
@@ -79,6 +88,7 @@ fun ModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () 
         // Slide up once the sheet has been measured, then watch for a header drag that let it go.
         snapshotFlow { position.anchors.size }.first { it > 0 }
         position.animateTo(SheetPosition.Open)
+        opened = true
         snapshotFlow { position.settledValue }.first { it == SheetPosition.Hidden }
         close {}
     }
@@ -97,28 +107,44 @@ fun ModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () 
                     .fillMaxSize()
                     .drawBehind { drawRect(scrim, alpha = position.shown()) }
                     .pointerInput(Unit) { detectTapGestures { close {} } }
+                    // Read last, after the sheet, as Material's scrim is.
+                    .semantics {
+                        traversalIndex = 1f
+                        contentDescription = "Close sheet"
+                        onClick { close {}; true }
+                    }
             )
-            // Above the scrim, so a touch on the sheet is the sheet's alone.
+            // Above the scrim. The sheet takes every touch inside it, so one that no control in the
+            // content claims (plain text, padding) does not fall through to the scrim.
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
                 Box(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .onSizeChanged { size ->
-                            position.updateAnchors(DraggableAnchors {
-                                SheetPosition.Open at 0f
-                                SheetPosition.Hidden at size.height.toFloat()
-                            })
+                            // A resize keeps the sheet heading where it was going (up, back, or away).
+                            position.updateAnchors(
+                                DraggableAnchors {
+                                    SheetPosition.Open at 0f
+                                    SheetPosition.Hidden at size.height.toFloat()
+                                },
+                                position.targetValue
+                            )
                         }
                         // Until it is measured the sheet sits one full height down, out of sight.
                         .graphicsLayer { translationY = position.offset.takeUnless { it.isNaN() } ?: size.height }
                         .clip(AapsTheme.shape.sheet)
                         .background(AapsTheme.colors.surface3)
+                        .pointerInput(Unit) {}
+                        .semantics {
+                            paneTitle = "Sheet"
+                            dismiss { close {}; true }
+                        }
                         .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                 ) {
                     CompositionLocalProvider(
                         LocalSheetDraggable provides true,
-                        LocalSheetHeaderDrag provides Modifier.anchoredDraggable(position, Orientation.Vertical, enabled = !closing)
+                        LocalSheetHeaderDrag provides Modifier.anchoredDraggable(position, Orientation.Vertical, enabled = opened && !closing)
                     ) { content(close) }
                 }
             }

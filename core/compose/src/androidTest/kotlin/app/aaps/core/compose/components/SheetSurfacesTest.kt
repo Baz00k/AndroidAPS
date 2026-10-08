@@ -11,6 +11,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
@@ -21,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
@@ -192,6 +195,67 @@ class SheetSurfacesTest {
         assertThat(dismissed).isEqualTo(0)
         assertThat(removed).isEqualTo(1)
         compose.onNodeWithText("Recent carbs").assertIsDisplayed()
+    }
+
+    @Test
+    fun aDragDuringTheOpeningSlideIsIgnoredAndALaterOneStillDismisses() {
+        var dismissed = 0
+        compose.mainClock.autoAdvance = false
+        showModalSheet(onDismissed = { dismissed++ }) { close ->
+            SheetSurface(title = "Recent carbs", onClose = { close {} }) { Text("No carb entries in the last few hours.") }
+        }
+        // Part way up: the header is on screen, the slide is not over.
+        compose.mainClock.advanceTimeBy(120)
+        compose.onNodeWithText("Recent carbs").performTouchInput { pullDown() }
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(0)
+        compose.onNodeWithText("Recent carbs").assertIsDisplayed()
+
+        compose.onNodeWithText("Recent carbs").performTouchInput { pullDown() }
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(1)
+        compose.onNodeWithText("Recent carbs").assertDoesNotExist()
+    }
+
+    @Test
+    fun aTapOnTheSheetStaysOnTheSheetAndATapAboveItCloses() {
+        var dismissed = 0
+        showModalSheet(onDismissed = { dismissed++ }) { close ->
+            SheetSurface(title = "Recent carbs", onClose = { close {} }) { Text("No carb entries in the last few hours.") }
+        }
+        compose.onNodeWithText("No carb entries in the last few hours.").performTouchInput { click() }
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(0)
+
+        // Well above the sheet: the scrim.
+        compose.onNodeWithText("Recent carbs").performTouchInput { click(Offset(centerX, -300f)) }
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(1)
+    }
+
+    @Test
+    fun aSheetWithoutACloseButtonCanStillBeClosedWithAccessibilityActions() {
+        var dismissed = 0
+        showModalSheet(onDismissed = { dismissed++ }) {
+            SheetSurface(title = "Delivering bolus") { Text("Insulin is on its way.") }
+        }
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).assertExists()
+        compose.onNodeWithContentDescription("Close sheet").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(1)
+    }
+
+    @Test
+    fun theSheetsDismissActionClosesItOnce() {
+        var dismissed = 0
+        showModalSheet(onDismissed = { dismissed++ }) {
+            SheetSurface(title = "Delivering bolus") { Text("Insulin is on its way.") }
+        }
+        val sheet = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss))
+        sheet.performSemanticsAction(SemanticsActions.Dismiss)
+        compose.waitForIdle()
+        assertThat(dismissed).isEqualTo(1)
     }
 
     private fun showModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) =
