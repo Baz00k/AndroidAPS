@@ -37,7 +37,7 @@
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:elevation="2dp"
+        android:elevation="0dp"
         app:contentInsetEndWithActions="48dp"
         app:contentInsetStartWithNavigation="48dp">
 
@@ -46,7 +46,9 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@android:color/transparent"
-
+            app:tabIndicator="@drawable/tab_indicator_rounded"
+            app:tabIndicatorFullWidth="false"
+            app:tabTextAppearance="@style/TextAppearance.Aaps.Tab"
             app:tabMode="scrollable" />
 
         <com.google.android.material.tabs.TabLayout
@@ -54,6 +56,9 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@android:color/transparent"
+            app:tabIndicator="@drawable/tab_indicator_rounded"
+            app:tabIndicatorFullWidth="false"
+            app:tabTextAppearance="@style/TextAppearance.Aaps.Tab"
             app:tabMinWidth="0dp"
             app:tabMode="scrollable"
 

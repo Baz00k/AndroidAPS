@@ -83,7 +83,7 @@ fun AlertFrame(
             Modifier
                 .fillMaxWidth()
                 .clip(AapsTheme.shape.hero)
-                .background(colors.surface)
+                .background(colors.surface2)
                 .padding(AapsSpacing.cardPad),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
         ) {

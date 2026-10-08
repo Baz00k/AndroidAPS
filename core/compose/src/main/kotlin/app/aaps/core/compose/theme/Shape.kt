@@ -8,7 +8,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Corner radii from the handoff "Shape & spacing" tokens.
+ * Corner radii, from Material 3's shape scale.
  *
  * Read through [AapsTheme.shape], never as a constant — a skin supplies its own set, and a square
  * skin that still drew round cards would look broken rather than deliberate.
@@ -25,38 +25,45 @@ data class AapsShapes(
     val extraSmall: CornerBasedShape
 )
 
+/** The seed at which [aapsShapes] reproduces Material's own scale. */
+val DefaultCornerRadius: Dp = 16.dp
+
 /**
- * Derive the whole set from one radius seed, the way the handoff's own numbers relate to each other.
+ * Derive the whole set from one radius seed.
  *
  * One value is the entire shape language: `aapsShapes(0.dp)` squares off every corner in the app,
  * including the pills, which is what a hard-edged skin needs and what a per-token file would make
- * needlessly laborious to express.
+ * needlessly laborious to express. At [DefaultCornerRadius] the steps land on Material's scale.
  */
-fun aapsShapes(radius: Dp = 18.dp): AapsShapes {
-    val r = if (radius < 0.dp) 0.dp else radius
+fun aapsShapes(radius: Dp = DefaultCornerRadius): AapsShapes {
+    val r = radius.coerceAtLeast(0.dp)
     fun step(factor: Float) = RoundedCornerShape(r * factor)
+    // A pill is fully rounded by definition — unless the skin has no curves at all, in which case a
+    // stadium shape would be the one thing breaking the language. Material buttons are pills too.
+    val pill = if (r <= 0.dp) RoundedCornerShape(0.dp) else RoundedCornerShape(50)
     return AapsShapes(
-        hero = step(1.33f),        // 24 at the default seed
-        card = step(1f),           // 18
-        cardSmall = step(0.78f),   // 14
-        // A pill is fully rounded by definition — unless the skin has no curves at all, in which
-        // case a stadium shape would be the one thing breaking the language.
-        pill = if (r <= 0.dp) RoundedCornerShape(0.dp) else RoundedCornerShape(999.dp),
-        button = step(0.89f),      // 16
-        iconButton = step(0.67f),  // 12
-        sheet = RoundedCornerShape(topStart = r * 1.44f, topEnd = r * 1.44f),  // 26
-        extraSmall = step(0.44f)   // 8
+        hero = step(1.5f),         // 24
+        card = step(1f),           // 16, Material "large"
+        cardSmall = step(0.75f),   // 12, "medium"
+        pill = pill,
+        button = pill,
+        iconButton = pill,
+        sheet = RoundedCornerShape(topStart = r * 1.75f, topEnd = r * 1.75f),  // 28, "extra large"
+        extraSmall = step(0.5f)    // 8, "small"
     )
 }
 
-/** The shape set the redesign shipped with. */
+/** The shape set of the built-in skins. */
 val DefaultAapsShapes = aapsShapes()
 
-/** M3 [Shapes] so Material components inherit the skin's radii instead of the platform defaults. */
-fun aapsM3Shapes(shapes: AapsShapes): Shapes = Shapes(
-    extraSmall = shapes.extraSmall,
-    small = shapes.cardSmall,
-    medium = shapes.card,
-    large = shapes.hero,
-    extraLarge = shapes.hero
-)
+/** M3 [Shapes] from the same seed, so Material components keep the skin's corners. */
+fun aapsM3Shapes(radius: Dp): Shapes {
+    val r = radius.coerceAtLeast(0.dp)
+    return Shapes(
+        extraSmall = RoundedCornerShape(r * 0.25f),
+        small = RoundedCornerShape(r * 0.5f),
+        medium = RoundedCornerShape(r * 0.75f),
+        large = RoundedCornerShape(r),
+        extraLarge = RoundedCornerShape(r * 1.75f)
+    )
+}

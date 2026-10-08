@@ -30,7 +30,9 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Base surface card for the redesign: [AapsTheme] surface fill + hairline border, no elevation.
+ * Base surface card: a Material filled card, no elevation. Its fill is what separates it from the
+ * screen, so it draws a hairline only where the fill cannot — a card the colour of the screen
+ * behind it, as on a true-black ground, would otherwise vanish.
  * Pure readout by default; pass [onClick] to make it interactive.
  */
 @Composable
@@ -42,11 +44,12 @@ fun AapsCard(
     contentPadding: PaddingValues = PaddingValues(AapsSpacing.cardPad),
     content: @Composable () -> Unit
 ) {
+    val colors = AapsTheme.colors
     Card(
         modifier = if (onClick != null) modifier.clip(shape).clickable(role = Role.Button, onClick = onClick) else modifier,
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = color),
-        border = BorderStroke(1.dp, AapsTheme.colors.hairline)
+        border = if (color == colors.background) BorderStroke(1.dp, colors.hairline) else null
     ) {
         Box(Modifier.padding(contentPadding)) { content() }
     }

@@ -2,9 +2,9 @@ package app.aaps.core.compose.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -12,48 +12,51 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowInsetsControllerCompat
 
 /**
- * Extended palette that M3's [androidx.compose.material3.ColorScheme] can't express — the semantic
- * glucose colors and the accent (is-tappable) family. Access via [AapsTheme.colors].
+ * The app's colour tokens — chrome, the semantic glucose colours and the accent (is-tappable) family.
+ * Access via [AapsTheme.colors]. Every field is required: a default would be one palette's literal
+ * colour hiding behind whatever skin is active.
  */
 @Immutable
 data class AapsColors(
     // chrome
-    val background: Color = AapsPalette.background,
-    val surface: Color = AapsPalette.surface,
-    val surface2: Color = AapsPalette.surface2,
-    val surface3: Color = AapsPalette.surface3,
-    val bar: Color = AapsPalette.bar,
-    val scrim: Color = AapsPalette.scrim,
-    val hairline: Color = AapsPalette.hairline,
-    val divider: Color = AapsPalette.divider,
-    val controlFill: Color = AapsPalette.controlFill,
-    val switchTrackOff: Color = AapsPalette.switchTrackOff,
-    val switchKnobOff: Color = AapsPalette.switchKnobOff,
+    val background: Color,
+    val surface: Color,
+    val surface2: Color,
+    val surface3: Color,
+    val bar: Color,
+    val scrim: Color,
+    val hairline: Color,
+    val divider: Color,
+    val controlFill: Color,
+    val switchTrackOff: Color,
+    val switchKnobOff: Color,
     // text
-    val textPrimary: Color = AapsPalette.textPrimary,
-    val textSecondary: Color = AapsPalette.textSecondary,
-    val textTertiary: Color = AapsPalette.textTertiary,
-    val textOnSurfaceStrong: Color = AapsPalette.textOnSurfaceStrong,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    val textOnSurfaceStrong: Color,
     // semantic (glucose / status)
-    val inRange: Color = AapsSemantic.inRange,
-    val high: Color = AapsSemantic.high,
-    val low: Color = AapsSemantic.low,
-    val veryLow: Color = AapsSemantic.veryLow,
-    val veryHigh: Color = AapsSemantic.veryHigh,
-    val iob: Color = AapsSemantic.iob,
+    val inRange: Color,
+    val high: Color,
+    val low: Color,
+    val veryLow: Color,
+    val veryHigh: Color,
+    val iob: Color,
     // accent (interactive)
-    val accent: Color = AapsAccent.accent,
-    val accentOnLight: Color = AapsAccent.onLightSurface,
-    val accentTint: Color = AapsAccent.tint,
-    val accentTintStrong: Color = AapsAccent.tintStrong,
-    val onAccent: Color = AapsAccent.onAccent
+    val accent: Color,
+    val accentOnLight: Color,
+    val accentTint: Color,
+    val accentTintStrong: Color,
+    val onAccent: Color
 )
 
-val LocalAapsColors = staticCompositionLocalOf { AapsColors() }
+val LocalAapsColors = staticCompositionLocalOf { AapsSkins.Default.dark }
 val LocalAapsTextStyles = staticCompositionLocalOf { DefaultAapsTextStyles }
 val LocalAapsShapes = staticCompositionLocalOf { DefaultAapsShapes }
 
@@ -79,11 +82,15 @@ fun AapsTheme(
         AapsUiMode.DARK   -> true
         AapsUiMode.SYSTEM -> isSystemInDarkTheme()
     }
-    val colors = skin.colors(dark)
+    val view = LocalView.current
+    val context = LocalContext.current
+    // A built-in skin renders the live Material scheme (dynamic colour); a skin file its own palette.
+    // Previews have no wallpaper to read, so they get the baseline scheme.
+    val scheme = skin.materialScheme(if (view.isInEditMode) null else context, dark)
+    val colors = skin.materialGround?.let { scheme?.toAapsColors(dark, it) } ?: skin.colors(dark)
 
     // Status/nav bar icons have to flip with the ground or they vanish into it. Reactive, so it
     // tracks a skin change without waiting for the activity to be recreated.
-    val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             (view.context as? Activity)?.window?.let { window ->
@@ -95,56 +102,51 @@ fun AapsTheme(
         }
     }
 
-    val m3 = if (dark)
-        darkColorScheme(
-            primary = colors.accent,
-            onPrimary = colors.onAccent,
-            primaryContainer = colors.accentTintStrong,
-            onPrimaryContainer = colors.accentOnLight,
-            background = colors.background,
-            onBackground = colors.textPrimary,
-            surface = colors.surface,
-            onSurface = colors.textPrimary,
-            surfaceVariant = colors.surface2,
-            onSurfaceVariant = colors.textSecondary,
-            outline = colors.hairline,
-            outlineVariant = colors.divider,
-            error = colors.low,
-            onError = colors.onAccent
-        )
-    else
-        lightColorScheme(
-            primary = colors.accent,
-            onPrimary = colors.onAccent,
-            primaryContainer = colors.accentTintStrong,
-            onPrimaryContainer = colors.accentOnLight,
-            background = colors.background,
-            onBackground = colors.textPrimary,
-            surface = colors.surface,
-            onSurface = colors.textPrimary,
-            surfaceVariant = colors.surface2,
-            onSurfaceVariant = colors.textSecondary,
-            outline = colors.hairline,
-            outlineVariant = colors.divider,
-            error = colors.low,
-            onError = colors.onAccent
-        )
-
     // Material's own typography and shapes are derived from the same tokens, so a dialog or a
     // switch follows the skin instead of staying on the platform default while the app around it
     // changes.
     MaterialTheme(
-        colorScheme = m3,
+        colorScheme = scheme ?: colors.toMaterialScheme(dark),
         typography = aapsM3Typography(skin.fontFamily, skin.singleWeightFont),
-        shapes = aapsM3Shapes(skin.shapes)
+        shapes = aapsM3Shapes(skin.cornerRadius)
     ) {
         CompositionLocalProvider(
+            // Tonal elevation lightens a surface towards the accent, which would undo a black ground.
+            LocalTonalElevationEnabled provides (skin.materialGround != MaterialGround.TrueBlack),
             LocalAapsColors provides colors,
             LocalAapsTextStyles provides skin.type,
             LocalAapsShapes provides skin.shapes,
             content = content
         )
     }
+}
+
+/** A skin file's palette expressed as Material roles, so Material components follow it too. */
+private fun AapsColors.toMaterialScheme(dark: Boolean): ColorScheme {
+    val base = if (dark) BaselineDarkScheme else BaselineLightScheme
+    return base.copy(
+        primary = accent,
+        onPrimary = onAccent,
+        primaryContainer = accentTintStrong,
+        onPrimaryContainer = accentOnLight,
+        secondaryContainer = accentTintStrong,
+        onSecondaryContainer = accentOnLight,
+        background = background,
+        onBackground = textPrimary,
+        surface = background,
+        onSurface = textPrimary,
+        surfaceVariant = surface2,
+        onSurfaceVariant = textSecondary,
+        surfaceContainerLowest = background,
+        surfaceContainerLow = surface3,
+        surfaceContainer = surface,
+        surfaceContainerHigh = surface2,
+        surfaceContainerHighest = controlFill.compositeOver(surface2),
+        outline = textTertiary,
+        outlineVariant = hairline,
+        error = low,
+        onError = onAccent
+    )
 }
 
 /** Convenience accessors mirroring `MaterialTheme.*`. */

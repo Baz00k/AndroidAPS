@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Material 3 "title small" in the app font, sentence case — the main tabs' labels. -->
+    <style name="TextAppearance.Aaps.Tab" parent="TextAppearance.AppCompat.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="textAllCaps">false</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:letterSpacing">0.007</item>
+        <item name="android:fontFamily">@font/google_sans_flex</item>
+        <item name="fontFamily">@font/google_sans_flex</item>
+        <item name="android:fontVariationSettings">"'wght' 500"</item>
+    </style>
+
+</resources>

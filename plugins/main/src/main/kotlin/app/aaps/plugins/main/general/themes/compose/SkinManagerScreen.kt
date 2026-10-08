@@ -1,6 +1,7 @@
 package app.aaps.plugins.main.general.themes.compose
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -139,13 +140,14 @@ private fun SkinRow(entry: SkinManagerState.Entry, active: Boolean, actions: Ski
             Icons.Rounded.Check,
             contentDescription = if (active) "in use" else null,
             // Reserved rather than conditional, so selecting does not shuffle the row's contents.
-            tint = if (active) colors.inRange else Color.Transparent,
+            tint = if (active) colors.accent else Color.Transparent,
             modifier = Modifier.size(18.dp)
         )
         // The palette itself is the clearest label a skin can have.
         entry.swatches?.let { swatches ->
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                swatches.forEach { Box(Modifier.size(12.dp).clip(CircleShape).background(it)) }
+                // Outlined, or a ground swatch matching the card behind it disappears.
+                swatches.forEach { Box(Modifier.size(12.dp).clip(CircleShape).background(it).border(1.dp, colors.hairline, CircleShape)) }
             }
         }
         // Spaced rather than stacked flush: a skin supplies its own font, and a face whose glyphs

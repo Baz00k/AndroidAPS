@@ -1,9 +1,12 @@
-Copyright 2021 The Hanken Grotesk Project Authors (https://github.com/marcologous/hanken-grotesk)
+Google Sans Flex, instanced to the wght axis (GRAD=0, ROND=0, slnt=0, wdth=100, opsz=18) from
+https://github.com/google/fonts/tree/main/ofl/googlesansflex. "Google Sans Flex" is a trademark of
+Google LLC; its use here implies no affiliation with or endorsement by Google.
 
+Copyright 2015 The Google Sans Flex Authors (https://github.com/googlefonts/googlesans-flex)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
-http://scripts.sil.org/OFL
+https://openfontlicense.org
 
 
 -----------------------------------------------------------

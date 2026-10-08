@@ -2,7 +2,9 @@ package app.aaps
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,10 +27,12 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.widget.Toolbar
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.GravityCompat
 import androidx.core.view.MenuCompat
 import androidx.core.view.MenuProvider
 import app.aaps.activities.PreferencesActivity
+import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
@@ -339,6 +343,26 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                                             UIRunnable { OKDialog.show(this, "", rh.gs(R.string.authorizationfailed), true) { isProtectionCheckActive = false; finish() } }
             )
         }
+    }
+
+    /** Toolbar, tabs and drawer as Material 3 draws them, in the colours of the Compose content. */
+    override fun paintChrome(colors: AapsColors) {
+        binding.toolbar.setBackgroundColor(colors.background.toArgb())
+        actionBarDrawerToggle.drawerArrowDrawable.color = colors.textSecondary.toArgb()
+        binding.toolbar.overflowIcon?.setTint(colors.textSecondary.toArgb())
+        listOf(binding.tabsNormal, binding.tabsCompact).forEach { tabs ->
+            tabs.setTabTextColors(colors.textSecondary.toArgb(), colors.accent.toArgb())
+            tabs.setSelectedTabIndicatorColor(colors.accent.toArgb())
+        }
+        val drawerCorner = 16 * resources.displayMetrics.density
+        binding.mainNavigationView.background = GradientDrawable().apply {
+            setColor(colors.surface3.toArgb())
+            cornerRadii = floatArrayOf(0f, 0f, drawerCorner, drawerCorner, drawerCorner, drawerCorner, 0f, 0f)
+            // A drawer the colour of the screen (a true-black ground) needs its edge drawn, like a card.
+            if (colors.surface3 == colors.background) setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), colors.hairline.toArgb())
+        }
+        binding.mainNavigationView.itemTextColor = ColorStateList.valueOf(colors.textPrimary.toArgb())
+        binding.mainNavigationView.itemIconTintList = ColorStateList.valueOf(colors.textSecondary.toArgb())
     }
 
     private fun setWakeLock() {

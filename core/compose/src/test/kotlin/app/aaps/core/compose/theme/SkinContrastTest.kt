@@ -1,5 +1,7 @@
 package app.aaps.core.compose.theme
 
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
@@ -26,14 +28,53 @@ class SkinContrastTest {
     @Test
     fun `the rules actually reject an unreadable palette`() {
         // A guard that never fires is indistinguishable from one that is broken.
-        val invisible = AapsColors(textPrimary = AapsColors().background)
+        val base = AapsSkins.Default.dark
+        val invisible = base.copy(textPrimary = base.background)
         assertThat(SkinValidation.problems(invisible)).isNotEmpty()
     }
 
     @Test
     fun `the rules reject a palette whose glucose bands look alike`() {
-        val muddled = AapsColors(low = AapsColors().high)
+        val base = AapsSkins.Default.dark
+        val muddled = base.copy(low = base.high)
         assertThat(SkinValidation.problems(muddled)).isNotEmpty()
+    }
+
+    @Test
+    fun `the rules reject accent ink that disappears into its tint`() {
+        val base = AapsSkins.Default.dark
+        assertThat(SkinValidation.problems(base.copy(accentOnLight = base.accentTintStrong))).isNotEmpty()
+    }
+
+    @Test
+    fun `glucose colours never follow the wallpaper`() {
+        // A dynamic scheme is the user's wallpaper. Whatever it tints, the glucose bands must keep
+        // their meaning — a red wallpaper must not repaint "in range".
+        listOf(true, false).forEach { dark ->
+            val reference = AapsSkins.Default.colors(dark)
+            val wallpaper = (if (dark) darkColorScheme(primary = Color.Red, error = Color.Green, surface = Color(0xFF301010))
+            else lightColorScheme(primary = Color.Red, error = Color.Green, surface = Color(0xFFFFE0E0))).toAapsColors(dark)
+            assertThat(wallpaper.accent).isEqualTo(Color.Red)
+            listOf(
+                wallpaper.inRange to reference.inRange, wallpaper.high to reference.high, wallpaper.low to reference.low,
+                wallpaper.veryLow to reference.veryLow, wallpaper.veryHigh to reference.veryHigh, wallpaper.iob to reference.iob
+            ).forEach { (actual, expected) -> assertWithMessage("dark=$dark").that(actual).isEqualTo(expected) }
+        }
+    }
+
+    @Test
+    fun `midnight is the default dark ground with its screen-sized surfaces black`() {
+        val dark = AapsSkins.Default.dark
+        val midnight = AapsSkins.Midnight.dark
+        listOf(midnight.background, midnight.surface3, midnight.bar).forEach { assertThat(it).isEqualTo(Color.Black) }
+        // Cards stay filled — outlines alone read as a wireframe — but darker than the tonal ground's.
+        assertThat(midnight.surface).isNotEqualTo(midnight.background)
+        assertThat(SkinValidation.contrast(midnight.surface, Color.Black)).isLessThan(SkinValidation.contrast(dark.surface, Color.Black))
+        // Smaller containers and controls keep their tones, or they could not be found on black.
+        listOf(midnight.surface2, midnight.controlFill, midnight.accentTintStrong).forEach { assertThat(it).isNotEqualTo(Color.Black) }
+        // Everything that is not a ground is the default's, so the two read as the same app.
+        val grounds = dark.copy(background = midnight.background, surface = midnight.surface, surface3 = midnight.surface3, bar = midnight.bar)
+        assertThat(midnight).isEqualTo(grounds)
     }
 
     @Test

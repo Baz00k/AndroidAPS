@@ -198,7 +198,7 @@ fun ClockPicker(initial: LocalTime, is24Hour: Boolean, onPick: (LocalTime) -> Un
     val picker = rememberTimePickerState(initialHour = initial.hour, initialMinute = initial.minute, is24Hour = is24Hour)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = colors.surface,
+        containerColor = colors.surface2,
         confirmButton = { TextButton(onClick = { onPick(LocalTime.of(picker.hour, picker.minute)) }) { Text("OK", color = colors.accent) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = colors.textSecondary) } },
         text = {
@@ -209,10 +209,10 @@ fun ClockPicker(initial: LocalTime, is24Hour: Boolean, onPick: (LocalTime) -> Un
                     clockDialSelectedContentColor = colors.onAccent,
                     clockDialUnselectedContentColor = colors.textPrimary,
                     selectorColor = colors.accent,
-                    containerColor = colors.surface,
+                    containerColor = colors.surface2,
                     periodSelectorBorderColor = colors.hairline,
                     periodSelectorSelectedContainerColor = colors.accentTintStrong,
-                    periodSelectorUnselectedContainerColor = colors.surface,
+                    periodSelectorUnselectedContainerColor = colors.surface2,
                     periodSelectorSelectedContentColor = colors.accentOnLight,
                     periodSelectorUnselectedContentColor = colors.textSecondary,
                     timeSelectorSelectedContainerColor = colors.accentTintStrong,

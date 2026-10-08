@@ -1,6 +1,7 @@
 package app.aaps.plugins.main.general.themes
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
@@ -11,14 +12,13 @@ import app.aaps.core.compose.theme.AapsAppearances
 import app.aaps.core.compose.theme.AapsSkinState
 import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.SkinFormatException
 import app.aaps.core.compose.theme.AapsUiMode
+import app.aaps.core.compose.theme.SkinFormatException
 import app.aaps.core.compose.theme.SkinSpec
-import app.aaps.core.compose.theme.toSkinHex
 import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
@@ -186,7 +186,7 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
                     byline = spec?.author?.let { "by $it" } ?: spec?.description,
                     // "Follow system" has no palette of its own to preview; everything else does.
                     swatches = if (appearance.mode == AapsUiMode.SYSTEM && !installed) null
-                    else SkinManagerState.swatchesOf(appearance.skin.colors(appearance.mode != AapsUiMode.LIGHT)),
+                    else SkinManagerState.swatchesOf(appearance.skin.resolvedColors(this, appearance.mode != AapsUiMode.LIGHT)),
                     removable = installed
                 )
             },
@@ -223,24 +223,18 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
      * were looking at when they decided to change it.
      */
     private fun templateSpec(): SkinSpec {
-        val c = AapsSkinState.skin.dark
+        // What is on screen right now — the wallpaper's colours for a built-in appearance — in full,
+        // as one palette, so importing the untouched template reproduces it instead of inheriting
+        // the baseline scheme for whatever it left out.
+        val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val skin = AapsSkinState.skin
         return SkinSpec(
             id = "my-skin",
             label = "My skin",
             author = null,
             description = "Edit skin.json, zip it back up, and import it.",
-            cornerRadius = 18f,
-            dark = SkinSpec.PaletteSpec(
-                background = c.background.toSkinHex(),
-                surface = c.surface.toSkinHex(),
-                textPrimary = c.textPrimary.toSkinHex(),
-                textSecondary = c.textSecondary.toSkinHex(),
-                accent = c.accent.toSkinHex(),
-                onAccent = c.onAccent.toSkinHex(),
-                inRange = c.inRange.toSkinHex(),
-                high = c.high.toSkinHex(),
-                low = c.low.toSkinHex()
-            )
+            cornerRadius = skin.cornerRadius.value,
+            palette = SkinSpec.PaletteSpec.from(skin.resolvedColors(this, dark))
         )
     }
 }

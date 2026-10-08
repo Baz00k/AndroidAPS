@@ -31,12 +31,19 @@ class SkinTypeAndShapeTest {
     }
 
     @Test
-    fun `the default seed reproduces the handoff radii`() {
+    fun `the default seed reproduces Material's shape scale`() {
         val s = aapsShapes()
-        assertThat(s.card).isEqualTo(RoundedCornerShape(18.dp))
-        assertThat(s.hero).isEqualTo(RoundedCornerShape(18.dp * 1.33f))
-        assertThat(s.pill).isEqualTo(RoundedCornerShape(999.dp))
+        assertThat(s.card).isEqualTo(RoundedCornerShape(16.dp))
+        assertThat(s.cardSmall).isEqualTo(RoundedCornerShape(12.dp))
+        assertThat(s.extraSmall).isEqualTo(RoundedCornerShape(8.dp))
+        assertThat(s.sheet).isEqualTo(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+        // Material buttons are fully rounded.
+        listOf(s.pill, s.button, s.iconButton).forEach { assertThat(it).isEqualTo(RoundedCornerShape(50)) }
         assertThat(DefaultAapsShapes).isEqualTo(s)
+        val m3 = aapsM3Shapes(DefaultCornerRadius)
+        assertThat(listOf(m3.extraSmall, m3.small, m3.medium, m3.large, m3.extraLarge))
+            .containsExactly(RoundedCornerShape(4.dp), RoundedCornerShape(8.dp), RoundedCornerShape(12.dp), RoundedCornerShape(16.dp), RoundedCornerShape(28.dp))
+            .inOrder()
     }
 
     @Test
@@ -60,9 +67,11 @@ class SkinTypeAndShapeTest {
 
     @Test
     fun `the default scale keeps its weight hierarchy`() {
+        // Material weights: emphasis on readouts and titles, regular for reading.
         val t = aapsTextStyles()
-        assertThat(t.hero.fontWeight).isEqualTo(FontWeight.ExtraBold)
-        assertThat(t.body.fontWeight).isEqualTo(FontWeight.Medium)
+        assertThat(t.hero.fontWeight).isEqualTo(FontWeight.Medium)
+        assertThat(t.title.fontWeight).isEqualTo(FontWeight.Medium)
+        assertThat(t.body.fontWeight).isEqualTo(FontWeight.Normal)
         assertThat(t.caption.fontWeight).isEqualTo(FontWeight.Normal)
         assertThat(DefaultAapsTextStyles).isEqualTo(t)
     }

@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
+import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.interfaces.androidPermissions.AndroidPermission
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -21,12 +22,14 @@ import app.aaps.core.interfaces.rx.events.EventThemeSwitch
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.activities.fitContentToSystemBars
+import app.aaps.core.ui.activities.followSkinChrome
 import app.aaps.core.ui.dialogs.WarningDialog
 import app.aaps.core.ui.locale.LocaleHelper
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.plugins.configuration.R
 import app.aaps.plugins.configuration.maintenance.CustomWatchfaceFileContract
 import app.aaps.plugins.configuration.maintenance.PrefsFileContract
+import app.aaps.plugins.configuration.maintenance.cloud.CloudConstants
 import dagger.android.support.DaggerAppCompatActivity
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import javax.inject.Inject
@@ -51,6 +54,7 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
 
     public override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        followSkinChrome { paintChrome(it) }
 
         compositeDisposable.add(rxBus.toObservable(EventThemeSwitch::class.java).subscribe {
             recreate()
@@ -131,6 +135,9 @@ open class DaggerAppCompatActivityWithResult : DaggerAppCompatActivity() {
             updateButtons()
         }
     }
+
+    /** Chrome of the activity's own beyond the window and action bar, painted on every appearance change. */
+    protected open fun paintChrome(colors: AapsColors) = Unit
 
     override fun onPostCreate(savedInstanceState: Bundle?) {
         super.onPostCreate(savedInstanceState)
