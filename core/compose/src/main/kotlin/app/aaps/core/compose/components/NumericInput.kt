@@ -1,8 +1,13 @@
 package app.aaps.core.compose.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -10,21 +15,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.R
+import app.aaps.core.compose.theme.AapsSpacing
+import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Valid edits commit exactly the displayed number; invalid/incomplete edits remain drafts and publish
@@ -97,6 +111,8 @@ fun NumericInput(
         spec.max -> stringResource(R.string.compose_numeric_max, formatNumeric(spec.max, spec.decimals), unit)
         else -> null
     }
+    val valueStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary)
+    val measurer = rememberTextMeasurer()
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         StepperRow(
             decreaseLabel = stringResource(R.string.compose_numeric_subtract, formatNumeric(spec.step, spec.decimals), unit, name),
@@ -106,23 +122,51 @@ fun NumericInput(
             decreaseEnabled = current != null && current > spec.min,
             increaseEnabled = current != null && current < spec.max
         ) {
-            BasicTextField(
-                value = text,
-                onValueChange = { edit(NumericDraft(it)) },
-                singleLine = true,
-                textStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary),
-                cursorBrush = SolidColor(colors.accent),
-                // Compose's numeric keyboard types do not request TYPE_NUMBER_FLAG_SIGNED. A text
-                // keyboard is intentional for signed entries: both minus and decimal separators work.
-                keyboardOptions = KeyboardOptions(keyboardType = if (spec.min < 0) KeyboardType.Text else KeyboardType.Decimal),
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp).semantics {
-                    contentDescription = name
-                    issue?.let { error(it) }
-                    stateDescription = listOfNotNull(unit.takeIf { it.isNotBlank() }, zeroLabel.takeIf { current == 0.0 }, limit).joinToString(", ")
-                }
-            )
-            // The field scrolls internally rather than displacing the separately measured unit.
-            if (unit.isNotBlank()) Text(unit, style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
+            // A filled field, so the value reads as typeable, holding the value and its unit centred
+            // together on one baseline as one reading. The unit stays outside the text field — the
+            // field's semantics are exactly the number — and the whole fill focuses it on a tap.
+            val focus = remember { FocusRequester() }
+            val keyboard = LocalSoftwareKeyboardController.current
+            Row(
+                Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+                    .heightIn(min = AapsSpacing.minTap)
+                    .clip(AapsTheme.shape.pill)
+                    .background(colors.controlFill)
+                    // Focus alone does not bring back a keyboard dismissed while the field kept focus.
+                    .pointerInput(Unit) { detectTapGestures { focus.requestFocus(); keyboard?.show() } }
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // A single-line field fills whatever width it is offered, so offer it the width of its
+                // own text (plus the cursor). Past the space available it scrolls internally rather
+                // than displacing the separately measured unit.
+                val valueWidth = with(LocalDensity.current) { measurer.measure(text, valueStyle).size.width.toDp() } + 2.dp
+                BasicTextField(
+                    value = text,
+                    onValueChange = { edit(NumericDraft(it)) },
+                    singleLine = true,
+                    textStyle = valueStyle,
+                    cursorBrush = SolidColor(colors.accent),
+                    // Compose's numeric keyboard types do not request TYPE_NUMBER_FLAG_SIGNED. A text
+                    // keyboard is intentional for signed entries: both minus and decimal separators work.
+                    keyboardOptions = KeyboardOptions(keyboardType = if (spec.min < 0) KeyboardType.Text else KeyboardType.Decimal),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .width(valueWidth)
+                        .alignByBaseline()
+                        .focusRequester(focus)
+                        .semantics {
+                            contentDescription = name
+                            issue?.let { error(it) }
+                            stateDescription = listOfNotNull(unit.takeIf { it.isNotBlank() }, zeroLabel.takeIf { current == 0.0 }, limit).joinToString(", ")
+                        }
+                )
+                if (unit.isNotBlank())
+                    Text(unit, style = AapsTheme.type.body, color = colors.textSecondary, maxLines = 1, modifier = Modifier.alignByBaseline().padding(start = 4.dp))
+            }
         }
         if (current == 0.0 && zeroLabel != null) Text(zeroLabel, style = AapsTheme.type.caption, color = colors.textSecondary)
         (issue ?: limit)?.let { Text(it, style = AapsTheme.type.caption, color = if (issue != null) colors.high else colors.textSecondary) }
