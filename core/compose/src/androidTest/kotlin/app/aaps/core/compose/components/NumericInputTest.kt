@@ -7,16 +7,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
@@ -84,5 +91,34 @@ class NumericInputTest {
         val unit = compose.onNodeWithText("U").fetchSemanticsNode().boundsInRoot
         val entry = field.fetchSemanticsNode().boundsInRoot
         assertThat(entry.right).isAtMost(unit.left)
+    }
+
+    @Test fun valueAndUnitReadAsOneCentredGroupAndTheWholeFieldTakesTheTap() {
+        compose.setContent {
+            AapsTheme { Column(Modifier.width(360.dp)) {
+                NumericInput(2.5, {}, NumericSpec(0.0, 10.0, 0.5, 1), "U", "Insulin")
+            } }
+        }
+        val minus = compose.onNodeWithContentDescription("Subtract 0.5 U Insulin").fetchSemanticsNode().boundsInRoot
+        val plus = compose.onNodeWithContentDescription("Add 0.5 U Insulin").fetchSemanticsNode().boundsInRoot
+        val field = compose.onNodeWithContentDescription("Insulin")
+        val node = field.fetchSemanticsNode()
+        val entry = node.boundsInRoot
+        val unit = compose.onNodeWithText("U").fetchSemanticsNode().boundsInRoot
+        val dp = compose.density.density
+        // Where the digits are drawn, not the field's bounds: a field can span the gap with its
+        // number pushed against one end.
+        val layout = mutableListOf<TextLayoutResult>().also { node.config[SemanticsActions.GetTextLayoutResult].action!!(it) }.single()
+        val digitsLeft = entry.left + layout.getLineLeft(0)
+        val digitsRight = entry.left + layout.getLineRight(0)
+        // The unit follows the number rather than sitting at the far end of the field...
+        assertThat(unit.left - digitsRight).isAtMost(8 * dp)
+        // ...and the two are centred together between − and +.
+        val groupCentre = (digitsLeft + unit.right) / 2
+        val gapCentre = (minus.right + plus.left) / 2
+        assertThat(groupCentre).isWithin(4 * dp).of(gapCentre)
+        // Tapping the fill beside the digits still lands in the field.
+        compose.onRoot().performTouchInput { click(Offset(plus.left - 24 * dp, entry.center.y)) }
+        field.assertIsFocused()
     }
 }
