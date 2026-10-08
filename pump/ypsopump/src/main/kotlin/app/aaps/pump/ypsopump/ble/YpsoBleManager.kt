@@ -1296,6 +1296,7 @@ class YpsoBleManager @Inject constructor(
         cursor: YpsoHistoryCursor?,
         maxRows: Int = 128,
         onResult: (YpsoHistorySnapshot?) -> Unit,
+        requireFullCoverage: Boolean = false,
     ): HistoryReadAttempt {
         require(maxRows > 0)
         val attempt = HistoryReadAttempt()
@@ -1569,7 +1570,7 @@ class YpsoBleManager @Inject constructor(
                 retainPartialScan(token.generation, reboot.toLong(), countBefore, headBefore, rows)
             }
         }
-        fun hasRequiredRows(): Boolean = cursor != null &&
+        fun hasRequiredRows(): Boolean = !requireFullCoverage && cursor != null &&
             rows.any { it.matchesCursor(cursor, reboot.toLong()) } &&
             (cursor.activeTbr == null || rows.any {
                 it.sequence == cursor.activeTbr.identity.sequence && it.fingerprint() == cursor.activeTbr.fingerprint

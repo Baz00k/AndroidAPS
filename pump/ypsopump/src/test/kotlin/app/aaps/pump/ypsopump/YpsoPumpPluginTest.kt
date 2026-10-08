@@ -371,7 +371,7 @@ class YpsoPumpPluginTest {
         verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
         verify(manager, never()).readProfile(any())
         verify(manager, never()).readProfileConfiguration(any(), any(), any())
-        verify(manager, never()).readStableHistory(any(), any(), any())
+        verify(manager, never()).readStableHistory(any(), any(), any(), any())
         assertNotNull(recovery, "status completion should schedule independent recovery")
         assertTrue(state.hasFreshProfileEvidence)
     }
@@ -440,7 +440,7 @@ class YpsoPumpPluginTest {
     @Test
     fun `a completed cooperative yield is ignored even after the command leaves the queue`() {
         prepareHistoryRecovery(null)
-        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+        whenever(manager.readStableHistory(anyOrNull(), any(), any(), any())).thenAnswer {
             it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(null)
             YpsoBleManager.HistoryReadAttempt().apply { requestYield() }
         }
@@ -535,7 +535,7 @@ class YpsoPumpPluginTest {
         whenever(manager.isConnected).thenReturn(true)
         whenever(manager.canReadHistory).thenReturn(true)
         whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+        whenever(manager.readStableHistory(anyOrNull(), any(), any(), any())).thenAnswer {
             it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(snapshot)
             YpsoBleManager.HistoryReadAttempt()
         }
@@ -1144,7 +1144,7 @@ class YpsoPumpPluginTest {
         val callback = java.util.concurrent.atomic.AtomicReference<((YpsoHistorySnapshot?) -> Unit)?>()
         val started = java.util.concurrent.CountDownLatch(1)
         val attempt = YpsoBleManager.HistoryReadAttempt()
-        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+        whenever(manager.readStableHistory(anyOrNull(), any(), any(), any())).thenAnswer {
             callback.set(it.getArgument(2))
             started.countDown()
             attempt
@@ -1171,7 +1171,7 @@ class YpsoPumpPluginTest {
         var recovery: (() -> Unit)? = null
         plugin.dispatchHistoryRecovery = { recovery = it }
         val attempts = mutableListOf<YpsoBleManager.HistoryReadAttempt>()
-        whenever(manager.readStableHistory(anyOrNull(), any(), any())).thenAnswer {
+        whenever(manager.readStableHistory(anyOrNull(), any(), any(), any())).thenAnswer {
             it.getArgument<(YpsoHistorySnapshot?) -> Unit>(2)(null)
             YpsoBleManager.HistoryReadAttempt().also(attempts::add)
         }

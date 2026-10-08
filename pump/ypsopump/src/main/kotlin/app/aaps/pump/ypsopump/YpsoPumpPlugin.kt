@@ -1278,10 +1278,11 @@ class YpsoPumpPlugin @Inject constructor(
     ): YpsoHistorySnapshot? {
         var snapshot: YpsoHistorySnapshot? = null
         val latch = java.util.concurrent.CountDownLatch(1)
-        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows) {
+        val cursor = historyIngestion.currentCursor()
+        val attempt = bleManager.readStableHistory(cursor, maxRows, onResult = {
             snapshot = it
             latch.countDown()
-        }
+        }, requireFullCoverage = cursor != null)
         onAttempt(attempt)
         val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         var yielded = false

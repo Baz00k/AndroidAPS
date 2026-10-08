@@ -449,6 +449,26 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `explicit complete coverage scans past cursor including a resumed cached prefix`() {
+        val pump = HistoryPump()
+        val anchor = pump.rows[1]
+        val cursor = app.aaps.pump.ypsopump.history.YpsoHistoryCursor(
+            app.aaps.pump.ypsopump.history.YpsoEventIdentity("test-pump", 0, anchor.sequence), anchor.fingerprint(), 8,
+        )
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+        val attempt = manager.readStableHistory(cursor, 3000, results::add, requireFullCoverage = true)
+        pump.beforeRow = { if (pump.rowReads == 4) attempt.requestYield() }
+        pump.drain()
+        assertNull(results.single())
+        pump.beforeRow = {}
+        manager.readStableHistory(cursor, 3000, results::add, requireFullCoverage = true)
+        pump.drain()
+
+        assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
+        assertTrue(results.last()!!.fullCoverage)
+    }
+
+    @Test
     fun `interrupted recovery reaches its cursor while new pump events arrive`() {
         val pump = HistoryPump()
         val oldest = pump.rows.last()
