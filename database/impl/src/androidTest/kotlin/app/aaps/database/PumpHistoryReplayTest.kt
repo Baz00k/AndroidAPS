@@ -7,6 +7,7 @@ import app.aaps.database.di.DatabaseModule
 import app.aaps.database.entities.Bolus
 import app.aaps.database.entities.TemporaryBasal
 import app.aaps.database.entities.embedments.InterfaceIDs
+import app.aaps.database.transactions.InvalidateTemporaryBasalTransaction
 import app.aaps.database.transactions.InsertBolusWithTempIdTransaction
 import app.aaps.database.transactions.InsertTemporaryBasalWithTempIdTransaction
 import app.aaps.database.transactions.SyncBolusWithTempIdTransaction
@@ -15,6 +16,7 @@ import app.aaps.database.transactions.SyncPumpTemporaryBasalTransaction
 import app.aaps.database.transactions.SyncTemporaryBasalWithTempIdTransaction
 import com.google.common.truth.Truth.assertThat
 import org.junit.After
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -126,6 +128,119 @@ class PumpHistoryReplayTest {
 
         assertSingleBasal()
         assertThat(repository.getTemporaryBasalActiveAt(start).blockingGet()!!.interfaceIDs.temporaryId).isEqualTo(702L)
+    }
+
+    @Test
+    fun independentlyImportedHistoryAndProvisionalBasalMergeWithoutDoubleCounting() {
+        repository.runTransactionForResult(
+            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 1.0))
+        ).blockingGet()
+        // Importing this same basal 2 s later cuts the provisional copy, not physical delivery.
+        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(basal().copy(timestamp = start + 2_000L), null)).blockingGet()
+        val importedId = db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!.id
+
+        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+        assertSingleBasal()
+        // Both the IOB starting-time query and the active-basal query must see only one current valid record.
+        assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet()).hasSize(1)
+        reopenDatabase()
+        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+        syncBasal()
+        assertSingleBasal()
+        val records = repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()
+        assertThat(records).hasSize(2)
+        val canonical = records.single { it.isValid }
+        assertThat(canonical.id).isEqualTo(importedId)
+        assertThat(canonical.interfaceIDs.temporaryId).isEqualTo(702L)
+        assertThat(canonical.interfaceIDs.endId).isNull()
+        assertThat(records.single { !it.isValid }.interfaceIDs.temporaryId).isNull()
+        assertThat(records.single { !it.isValid }.interfaceIDs.pumpId).isNull()
+    }
+
+    @Test
+    fun lateBasalBindingKeepsNewerReplacementEndAcrossReplay() {
+        // The imported pump timestamp is 2 s later than the phone's provisional start. Importing
+        // it cuts the provisional at that time, but that cut is not an actual delivery stop.
+        repository.runTransactionForResult(
+            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))
+        ).blockingGet()
+        val imported = basal().copy(timestamp = start + 2_000L)
+        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(imported, null)).blockingGet()
+        val replacementTime = start + 10 * 60_000L
+        repository.runTransactionForResult(
+            SyncPumpTemporaryBasalTransaction(basal(pumpId = 803, rate = 0.6).copy(timestamp = replacementTime), null)
+        ).blockingGet()
+
+        repeat(2) {
+            repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+            syncBasal()
+            reopenDatabase()
+
+            val records = repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet()
+            assertThat(records).hasSize(2)
+            val merged = records.single { it.interfaceIDs.pumpId == 802L }
+            assertThat(merged.timestamp).isEqualTo(start)
+            assertThat(merged.duration).isEqualTo(10 * 60_000L)
+            assertThat(merged.interfaceIDs.endId).isEqualTo(803L)
+            assertThat(db.temporaryBasalDao.findByPumpEndIds(803, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!.id).isEqualTo(merged.id)
+            assertThat(repository.getTemporaryBasalActiveAt(replacementTime - 1).blockingGet()!!.id).isEqualTo(merged.id)
+            assertThat(repository.getTemporaryBasalActiveAt(replacementTime).blockingGet()!!.interfaceIDs.pumpId).isEqualTo(803L)
+        }
+    }
+
+    @Test
+    fun removedBasalRepresentationStaysRemovedAfterMergeAndHistoryReplay() {
+        for (removeImported in listOf(false, true)) {
+            val pumpId = if (removeImported) 804L else 802L
+            val tempId = if (removeImported) 704L else 702L
+            repository.runTransactionForResult(
+                InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = tempId))
+            ).blockingGet()
+            repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(basal(pumpId = pumpId), null)).blockingGet()
+            val removed = if (removeImported)
+                db.temporaryBasalDao.findByPumpIds(pumpId, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!
+            else db.temporaryBasalDao.findByPumpTempIds(tempId, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!
+            repository.runTransactionForResult(InvalidateTemporaryBasalTransaction(removed.id)).blockingGet()
+
+            repeat(2) {
+                repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(pumpId = pumpId, temporaryId = tempId), null)).blockingGet()
+                repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(basal(pumpId = pumpId), null)).blockingGet()
+                reopenDatabase()
+                assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet()).isEmpty()
+                val canonical = db.temporaryBasalDao.findByPumpIds(pumpId, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!
+                assertThat(canonical.isValid).isFalse()
+                assertThat(canonical.interfaceIDs.temporaryId).isEqualTo(tempId)
+            }
+        }
+    }
+
+    @Test
+    fun failedBasalMergeRollsBackBothRecordsAndCanBeRetriedAfterReopen() {
+        repository.runTransactionForResult(
+            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))
+        ).blockingGet()
+        syncBasal()
+        val importedId = db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!.id
+        val before = repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()
+        // Fail the second write, after the provisional invalidation, on actual SQLite.
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_basal_merge BEFORE UPDATE ON temporaryBasals " +
+                "WHEN OLD.id = $importedId BEGIN SELECT RAISE(ABORT, 'synthetic merge failure'); END"
+        )
+        try {
+            assertThrows(RuntimeException::class.java) {
+                repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+            }
+            assertThat(repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()).containsExactlyElementsIn(before)
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_basal_merge")
+        }
+        reopenDatabase()
+        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+        reopenDatabase()
+
+        assertSingleBasal()
+        assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet().single().id).isEqualTo(importedId)
     }
 
     private fun syncBolus(amount: Double) {

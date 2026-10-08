@@ -33,4 +33,6 @@ Observed on V05.00.52 for BLE- and pump-menu-started TBRs:
 - A pump Stop that ends a TBR first rewrites the TBR row, then appends type 14 with value 1 = 3. Resuming appends type 14 with value 1 = 10 and does not start a new TBR.
 - Rejected TBR commands (codes 130, 134, 135) add no row.
 
+AAPS-started TBRs are recorded under a temporary ID until history matches their pump row. If the row was imported independently before that match, reconciliation keeps the imported record and marks the provisional copy invalid in the same database transaction. Only one valid record contributes to basal accounting. A removed record stays removed, and a known stop or replacement end is not extended by late reconciliation. This updates treatment records only; it does not send a pump command.
+
 For additional pump event names, see the [original research event table](https://github.com/SandraK82/ypsopump-research/blob/main/ypsopump-test/app/src/main/java/com/ypsopump/test/data/PumpDataModels.kt). The driver's classifier is authoritative for fields it actually consumes.
