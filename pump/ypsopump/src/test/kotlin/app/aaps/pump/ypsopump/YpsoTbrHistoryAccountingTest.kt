@@ -12,9 +12,16 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryState
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore
+import app.aaps.pump.ypsopump.tbr.YpsoTbrCommandEvidence
+import app.aaps.pump.ypsopump.tbr.YpsoTbrController
 import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
 import app.aaps.pump.ypsopump.tbr.YpsoTbrJournal
+import app.aaps.pump.ypsopump.tbr.YpsoTbrLink
+import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRecords
+import app.aaps.pump.ypsopump.tbr.YpsoTbrRequest
+import app.aaps.pump.ypsopump.tbr.YpsoTbrWriteResult
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
@@ -25,7 +32,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
-import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -168,21 +174,20 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `when no clock reading comes the AAPS record stands in for the row and history moves on`() {
+    fun `when no clock reading comes history stays blocked without suppressing the row`() {
         startedAttempt(at = pumpStart + 3 * 60_000L)
 
-        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
-        assertNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone, pumpClockOffsetMs = 0L))
+        assertNotNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
 
         assertNull(saved[48_224L])
-        assertEquals(48_224L, store.attempts.single().unmatchedRowPumpId)
+        assertNull(store.attempts.single().unmatchedRowPumpId)
         assertNull(store.attempts.single().pumpId)
     }
 
     @Test
     fun `an unmatched start no longer holds later rows with its percent`() {
         startedAttempt(at = pumpStart + 3 * 60_000L)
-        accounting.apply(event(48_224, 9, 120, 15), serial, zone)
+        journal.unmatched("a", 48_224L)
 
         assertNull(accounting.apply(event(48_230, 9, 120, 15, seconds = pumpStartSeconds + 3_600), serial, zone, waitForClock = true))
         assertEquals(pumpStart + 3_600_000L to 15 * 60_000L, saved[48_230L])
@@ -197,43 +202,147 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `terminal rewrite can bind an AAPS start after its running row was imported separately`() {
+    fun `clock changes cannot promote missing command coverage to a proven identity`() {
         startedAttempt(percent = 80)
-        val historyStore = object : YpsoHistoryStateStore {
-            var state = YpsoHistoryState()
+        val replay = SyntheticHistoryReplay()
+        val anchor = event(48_222, 14, 10, 0).entry
+        assertTrue(replay.scan(listOf(anchor), 14_000L) is YpsoHistoryIngestionResult.Applied)
+        val running = event(48_224, 9, 80, 15).entry
+        assertTrue(replay.scan(listOf(running, anchor), 14_000L) is YpsoHistoryIngestionResult.Blocked)
+        assertTrue(replay.blockedAfterRestart())
+        val terminal = event(48_224, 10, 80, 6).entry
+        assertTrue(replay.scan(listOf(terminal, anchor), 13_000L) is YpsoHistoryIngestionResult.Blocked)
+
+        verify(sync, never()).syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())
+        assertNull(journal.find("a")!!.pumpId)
+    }
+
+    @Test
+    fun `ended pump basal never takes the identity of a subsequent AAPS start`() {
+        val replay = SyntheticHistoryReplay()
+        val anchor = event(48_222, 14, 10, 0).entry
+        assertTrue(replay.scan(listOf(anchor), 0L) is YpsoHistoryIngestionResult.Applied)
+        val pump = ScriptedTbrPump(pumpStart + 10_000L)
+        val controller = controller(pump)
+        assertTrue(controller.start(YpsoTbrRequest(80, 30), "NORMAL") is YpsoTbrController.Result.Started)
+        val attempt = journal.all().single { it.kind == YpsoTbrAttempt.Kind.START }
+
+        // Independent row 48224 started at T and ended before the fresh idle status at T+10s.
+        // AAPS starts row 48226 at T+10s; accurate zero clock offset and both history rows are
+        // supplied. Timing follows documented semantics, but menu latency is not hardware-tested.
+        val independent = event(48_224, 10, 80, 0).entry
+        val own = event(48_226, 9, 80, 30, seconds = pumpStartSeconds + 10).entry
+        val result = replay.scan(listOf(own, independent, anchor), 0L)
+
+        // Assert the call itself: the pump-ID-keyed fake cannot conceal a wrong merge here.
+        verify(sync, never()).syncTemporaryBasalWithTempId(
+            any(), any(), any(), any(), org.mockito.kotlin.eq(attempt.temporaryId), anyOrNull(), org.mockito.kotlin.eq(48_224L), any(), any()
+        )
+        assertTrue(result is YpsoHistoryIngestionResult.Blocked)
+        assertNull(journal.find(attempt.id)!!.pumpId)
+        assertEquals(48_222L, replay.state.cursor!!.identity.sequence)
+        assertTrue(replay.blockedAfterRestart())
+        // A changed clock measurement or disappearance of the competing row is not proof.
+        assertTrue(replay.scan(listOf(own, anchor), 0L) is YpsoHistoryIngestionResult.Blocked)
+        assertTrue(replay.blockedAfterRestart())
+        // Established row identity (not a time-based guess) allows replay and clears the gate.
+        journal.identified(attempt.id, 48_226L)
+        assertTrue(replay.scan(listOf(own, independent, anchor), 0L) is YpsoHistoryIngestionResult.Applied)
+        assertEquals(48_226L, journal.find(attempt.id)!!.pumpId)
+        assertTrue(!replay.blockedAfterRestart())
+    }
+
+    @Test
+    fun `terminal row fitting two unbound attempts blocks without choosing the earlier identity`() {
+        val replay = SyntheticHistoryReplay()
+        val anchor = event(48_222, 14, 10, 0).entry
+        assertTrue(replay.scan(listOf(anchor), 0L) is YpsoHistoryIngestionResult.Applied)
+        val pump = ScriptedTbrPump(pumpStart + 2_000L)
+        val controller = controller(pump)
+        assertTrue(controller.start(YpsoTbrRequest(80, 30), "NORMAL") is YpsoTbrController.Result.Started)
+        // A normal AAPS replacement sends a confirmed stop before the second start. The same
+        // old history baseline is used because neither start has been scanned yet.
+        pump.clock = pumpStart + 10_000L
+        assertTrue(controller.start(YpsoTbrRequest(80, 30), "NORMAL") is YpsoTbrController.Result.Started)
+        val attempts = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }
+        assertNotNull(attempts.first().stoppedAt)
+
+        // Complete causal history: the earlier row ended, the newer one runs. Both compatible
+        // time windows overlap. Check the conservative ambiguity policy, not hardware occurrence.
+        val first = event(48_224, 10, 80, 0, seconds = pumpStartSeconds + 2).entry
+        val second = event(48_226, 9, 80, 30, seconds = pumpStartSeconds + 10).entry
+        val result = replay.scan(listOf(second, first, anchor), 0L)
+
+        verify(sync, never()).syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())
+        assertTrue(result is YpsoHistoryIngestionResult.Blocked)
+        assertTrue(journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.all { it.pumpId == null })
+        assertEquals(48_222L, replay.state.cursor!!.identity.sequence)
+    }
+
+    private class ScriptedTbrPump(var clock: Long) : YpsoTbrLink {
+        private var percent = 100
+        private var remaining = 0
+        override fun status() = YpsoTbrObservation(true, percent, remaining, clock)
+        override fun command(percent: Int, durationMinutes: Int, effective: (YpsoTbrObservation) -> Boolean, beforeDispatch: (Long) -> Unit): YpsoTbrCommandEvidence {
+            val dispatched = clock
+            beforeDispatch(dispatched)
+            this.percent = percent
+            remaining = durationMinutes
+            clock += 500L
+            val acknowledged = clock
+            clock += 500L
+            return YpsoTbrCommandEvidence(YpsoTbrWriteResult.Acknowledged, acknowledged, dispatched, status())
+        }
+    }
+
+    private fun controller(pump: ScriptedTbrPump) = YpsoTbrController(
+        pump, journal, object : YpsoTbrRecords {
+            override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved {
+                provisional[attempt.temporaryId] = timestamp to attempt.durationMinutes * 60_000L
+                return YpsoTbrRecords.Saved.SAVED
+            }
+            override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
+                val record = provisional[attempt.temporaryId] ?: return false
+                provisional[attempt.temporaryId] = record.first to end - record.first
+                return true
+            }
+            override fun reconcileWith(observation: YpsoTbrObservation) = Unit
+        }, { serial }, { 48_222L }, { pump.clock }
+    )
+
+    private inner class SyntheticHistoryReplay {
+        var state = YpsoHistoryState()
+        private val historyStore = object : YpsoHistoryStateStore {
             override fun load() = state
             override fun commit(value: YpsoHistoryState) { state = value }
         }
-        val ingestion = YpsoHistoryIngestion(historyStore, sync, accounting)
-        fun scan(rows: List<YpsoHistoryEntry>, offset: Long): YpsoHistoryIngestionResult {
+        private val ingestion = YpsoHistoryIngestion(historyStore, sync, accounting)
+
+        fun blockedAfterRestart() = YpsoHistoryIngestion(historyStore, sync, accounting).basalAccountingBlocked()
+
+        fun scan(rows: List<YpsoHistoryEntry>, offset: Long?): YpsoHistoryIngestionResult {
             val indexed = rows.mapIndexed { index, row -> row.copy(index = index) }
             val snapshot = YpsoHistorySnapshot(indexed.size, indexed.size, 21, 21, indexed.first(), indexed.first(), indexed, true, pumpClockOffsetMs = offset)
             return ingestion.ingest(serial, zone, 21, snapshot)
         }
-        // Bootstrap first, then import a new row through the production reconciler and ingestion.
-        val anchor = event(48_222, 14, 10, 0).entry
-        assertTrue(scan(listOf(anchor), 14_000L) is YpsoHistoryIngestionResult.Applied)
-        val running = event(48_224, 9, 80, 15).entry
-        assertTrue(scan(listOf(running, anchor), 14_000L) is YpsoHistoryIngestionResult.Applied)
-        // Measured-time matching uses a 15 s window. This first corrected row falls just outside it.
-        assertEquals(pumpStart - 14_000L to 15 * 60_000L, saved[48_224L])
-        assertNull(journal.find("a")!!.pumpId)
+    }
 
-        // A later clock reading differs by one second (whole-second clock plus read latency).
-        // The terminal rewrite now fits the same attempt, despite the ordering guards.
-        val terminal = event(48_224, 10, 80, 6).entry
-        assertTrue(scan(listOf(terminal, anchor), 13_000L) is YpsoHistoryIngestionResult.Applied)
-        assertTrue(scan(listOf(terminal, anchor), 13_000L) is YpsoHistoryIngestionResult.Applied)
-
-        inOrder(sync) {
-            verify(sync).syncTemporaryBasalWithPumpId(
-                pumpStart - 14_000L, 80.0, 15 * 60_000L, false, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial
-            )
-            verify(sync).syncTemporaryBasalWithTempId(
-                pumpStart + 2_000L, 80.0, 6 * 60_000L, false, 99L, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial
-            )
+    @Test
+    fun `clockless and missing history cannot enable dosing for an outstanding start`() {
+        for (missing in listOf(false, true)) {
+            store.attempts = emptyList()
+            startedAttempt(at = pumpStart + 3 * 60_000L)
+            val replay = SyntheticHistoryReplay()
+            val anchor = event(48_222, 14, 10, 0).entry
+            assertTrue(replay.scan(listOf(anchor), 0L) is YpsoHistoryIngestionResult.Applied)
+            val row = event(48_224, 9, 120, 15).entry
+            val rows = if (missing) listOf(event(48_224, 14, 10, 0).entry, anchor) else listOf(row, anchor)
+            assertTrue(replay.scan(rows, if (missing) 0L else null) is YpsoHistoryIngestionResult.Blocked)
+            assertTrue(replay.blockedAfterRestart())
+            assertNull(journal.find("a")!!.pumpId)
+            assertNull(journal.find("a")!!.unmatchedRowPumpId)
         }
-        assertEquals(48_224L, journal.find("a")!!.pumpId)
+        verify(sync, never()).syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())
     }
 
     @Test
@@ -269,15 +378,15 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a row that fits two AAPS starts binds the earlier one and the next row the later`() {
+    fun `a row that fits two AAPS starts is refused without selecting the earlier one`() {
         startedAttempt("a", percent = 0, minutes = 30, tempId = 1L)
         startedAttempt("b", percent = 0, minutes = 30, at = pumpStart + 30_000L, tempId = 2L)
 
-        assertNull(accounting.apply(event(48_224, 10, 0, 0), serial, zone))
-        assertNull(accounting.apply(event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 30), serial, zone))
+        assertNotNull(accounting.apply(event(48_224, 10, 0, 0), serial, zone))
 
-        assertEquals(48_224L, journal.find("a")!!.pumpId)
-        assertEquals(48_226L, journal.find("b")!!.pumpId)
+        assertNull(journal.find("a")!!.pumpId)
+        assertNull(journal.find("b")!!.pumpId)
+        verify(sync, never()).syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())
     }
 
     @Test

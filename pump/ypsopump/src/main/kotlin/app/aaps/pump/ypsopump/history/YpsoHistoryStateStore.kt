@@ -22,6 +22,8 @@ data class YpsoPendingBolusSync(
 data class YpsoHistoryState(
     val cursor: YpsoHistoryCursor? = null,
     val pendingBolus: YpsoPendingBolusSync? = null,
+    /** Pump whose basal identities are unresolved; persisted before any ambiguous replay writes. */
+    val basalAttributionBlockedSerial: String? = null,
 )
 
 interface YpsoHistoryStateStore {
@@ -51,9 +53,10 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
     }
 
     private fun encode(value: YpsoHistoryState): JSONObject = JSONObject()
-        .put("version", 2)
+        .put("version", 3)
         .put("cursor", value.cursor?.let(::encodeCursor) ?: JSONObject.NULL)
         .put("pendingBolus", value.pendingBolus?.let(::encodePending) ?: JSONObject.NULL)
+        .put("basalAttributionBlockedSerial", value.basalAttributionBlockedSerial ?: JSONObject.NULL)
 
     private fun encodeCursor(value: YpsoHistoryCursor): JSONObject = JSONObject()
         .put("serial", value.identity.pumpSerial)
@@ -84,11 +87,14 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
         .put("type", value.type.name)
 
     private fun decode(json: JSONObject): YpsoHistoryState {
-        require(json.getInt("version") in 1..2)
-        require(json.keys().asSequence().toSet() == setOf("version", "cursor", "pendingBolus"))
+        val version = json.getInt("version")
+        require(version in 1..3)
+        val fields = setOf("version", "cursor", "pendingBolus")
+        require(json.keys().asSequence().toSet() == if (version == 3) fields + "basalAttributionBlockedSerial" else fields)
         return YpsoHistoryState(
             cursor = if (json.isNull("cursor")) null else decodeCursor(json.getJSONObject("cursor")),
             pendingBolus = if (json.isNull("pendingBolus")) null else decodePending(json.getJSONObject("pendingBolus")),
+            basalAttributionBlockedSerial = if (version < 3 || json.isNull("basalAttributionBlockedSerial")) null else json.getString("basalAttributionBlockedSerial"),
         )
     }
 

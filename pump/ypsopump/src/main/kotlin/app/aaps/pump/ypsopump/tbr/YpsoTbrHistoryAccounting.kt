@@ -55,6 +55,44 @@ class YpsoTbrHistoryAccounting(
     /** AAPS accepts pump records only from this pump's registration on; older rows are not its to import. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
 ) {
+    fun hasUnprovenStarts(pumpSerial: String): Boolean = journal.all().any {
+        it.pumpSerial == pumpSerial && it.kind == YpsoTbrAttempt.Kind.START && it.state == YpsoTbrAttempt.State.EFFECTIVE &&
+            it.pumpId == null && it.rowPumpId == null
+    }
+    /** Check the whole replay before binding any row: compatibility is not a unique identity. */
+    fun attributionBlock(events: List<YpsoHistoryEvent>, pumpSerial: String, zone: ZoneId, clockOffset: (YpsoHistoryEvent) -> Long?): String? {
+        val outstanding = journal.all().filter {
+            it.pumpSerial == pumpSerial && it.kind == YpsoTbrAttempt.Kind.START && it.state == YpsoTbrAttempt.State.EFFECTIVE &&
+                it.pumpId == null && it.rowPumpId == null
+        }
+        if (outstanding.any { it.unmatchedRowPumpId != null }) return "temporary basal has an unproven unmatched history identity"
+        if (outstanding.any { attempt -> attempt.baselinePumpId == null || events.none { it.identity.aapsPumpId == attempt.baselinePumpId } }) {
+            return "temporary basal history no longer covers the command baseline"
+        }
+        if (outstanding.isNotEmpty() && events.any { event ->
+                event.semantics.kind in TBR_KINDS && clockOffset(event) == null && outstanding.any {
+                    it.percent == event.entry.value1 && (it.baselinePumpId == null || it.baselinePumpId < event.identity.aapsPumpId)
+                }
+            }) return "temporary basal attribution needs a usable pump clock"
+        val candidates = events.filter { it.semantics.kind in TBR_KINDS }.mapNotNull { event ->
+            val pumpId = event.identity.aapsPumpId
+            if (journal.boundTo(pumpId) != null || journal.identifiedAs(pumpId) != null || journal.unmatchedAs(pumpId) != null) return@mapNotNull null
+            val pumpTime = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
+                ?.instant?.toEpochMilli() ?: return@mapNotNull null
+            val offset = clockOffset(event)
+            val requested = if (event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED) event.entry.value2 else event.semantics.requestedDurationMinutes
+            pumpId to bindCandidates(pumpId, event.entry.value1, requested, pumpTime - (offset ?: 0L), pumpSerial, if (offset != null) MEASURED_SKEW else CLOCK_SKEW)
+        }
+        if (candidates.any { it.second.size > 1 } || candidates.flatMap { (id, attempts) -> attempts.map { it.id to id } }
+                .groupBy({ it.first }, { it.second }).any { it.value.distinct().size > 1 }) {
+            return "temporary basal history has ambiguous command identities"
+        }
+        if (outstanding.any { attempt -> candidates.none { (_, attempts) -> attempts.any { it.id == attempt.id } } }) {
+            return "temporary basal history does not cover an outstanding command identity"
+        }
+        return null
+    }
+
     /**
      * Applies one reconciled history event; returns a blocking reason or null when applied.
      * [pumpClockOffsetMs] is the pump clock minus the phone clock, measured on the read that returned
@@ -81,7 +119,7 @@ class YpsoTbrHistoryAccounting(
         // An AAPS start already matched to this row is timed by AAPS and needs no pump time.
         if (tbr) (journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId))?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
         // The AAPS record of an unmatched start stands in for this row, in every later rewrite too.
-        if (tbr && journal.unmatchedAs(pumpId) != null) return null
+        if (tbr && journal.unmatchedAs(pumpId) != null) return "temporary basal has an unproven unmatched history identity"
         val pumpTime = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
             ?.instant?.toEpochMilli()
         // On the phone's clock. With the offset measured on this read, a row's time is exact to a few
@@ -89,19 +127,18 @@ class YpsoTbrHistoryAccounting(
         val start = pumpTime?.let { it - (pumpClockOffsetMs ?: 0L) } ?: return "TBR or pump-mode timestamp is ambiguous"
         val skew = if (pumpClockOffsetMs != null) MEASURED_SKEW else CLOCK_SKEW
         if (tbr) {
-            bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
+            val candidates = bindCandidates(pumpId, percent, if (running) minutes else event.semantics.requestedDurationMinutes, start, pumpSerial, skew)
+            if (candidates.size > 1) return "temporary basal history has ambiguous command identities"
+            candidates.singleOrNull()
                 ?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
-            // Without a usable clock a start's own row can fall outside the drift window, and importing
-            // it would count the same TBR twice. A later read may still measure the clock; after that,
-            // the start keeps its AAPS record in place of this row, and history moves on.
+            // A retry limit cannot turn an unproven identity into permission to suppress a pump row.
             if (pumpClockOffsetMs == null) {
                 journal.all().firstOrNull {
                     it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == pumpSerial && it.percent == percent &&
                         (it.baselinePumpId == null || it.baselinePumpId < pumpId)
                 }?.let {
                     if (waitForClock) return "TBR row $pumpId may belong to AAPS start ${it.id}; $CLOCK_WAIT"
-                    journal.unmatched(it.id, pumpId)
-                    return null
+                    return "temporary basal attribution needs a usable pump clock"
                 }
             }
         }
@@ -143,13 +180,12 @@ class YpsoTbrHistoryAccounting(
      * The AAPS start whose time window this row's start falls in. The pump was proven idle right
      * before each start was sent, so its row began inside [dispatch, latest effect], widened by
      * [skew]: a few seconds when the pump clock was measured on this read, otherwise the drift that
-     * profile reads allow. With a measured clock this is identity: an identical TBR set on the pump
-     * instead would have to start within seconds of the AAPS command, which the pump would reject
-     * while the AAPS TBR runs. [requestedMinutes] is the duration a running row still carries. Rows older than the attempt's history baseline are never its
-     * own. Rows arrive oldest first, so of several windows the earliest-dispatched attempt is this
-     * row's. A start that fits no row keeps its own record, which status reconciles against the pump.
+     * profile reads allow. A same-percent pump-set TBR can end before the command's idle status
+     * and still fit that tolerance. [requestedMinutes] is the duration a running row still carries. Rows older than the attempt's history baseline are never its
+     * own. Overlapping windows are compatibility, not ownership: the whole replay is checked before
+     * binding and a row matching several attempts is refused. A start that fits no row keeps its own record.
      */
-    private fun bindCandidate(pumpId: Long, percent: Int, requestedMinutes: Int?, rowStart: Long, serial: String, skew: Long): YpsoTbrAttempt? =
+    private fun bindCandidates(pumpId: Long, percent: Int, requestedMinutes: Int?, rowStart: Long, serial: String, skew: Long): List<YpsoTbrAttempt> =
         journal.all()
             .filter {
                 it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial && it.percent == percent &&
@@ -158,7 +194,6 @@ class YpsoTbrHistoryAccounting(
                     rowStart >= checkNotNull(it.dispatchedAt) - skew &&
                     rowStart <= (it.effectiveBy ?: checkNotNull(it.effectiveAt)) + skew
             }
-            .minByOrNull { checkNotNull(it.dispatchedAt) }
 
     private fun syncAttempt(attempt: YpsoTbrAttempt, pumpId: Long, pumpDuration: Long): String? {
         val start = checkNotNull(attempt.effectiveAt)

@@ -156,6 +156,34 @@ class YpsoHistoryIngestionTest {
     }
 
     @Test
+    fun `clock change after counter wrap invalidates offset for an older basal`() {
+        val store = Store()
+        val probe = OffsetProbe()
+        val ingestion = YpsoHistoryIngestion(store, mock(), probe.accounting)
+        val anchor = row(100, 14, 10).copy(sequence = 0xfffffffdL)
+        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor))) is YpsoHistoryIngestionResult.Applied)
+        val basal = row(101, 10, 80).copy(sequence = 0xfffffffeL)
+        val clockChange = row(1, 13, 0)
+        val newer = row(2, 10, 90)
+        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+            snapshot(listOf(newer, clockChange, basal, anchor)).copy(pumpClockOffsetMs = 5_000L)
+        ) is YpsoHistoryIngestionResult.Applied)
+
+        assertNull(probe.seen[0xfffffffeL])
+        assertEquals(5_000L, probe.seen[2L])
+    }
+
+    @Test
+    fun `switching pumps cannot clear a persisted basal attribution block`() {
+        val store = Store(YpsoHistoryState(basalAttributionBlockedSerial = "10000001"))
+        val ingestion = YpsoHistoryIngestion(store, mock())
+
+        assertTrue(ingestion.ingest("20000002", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 14, 10)))) is YpsoHistoryIngestionResult.Blocked)
+        assertEquals("10000001", store.value.basalAttributionBlockedSerial)
+        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusMessage.SYNC_IN_PROGRESS, ingestion.bolusReadiness("20000002", 21))
+    }
+
+    @Test
     fun `a TBR row waits for a clock reading only a bounded number of scans`() {
         val store = Store()
         val probe = OffsetProbe()

@@ -81,6 +81,40 @@ class YpsoPumpPluginTest {
     )
 
     @Test
+    fun `persisted basal attribution block disables loop and new delivery without claiming pump suspension`() {
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        state.serialNumber = "10000001"
+        val file = File(historyDirectory, "ypsopump-history-state.json")
+        app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore(file).commit(
+            app.aaps.pump.ypsopump.history.YpsoHistoryState(basalAttributionBlockedSerial = "10000001")
+        )
+        val restarted = YpsoPumpPlugin(
+            AAPSLoggerTest(), rh, preferences, commandQueue, state, manager, sync, rxBus, ui,
+            Provider { PumpEnactResultObject(rh) }, provisioning, profileFunction, constraintsChecker, appLifecycle
+        )
+        state.publishStatus(80.0, 90, false, 100, System.currentTimeMillis())
+        val allowed = app.aaps.core.objects.constraints.ConstraintObject(true, AAPSLoggerTest())
+        assertFalse(restarted.isLoopInvocationAllowed(allowed).value())
+        assertFalse(restarted.isSuspended())
+        val profile: Profile = mock()
+        val results = listOf(
+            restarted.setTempBasalPercent(80, 30, profile, true, PumpSync.TemporaryBasalType.NORMAL),
+            restarted.deliverTreatment(DetailedBolusInfo().apply { insulin = 0.1; bolusType = BS.Type.SMB }),
+            restarted.setExtendedBolus(0.1, 30)
+        )
+        results.forEach { assertFalse(it.success); assertFalse(it.enacted) }
+        verify(manager, never()).writeTbr(any(), any(), any(), any(), any())
+        verify(manager, never()).startBolus(any(), any(), any(), any(), any())
+        // Cancellation is still routed through fresh status, even while new delivery is blocked.
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.StatusReadAttempt()
+        }
+        restarted.cancelTempBasal(true)
+        verify(manager).readStatus(any())
+    }
+
+    @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {
         state.publishStatus(80.0, 90, false, 100, 4000L)
         // Every therapy request reads fresh status first; an unreadable pump must fail closed.

@@ -31,6 +31,8 @@ class YpsoHistoryIngestion(
     private val resolveProvisional: (pumpSerial: String, pumpId: Long, timestamp: Long, amount: Double, type: BS.Type) -> Unit = { _, _, _, _, _ -> },
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
+    // IOB includes past pumps too. Switching the active pump cannot make unresolved records safe.
+    fun basalAccountingBlocked(): Boolean = store.load().basalAttributionBlockedSerial != null
 
     /**
      * Scans that reached a row needing a pump clock reading without one. Kept in memory only: a
@@ -39,6 +41,7 @@ class YpsoHistoryIngestion(
     private val clocklessScans = java.util.concurrent.atomic.AtomicInteger(0)
     /** Cheap local gate for a new dose. Never performs pump I/O. */
     fun bolusReadiness(pumpSerial: String, reboot: Long): YpsoBolusMessage? {
+        if (basalAccountingBlocked()) return YpsoBolusMessage.SYNC_IN_PROGRESS
         if (!retryPending(pumpSerial)) return YpsoBolusMessage.SAVING_PREVIOUS_DOSE
         val cursor = store.load().cursor ?: return YpsoBolusMessage.SYNC_IN_PROGRESS
         if (cursor.identity.pumpSerial != pumpSerial || cursor.pumpReboot != reboot) {
@@ -91,15 +94,22 @@ class YpsoHistoryIngestion(
         }
         val state = store.load()
         val cursor = state.cursor?.takeIf { it.identity.pumpSerial == pumpSerial }
+        if (state.basalAttributionBlockedSerial != null && state.basalAttributionBlockedSerial != pumpSerial) {
+            return YpsoHistoryIngestionResult.Blocked("temporary basal identities from another pump still require reconciliation")
+        }
         val reconciliation = cursor?.let { YpsoHistoryReconciler.reconcile(it, snapshot) }
             ?: YpsoHistoryReconciler.bootstrap(pumpSerial, 0, snapshot)
         when (reconciliation) {
             is YpsoHistoryReconciliation.Bootstrap -> {
+                if (basalAccountingBlocked()) return YpsoHistoryIngestionResult.Blocked("temporary basal identities still require reconciliation")
                 store.commit(state.copy(cursor = reconciliation.cursor))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
             is YpsoHistoryReconciliation.Moving -> return YpsoHistoryIngestionResult.Blocked("history moved during scan", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
             is YpsoHistoryReconciliation.Gap -> {
+                if (tbrAccounting?.hasUnprovenStarts(pumpSerial) == true) {
+                    store.commit(store.load().copy(basalAttributionBlockedSerial = pumpSerial))
+                }
                 val detail = YpsoHistoryReconciler.lastInvalidSnapshotDetail
                     ?.takeIf { reconciliation.reason == YpsoHistoryReconciliation.Reason.INVALID_SNAPSHOT }
                 return YpsoHistoryIngestionResult.Blocked(
@@ -112,14 +122,43 @@ class YpsoHistoryIngestion(
                 // clock was not set between that row and the read: a date/time change row after it in
                 // the pump's own order (sequence) ends its validity. The clock rows in this scan cover
                 // everything newer than the cursor; an in-place update (stateUpdates) is older than all.
-                val lastClockChange = snapshot.rowsNewestFirst
-                    .filter { YpsoHistoryClassifier.classify(it).kind in CLOCK_CHANGES }
-                    .maxOfOrNull { it.sequence }
+                // Validated ring order, not raw sequence values: counters can wrap between rows.
+                val lastClockChangeIndex = snapshot.rowsNewestFirst.indexOfFirst {
+                    YpsoHistoryClassifier.classify(it).kind in CLOCK_CHANGES
+                }.takeIf { it >= 0 }
                 val waitForClock = clocklessScans.get() < CLOCK_WAIT_SCANS
+                fun offsetFor(event: YpsoHistoryEvent): Long? = snapshot.pumpClockOffsetMs?.takeIf {
+                    lastClockChangeIndex == null ||
+                        snapshot.rowsNewestFirst.indexOfFirst { it.sequence == event.identity.sequence } in 0..lastClockChangeIndex &&
+                        event !in reconciliation.stateUpdates
+                }
+                // Include rows already passed by the cursor. An outstanding attempt can still fit
+                // an earlier independent row; checking only this scan's new events hides that choice.
+                val head = reconciliation.cursor.identity
+                if (!snapshot.fullCoverage && tbrAccounting?.hasUnprovenStarts(pumpSerial) == true) {
+                    store.commit(store.load().copy(basalAttributionBlockedSerial = pumpSerial))
+                    return YpsoHistoryIngestionResult.Blocked("temporary basal attribution needs complete history")
+                }
+                val replayRows = snapshot.rowsNewestFirst.mapNotNull { row ->
+                    val generation = head.sequenceGeneration - if (row.sequence > head.sequence) 1 else 0
+                    if (generation < 0) return@mapNotNull null
+                    events.firstOrNull { it.identity.sequence == row.sequence }
+                        ?: YpsoHistoryEvent(
+                            YpsoEventIdentity(pumpSerial, generation, row.sequence), row
+                        )
+                }
+                tbrAccounting?.attributionBlock(replayRows, pumpSerial, zone, ::offsetFor)?.let { reason ->
+                    store.commit(store.load().copy(basalAttributionBlockedSerial = pumpSerial))
+                    return YpsoHistoryIngestionResult.Blocked(reason)
+                }
+                // Disappearance of a conflicting row, a new clock reading or a status sample is
+                // not identity evidence. An existing block clears only after the journal proves
+                // the outstanding identities and their accounting is successfully replayed.
+                if (basalAccountingBlocked() && tbrAccounting?.hasUnprovenStarts(pumpSerial) != false) {
+                    return YpsoHistoryIngestionResult.Blocked("temporary basal identities still require reconciliation")
+                }
                 for (event in events) {
-                    val offset = snapshot.pumpClockOffsetMs?.takeIf {
-                        lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
-                    }
+                    val offset = offsetFor(event)
                     when (event.semantics.kind) {
                         // Only immediate-bolus terminal rows are ingested as an instantaneous normal
                         // bolus. Square/combination terminal rows carry the pump-confirmed delivered
@@ -212,7 +251,7 @@ class YpsoHistoryIngestion(
                     }
                 }
                 clocklessScans.set(0)
-                store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
+                store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null, basalAttributionBlockedSerial = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
         }

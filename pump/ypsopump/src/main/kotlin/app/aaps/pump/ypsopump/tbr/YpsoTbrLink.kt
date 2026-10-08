@@ -44,6 +44,7 @@ internal class YpsoTbrBleLink(
     private val bleManager: YpsoBleManager,
     private val readStatus: () -> Boolean,
     private val now: () -> Long = System::currentTimeMillis,
+    private val startAllowed: () -> Boolean = { true },
 ) : YpsoTbrLink {
 
     override fun status(): YpsoTbrObservation? {
@@ -57,6 +58,9 @@ internal class YpsoTbrBleLink(
         effective: (YpsoTbrObservation) -> Boolean,
         beforeDispatch: (dispatchedAt: Long) -> Unit,
     ): YpsoTbrCommandEvidence {
+        if (durationMinutes > 0 && !startAllowed()) {
+            return YpsoTbrCommandEvidence(YpsoTbrWriteResult.NotSent("basal accounting is unresolved"), null, null, null)
+        }
         val writeId = "tbr-${UUID.randomUUID()}"
         val dispatchedAt = AtomicReference<Long?>(null)
         val latch = CountDownLatch(1)

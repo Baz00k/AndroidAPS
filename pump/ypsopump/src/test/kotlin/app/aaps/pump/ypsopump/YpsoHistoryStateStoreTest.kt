@@ -27,6 +27,7 @@ class YpsoHistoryStateStoreTest {
                 YpsoMutableHistoryState(identity, row.fingerprint(), row.stateFingerprint(), 150, 15),
             ),
             YpsoPendingBolusSync("10000001", (3L shl 32) or 51, 1_700_000_000_000, 100, 51, BS.Type.SMB),
+            basalAttributionBlockedSerial = "10000001",
         )
 
         YpsoHistoryStateFileStore(file).commit(expected)

@@ -10,6 +10,8 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
+import app.aaps.core.interfaces.constraints.Constraint
+import app.aaps.core.interfaces.constraints.PluginConstraints
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -117,7 +119,7 @@ class YpsoPumpPlugin @Inject constructor(
         .description(R.string.ypsopump_description),
     ownPreferences = emptyList(),
     aapsLogger, rh, preferences, commandQueue
-), Pump {
+), Pump, PluginConstraints {
 
     @Inject lateinit var persistenceLayer: app.aaps.core.interfaces.db.PersistenceLayer
 
@@ -170,7 +172,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
     private val tbrControllerLazy = lazy {
         YpsoTbrController(
-            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
+            YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }, startAllowed = { !basalAccountingBlocked() }),
             tbrJournal,
             tbrRecords,
             ::serialNumber,
@@ -343,6 +345,17 @@ class YpsoPumpPlugin @Inject constructor(
         }
     }
     internal fun readinessStatus(): String = bleManager.readinessStatus()
+
+    private fun basalAccountingBlocked(): Boolean = try {
+        historyIngestion.basalAccountingBlocked()
+    } catch (_: RuntimeException) {
+        true // An unreadable durable accounting state cannot enable automated dosing.
+    }
+
+    override fun isLoopInvocationAllowed(value: Constraint<Boolean>): Constraint<Boolean> {
+        if (basalAccountingBlocked()) value.set(false, rh.gs(R.string.ypsopump_history_incomplete_notification), this)
+        return value
+    }
     @Volatile private var historyRecoveryEnabled = true
 
     init {
@@ -707,6 +720,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     private fun deliverTreatmentNow(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
+        if (basalAccountingBlocked()) return fail(YpsoBolusMessage.SYNC_IN_PROGRESS)
         if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
         if (bolusStopBeforeStart.get()) bolusController.requestStop()
         try {
@@ -1799,6 +1813,7 @@ class YpsoPumpPlugin @Inject constructor(
     private fun setTempBasalPercentNow(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
         // AAPS schedules 100% as a cancellation; the pump itself treats it as the scheduled rate.
         if (percent == YpsoTbrRequest.STOP_PERCENT) return cancelTempBasalNow(enforceNew)
+        if (basalAccountingBlocked()) return fail(YpsoBolusMessage.SYNC_IN_PROGRESS)
         val request = runCatching { YpsoTbrRequest(percent.coerceAtMost(YpsoTbrRequest.MAX_PERCENT), durationInMinutes) }
             .getOrElse { return fail(R.string.ypsopump_tbr_invalid, it.message ?: "invalid request") }
         return enactTbr(request, tbrType)
@@ -1886,6 +1901,7 @@ class YpsoPumpPlugin @Inject constructor(
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult = onLink { setExtendedBolusNow(insulin, durationInMinutes) }
 
     private fun setExtendedBolusNow(insulin: Double, durationInMinutes: Int): PumpEnactResult {
+        if (basalAccountingBlocked()) return fail(YpsoBolusMessage.SYNC_IN_PROGRESS)
         val constrainedMaximum = constraintsChecker.getMaxExtendedBolusAllowed().value()
         val request = runCatching {
             YpsoBolusRequestValidator.validateDelivery(
@@ -2072,6 +2088,11 @@ class YpsoPumpPlugin @Inject constructor(
             bolusController.observeBolusNotification(notification, connection, receivedAt = receivedAt)
         }
         historyRecoveryEnabled = true
+        if (basalAccountingBlocked()) uiInteraction.addNotification(
+            Notification.YPSOPUMP_HISTORY_INCOMPLETE,
+            rh.gs(R.string.ypsopump_history_incomplete_notification),
+            Notification.URGENT,
+        )
         publishedUnresolvedBolusWarning = null
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN))
         // Process death must not turn the finite 90-second immediate-bolus observation period into a
