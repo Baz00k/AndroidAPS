@@ -155,7 +155,7 @@ internal class YpsoImmediateBolusController(
         // notification may arrive before the sequence is journalled. Remember it against the sequence
         // the pump named; dropping it here would strand the command until its timeout.
         val sequence = attempt.provenSequence(block)
-            ?: return rememberPendingTerminal(notification, block, observedAt)
+            ?: return rememberPendingTerminal(attempt.requestId, notification, block, observedAt)
         if (!notification.isTerminalFor(block, sequence)) return null
         return journal.observeBlockTerminal(attempt.requestId, observedAt)
     }
@@ -208,6 +208,7 @@ internal class YpsoImmediateBolusController(
      * by [applyPendingTerminal] once the proof names the same sequence, and never otherwise.
      */
     private fun rememberPendingTerminal(
+        requestId: String,
         notification: YpsoBolusNotification,
         block: YpsoBolusBlock,
         observedAt: Long,
@@ -215,7 +216,14 @@ internal class YpsoImmediateBolusController(
         val sequence = notification.sequence(block)
         if (notification.statusCode(block) !in YpsoBolusNotification.TERMINAL_CODES || sequence == 0L) return null
         pendingTerminal.set(Triple(block, sequence, observedAt))
-        return null
+        // The callback's attempt snapshot may predate identity proof. Proof can commit and drain an
+        // empty pending slot while observeNotifiedFast waits for the dispatch lock or journal I/O.
+        // Publish first, then re-read: either proof drains this announcement later, or its identity is
+        // already durable and this callback applies it. Re-reading before publishing leaves a gap.
+        val current = journal.current() ?: return null
+        if (current.requestId != requestId || current.provenSequence(block) != sequence) return null
+        applyPendingTerminal(requestId, block, sequence)
+        return journal.current()
     }
 
     /** Applies a terminal announcement that raced ahead of this attempt's identity proof. */

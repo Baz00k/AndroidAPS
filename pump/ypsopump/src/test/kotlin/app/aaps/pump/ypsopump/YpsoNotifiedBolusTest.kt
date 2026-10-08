@@ -5,6 +5,7 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptJournal
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptStore
 import app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
 import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusController
@@ -16,8 +17,12 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.mockito.kotlin.mock
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A fast bolus can end before any status read shows its programmed amount (bench: 0.4 U finished in
@@ -27,7 +32,8 @@ import java.io.File
 class YpsoNotifiedBolusTest {
     private class MemoryStore : YpsoBolusAttemptStore {
         val values = mutableListOf<YpsoBolusAttempt>()
-        override fun load() = values.lastOrNull()
+        var onLoad: (() -> Unit)? = null
+        override fun load() = values.lastOrNull().also { onLoad?.invoke() }
         override fun loadAll() = values.toList()
         override fun commit(attempt: YpsoBolusAttempt) {
             val i = values.indexOfFirst { it.requestId == attempt.requestId }
@@ -45,6 +51,51 @@ class YpsoNotifiedBolusTest {
         journal.beforeDispatch(requestId, counter, clock)
         assertTrue(controller.beginDelivery())
         controller.armDispatchConnection(CONNECTION, counter, armedAt = 0)
+    }
+
+    @ParameterizedTest
+    @CsvSource("51870, request-1, true", "51871, request-1, false", "51870, request-2, false")
+    fun `terminal notification racing with identity proof only completes the matching delivery`(
+        provenSequence: Long,
+        provenRequestId: String,
+        matches: Boolean,
+    ) {
+        val replay = attempt().copy(
+            requestedCentiUnits = 20,
+            baseline = attempt().baseline.copy(fastSequence = 51_869, historyPumpId = 51_869),
+        )
+        journal.prepare(replay)
+        journal.beforeDispatch("request-1", 4810, clock)
+        assertTrue(controller.beginDelivery())
+        controller.armDispatchConnection(CONNECTION, 4810, armedAt = 0)
+        val snapshotRead = CountDownLatch(1)
+        val terminal = requireNotNull(YpsoBolusNotification.decode(
+            "049eca000000000000009de42a".chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+        ))
+        val observer = Thread {
+            controller.observeBolusNotification(terminal, CONNECTION, 3_300)
+        }
+        store.onLoad = { if (Thread.currentThread() === observer) snapshotRead.countDown() }
+
+        // The callback has read the pre-proof attempt, but has not persisted its notification yet.
+        // Identity proof and its pending-terminal drain finish while the callback is paused.
+        synchronized(controller) {
+            observer.start()
+            assertTrue(snapshotRead.await(2, TimeUnit.SECONDS))
+            if (provenRequestId != replay.requestId) {
+                journal.prepare(replay.copy(requestId = provenRequestId))
+                journal.beforeDispatch(provenRequestId, 4811, clock)
+            }
+            journal.observeFastDelivering(provenRequestId, provenSequence, 20)
+            controller.applyPendingTerminal(provenRequestId, YpsoBolusBlock.FAST, provenSequence)
+        }
+        observer.join(2_000)
+        assertFalse(observer.isAlive)
+        store.onLoad = null
+
+        assertEquals(if (matches) 3_300L else null, store.load()!!.blockTerminalAt)
+        // A terminal notification does not confirm the delivered amount or invite a retry.
+        assertNull(store.load()!!.confirmedCentiUnits)
     }
 
     @Test
