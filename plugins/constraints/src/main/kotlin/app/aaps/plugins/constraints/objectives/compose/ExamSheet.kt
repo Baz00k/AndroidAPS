@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import app.aaps.core.compose.components.CheckboxRow
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
@@ -74,26 +74,8 @@ fun ExamSheet(
             AapsCard(Modifier.fillMaxWidth()) {
                 Column {
                     state.options.forEachIndexed { i, option ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .then(if (state.answered) Modifier else Modifier.clickable { onToggleOption(i) })
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = option.selected,
-                                onCheckedChange = if (state.answered) null else ({ onToggleOption(i) }),
-                                enabled = !state.answered,
-                                colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary)
-                            )
-                            Text(
-                                option.text,
-                                style = AapsTheme.type.body,
-                                color = if (state.answered) colors.textSecondary else colors.textPrimary,
-                                modifier = Modifier.padding(start = 4.dp)
-                            )
-                        }
+                        // Answered questions show the correct answers: read-only, but they must stay readable.
+                        CheckboxRow(option.text, option.selected, { onToggleOption(i) }, readOnly = state.answered)
                     }
                 }
             }
@@ -105,7 +87,7 @@ fun ExamSheet(
             if (hintViews.isNotEmpty())
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
-                        Text("HINTS", style = AapsTheme.type.label, color = colors.textSecondary)
+                        SectionLabel("Hints")
                         hintViews.forEach { hint ->
                             AndroidView(factory = { hint }, modifier = Modifier.fillMaxWidth())
                         }

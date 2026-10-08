@@ -1,7 +1,6 @@
 package app.aaps.core.compose.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -95,22 +93,4 @@ fun AlertContent(
             }
         }
     }
-}
-
-/** Full-width outlined/neutral button — the "not the affirmative" option in an [AlertContent]. */
-@Composable
-fun SecondaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = AapsTheme.colors
-    Text(
-        label,
-        style = AapsTheme.type.body,
-        color = colors.textSecondary,
-        textAlign = TextAlign.Center,
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.button)
-            .background(colors.controlFill)
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp)
-    )
 }

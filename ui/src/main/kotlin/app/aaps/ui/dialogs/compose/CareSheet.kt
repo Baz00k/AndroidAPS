@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,7 +14,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.NotesField
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
@@ -77,11 +77,11 @@ fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: ()
                     step = state.bgStep, min = state.bgMin, max = state.bgMax, decimals = state.bgDecimals, unit = state.bgUnit,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("SOURCE", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Source")
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Meter", onClick = { meter = CareMeter.METER }, selected = meter == CareMeter.METER)
-                    Chip("Sensor", onClick = { meter = CareMeter.SENSOR }, selected = meter == CareMeter.SENSOR)
-                    Chip("Other", onClick = { meter = CareMeter.MANUAL }, selected = meter == CareMeter.MANUAL)
+                    Choice("Meter", selected = meter == CareMeter.METER, onClick = { meter = CareMeter.METER })
+                    Choice("Sensor", selected = meter == CareMeter.SENSOR, onClick = { meter = CareMeter.SENSOR })
+                    Choice("Other", selected = meter == CareMeter.MANUAL, onClick = { meter = CareMeter.MANUAL })
                 }
             }
 

@@ -36,9 +36,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.compose.components.Choice
 
 /**
  * Redesigned History timeline (handoff Section 4): filter chips + a chronological, day-grouped list of
@@ -119,7 +119,7 @@ fun HistoryScreen(
 
 @Composable
 private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) =
-    Chip(label, onClick, selected = selected)
+    Choice(label, selected = selected, onClick = onClick)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

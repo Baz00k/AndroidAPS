@@ -10,24 +10,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.components.IconButtonTone
+import app.aaps.core.compose.components.RoundIconButton
+import app.aaps.core.compose.components.Tag
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
@@ -51,10 +49,7 @@ fun AutomationScreen(
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Automation", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
-            Box(
-                Modifier.size(36.dp).clip(CircleShape).background(colors.accentTint).clickable(onClick = onAdd),
-                contentAlignment = Alignment.Center
-            ) { Icon(Icons.Rounded.Add, contentDescription = "Add rule", tint = colors.accentOnLight, modifier = Modifier.size(22.dp)) }
+            RoundIconButton(Icons.Rounded.Add, "Add rule", onAdd, tone = IconButtonTone.Tonal)
         }
 
         if (state.rules.isEmpty()) {
@@ -104,7 +99,7 @@ private fun ChipGroup(label: String, chips: List<String>) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            chips.forEach { Chip(label = it, onClick = {}, enabled = false) }
+            chips.forEach { Tag(it) }
         }
     }
 }

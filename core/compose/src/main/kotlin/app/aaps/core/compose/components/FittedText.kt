@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
 
@@ -62,10 +63,14 @@ private fun AutoSizedText(text: String, style: TextStyle, color: Color, modifier
         BasicText(text = text, modifier = modifier, style = style.copy(color = color), maxLines = lines)
         return
     }
+    // A line height in sp stays put while the font shrinks, so two shrunk lines drift apart. As a
+    // multiple of the font size it shrinks with it.
+    val lineHeight = style.lineHeight
+    val scaledStyle = if (lineHeight.isSp && max.isSp) style.copy(lineHeight = (lineHeight.value / max.value).em) else style
     BasicText(
         text = text,
         modifier = modifier,
-        style = style.copy(color = color),
+        style = scaledStyle.copy(color = color),
         maxLines = lines,
         autoSize = TextAutoSize.StepBased(
             minFontSize = max * minScale,

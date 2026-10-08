@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -23,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -43,7 +43,7 @@ fun AapsCard(
     content: @Composable () -> Unit
 ) {
     Card(
-        modifier = if (onClick != null) modifier.clip(shape).clickable(onClick = onClick) else modifier,
+        modifier = if (onClick != null) modifier.clip(shape).clickable(role = Role.Button, onClick = onClick) else modifier,
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = color),
         border = BorderStroke(1.dp, AapsTheme.colors.hairline)
@@ -104,7 +104,7 @@ fun TintIcon(
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(11.dp))
+            .clip(AapsTheme.shape.iconButton)
             .background(background),
         contentAlignment = Alignment.Center
     ) {

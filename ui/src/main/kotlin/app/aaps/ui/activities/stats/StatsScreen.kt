@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.theme.AapsSpacing
@@ -72,7 +73,7 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
         // TIR card
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("TIME IN RANGE", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Time in range")
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsTheme.type.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
                     Text("in range", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
@@ -166,7 +167,7 @@ private fun GlucoseProfile(state: StatsUiState) {
 
     Column(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("A TYPICAL DAY", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+            SectionLabel("A typical day", Modifier.weight(1f))
             if (depth.isNotEmpty())
                 Text(depth, style = AapsTheme.type.caption, color = if (maxDays <= 1 && !state.loading) colors.high else colors.textTertiary)
         }

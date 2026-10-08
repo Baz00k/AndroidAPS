@@ -1,7 +1,6 @@
 package app.aaps.pump.medtrum.ui.compose
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +18,12 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.SecondaryButton
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -115,7 +115,7 @@ fun MedtrumOverviewScreen(
 
         RowsCard(state.status)
         if (state.patch.isNotEmpty()) {
-            Text("PATCH", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            SectionLabel("Patch", Modifier.padding(bottom = 8.dp))
             RowsCard(state.patch)
         }
 
@@ -125,8 +125,8 @@ fun MedtrumOverviewScreen(
             modifier = Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGapSmall)
         )
         Row(Modifier.fillMaxWidth().padding(top = AapsSpacing.rowGap, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-            SecondaryButton(state.refreshLabel, state.canRefresh, onRefresh, Modifier.weight(1f))
-            if (state.canResetAlarms) SecondaryButton(state.resetAlarmsLabel, true, onResetAlarms, Modifier.weight(1f))
+            SecondaryButton(state.refreshLabel, onRefresh, Modifier.weight(1f), enabled = state.canRefresh)
+            if (state.canResetAlarms) SecondaryButton(state.resetAlarmsLabel, onResetAlarms, Modifier.weight(1f))
         }
     }
 }
@@ -176,20 +176,4 @@ private fun ValueTile(label: String, value: String, modifier: Modifier = Modifie
             Text(value.ifBlank { "—" }, style = AapsTheme.type.cardValue, color = colors.textPrimary, modifier = Modifier.padding(top = 2.dp))
         }
     }
-}
-
-@Composable
-private fun SecondaryButton(label: String, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = AapsTheme.colors
-    Text(
-        label,
-        style = AapsTheme.type.label,
-        color = if (enabled) colors.textOnSurfaceStrong else colors.textTertiary,
-        textAlign = TextAlign.Center,
-        modifier = modifier
-            .clip(AapsTheme.shape.button)
-            .background(colors.controlFill)
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(vertical = 13.dp)
-    )
 }

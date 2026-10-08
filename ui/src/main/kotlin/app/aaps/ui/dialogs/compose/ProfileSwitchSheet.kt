@@ -21,8 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.Stepper
 import app.aaps.core.compose.theme.AapsTheme
@@ -66,13 +67,13 @@ fun ProfileSwitchSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (state.profiles.size > 1) {
-                Text("PROFILE", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Profile")
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.profiles.forEach { p -> Chip(p, { profile = p }, selected = p == profile) }
+                    state.profiles.forEach { p -> Choice(p, selected = p == profile, onClick = { profile = p }) }
                 }
             }
 
-            Text("PERCENTAGE", style = AapsTheme.type.label, color = colors.textSecondary)
+            SectionLabel("Percentage")
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Stepper(
@@ -83,7 +84,7 @@ fun ProfileSwitchSheet(
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(80, 90, 100, 110, 120).forEach { p ->
-                            Chip("$p", { percent = p }, Modifier.weight(1f), selected = percent == p)
+                            Choice("$p", selected = percent == p, onClick = { percent = p }, modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -107,9 +108,9 @@ fun ProfileSwitchSheet(
                         onPlus = { durationMin = (durationMin + DURATION_STEP_MIN).coerceAtMost(MAX_PROFILE_SWITCH_DURATION_MIN) },
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("1h", { durationMin = 60 }, Modifier.weight(1f), selected = durationMin == 60)
-                        Chip("2h", { durationMin = 120 }, Modifier.weight(1f), selected = durationMin == 120)
-                        Chip("Until I change", { durationMin = 0 }, Modifier.weight(1.6f), selected = durationMin == 0)
+                        Choice("1h", selected = durationMin == 60, onClick = { durationMin = 60 }, modifier = Modifier.weight(1f))
+                        Choice("2h", selected = durationMin == 120, onClick = { durationMin = 120 }, modifier = Modifier.weight(1f))
+                        Choice("Until I change", selected = durationMin == 0, onClick = { durationMin = 0 }, modifier = Modifier.weight(1.6f))
                     }
                 }
             }

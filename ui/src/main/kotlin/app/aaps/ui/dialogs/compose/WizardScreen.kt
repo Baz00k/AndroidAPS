@@ -49,11 +49,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.Tag
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.AmountStepper
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.aapsSwitchColors
-import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.EntryTime
@@ -160,7 +162,7 @@ private fun InputCards(
     CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs)
     AapsCard {
         Column {
-            SectionLabel("INCLUDED", colors, Modifier.padding(bottom = 4.dp))
+            SectionLabel("Included", Modifier.padding(bottom = 4.dp))
             FactorRow("Carbs", "${inputs.carbs} g", result.carbsInsulin, colors)
             FactorRow(
                 "BG correction", null, result.bgInsulin, colors,
@@ -208,7 +210,7 @@ private fun OutcomeSummary(result: WizardResult, colors: AapsColors, modifier: M
         when {
             outcome.uncappedInsulin != null                                    -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Struck(units(outcome.uncappedInsulin), colors)
-                Tag("Max bolus", colors.high)
+                Tag("Max bolus", tint = colors.high)
             }
             outcome.commit == CalculatorOutcome.Commit.LOG_CARBS               -> Text("${outcome.carbs} g", style = AapsTheme.type.caption, color = colors.textSecondary)
             outcome.carbEquivalent != null                                     -> Text("Carb equivalent ${outcome.carbEquivalent}\u00A0g", style = AapsTheme.type.caption, color = colors.textSecondary)
@@ -258,10 +260,10 @@ private fun GlucoseCard(inputs: WizardInputs, result: WizardResult, colors: Aaps
                             GlucoseSource.SENSOR -> Text(result.glucoseAge, style = AapsTheme.type.caption, color = colors.textTertiary)
                             GlucoseSource.STALE  -> {
                                 Text(result.glucoseAge, style = AapsTheme.type.caption, color = colors.textTertiary)
-                                Tag("Stale", colors.high)
+                                Tag("Stale", tint = colors.high)
                             }
                             GlucoseSource.MANUAL -> Text("Manual", style = AapsTheme.type.caption, color = colors.textTertiary)
-                            GlucoseSource.NONE   -> Tag("No reading", colors.textSecondary)
+                            GlucoseSource.NONE   -> Tag("No reading", tint = colors.textSecondary)
                         }
                     }
                 }
@@ -305,11 +307,13 @@ private fun CarbsCard(
         )
         ChoiceRow {
             carbControls.quickIncrements.forEach { increment ->
-                Choice(
-                    if (increment > 0) "+$increment g" else "$increment g", selected = false,
+                ActionChip(
+                    if (increment > 0) "+$increment g" else "$increment g",
+                    modifier = Modifier.weight(1f),
                     enabled = if (increment > 0) inputs.carbs < carbControls.maxCarbs else inputs.carbs > 0,
-                    clickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs"
-                ) { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
+                    clickLabel = if (increment >= 0) "Add $increment grams of carbs" else "Subtract ${-increment} grams of carbs",
+                    onClick = { onInputs(inputs.copy(carbs = carbControls.addIncrement(inputs.carbs, increment))) }
+                )
             }
         }
         // Only a collapsed header advertises the advisor; once open, the advisor's own row is in view.
@@ -406,13 +410,13 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
         if (changed)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Struck(if (showsInsulin) units(baseline.outcome.insulin) else "${baseline.outcome.carbs} g", colors)
-                Tag("Updated", colors.accent)
+                Tag("Updated", tint = colors.accent)
             }
         Text(if (showsInsulin) units(outcome.insulin) else "${outcome.carbs} g", style = AapsTheme.type.hero, color = colors.textPrimary)
         outcome.uncappedInsulin?.let { uncapped ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Struck(units(uncapped), colors)
-                Tag("Max bolus", colors.high)
+                Tag("Max bolus", tint = colors.high)
             }
         }
         when {
@@ -471,23 +475,6 @@ private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCom
 }
 
 private fun units(v: Double) = String.format(Locale.getDefault(), "%.2f U", v)
-
-@Composable
-private fun SectionLabel(text: String, colors: AapsColors, modifier: Modifier = Modifier) =
-    Text(text, style = AapsTheme.type.label, color = colors.textSecondary, modifier = modifier)
-
-/** A short status word in a tinted pill — "Stale", "Updated", "Max bolus". */
-@Composable
-private fun Tag(text: String, tint: Color) =
-    Text(
-        text,
-        style = AapsTheme.type.label,
-        color = tint,
-        modifier = Modifier
-            .clip(AapsTheme.shape.pill)
-            .background(tint.copy(alpha = 0.14f))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    )
 
 @Composable
 private fun Struck(text: String, colors: AapsColors) =

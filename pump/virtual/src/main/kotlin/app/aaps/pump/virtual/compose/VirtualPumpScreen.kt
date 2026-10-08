@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
@@ -73,7 +74,7 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
             }
 
         if (state.definition.isNotBlank()) {
-            Text("CAPABILITIES", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            SectionLabel("Capabilities", Modifier.padding(bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Text(state.definition, style = AapsTheme.type.caption, color = colors.textSecondary)
             }

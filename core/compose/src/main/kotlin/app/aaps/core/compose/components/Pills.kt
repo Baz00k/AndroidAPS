@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -15,12 +16,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Status pill: a colored dot (glucose/status color) + label + optional bold value, on a flat
- * control-fill background. This is a *readout*, so it stays flat (no accent, not tappable).
- * Used for the Home loop pill and the supplies strip.
+ * control-fill background. This is a *readout*, so it stays flat (no accent). With [onClick] it is
+ * also a button, as tall as a touch target (the Home loop pill). Used for the supplies strip too.
  */
 @Composable
 fun StatusPill(
@@ -36,7 +39,7 @@ fun StatusPill(
     Row(
         modifier = modifier
             .clip(AapsTheme.shape.pill)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.heightIn(min = AapsSpacing.minTap).clickable(role = Role.Button, onClick = onClick) else Modifier)
             .background(colors.controlFill)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -64,5 +67,15 @@ fun Dot(color: Color, glow: Boolean = false, size: androidx.compose.ui.unit.Dp =
                 .clip(CircleShape)
                 .background(color)
         )
+    }
+}
+
+@ComponentPreviews
+@Composable
+private fun PillsPreview() = PreviewSurface {
+    StatusPill("Closed loop  · 4m ago", dotColor = AapsTheme.colors.inRange, glow = true, labelColor = AapsTheme.colors.textPrimary, onClick = {})
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        StatusPill("Sensor", dotColor = AapsTheme.colors.high, value = "6d")
+        StatusPill("Reservoir", dotColor = AapsTheme.colors.inRange, value = "88 U")
     }
 }

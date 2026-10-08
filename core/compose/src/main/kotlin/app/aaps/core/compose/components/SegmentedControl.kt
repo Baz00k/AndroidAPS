@@ -5,8 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,6 +20,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
@@ -43,7 +45,7 @@ fun SegmentedControl(
         modifier = modifier
             .clip(AapsTheme.shape.pill)
             .background(colors.controlFill)
-            .padding(3.dp)
+            .padding(TRACK_INSET)
             .selectableGroup(),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -57,13 +59,24 @@ fun SegmentedControl(
                 color = if (active) colors.accentOnLight else colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = (if (fillWidth) Modifier.weight(1f) else Modifier)
+                    .heightIn(min = AapsSpacing.minTap)
                     .disabledAlpha(enabled)
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(AapsTheme.shape.pill)
                     .selectable(selected = active, enabled = enabled, role = Role.Tab) { onSelect(i) }
                     .then(if (!enabled && disabledReason != null) Modifier.semantics { stateDescription = disabledReason } else Modifier)
                     .background(bg)
-                    .padding(horizontal = 12.dp, vertical = if (fillWidth) 10.dp else 6.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
             )
         }
     }
+}
+
+private val TRACK_INSET = 3.dp
+
+@ComponentPreviews
+@Composable
+private fun SegmentedControlPreview() = PreviewSurface {
+    SegmentedControl(listOf("3h", "6h", "12h", "24h"), selectedIndex = 1, onSelect = {})
+    SegmentedControl(listOf("Basal", "IC", "ISF", "Target"), selectedIndex = 0, onSelect = {}, fillWidth = true, disabled = setOf(3), disabledReason = "Not available")
 }

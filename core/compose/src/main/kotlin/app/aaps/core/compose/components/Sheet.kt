@@ -134,28 +134,3 @@ private fun SheetIconButton(icon: ImageVector, description: String, onClick: () 
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) { Icon(icon, contentDescription = description, tint = AapsTheme.colors.textSecondary) }
-
-/** A rounded chip. [selected] fills accent-tint; otherwise control-fill. */
-@Composable
-fun Chip(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    selected: Boolean = false,
-    enabled: Boolean = true
-) {
-    val colors = AapsTheme.colors
-    val bg = if (selected) colors.accentTintStrong else colors.controlFill
-    val fg = if (selected) colors.accentOnLight else colors.textPrimary
-    Text(
-        label,
-        style = AapsTheme.type.listTitle,
-        color = fg,
-        modifier = modifier
-            .disabledAlpha(enabled)
-            .clip(AapsTheme.shape.pill)
-            .background(bg)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-    )
-}

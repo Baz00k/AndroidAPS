@@ -2,6 +2,7 @@ package app.aaps.ui.dialogs.compose
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
@@ -18,8 +19,8 @@ data class TargetPresetOption(val preset: TargetPreset, val summary: String)
 fun TargetPresetCard(options: List<TargetPresetOption>, selected: TargetPreset, onSelect: (TargetPreset) -> Unit) {
     EntryCard("Temporary target") {
         ChoiceRow {
-            Choice(TargetPreset.NONE.label, selected = selected == TargetPreset.NONE) { onSelect(TargetPreset.NONE) }
-            options.forEach { option -> Choice(option.preset.label, selected = selected == option.preset) { onSelect(option.preset) } }
+            Choice(TargetPreset.NONE.label, selected = selected == TargetPreset.NONE, onClick = { onSelect(TargetPreset.NONE) }, modifier = Modifier.weight(1f))
+            options.forEach { option -> Choice(option.preset.label, selected = selected == option.preset, onClick = { onSelect(option.preset) }, modifier = Modifier.weight(1f)) }
         }
         options.firstOrNull { it.preset == selected }?.let {
             Text(it.summary, style = AapsTheme.type.caption, color = AapsTheme.colors.textSecondary)

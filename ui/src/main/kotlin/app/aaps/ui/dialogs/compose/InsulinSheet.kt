@@ -12,8 +12,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AmountStepper
-import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
@@ -99,9 +99,9 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
             AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin")
             ChoiceRow {
                 state.quickIncrements.forEach { inc ->
-                    Choice((if (inc > 0) "+" else "") + fmt(inc) + " U", selected = false, enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0) {
+                    ActionChip((if (inc > 0) "+" else "") + fmt(inc) + " U", modifier = Modifier.weight(1f), enabled = if (inc > 0) amount < state.maxInsulin else amount > 0.0, onClick = {
                         amount = (amount + inc).coerceIn(0.0, state.maxInsulin)
-                    }
+                    })
                 }
             }
         }

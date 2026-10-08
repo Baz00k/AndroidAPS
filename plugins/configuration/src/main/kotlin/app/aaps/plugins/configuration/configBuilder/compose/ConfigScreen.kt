@@ -1,5 +1,8 @@
 package app.aaps.plugins.configuration.configBuilder.compose
 
+import app.aaps.core.compose.components.CheckboxRow
+import app.aaps.core.compose.components.RadioRow
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -7,17 +10,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -65,48 +65,27 @@ fun ConfigScreen(
         }
 
         state.categories.forEach { category ->
-            Text(category.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
+            SectionLabel(category.title)
             if (category.description.isNotBlank())
                 Text(category.description, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
             else Box(Modifier.height(8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-                Column {
+                Column(if (category.multiple) Modifier else Modifier.selectableGroup()) {
                     category.options.forEachIndexed { i, option ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !option.fixed) { onSelect(option.index, !option.selected) }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (category.multiple)
-                                Checkbox(
-                                    checked = option.selected,
-                                    enabled = !option.fixed,
-                                    onCheckedChange = { onSelect(option.index, it) },
-                                    colors = CheckboxDefaults.colors(checkedColor = colors.accent, checkmarkColor = colors.onAccent, uncheckedColor = colors.hairline)
-                                )
-                            else
-                                RadioButton(
-                                    selected = option.selected,
-                                    enabled = !option.fixed,
-                                    onClick = { onSelect(option.index, true) },
-                                    colors = RadioButtonDefaults.colors(selectedColor = colors.accent, unselectedColor = colors.hairline)
-                                )
-                            Column(Modifier.weight(1f).padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(option.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (option.description.isNotBlank())
-                                    Text(option.description, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
+                        val sub = option.description.ifBlank { null }
+                        if (category.multiple)
+                            CheckboxRow(option.name, option.selected, { onSelect(option.index, it) }, sub = sub, enabled = !option.fixed)
+                        else
+                            // Choosing the active option again would ask to switch to it again (and reconnect a pump).
+                            RadioRow(option.name, option.selected, { if (!option.selected) onSelect(option.index, true) }, sub = sub, enabled = !option.fixed)
                     }
                 }
             }
         }
 
         if (state.plugins.isNotEmpty()) {
-            Text("PLUGINS", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            SectionLabel("Plugins", Modifier.padding(bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 Column {
                     state.plugins.forEachIndexed { i, p ->
@@ -134,7 +113,7 @@ fun ConfigScreen(
         }
 
         if (state.prefs.isNotEmpty()) {
-            Text("SETTINGS", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            SectionLabel("Settings", Modifier.padding(bottom = 8.dp))
             state.prefs.groupBy { it.group }.forEach { (group, rows) ->
                 Text(group, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp, top = 4.dp))
                 AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap)) {

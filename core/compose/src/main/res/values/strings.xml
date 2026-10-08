@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="compose_notes_label">Notes</string>
+    <string name="compose_notes_placeholder">Add a note…</string>
+</resources>
