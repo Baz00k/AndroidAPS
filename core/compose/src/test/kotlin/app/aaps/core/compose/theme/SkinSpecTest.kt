@@ -31,7 +31,7 @@ class SkinSpecTest {
         assertThat(skin.dark.background).isEqualTo(AapsSkins.Default.dark.background)
         assertThat(skin.dark.textPrimary).isEqualTo(AapsSkins.Default.dark.textPrimary)
         assertThat(skin.cornerRadius).isEqualTo(DefaultCornerRadius)
-        assertThat(skin.fontFamily).isEqualTo(GoogleSansFlex)
+        assertThat(skin.fontFamily).isEqualTo(SystemFont)
     }
 
     @Test

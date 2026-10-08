@@ -63,18 +63,15 @@ class SkinContrastTest {
     }
 
     @Test
-    fun `midnight is the default dark ground with its screen-sized surfaces black`() {
+    fun `midnight is the default dark ground with the screen and its bars black`() {
         val dark = AapsSkins.Default.dark
         val midnight = AapsSkins.Midnight.dark
-        listOf(midnight.background, midnight.surface3, midnight.bar).forEach { assertThat(it).isEqualTo(Color.Black) }
-        // Cards stay filled — outlines alone read as a wireframe — but darker than the tonal ground's.
-        assertThat(midnight.surface).isNotEqualTo(midnight.background)
-        assertThat(SkinValidation.contrast(midnight.surface, Color.Black)).isLessThan(SkinValidation.contrast(dark.surface, Color.Black))
-        // Smaller containers and controls keep their tones, or they could not be found on black.
-        listOf(midnight.surface2, midnight.controlFill, midnight.accentTintStrong).forEach { assertThat(it).isNotEqualTo(Color.Black) }
-        // Everything that is not a ground is the default's, so the two read as the same app.
-        val grounds = dark.copy(background = midnight.background, surface = midnight.surface, surface3 = midnight.surface3, bar = midnight.bar)
-        assertThat(midnight).isEqualTo(grounds)
+        listOf(midnight.background, midnight.bar).forEach { assertThat(it).isEqualTo(Color.Black) }
+        // What sits on the black keeps its fill — cards, sheets, nested panels, controls — so it
+        // separates by tone rather than needing outlines.
+        listOf(midnight.surface, midnight.surface2, midnight.surface3, midnight.controlFill, midnight.accentTintStrong)
+            .forEach { assertThat(it).isNotEqualTo(Color.Black) }
+        assertThat(midnight).isEqualTo(dark.copy(background = Color.Black, bar = Color.Black))
     }
 
     @Test

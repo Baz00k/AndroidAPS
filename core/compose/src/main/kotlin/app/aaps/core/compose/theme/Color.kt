@@ -61,10 +61,10 @@ enum class MaterialGround {
     Tonal,
 
     /**
-     * For OLED panels, where an unlit pixel draws no power and is genuinely black: on the dark ground,
-     * everything the size of the screen — the screen itself, bars, sheets — becomes #000. Cards stay
-     * filled, one tone below the tonal dark ground's, because outlines alone turn a screen into a
-     * wireframe; nested panels, dialogs, menus and controls keep their tones so they stay findable.
+     * For OLED panels, where an unlit pixel draws no power and is genuinely black: the tonal dark
+     * ground with the screen itself and its bars #000 — the areas that are always on and always large.
+     * Everything placed on that ground keeps its tone: cards stay filled, and sheets, drawers and
+     * dialogs stay lifted, so they separate from black by fill rather than by outlines.
      */
     TrueBlack
 }
@@ -98,11 +98,7 @@ private fun ColorScheme.withBlackGrounds(): ColorScheme = copy(
  */
 fun ColorScheme.toAapsColors(dark: Boolean, ground: MaterialGround = MaterialGround.Tonal): AapsColors {
     val colors = tonalColors(dark)
-    // Material has no role for "a card on black", so the true-black ground picks one: the container
-    // just above the black ones, which a scheme from [materialScheme] leaves tonal.
-    return if (dark && ground == MaterialGround.TrueBlack)
-        colors.copy(background = Color.Black, surface = surfaceContainerLow, surface3 = Color.Black, bar = Color.Black)
-    else colors
+    return if (dark && ground == MaterialGround.TrueBlack) colors.copy(background = Color.Black, bar = Color.Black) else colors
 }
 
 private fun ColorScheme.tonalColors(dark: Boolean): AapsColors = AapsColors(

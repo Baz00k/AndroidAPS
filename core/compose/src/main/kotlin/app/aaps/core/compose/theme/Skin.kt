@@ -49,7 +49,7 @@ data class AapsSkin(
     // a family and a ready-made set of styles lets the two disagree: a skin could name a pixel font,
     // forget to rebuild the styles, and ship Material components in one font and app text in another.
     // Deriving makes that unrepresentable, and it is what keeps a skin file short enough to hand-write.
-    val fontFamily: androidx.compose.ui.text.font.FontFamily = GoogleSansFlex,
+    val fontFamily: androidx.compose.ui.text.font.FontFamily = SystemFont,
     /** Set for a font that ships one weight; the scale then uses size alone for hierarchy. */
     val singleWeightFont: Boolean = false,
     val typeScale: Float = 1f,

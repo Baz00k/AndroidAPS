@@ -170,7 +170,7 @@ data class SkinSpec(
             // A single-look skin renders its one palette on both grounds rather than falling back to
             // the default light one, which would silently discard its identity in light mode.
             light = light?.toColors(single ?: AapsSkins.Default.light) ?: darkColors,
-            fontFamily = fontFamily ?: GoogleSansFlex,
+            fontFamily = fontFamily ?: SystemFont,
             singleWeightFont = font?.singleWeight ?: false,
             typeScale = font?.scale ?: 1f,
             cornerRadius = cornerRadius?.dp ?: DefaultCornerRadius

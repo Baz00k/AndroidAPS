@@ -1,7 +1,6 @@
 package app.aaps.core.compose.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,8 +86,6 @@ fun SheetSurface(
             .fillMaxWidth()
             .clip(AapsTheme.shape.sheet)
             .background(colors.surface3)
-            // A sheet the colour of the screen (a true-black ground) needs its edge drawn, like a card.
-            .then(if (colors.surface3 == colors.background) Modifier.border(1.dp, colors.hairline, AapsTheme.shape.sheet) else Modifier)
             .padding(bottom = 12.dp)
     ) {
         val dragHandle = LocalSheetDragHandle.current

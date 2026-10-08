@@ -3,34 +3,17 @@ package app.aaps.core.compose.theme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import app.aaps.core.compose.R
 
 /**
- * Google Sans Flex — the typeface of current Android system apps — vendored as a variable font
- * (`res/font/google_sans_flex.ttf`) cut down to its `wght` axis; see `LICENSE-GoogleSansFlex-OFL.txt`.
- * We derive each static weight via [FontVariation] — requires API 26+, below every module minSdk.
- * Scripts it does not cover fall back to the system font glyph by glyph.
+ * The built-in skins write in the system font — Roboto on most devices, the maker's or the user's own
+ * choice on others — so the app reads like the platform around it and honours a font picked for
+ * legibility. A skin file can still bring its own.
  */
-@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
-private fun googleSansFlex(weight: FontWeight) =
-    Font(
-        R.font.google_sans_flex,
-        weight = weight,
-        variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight))
-    )
-
-val GoogleSansFlex = FontFamily(
-    googleSansFlex(FontWeight.Normal),     // 400
-    googleSansFlex(FontWeight.Medium),     // 500
-    googleSansFlex(FontWeight.SemiBold),   // 600
-    googleSansFlex(FontWeight.Bold)        // 700
-)
+val SystemFont: FontFamily = FontFamily.Default
 
 /** Tabular figures for every numeric readout, so digits don't jitter as values change. */
 val TabularNums = "tnum"
@@ -38,8 +21,8 @@ val TabularNums = "tnum"
 /**
  * The app type scale. Not all roles map onto M3's [Typography] names, so the app-specific roles
  * (hero BG value, big value, card value, …) live here, with Material's weights: regular for reading,
- * medium for titles and labels, and medium for the readouts so they carry emphasis without the
- * heavy black weights Material reserves for nothing.
+ * medium for titles, labels and the readouts, which carry emphasis by size rather than by the
+ * extra-bold weights Material does not use.
  *
  * Read it through [AapsTheme.type], never as a constant: a skin supplies its own scale, and a style
  * captured outside composition would pin the screen to whatever font happened to be loaded first.
@@ -65,7 +48,7 @@ data class AapsTextStyles(
  * on size for hierarchy instead.
  */
 fun aapsTextStyles(
-    family: FontFamily = GoogleSansFlex,
+    family: FontFamily = SystemFont,
     scale: Float = 1f,
     singleWeight: Boolean = false
 ): AapsTextStyles {

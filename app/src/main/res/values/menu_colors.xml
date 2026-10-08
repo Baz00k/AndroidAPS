@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material's surface container for the native overflow menu, from the system's dynamic palette.
+         Android 13 has no surface roles yet, so it takes the nearest neutral tone. -->
+    <color name="menu_container">@android:color/system_neutral1_50</color>
+</resources>

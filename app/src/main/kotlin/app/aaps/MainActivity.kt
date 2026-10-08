@@ -358,9 +358,8 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         binding.mainNavigationView.background = GradientDrawable().apply {
             setColor(colors.surface3.toArgb())
             cornerRadii = floatArrayOf(0f, 0f, drawerCorner, drawerCorner, drawerCorner, drawerCorner, 0f, 0f)
-            // A drawer the colour of the screen (a true-black ground) needs its edge drawn, like a card.
-            if (colors.surface3 == colors.background) setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), colors.hairline.toArgb())
         }
+        binding.mainNavigationView.getHeaderView(0)?.findViewById<TextView>(R.id.drawer_headline)?.setTextColor(colors.textSecondary.toArgb())
         binding.mainNavigationView.itemTextColor = ColorStateList.valueOf(colors.textPrimary.toArgb())
         binding.mainNavigationView.itemIconTintList = ColorStateList.valueOf(colors.textSecondary.toArgb())
     }
