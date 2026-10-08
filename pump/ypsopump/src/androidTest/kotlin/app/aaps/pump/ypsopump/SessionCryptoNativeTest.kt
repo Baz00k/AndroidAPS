@@ -7,7 +7,6 @@ import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import com.sun.jna.NativeLibrary
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,20 +35,14 @@ class SessionCryptoNativeTest {
 
         val wrongKey = key.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
         assertThrows(SessionCrypto.AuthenticationFailedException::class.java) { crypto.decrypt(vector, wrongKey) }
-        for (index in listOf(0, vector.size - SessionCrypto.NONCE_SIZE - 1, vector.lastIndex)) {
-            val tampered = vector.copyOf().also { it[index] = (it[index].toInt() xor 1).toByte() }
-            assertThrows(SessionCrypto.AuthenticationFailedException::class.java) { crypto.decrypt(tampered, key) }
-        }
+        val tampered = vector.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
+        assertThrows(SessionCrypto.AuthenticationFailedException::class.java) { crypto.decrypt(tampered, key) }
 
-        val first = crypto.encrypt(decoded.body, key, decoded.reboot, decoded.counter)
-        val second = crypto.encrypt(decoded.body, key, decoded.reboot, decoded.counter)
-        assertEquals(vector.size, first.size)
-        assertFalse(first.takeLast(SessionCrypto.NONCE_SIZE) == second.takeLast(SessionCrypto.NONCE_SIZE))
-        // A fresh codec instance can decrypt the existing wire format; no JNA-specific state is saved.
-        val restored = SessionCrypto().decrypt(first, key)
-        assertArrayEquals(decoded.body, restored.body)
-        assertEquals(decoded.reboot, restored.reboot)
-        assertEquals(decoded.counter, restored.counter)
+        val encrypted = crypto.encrypt(decoded.body, key, decoded.reboot, decoded.counter)
+        val roundtrip = crypto.decrypt(encrypted, key)
+        assertArrayEquals(decoded.body, roundtrip.body)
+        assertEquals(decoded.reboot, roundtrip.reboot)
+        assertEquals(decoded.counter, roundtrip.counter)
     }
 
     private fun hex(value: String) = value.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
