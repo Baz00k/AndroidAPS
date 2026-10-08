@@ -216,13 +216,13 @@ class PluginStore @Inject constructor(
     override val activeNsClient: NsClient?
         get() = getTheOneEnabledInArray(getSpecificPluginsListByInterface(NsClient::class.java), PluginType.SYNC) as NsClient?
 
-    @Suppress("UNCHECKED_CAST")
     override val firstActiveSync: Sync?
-        get() = (getSpecificPluginsList(PluginType.SYNC) as ArrayList<Sync>).firstOrNull { it.connected }
+        get() = activeSyncs.firstOrNull { it.connected }
 
-    @Suppress("UNCHECKED_CAST")
+    // SYNC is a category, not a contract: Wear sits in it without implementing Sync, so filter
+    // rather than cast — an unchecked cast only fails once iteration reaches such a plugin.
     override val activeSyncs: ArrayList<Sync>
-        get() = getSpecificPluginsList(PluginType.SYNC) as ArrayList<Sync>
+        get() = ArrayList(getSpecificPluginsList(PluginType.SYNC).filterIsInstance<Sync>())
 
     override fun getPluginsList(): ArrayList<PluginBase> = ArrayList(plugins)
 

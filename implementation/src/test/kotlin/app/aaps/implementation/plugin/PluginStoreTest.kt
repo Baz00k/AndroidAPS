@@ -9,7 +9,10 @@ import app.aaps.core.interfaces.profile.ProfileSource
 import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.smoothing.Smoothing
 import app.aaps.core.interfaces.source.BgSource
+import app.aaps.core.interfaces.sync.Sync
 import app.aaps.shared.tests.TestBase
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.mock
@@ -45,6 +48,36 @@ class PluginStoreTest : TestBase() {
         verify(defaultAps, never()).setPluginEnabled(PluginType.APS, true)
         verify(selectedAps, never()).setPluginEnabled(PluginType.APS, false)
     }
+
+    @Test
+    fun `sync lookups skip sync-category plugins that are not a Sync`() {
+        // Wear sits in the SYNC category without implementing Sync. Casting the whole category to
+        // Sync crashed the Objectives screen as soon as the lookup reached it.
+        val wear = plugin(PluginType.SYNC, WearLike::class.java, "wear", enabled = true)
+        val offline = syncPlugin("offline", connected = false)
+        val online = syncPlugin("online", connected = true)
+        val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true)).apply {
+            plugins = listOf(wear, offline, online) + plugins
+        }
+
+        assertSame(online, store.firstActiveSync)
+        assertEquals(listOf(offline, online), store.activeSyncs)
+    }
+
+    @Test
+    fun `no connected sync is reported as none rather than failing`() {
+        val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true)).apply {
+            plugins = listOf(plugin(PluginType.SYNC, WearLike::class.java, "wear", enabled = true), syncPlugin("offline", connected = false)) + plugins
+        }
+
+        assertNull(store.firstActiveSync)
+    }
+
+    /** A plugin interface unrelated to Sync, standing in for Wear. */
+    interface WearLike
+
+    private fun syncPlugin(name: String, connected: Boolean): PluginBase =
+        plugin(PluginType.SYNC, Sync::class.java, name, enabled = true).also { `when`((it as Sync).connected).thenReturn(connected) }
 
     private fun storeWith(vararg algorithms: PluginBase) = PluginStore(aapsLogger).apply {
         plugins = algorithms.toList() + listOf(
