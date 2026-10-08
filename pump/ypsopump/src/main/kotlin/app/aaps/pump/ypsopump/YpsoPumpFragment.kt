@@ -17,7 +17,6 @@ import app.aaps.core.utils.compactDurationLabel
 import app.aaps.pump.ypsopump.compose.PumpStatusRow
 import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
-import app.aaps.pump.ypsopump.compose.QueueItem
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
@@ -88,12 +87,6 @@ internal fun buildPumpStatusState(
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
     }
-    val queue = buildList {
-        val running = commandQueue.performing()
-        if (running != null) add(QueueItem(running.status(), true))
-        val queued = commandQueue.size()
-        if (queued > 0) add(QueueItem("$queued command${if (queued == 1) "" else "s"} queued", false))
-    }
     val presentation = pumpSetupPresentation(
         causes = pumpState.availability.causes,
         hasSavedDetails = pumpState.claimedSerialNumber.isNotBlank(),
@@ -116,6 +109,8 @@ internal fun buildPumpStatusState(
         battery = status.battery,
         unavailableLabel = rh.gs(R.string.ypsopump_value_unavailable),
         rows = rows,
-        queue = queue,
+        queue = pumpActivityItems(commandQueue, rh),
+        queueTitle = rh.gs(R.string.ypsopump_queue_title),
+        queueIdleLabel = rh.gs(R.string.ypsopump_queue_idle),
     )
 }

@@ -29,7 +29,7 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Pump status screen: connection pill with at most one instruction, Reservoir + Battery gauge
- * tiles, confirmed status rows, and the command queue while it is busy. Read-only view.
+ * tiles, confirmed status rows, and the command queue (running, waiting, or idle). Read-only view.
  */
 @Composable
 fun PumpStatusScreen(state: PumpStatusState) {
@@ -86,15 +86,22 @@ fun PumpStatusScreen(state: PumpStatusState) {
             }
         }
 
-        if (state.queue.isNotEmpty()) {
-            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-                Column {
-                    state.queue.forEachIndexed { i, q ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
-                            Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                        }
+        // Always shown, so an empty queue reads as "idle" rather than as a missing section.
+        AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+            Column {
+                Text(state.queueTitle, style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(top = 4.dp))
+                if (state.queue.isEmpty()) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(colors.textTertiary))
+                        Text(state.queueIdleLabel, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                    }
+                }
+                state.queue.forEachIndexed { i, q ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
+                        Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                        Text(q.stateLabel, style = AapsTheme.type.caption, color = if (q.running) colors.textPrimary else colors.textSecondary, modifier = Modifier.padding(start = 10.dp))
                     }
                 }
             }

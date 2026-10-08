@@ -2207,7 +2207,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     internal data class ConfigurationReadResult(val message: String, val warning: Boolean)
 
-    private inner class ConfigurationReadCallback(
+    internal inner class ConfigurationReadCallback(
         val reason: String,
         private val onResult: (ConfigurationReadResult) -> Unit,
     ) : app.aaps.core.interfaces.queue.Callback() {

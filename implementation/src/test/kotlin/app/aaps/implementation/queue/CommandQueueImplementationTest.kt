@@ -631,6 +631,52 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun snapshotNeverShowsASupersededCommandNextToItsCancellation() {
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        val start = commandQueue.snapshot().queued.single()
+        assertThat(start).isInstanceOf(CommandTempBasalPercent::class.java)
+
+        // The cancellation replaces the waiting start; the start will never execute.
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+        val waiting = commandQueue.snapshot()
+        assertThat(waiting.performing).isNull()
+        assertThat(waiting.queued.single()).isInstanceOf(CommandCancelTempBasal::class.java)
+
+        // Once the worker takes it, it is running and nothing else is listed.
+        commandQueue.pickup()
+        val running = commandQueue.snapshot()
+        assertThat(running.performing).isInstanceOf(CommandCancelTempBasal::class.java)
+        assertThat(running.queued).isEmpty()
+        assertThat(running.queued + running.performing).doesNotContain(start)
+    }
+
+    @Test
+    fun snapshotKeepsExecutionOrderAndDoesNotExposeTheLiveQueue() {
+        commandQueue.customCommand(CustomCommand1(), null)
+        commandQueue.customCommand(CustomCommand2(), null)
+        commandQueue.pickup()
+
+        val snapshot = commandQueue.snapshot()
+        assertThat(snapshot.performing?.status()).isEqualTo("CUSTOM COMMAND 1")
+        assertThat(snapshot.queued.map { it.status() }).containsExactly("CUSTOM COMMAND 2")
+
+        commandQueue.clear()
+        // A later change must not alter what was already read.
+        assertThat(snapshot.queued).hasSize(1)
+        assertThat(commandQueue.snapshot().queued).isEmpty()
+    }
+
+    @Test
+    fun queuedCancelTempBasalIsDescribedAsACancellation() {
+        whenever(rh.gs(app.aaps.core.ui.R.string.uel_cancel_temp_basal)).thenReturn("CANCEL TEMP BASAL")
+        whenever(rh.gs(app.aaps.core.ui.R.string.uel_accepts_temp_basal)).thenReturn("ACCEPTS TEMP BASAL")
+
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+
+        assertThat(commandQueue.snapshot().queued.single().status()).isEqualTo("CANCEL TEMP BASAL")
+    }
+
+    @Test
     fun readStatusTwiceIsNotAllowed() {
         // given
         assertThat(commandQueue.size()).isEqualTo(0)

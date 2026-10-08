@@ -16,6 +16,14 @@
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
     <string name="ypsopump_description">YpsoPump status, bolus, extended bolus and temporary basal delivery.</string>
+    <string name="ypsopump_queue_title">Pump commands</string>
+    <string name="ypsopump_queue_idle">Idle. No commands are running or waiting.</string>
+    <string name="ypsopump_queue_running">Running</string>
+    <string name="ypsopump_queue_waiting">Waiting</string>
+    <string name="ypsopump_queue_read_status">Reading pump status</string>
+    <string name="ypsopump_queue_read_profiles">Reading basal profiles from the pump</string>
+    <string name="ypsopump_queue_check_program">Checking which schedule the pump has active</string>
+    <string name="ypsopump_queue_check_profile">Checking the pump basal profile</string>
     <string name="ypsopump_last_status">Last updated</string>
     <string name="ypsopump_serial">Serial</string>
     <string name="ypsopump_firmware">Firmware</string>

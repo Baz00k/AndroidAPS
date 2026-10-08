@@ -59,7 +59,7 @@ class CommandCancelTempBasal(
         callback?.result(r)?.run()
     }
 
-    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.uel_accepts_temp_basal)
+    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.uel_cancel_temp_basal)
 
     override fun log(): String = "CANCEL TEMPBASAL"
     override fun cancel() {

@@ -61,7 +61,7 @@ class YpsoPumpPluginTest {
     private val rxBus: RxBus = mock()
     private val preferences: Preferences = mock()
     private val provisioning: YpsoProvisioningService = mock()
-    private val commandQueue: CommandQueue = mock()
+    private val commandQueue: CommandQueue = idleCommandQueue()
     private val installed = YpsoProvisioningService.InstalledSession(
         "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
         PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))

@@ -14,6 +14,9 @@ interface CommandQueue {
     fun clear()
     fun size(): Int
     fun performing(): Command?
+
+    /** One coherent view of [performing] and the commands waiting behind it, in execution order. */
+    fun snapshot(): QueueSnapshot
     fun resetPerforming()
     fun bolusInQueue(): Boolean
     fun extendedBolusInQueue(): Boolean

@@ -6,7 +6,7 @@ import androidx.compose.runtime.Immutable
 data class PumpStatusRow(val label: String, val value: String)
 
 @Immutable
-data class QueueItem(val text: String, val running: Boolean)
+data class QueueItem(val text: String, val running: Boolean, val stateLabel: String)
 
 @Immutable
 data class PumpStatusState(
@@ -21,5 +21,8 @@ data class PumpStatusState(
     val battery: Int? = null,
     val unavailableLabel: String = "Unavailable",
     val rows: List<PumpStatusRow> = emptyList(),
+    /** Running command first, then waiting ones in execution order; empty when the pump is idle. */
     val queue: List<QueueItem> = emptyList(),
+    val queueTitle: String = "Pump commands",
+    val queueIdleLabel: String = "Idle",
 )

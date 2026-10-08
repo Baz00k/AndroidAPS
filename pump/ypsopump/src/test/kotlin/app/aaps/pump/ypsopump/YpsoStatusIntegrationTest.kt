@@ -148,7 +148,7 @@ class YpsoStatusIntegrationTest {
             assertTrue(acquired > 0)
             val date: DateUtil = mock()
             whenever(date.minOrSecAgo(org.mockito.kotlin.eq(rh), any())).thenReturn("reading age")
-            fun display() = buildPumpStatusState(state, mock(), date, rh)
+            fun display() = buildPumpStatusState(state, idleCommandQueue(), date, rh)
             assertEquals(5.5, display().reservoir)
             assertEquals(40, display().battery)
             plugin.disconnect("Queue empty")
