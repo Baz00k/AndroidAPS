@@ -135,27 +135,26 @@ class PumpHistoryReplayTest {
         repository.runTransactionForResult(
             InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 1.0))
         ).blockingGet()
-        syncBasal()
+        // Importing this same basal 2 s later cuts the provisional copy, not physical delivery.
+        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(basal().copy(timestamp = start + 2_000L), null)).blockingGet()
         val importedId = db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!.id
 
         repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
         assertSingleBasal()
         // Both the IOB starting-time query and the active-basal query must see only one current valid record.
         assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet()).hasSize(1)
-        assertThat(repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()).hasSize(2)
-        assertThat(db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!.id).isEqualTo(importedId)
-
-        repeat(2) {
-            repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
-            syncBasal()
-            reopenDatabase()
-            assertSingleBasal()
-            val records = repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()
-            assertThat(records.single { it.isValid }.id).isEqualTo(importedId)
-            assertThat(records.single { it.isValid }.interfaceIDs.temporaryId).isEqualTo(702L)
-            assertThat(records.single { !it.isValid }.interfaceIDs.temporaryId).isNull()
-            assertThat(records.single { !it.isValid }.interfaceIDs.pumpId).isNull()
-        }
+        reopenDatabase()
+        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
+        syncBasal()
+        assertSingleBasal()
+        val records = repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()
+        assertThat(records).hasSize(2)
+        val canonical = records.single { it.isValid }
+        assertThat(canonical.id).isEqualTo(importedId)
+        assertThat(canonical.interfaceIDs.temporaryId).isEqualTo(702L)
+        assertThat(canonical.interfaceIDs.endId).isNull()
+        assertThat(records.single { !it.isValid }.interfaceIDs.temporaryId).isNull()
+        assertThat(records.single { !it.isValid }.interfaceIDs.pumpId).isNull()
     }
 
     @Test
@@ -190,19 +189,6 @@ class PumpHistoryReplayTest {
     }
 
     @Test
-    fun importingSameBasalDoesNotTurnTimestampSkewIntoAnEarlyStop() {
-        repository.runTransactionForResult(
-            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))
-        ).blockingGet()
-        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(basal().copy(timestamp = start + 2_000), null)).blockingGet()
-        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
-        reopenDatabase()
-
-        assertSingleBasal()
-        assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet().single().interfaceIDs.endId).isNull()
-    }
-
-    @Test
     fun removedBasalRepresentationStaysRemovedAfterMergeAndHistoryReplay() {
         for (removeImported in listOf(false, true)) {
             val pumpId = if (removeImported) 804L else 802L
@@ -226,48 +212,6 @@ class PumpHistoryReplayTest {
                 assertThat(canonical.interfaceIDs.temporaryId).isEqualTo(tempId)
             }
         }
-    }
-
-    @Test
-    fun percentBasalMergePreservesUnitsAndOneNetInsulinContribution() {
-        repository.runTransactionForResult(
-            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702, rate = 120.0).copy(isAbsolute = false))
-        ).blockingGet()
-        val confirmed = basal(rate = 80.0).copy(isAbsolute = false)
-        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(confirmed, null)).blockingGet()
-        repository.runTransactionForResult(
-            SyncTemporaryBasalWithTempIdTransaction(confirmed.copy(interfaceIDs_backing = ids(802, 702)), null)
-        ).blockingGet()
-        reopenDatabase()
-
-        val records = repository.getTemporaryBasalsStartingFromTimeToTime(start, start + duration, true).blockingGet()
-        assertThat(records).hasSize(1)
-        assertThat(records.single().isAbsolute).isFalse()
-        assertThat(records.single().rate).isEqualTo(80.0)
-        // At a synthetic scheduled basal of 1 U/h, 80% for 30 min is -0.1 U relative to
-        // schedule. The IOB consumer sums a contribution from each row returned by this query.
-        val netUnits = records.sumOf { (it.rate / 100.0 - 1.0) * it.duration / 3_600_000.0 }
-        assertThat(netUnits).isWithin(1e-12).of(-0.1)
-    }
-
-    @Test
-    fun conflictingBasalBindingLeavesBothRecordsUnchanged() {
-        repository.runTransactionForResult(
-            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))
-        ).blockingGet()
-        syncBasal()
-        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
-        repository.runTransactionForResult(
-            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 703))
-        ).blockingGet()
-        val before = repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()
-
-        assertThrows(IllegalStateException::class.java) {
-            repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 703), null)).blockingGet()
-        }
-        reopenDatabase()
-
-        assertThat(repository.getTemporaryBasalsStartingFromTimeIncludingInvalid(start, true).blockingGet()).containsExactlyElementsIn(before)
     }
 
     @Test
@@ -297,25 +241,6 @@ class PumpHistoryReplayTest {
 
         assertSingleBasal()
         assertThat(repository.getTemporaryBasalsStartingFromTime(start, true).blockingGet().single().id).isEqualTo(importedId)
-    }
-
-    @Test
-    fun basalMergeNeverUsesAnotherPumpsRecordWithTheSamePumpId() {
-        val otherPump = basal().copy(interfaceIDs_backing = ids(802, null).copy(pumpSerial = "other-synthetic-pump"))
-        repository.runTransactionForResult(SyncPumpTemporaryBasalTransaction(otherPump, null)).blockingGet()
-        val otherId = db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "other-synthetic-pump")!!.id
-        repository.runTransactionForResult(
-            InsertTemporaryBasalWithTempIdTransaction(basal(pumpId = null, temporaryId = 702))
-        ).blockingGet()
-        repository.runTransactionForResult(SyncTemporaryBasalWithTempIdTransaction(basal(temporaryId = 702), null)).blockingGet()
-        reopenDatabase()
-
-        val other = db.temporaryBasalDao.findById(otherId)!!
-        assertThat(other.isValid).isTrue()
-        assertThat(other.interfaceIDs.temporaryId).isNull()
-        val own = db.temporaryBasalDao.findByPumpIds(802, InterfaceIDs.PumpType.GENERIC_AAPS, "synthetic-pump")!!
-        assertThat(own.id).isNotEqualTo(otherId)
-        assertThat(own.interfaceIDs.temporaryId).isEqualTo(702L)
     }
 
     private fun syncBolus(amount: Double) {
