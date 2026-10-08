@@ -64,7 +64,7 @@ class NumericEntryFlowsTest {
         var computations = WizardInputs()
         compose.setContent { AapsTheme {
             WizardScreen(
-                compute = { computations = it; WizardResult(available = true, advisorAvailable = true, outcome = CalculatorOutcome(carbs = it.carbs)) },
+                compute = { computations = it; WizardResult(available = true, advisorAvailable = (it.manualBg ?: 12.5) > 10.0, outcome = CalculatorOutcome(carbs = it.carbs)) },
                 onCommit = { _, _, _ -> error("Editing must not commit") }, onCancel = {}, initialInputs = WizardInputs(carbs = 5),
                 carbControls = WizardCarbControls.fromOverviewIncrements(listOf(5, 10, 20), 100)
             )
@@ -87,5 +87,10 @@ class NumericEntryFlowsTest {
         compose.onNodeWithText("Eat once glucose falls").performScrollTo().performClick()
         compose.onNodeWithText("Meal details").performScrollTo().performClick()
         compose.onNodeWithText("Eat once glucose falls").assertDoesNotExist()
+        glucose.performScrollTo().performTextReplacement("5")
+        compose.onNodeWithText("Review").assertIsNotEnabled()
+        compose.onNodeWithText("Meal details").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("of carb absorption").assertExists()
+        compose.onNodeWithText("Review").assertIsEnabled()
     }
 }
