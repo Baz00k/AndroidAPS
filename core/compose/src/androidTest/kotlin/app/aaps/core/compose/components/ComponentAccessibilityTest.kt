@@ -90,6 +90,19 @@ class ComponentAccessibilityTest {
     }
 
     @Test
+    fun aReadOnlyRowAnnouncesItsStateWithoutBeingAnActionOrDisabled() {
+        // An answered exam question: it cannot change, but it is information to read, not an unavailable option.
+        var changes = 0
+        show { CheckboxRow("Insulin acts for about 5 h", true, { changes++ }, readOnly = true) }
+        compose.onNodeWithText("Insulin acts for about 5 h")
+            .assert(hasNoClickAction())
+            .assertIsEnabled()
+            .assertIsOn()
+            .performClick()
+        assertThat(changes).isEqualTo(0)
+    }
+
+    @Test
     fun aChoiceIsASelectableOptionAndAnActionChipIsNot() {
         show {
             Choice("Eating soon", selected = true, onClick = {})
@@ -110,7 +123,7 @@ class ComponentAccessibilityTest {
     }
 
     @Test
-    fun everyButtonAndChipIsAtLeastATouchTargetTall() {
+    fun everyButtonChipAndSegmentIsAtLeastATouchTargetTall() {
         show {
             PrimaryButton("Primary", {})
             SecondaryButton("Secondary", {})
@@ -120,8 +133,9 @@ class ComponentAccessibilityTest {
             Choice("Choice", selected = false, onClick = {})
             ActionChip("Action", {})
             RoundIconButton(Icons.Rounded.Add, "Icon", {})
+            SegmentedControl(listOf("3h", "6h"), selectedIndex = 0, onSelect = {})
         }
-        compose.onAllNodes(hasClickAction()).assertCountEquals(8)
+        compose.onAllNodes(hasClickAction()).assertCountEquals(10)
         compose.onAllNodes(hasClickAction()).fetchSemanticsNodes().indices.forEach {
             compose.onAllNodes(hasClickAction())[it].assertHeightIsAtLeast(AapsSpacing.minTap)
         }
@@ -129,11 +143,12 @@ class ComponentAccessibilityTest {
 
     @Test
     fun aChipInAScrollingRowIsSizedToItsLabel() {
-        // An unbounded row once squeezed the label into the chip's minimum width, shrinking "now" to fit.
+        // An unbounded row once squeezed the label into the chip's minimum width, shrinking it to fit.
+        // The label is wider than that minimum, so a chip sized to it must be wider too.
         show {
-            Row(Modifier.horizontalScroll(rememberScrollState())) { ActionChip("now", {}) }
+            Row(Modifier.horizontalScroll(rememberScrollState())) { ActionChip("30 minutes ago", {}) }
         }
-        val label = compose.onNodeWithText("now").fetchSemanticsNode()
+        val label = compose.onNodeWithText("30 minutes ago").fetchSemanticsNode()
         assertThat(label.size.width).isGreaterThan(with(compose.density) { AapsSpacing.minTap.roundToPx() })
     }
 

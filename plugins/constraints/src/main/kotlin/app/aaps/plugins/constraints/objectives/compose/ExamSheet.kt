@@ -74,7 +74,8 @@ fun ExamSheet(
             AapsCard(Modifier.fillMaxWidth()) {
                 Column {
                     state.options.forEachIndexed { i, option ->
-                        CheckboxRow(option.text, option.selected, { onToggleOption(i) }, enabled = !state.answered)
+                        // Answered questions show the correct answers: read-only, but they must stay readable.
+                        CheckboxRow(option.text, option.selected, { onToggleOption(i) }, readOnly = state.answered)
                     }
                 }
             }

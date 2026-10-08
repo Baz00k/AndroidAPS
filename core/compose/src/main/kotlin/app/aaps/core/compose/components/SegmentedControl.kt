@@ -59,8 +59,7 @@ fun SegmentedControl(
                 color = if (active) colors.accentOnLight else colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = (if (fillWidth) Modifier.weight(1f) else Modifier)
-                    // Inside the track's inset, so the whole control is at least a touch target tall.
-                    .heightIn(min = AapsSpacing.minTap - TRACK_INSET * 2)
+                    .heightIn(min = AapsSpacing.minTap)
                     .disabledAlpha(enabled)
                     .clip(AapsTheme.shape.pill)
                     .selectable(selected = active, enabled = enabled, role = Role.Tab) { onSelect(i) }

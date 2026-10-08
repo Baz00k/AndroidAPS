@@ -24,6 +24,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -34,7 +37,13 @@ import app.aaps.core.compose.theme.AapsTheme
  * control only draws the state; it is never a second, separate target.
  */
 
-/** One independent yes/no option in a list, with a leading checkbox. */
+/**
+ * One independent yes/no option in a list, with a leading checkbox.
+ *
+ * [readOnly] shows a choice that can no longer change but still has to be read, such as an answered
+ * exam question: it stays at full strength and announces its state, with no action. [enabled] = false
+ * is for an option that is unavailable, and dims it.
+ */
 @Composable
 fun CheckboxRow(
     title: String,
@@ -42,12 +51,14 @@ fun CheckboxRow(
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     sub: String? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    readOnly: Boolean = false
 ) {
     val colors = AapsTheme.colors
     SelectionRow(
         title, sub, enabled,
-        modifier.toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onCheckedChange),
+        if (readOnly) modifier.semantics(mergeDescendants = true) { toggleableState = ToggleableState(checked) }
+        else modifier.toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onCheckedChange),
         leading = {
             Checkbox(
                 checked = checked,
@@ -137,6 +148,7 @@ private fun SelectionRowsPreview() = PreviewSurface {
     ToggleRow("Remind me to eat", false, {}, enabled = false)
     CheckboxRow("Insulin cartridge change", cartridge, { cartridge = it })
     CheckboxRow("Fixed plugin", true, {}, sub = "Always on", enabled = false)
+    CheckboxRow("Answered: insulin acts for about 5 h", true, {}, readOnly = true)
     Column(Modifier.selectableGroup()) {
         listOf("Closed loop", "Open loop").forEachIndexed { i, label ->
             RadioRow(label, mode == i, { mode = i }, sub = if (i == 0) "Doses automatically" else null)
