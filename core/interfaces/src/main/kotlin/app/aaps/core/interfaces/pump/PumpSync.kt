@@ -445,6 +445,10 @@ interface PumpSync {
      * If db record doesn't exist data is ignored and false returned.
      * If exists, data is updated, type and pumpId only if provided
      * isValid field is preserved
+     * Providing a pumpId asserts that it and temporaryId represent the same physical basal.
+     * If that pump record was already imported, it is retained and the provisional copy is
+     * invalidated atomically. Removal of either copy and known stop/replacement ends survive.
+     * Conflicting identity bindings fail without changing either record.
      *
      * USAGE:
      * After reading record from history or completed bolus call syncTemporaryBasalWithTempId and

@@ -5,6 +5,11 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoHistoryEvent
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
+import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoHistoryState
+import app.aaps.pump.ypsopump.history.YpsoHistoryStateStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore
 import app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting
@@ -20,6 +25,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -188,6 +194,46 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(event(48_224, 10, 110, 4), serial, zone, pumpClockOffsetMs = 2_000L))
 
         assertEquals(pumpStart - 1_000L to 4 * 60_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `terminal rewrite can bind an AAPS start after its running row was imported separately`() {
+        startedAttempt(percent = 80)
+        val historyStore = object : YpsoHistoryStateStore {
+            var state = YpsoHistoryState()
+            override fun load() = state
+            override fun commit(value: YpsoHistoryState) { state = value }
+        }
+        val ingestion = YpsoHistoryIngestion(historyStore, sync, accounting)
+        fun scan(rows: List<YpsoHistoryEntry>, offset: Long): YpsoHistoryIngestionResult {
+            val indexed = rows.mapIndexed { index, row -> row.copy(index = index) }
+            val snapshot = YpsoHistorySnapshot(indexed.size, indexed.size, 21, 21, indexed.first(), indexed.first(), indexed, true, pumpClockOffsetMs = offset)
+            return ingestion.ingest(serial, zone, 21, snapshot)
+        }
+        // Bootstrap first, then import a new row through the production reconciler and ingestion.
+        val anchor = event(48_222, 14, 10, 0).entry
+        assertTrue(scan(listOf(anchor), 14_000L) is YpsoHistoryIngestionResult.Applied)
+        val running = event(48_224, 9, 80, 15).entry
+        assertTrue(scan(listOf(running, anchor), 14_000L) is YpsoHistoryIngestionResult.Applied)
+        // Measured-time matching uses a 15 s window. This first corrected row falls just outside it.
+        assertEquals(pumpStart - 14_000L to 15 * 60_000L, saved[48_224L])
+        assertNull(journal.find("a")!!.pumpId)
+
+        // A later clock reading differs by one second (whole-second clock plus read latency).
+        // The terminal rewrite now fits the same attempt, despite the ordering guards.
+        val terminal = event(48_224, 10, 80, 6).entry
+        assertTrue(scan(listOf(terminal, anchor), 13_000L) is YpsoHistoryIngestionResult.Applied)
+        assertTrue(scan(listOf(terminal, anchor), 13_000L) is YpsoHistoryIngestionResult.Applied)
+
+        inOrder(sync) {
+            verify(sync).syncTemporaryBasalWithPumpId(
+                pumpStart - 14_000L, 80.0, 15 * 60_000L, false, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial
+            )
+            verify(sync).syncTemporaryBasalWithTempId(
+                pumpStart + 2_000L, 80.0, 6 * 60_000L, false, 99L, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial
+            )
+        }
+        assertEquals(48_224L, journal.find("a")!!.pumpId)
     }
 
     @Test
