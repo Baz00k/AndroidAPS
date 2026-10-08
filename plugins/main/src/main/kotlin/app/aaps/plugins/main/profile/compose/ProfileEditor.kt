@@ -20,8 +20,10 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,8 +86,22 @@ fun ProfileEditor(
     onSave: () -> Unit,
     onManage: () -> Unit
 ) {
+    // Equal values in different profiles are not the same editable field. Never carry a rejected
+    // draft into another profile, especially when its units or bounds differ.
+    key(state.selectedProfileIndex) { ProfileEditorContent(state, callbacks, onSave, onManage) }
+}
+
+@Composable
+private fun ProfileEditorContent(
+    state: ProfileEditState,
+    callbacks: ProfileEditorCallbacks,
+    onSave: () -> Unit,
+    onManage: () -> Unit
+) {
     val colors = AapsTheme.colors
     var tab by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0) }
+    var diaValid by remember(state.selectedProfileIndex) { mutableStateOf(false) }
+    val fieldValidity = remember(state.selectedProfileIndex) { mutableStateMapOf<Pair<Int, Int>, Boolean>() }
 
     val blocks = when (tab) {
         0 -> state.basal
@@ -98,6 +114,9 @@ fun ProfileEditor(
         1 -> state.isfC
         2 -> state.icC
         else -> state.targetC
+    }
+    val draftsValid = diaValid && blocks.all { block ->
+        fieldValidity[block.index to 1] == true && (!constraints.isPair || fieldValidity[block.index to 2] == true)
     }
 
     Column(
@@ -138,6 +157,7 @@ fun ProfileEditor(
                     min = state.diaMin,
                     max = state.diaMax,
                     decimals = 1,
+                    onValidityChange = { diaValid = it },
                     unit = "h",
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -146,8 +166,10 @@ fun ProfileEditor(
 
         // Tabs
         SegmentedControl(
-            TABS, tab, { tab = it },
-            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)
+            TABS, tab, { if (draftsValid) { fieldValidity.clear(); tab = it } },
+            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap),
+            disabled = if (draftsValid) emptySet() else TABS.indices.filter { it != tab }.toSet(),
+            disabledReason = if (draftsValid) null else "Complete numeric entries before changing sections"
         )
 
         // Basal daily total
@@ -172,6 +194,8 @@ fun ProfileEditor(
                         canPickTime = b.index != 0,
                         onValue1 = { callbacks.onValue1(tab, b.index, it) },
                         onValue2 = { callbacks.onValue2(tab, b.index, it) },
+                        onValidity1 = { fieldValidity[b.index to 1] = it },
+                        onValidity2 = { fieldValidity[b.index to 2] = it },
                         onTimeShift = { deltaHours ->
                             val prev = if (i > 0) blocks[i - 1].startSeconds else -HOUR
                             val next = if (i + 1 < blocks.size) blocks[i + 1].startSeconds else 24 * HOUR
@@ -195,8 +219,8 @@ fun ProfileEditor(
 
         // Save
         PrimaryButton(
-            "Save profile", onSave,
-            Modifier.fillMaxWidth().padding(bottom = 24.dp)
+            "Save profile", { if (draftsValid) onSave() },
+            Modifier.fillMaxWidth().padding(bottom = 24.dp), enabled = draftsValid
         )
     }
 }
@@ -209,6 +233,8 @@ private fun BlockRow(
     canPickTime: Boolean,
     onValue1: (Double) -> Unit,
     onValue2: (Double) -> Unit,
+    onValidity1: (Boolean) -> Unit,
+    onValidity2: (Boolean) -> Unit,
     onTimeShift: (Int) -> Unit,   // delta in hours (−1 / +1)
     onRemove: () -> Unit
 ) {
@@ -242,17 +268,20 @@ private fun BlockRow(
         if (constraints.isPair) {
             NumberField(
                 label = "Low", value = block.value1, onValue = onValue1,
+                onValidityChange = onValidity1,
                 step = constraints.step, min = constraints.min1, max = constraints.max1,
                 decimals = constraints.decimals, unit = constraints.unitLabel, modifier = Modifier.fillMaxWidth()
             )
             NumberField(
                 label = "High", value = block.value2 ?: block.value1, onValue = onValue2,
+                onValidityChange = onValidity2,
                 step = constraints.step, min = constraints.min2, max = constraints.max2,
                 decimals = constraints.decimals, unit = constraints.unitLabel, modifier = Modifier.fillMaxWidth()
             )
         } else {
             NumberField(
                 label = "", value = block.value1, onValue = onValue1,
+                onValidityChange = onValidity1,
                 step = constraints.step, min = constraints.min1, max = constraints.max1,
                 decimals = constraints.decimals, unit = constraints.unitLabel, modifier = Modifier.fillMaxWidth()
             )

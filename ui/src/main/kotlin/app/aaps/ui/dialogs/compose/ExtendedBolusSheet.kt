@@ -39,23 +39,25 @@ data class ExtendedBolusInputs(
 fun ExtendedBolusSheet(state: ExtendedBolusSheetState, onSubmit: (ExtendedBolusInputs) -> Unit, onClose: () -> Unit) {
     var insulin by remember { mutableStateOf(state.insulinStep) }
     var duration by remember { mutableStateOf(state.durationStep) }
+    var insulinValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
 
     SheetSurface(title = "Extended bolus", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             NumberField(
                 label = "Insulin", value = insulin, onValue = { insulin = it },
                 step = state.insulinStep, min = 0.0, max = state.maxInsulin, decimals = state.insulinDecimals, unit = "U",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(), onValidityChange = { insulinValid = it }
             )
             NumberField(
                 label = "Duration", value = duration, onValue = { duration = it },
                 step = state.durationStep, min = 0.0, max = state.maxDuration, decimals = 0, unit = "min",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { durationValid = it }
             )
             PrimaryButton(
                 label = "Set extended bolus",
-                onClick = { onSubmit(ExtendedBolusInputs(insulin = insulin, durationMin = duration.toInt())) },
-                enabled = insulin > 0.0 && duration > 0.0
+                onClick = { if (insulinValid && durationValid) onSubmit(ExtendedBolusInputs(insulin = insulin, durationMin = duration.toInt())) },
+                enabled = insulinValid && durationValid && insulin > 0.0 && duration > 0.0
             )
         }
     }

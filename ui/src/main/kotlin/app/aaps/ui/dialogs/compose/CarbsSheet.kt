@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -54,6 +55,9 @@ private const val CARBS_LATEST_MIN = 12 * 60
 @Composable
 fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose: () -> Unit) {
     var carbs by rememberSaveable { mutableStateOf(0.0) }
+    var carbsValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
+    var submitted by rememberSaveable { mutableStateOf(false) }
     // The picked time is a moment, not a distance from whenever the form is finally submitted; the
     // distance shown is derived from it.
     var at by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -79,8 +83,10 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
                     target != TargetPreset.NONE -> "Set target"
                     else                        -> "Log"
                 },
-                enabled = grams != 0 || target != TargetPreset.NONE,
+                enabled = carbsValid && durationValid && !submitted && (grams != 0 || target != TargetPreset.NONE),
                 onClick = {
+                    if (!carbsValid || !durationValid || submitted) return@PrimaryButton
+                    submitted = true
                     onSubmit(
                         CarbsInputs(
                             carbs = grams,
@@ -97,11 +103,11 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
         }
     ) {
         EntryCard("Carbs") {
-            AmountStepper(carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", name = "of carbs")
+            AmountStepper(carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", name = "of carbs", integerOnly = true, onValidityChange = { carbsValid = it })
             ChoiceRow {
                 state.quickIncrements.forEach { inc ->
-                    ActionChip(if (inc > 0) "+$inc g" else "$inc g", modifier = Modifier.weight(1f), enabled = if (inc > 0) carbs < state.maxCarbs else carbs > -state.maxCarbs, onClick = {
-                        carbs = (carbs + inc).coerceIn(-state.maxCarbs, state.maxCarbs)
+                    ActionChip(if (inc > 0) "+$inc g" else "$inc g", modifier = Modifier.weight(1f), enabled = carbsValid && (if (inc > 0) carbs < state.maxCarbs else carbs > -state.maxCarbs), onClick = {
+                        if (carbsValid) carbs = (carbs + inc).coerceIn(-state.maxCarbs, state.maxCarbs)
                     })
                 }
             }
@@ -110,7 +116,7 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
             TimeStepper(timeOffset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, CARBS_EARLIEST_MIN, CARBS_LATEST_MIN, atMs = at)
             if (eatReminderAvailable) ToggleRow("Remind me to eat", alarm, { alarm = it })
         }
-        AbsorptionCard(duration, { duration = it }, state.maxDurationHours)
+        AbsorptionCard(duration, { duration = it }, state.maxDurationHours, onValidityChange = { durationValid = it })
         TargetPresetCard(state.targets, target) { target = it }
         if (state.showBolusReminder) ToggleRow("Remind me to bolus", remindBolus, { remindBolus = it }, sub = "When glucose is rising again")
         if (state.showNotes) NotesField(notes, { notes = it })

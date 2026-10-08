@@ -83,6 +83,7 @@ class CarbsDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var targetPresets: TargetPresets
 
     private var queryingProtection = false
+    private var submitted = false
     private lateinit var sheetState: CarbsSheetState
     private val disposable = CompositeDisposable()
 
@@ -134,6 +135,8 @@ class CarbsDialog : DaggerBottomSheetFragment() {
     }
 
     private fun submit(inputs: CarbsInputs) {
+        if (submitted) return
+        submitted = true
         val carbs = inputs.carbs
         var carbsAfterConstraints = constraintChecker.applyCarbsConstraints(ConstraintObject(carbs, aapsLogger)).value()
         val units = profileUtil.units
@@ -180,7 +183,10 @@ class CarbsDialog : DaggerBottomSheetFragment() {
 
         if (carbsAfterConstraints != 0 || target != null) {
             activity?.let { activity ->
+                var confirmed = false
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.carbs), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+                    if (confirmed) return@showConfirmation
+                    confirmed = true
                     target?.let { disposable += targetPresets.start(it, Sources.CarbDialog, note = null) }
                     if (carbsAfterConstraints != 0) {
                         val detailedBolusInfo = DetailedBolusInfo().also {

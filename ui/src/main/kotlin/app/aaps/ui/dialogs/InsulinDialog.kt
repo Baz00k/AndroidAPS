@@ -24,13 +24,11 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
-import app.aaps.core.interfaces.pump.defs.determineCorrectBolusStepSize
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
-import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntKey
@@ -52,12 +50,12 @@ import app.aaps.ui.dialogs.compose.InsulinIntent
 import app.aaps.ui.dialogs.compose.TargetPreset
 import app.aaps.ui.dialogs.compose.InsulinSheet
 import app.aaps.ui.dialogs.compose.InsulinSheetState
+import app.aaps.core.compose.components.formatNumeric
 import com.google.common.base.Joiner
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import java.util.LinkedList
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import kotlin.math.abs
 
 /**
  * Redesigned Insulin (careportal bolus) dialog. UI is Compose ([InsulinSheet]); [submit] runs the
@@ -78,7 +76,6 @@ class InsulinDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var persistenceLayer: PersistenceLayer
-    @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var loop: Loop
@@ -86,6 +83,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var targetPresets: TargetPresets
 
     private var queryingProtection = false
+    private var submitted = false
     private val disposable = CompositeDisposable()
 
 
@@ -119,13 +117,15 @@ class InsulinDialog : DaggerBottomSheetFragment() {
         return InsulinEntryPolicy.deliveryUnavailable(config.AAPSCLIENT, loop.runningMode.isPumpSuspended(), pump.isInitialized())
     }
 
-    private fun submit(inputs: InsulinInputs) {
+    private fun submit(inputs: InsulinInputs): Boolean {
+        if (submitted) return true
+        if (!inputs.amount.isFinite() || inputs.amount < 0.0) return false
         // The pump may have stopped while the screen was open; never send a bolus it was not offered for.
         if (inputs.intent == InsulinIntent.DELIVER) deliveryUnavailable()?.let { reason ->
             activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.bolus), reason.label) }
-            return
+            return false
         }
-        val pumpDescription = activePlugin.activePump.pumpDescription
+        submitted = true
         val insulin = inputs.amount
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         val actions: LinkedList<String?> = LinkedList()
@@ -134,14 +134,14 @@ class InsulinDialog : DaggerBottomSheetFragment() {
 
         if (insulinAfterConstraints > 0) {
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, pumpDescription.bolusStep)
+                (rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + formatNumeric(insulinAfterConstraints, 2) + " U")
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.bolusColor)
             )
             if (recordOnlyChecked)
                 actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_recorded_only).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
-            if (abs(insulinAfterConstraints - insulin) > pumpDescription.pumpType.determineCorrectBolusStepSize(insulinAfterConstraints))
-                actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_constraint_applied_warn, insulin, insulinAfterConstraints).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         }
+        if (insulinAfterConstraints != insulin)
+            actions.add(("Requested ${formatNumeric(insulin, 2)} U; constrained to ${formatNumeric(insulinAfterConstraints, 2)} U").formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         if (target != null) actions.add(targetPresets.confirmationLine(context, target))
 
         val time = InsulinEntryPolicy.eventTime(inputs.intent, dateUtil.now(), inputs.givenAt)
@@ -158,7 +158,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                 // entry (reconciling a dose already given by hand) never touches the pump.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
                     if (delivers) { t2, m, r ->
-                        val action = "Deliver " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, pumpDescription.bolusStep)
+                        val action = "Deliver " + formatNumeric(insulinAfterConstraints, 2) + " U"
                         pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r, action = action) }
                     }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
@@ -167,7 +167,10 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                     recordOnlyChecked            -> "Log insulin"
                     else                         -> rh.gs(app.aaps.core.ui.R.string.bolus)
                 }
+                var confirmed = false
                 confirm(title, HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
+                    if (confirmed) return@Runnable
+                    confirmed = true
                     target?.let { disposable += targetPresets.start(it, Sources.InsulinDialog, note = notes) }
                     if (insulinAfterConstraints > 0) {
                         val detailedBolusInfo = DetailedBolusInfo()
@@ -200,6 +203,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                 OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.bolus), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
             }
         dismiss()
+        return true
     }
 
     override fun onResume() {
