@@ -1,25 +1,17 @@
 package app.aaps.ui.dialogs.compose
 
-import android.app.Dialog
-import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
 import android.os.Handler
 import android.os.Looper
-import android.view.ViewGroup
-import android.view.Window
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.ComposeView
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.lifecycle.setViewTreeViewModelStoreOwner
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import app.aaps.core.compose.components.AlertAction
 import app.aaps.core.compose.components.AlertContent
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.ui.dialogs.ComposeDialogHost
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.pump.defs.PumpType
@@ -170,54 +162,40 @@ class PumpReadyGate @Inject constructor(
     }
 
     private fun showSheet(activity: FragmentActivity, blocker: DeliveryBlocker, proceed: Runnable, onCancel: () -> Unit) {
-        val dialog = Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        // Every exit from this sheet has to be a deliberate choice. A "Check again" is in flight for as
-        // long as it takes to connect; if a back press could close the sheet meanwhile, the callback would
-        // still land and deliver a dose the user had walked away from.
-        dialog.setCancelable(false)
-        dialog.setCanceledOnTouchOutside(false)
-
         var closed = false
         // Only ever act once, and never on an activity that has gone away underneath a slow re-check.
-        fun finish(runIt: Boolean, before: () -> Boolean = { true }) {
+        fun finish(dismiss: () -> Unit, runIt: Boolean, before: () -> Boolean = { true }) {
             if (closed) return
             closed = true
-            dialog.dismiss()
+            dismiss()
             if (runIt && !activity.isFinishing && !activity.isDestroyed && before()) proceed.run() else onCancel()
         }
 
-        val view = ComposeView(activity).apply {
-            setViewTreeLifecycleOwner(activity)
-            setViewTreeViewModelStoreOwner(activity)
-            setViewTreeSavedStateRegistryOwner(activity)
-            setContent {
-                AapsTheme {
-                    PumpReadyContent(
-                        initial = blocker,
-                        recheck = { onResult ->
-                            // The queue callback lands on the queue worker thread; Compose state has to be
-                            // written from the main thread. A refused enqueue never calls back at all, which
-                            // would leave the button stuck on "Checking…", so answer that case ourselves.
-                            val main = Handler(Looper.getMainLooper())
-                            val queued = commandQueue.readStatus("bolus pre-check", object : Callback() {
-                                override fun run() {
-                                    main.post { if (!closed) onResult(detect()) }
-                                }
-                            })
-                            if (!queued) main.post { if (!closed) onResult(detect()) }
-                        },
-                        onDismiss = { finish(runIt = false) },
-                        onProceed = { finish(runIt = true) },
-                        onResumeLoop = { finish(runIt = true) { resumeLoop() } }
-                    )
-                }
-            }
+        // Every exit from this sheet has to be a deliberate choice. A "Check again" is in flight for as
+        // long as it takes to connect; if a back press could close the sheet meanwhile, the callback would
+        // still land and deliver a dose the user had walked away from.
+        val shown = ComposeDialogHost.show(activity, cancelable = false) { dismiss ->
+            PumpReadyContent(
+                initial = blocker,
+                recheck = { onResult ->
+                    // The queue callback lands on the queue worker thread; Compose state has to be
+                    // written from the main thread. A refused enqueue never calls back at all, which
+                    // would leave the button stuck on "Checking…", so answer that case ourselves.
+                    val main = Handler(Looper.getMainLooper())
+                    val queued = commandQueue.readStatus("bolus pre-check", object : Callback() {
+                        override fun run() {
+                            main.post { if (!closed) onResult(detect()) }
+                        }
+                    })
+                    if (!queued) main.post { if (!closed) onResult(detect()) }
+                },
+                onDismiss = { finish(dismiss, runIt = false) },
+                onProceed = { finish(dismiss, runIt = true) },
+                onResumeLoop = { finish(dismiss, runIt = true) { resumeLoop() } }
+            )
         }
-        dialog.setContentView(view)
-        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog.show()
+        // Nothing to show the question in, so nothing is delivered.
+        if (!shown) finish({}, runIt = false)
     }
 }
 

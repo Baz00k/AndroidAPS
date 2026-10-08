@@ -18,17 +18,21 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
- * Hosts redesigned (Compose) dialog content in a plain [Dialog].
+ * Hosts Compose dialog content in a plain [Dialog]: the one host for confirmations and alerts
+ * (`OKDialog`, `HoldConfirmDialog`, the pump-ready check). It cannot be dragged, and it is not
+ * dismissed by a tap outside it.
  *
  * A bare `Dialog` gives a `ComposeView` no ViewTree owners of its own, so we borrow the host
- * activity's — the same trick `HoldConfirmDialog` uses. When the caller's context can't be unwrapped
- * to an activity (a service/application context) there is nothing to borrow, [show] returns `false`
- * and the caller falls back to the legacy AlertDialog. That path is unreachable in practice — a
+ * activity's. When the caller's context can't be unwrapped to an activity (a service or
+ * application context) there is nothing to borrow, [show] returns `false` and the caller falls back
+ * (`OKDialog` to the legacy AlertDialog). That path is unreachable in practice — a
  * plain application context can't show a dialog at all — but failing over beats crashing.
  */
-internal object ComposeDialogHost {
+object ComposeDialogHost {
 
     /**
+     * @param cancelable whether Back closes the dialog. A dialog with work in flight that must end in
+     *                   a deliberate choice passes false.
      * @param content receives a `dismiss` lambda; call it from every action so the dialog closes
      *                exactly once regardless of which button was pressed.
      * @param onDismissed invoked after the dialog goes away for ANY reason (button or back press).
