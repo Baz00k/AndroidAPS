@@ -1,5 +1,6 @@
 package app.aaps.core.compose.components
 
+import android.view.KeyEvent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
@@ -12,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -22,6 +24,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
 import app.aaps.core.compose.theme.AapsTheme
 import com.google.common.truth.Truth.assertThat
 import org.junit.Rule
@@ -141,6 +144,54 @@ class SheetSurfacesTest {
         assertThat(actions).isEqualTo(1)
         assertThat(dismissed).isEqualTo(1)
         assertThat(ranBeforeDismissal).isFalse()
+    }
+
+    @Test
+    fun backWhileTheSheetSlidesAwayStillFinishesTheCloseOnce() {
+        val events = mutableListOf<String>()
+        var closeSheet: ((() -> Unit) -> Unit)? = null
+        showModalSheet(onDismissed = { events += "dismissed" }) { close ->
+            closeSheet = close
+            SheetSurface(title = "Recent carbs", onClose = { close {} }) { Text("No carb entries in the last few hours.") }
+        }
+        compose.waitForIdle()
+
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { closeSheet!! { events += "action" } }
+        compose.mainClock.advanceTimeBy(48)
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+
+        assertThat(events).containsExactly("dismissed", "action").inOrder()
+        compose.onNodeWithText("Recent carbs").assertDoesNotExist()
+    }
+
+    @Test
+    fun whileTheSheetSettlesTheBodyStillOwnsItsGestures() {
+        var dismissed = 0
+        var removed = 0
+        showModalSheet(onDismissed = { dismissed++ }) { close ->
+            SheetSurface(title = "Recent carbs", onClose = { close {} }) {
+                Text("No carb entries in the last few hours.")
+                PrimaryButton("Remove", { removed++ })
+            }
+        }
+        compose.waitForIdle()
+
+        compose.mainClock.autoAdvance = false
+        // A short, slow header drag the sheet springs back from; the body is used before it has settled.
+        compose.onNodeWithText("Recent carbs").performTouchInput { swipe(start = center, end = center + Offset(0f, 60f), durationMillis = 800) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("No carb entries in the last few hours.").performTouchInput { pullDown() }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Remove").performTouchInput { click() }
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+
+        assertThat(dismissed).isEqualTo(0)
+        assertThat(removed).isEqualTo(1)
+        compose.onNodeWithText("Recent carbs").assertIsDisplayed()
     }
 
     private fun showModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) =

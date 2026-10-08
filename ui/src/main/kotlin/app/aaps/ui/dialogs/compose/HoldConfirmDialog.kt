@@ -25,27 +25,14 @@ import app.aaps.core.ui.dialogs.ComposeDialogHost
 object HoldConfirmDialog {
 
     fun show(activity: FragmentActivity, title: String, message: CharSequence, ok: Runnable?, cancel: Runnable? = null, action: String = "Confirm") {
-        // Only the first answer counts: a second confirm must never start a second delivery.
-        var answered = false
-        ComposeDialogHost.show(activity) { dismiss ->
+        val answer = SingleAnswer(ok, cancel)
+        ComposeDialogHost.show(activity, onDismissed = answer::dismissed) { dismiss ->
             HoldConfirmContent(
                 title = title,
                 message = message.toPlainText(),
                 action = action,
-                onConfirm = {
-                    if (!answered) {
-                        answered = true
-                        dismiss()
-                        ok?.run()
-                    }
-                },
-                onCancel = {
-                    if (!answered) {
-                        answered = true
-                        dismiss()
-                        cancel?.run()
-                    }
-                }
+                onConfirm = { answer.confirm(dismiss) },
+                onCancel = { answer.cancel(dismiss) }
             )
         }
     }
@@ -65,3 +52,28 @@ internal fun HoldConfirmContent(title: String, message: String, action: String, 
         HoldToConfirmButton(label = action, onConfirm = onConfirm, modifier = Modifier.fillMaxWidth())
         SecondaryButton("Cancel", onCancel, Modifier.fillMaxWidth())
     }
+
+/**
+ * A confirmation's answer. Only the first counts, and none once the dialog has gone (Back answers
+ * nothing): a second confirm, or one after Cancel or Back, must never start a delivery.
+ */
+internal class SingleAnswer(private val ok: Runnable?, private val cancel: Runnable?) {
+
+    private var answered = false
+
+    fun confirm(dismiss: () -> Unit) = answer(dismiss, ok)
+
+    fun cancel(dismiss: () -> Unit) = answer(dismiss, cancel)
+
+    /** The dialog went away, by an answer or by Back. */
+    fun dismissed() {
+        answered = true
+    }
+
+    private fun answer(dismiss: () -> Unit, then: Runnable?) {
+        if (answered) return
+        answered = true
+        dismiss()
+        then?.run()
+    }
+}

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,12 @@ val LocalSheetDraggable = staticCompositionLocalOf { false }
  * [SheetSurface] hands it the header (grabber and title row) to hit-test a touch against.
  */
 val LocalSheetDragHandle = staticCompositionLocalOf<((LayoutCoordinates) -> Unit)?> { null }
+
+/**
+ * Set by a Compose host ([ModalSheet]) to the drag gesture that moves the sheet. [SheetSurface] puts
+ * it on the header only, so nothing below the header can move the sheet.
+ */
+val LocalSheetHeaderDrag = compositionLocalOf<Modifier> { Modifier }
 
 /**
  * Bottom-sheet surface: rounded-top panel with a grabber and a title row. Hosted by a native modal
@@ -82,7 +89,10 @@ fun SheetSurface(
             .padding(bottom = 12.dp)
     ) {
         val dragHandle = LocalSheetDragHandle.current
-        Column(if (dragHandle != null) Modifier.onGloballyPositioned(dragHandle) else Modifier) {
+        Column(
+            (if (dragHandle != null) Modifier.onGloballyPositioned(dragHandle) else Modifier)
+                .then(LocalSheetHeaderDrag.current)
+        ) {
             if (LocalSheetDraggable.current)
                 Box(
                     Modifier
