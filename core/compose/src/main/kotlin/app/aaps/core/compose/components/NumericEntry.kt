@@ -66,5 +66,8 @@ fun formatNumeric(value: Double, decimals: Int, locale: Locale = Locale.getDefau
     if (!value.isFinite()) return value.toString()
     val number = BigDecimal.valueOf(value).stripTrailingZeros()
     val text = number.setScale(maxOf(decimals.coerceIn(0, 12), number.scale(), 0)).toPlainString()
-    return text.replace('.', DecimalFormatSymbols.getInstance(locale).decimalSeparator)
+    // The entry grammar accepts comma and dot. Do not generate an unparseable initial draft on
+    // locales whose decimal separator is neither (for example Arabic U+066B).
+    val separator = DecimalFormatSymbols.getInstance(locale).decimalSeparator.let { if (it == ',') ',' else '.' }
+    return text.replace('.', separator)
 }

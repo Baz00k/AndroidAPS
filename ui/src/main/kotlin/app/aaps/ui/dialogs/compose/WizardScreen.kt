@@ -156,7 +156,7 @@ fun WizardScreen(
         ) { onReview ->
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
                 if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
-                                         { if (absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
+                                         { if (inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
                                          { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it })
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }

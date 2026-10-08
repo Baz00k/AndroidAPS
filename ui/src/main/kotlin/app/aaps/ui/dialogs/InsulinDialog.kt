@@ -117,13 +117,13 @@ class InsulinDialog : DaggerBottomSheetFragment() {
         return InsulinEntryPolicy.deliveryUnavailable(config.AAPSCLIENT, loop.runningMode.isPumpSuspended(), pump.isInitialized())
     }
 
-    private fun submit(inputs: InsulinInputs) {
-        if (submitted) return
-        if (!inputs.amount.isFinite() || inputs.amount < 0.0) return
+    private fun submit(inputs: InsulinInputs): Boolean {
+        if (submitted) return true
+        if (!inputs.amount.isFinite() || inputs.amount < 0.0) return false
         // The pump may have stopped while the screen was open; never send a bolus it was not offered for.
         if (inputs.intent == InsulinIntent.DELIVER) deliveryUnavailable()?.let { reason ->
             activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.bolus), reason.label) }
-            return
+            return false
         }
         submitted = true
         val insulin = inputs.amount
@@ -203,6 +203,7 @@ class InsulinDialog : DaggerBottomSheetFragment() {
                 OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.bolus), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
             }
         dismiss()
+        return true
     }
 
     override fun onResume() {

@@ -33,5 +33,6 @@ class NumericEntryTest {
         assertThat(dose.precisionInsufficient).isTrue()
         assertThat(dose.copy(decimals = 3).precisionInsufficient).isFalse()
         assertThat(formatNumeric(0.025, 2, Locale.US)).isEqualTo("0.025")
+        assertThat(dose.validate(formatNumeric(0.025, 2, Locale.forLanguageTag("ar-SA"))).value).isEqualTo(0.025)
     }
 }

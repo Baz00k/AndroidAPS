@@ -43,8 +43,9 @@ class NumericEntryFlowsTest {
 
     @Test fun insulinPublishesExactOffStepRequestAndDoesNotSubmitAStaleValue() {
         val submissions = mutableListOf<InsulinInputs>()
+        var accept = false
         compose.setContent { AapsTheme {
-            InsulinSheet(InsulinSheetState(5.0, 0.025, 2, listOf(0.025), null, emptyList(), false), submissions::add, {})
+            InsulinSheet(InsulinSheetState(5.0, 0.025, 2, listOf(0.025), null, emptyList(), false), { if (accept) submissions.add(it) else false }, {})
         } }
         val amount = compose.onAllNodes(hasSetTextAction())[0]
         amount.performTextReplacement("0,025")
@@ -52,7 +53,10 @@ class NumericEntryFlowsTest {
         amount.performTextReplacement("0.")
         compose.onNodeWithText("Deliver 0.025 U").assertIsNotEnabled().performClick()
         amount.performTextReplacement("0.013")
-        compose.onNodeWithText("Deliver 0.013 U").performClick().performClick()
+        compose.onNodeWithText("Deliver 0.013 U").performClick().assertIsEnabled()
+        compose.runOnIdle { assertThat(submissions).isEmpty(); accept = true }
+        compose.onNodeWithText("Log").performClick()
+        compose.onNodeWithText("Log 0.013 U").performClick().performClick()
         compose.runOnIdle { assertThat(submissions.map { it.amount }).containsExactly(0.013) }
     }
 
@@ -60,7 +64,7 @@ class NumericEntryFlowsTest {
         var computations = WizardInputs()
         compose.setContent { AapsTheme {
             WizardScreen(
-                compute = { computations = it; WizardResult(available = true, outcome = CalculatorOutcome(carbs = it.carbs)) },
+                compute = { computations = it; WizardResult(available = true, advisorAvailable = true, outcome = CalculatorOutcome(carbs = it.carbs)) },
                 onCommit = { _, _, _ -> error("Editing must not commit") }, onCancel = {}, initialInputs = WizardInputs(carbs = 5),
                 carbControls = WizardCarbControls.fromOverviewIncrements(listOf(5, 10, 20), 100)
             )
@@ -80,5 +84,8 @@ class NumericEntryFlowsTest {
         compose.onNodeWithText("Meal details").performScrollTo().performClick()
         compose.onAllNodes(hasSetTextAction())[2].performScrollTo().performTextReplacement("")
         compose.onNodeWithText("Review").assertIsNotEnabled()
+        compose.onNodeWithText("Eat once glucose falls").performScrollTo().performClick()
+        compose.onNodeWithText("Meal details").performScrollTo().performClick()
+        compose.onNodeWithText("Eat once glucose falls").assertDoesNotExist()
     }
 }

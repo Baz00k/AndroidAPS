@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateMapOf
@@ -80,6 +81,18 @@ private const val HOUR = 60 * 60
  */
 @Composable
 fun ProfileEditor(
+    state: ProfileEditState,
+    callbacks: ProfileEditorCallbacks,
+    onSave: () -> Unit,
+    onManage: () -> Unit
+) {
+    // Equal values in different profiles are not the same editable field. Never carry a rejected
+    // draft into another profile, especially when its units or bounds differ.
+    key(state.selectedProfileIndex) { ProfileEditorContent(state, callbacks, onSave, onManage) }
+}
+
+@Composable
+private fun ProfileEditorContent(
     state: ProfileEditState,
     callbacks: ProfileEditorCallbacks,
     onSave: () -> Unit,

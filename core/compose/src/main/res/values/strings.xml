@@ -8,7 +8,6 @@
     <string name="compose_numeric_configuration">Numeric entry unavailable: invalid limits or increment</string>
     <string name="compose_numeric_min">Min %1$s %2$s</string>
     <string name="compose_numeric_max">Max %1$s %2$s</string>
-    <string name="compose_numeric_precision">Increment needs more than %1$d decimal places; full precision shown</string>
     <string name="compose_numeric_subtract">Subtract %1$s %2$s %3$s</string>
     <string name="compose_numeric_add">Add %1$s %2$s %3$s</string>
 </resources>

@@ -54,7 +54,7 @@ data class InsulinInputs(
  * given, without touching the pump.
  */
 @Composable
-fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, onClose: () -> Unit) {
+fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Boolean, onClose: () -> Unit) {
     val colors = AapsTheme.colors
     var amount by rememberSaveable { mutableStateOf(0.0) }
     var amountValid by remember { mutableStateOf(false) }
@@ -85,7 +85,9 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
                 onClick = {
                     if (amountValid && !submitted) {
                         submitted = true
-                        onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else ""))
+                        // False means the host rejected before starting confirmation or any action.
+                        // Only that safe rejection permits another request; accepted requests stay latched.
+                        if (!onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else ""))) submitted = false
                     }
                 }
             )

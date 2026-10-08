@@ -126,7 +126,5 @@ fun NumericInput(
         }
         if (current == 0.0 && zeroLabel != null) Text(zeroLabel, style = AapsTheme.type.caption, color = colors.textSecondary)
         (issue ?: limit)?.let { Text(it, style = AapsTheme.type.caption, color = if (issue != null) colors.high else colors.textSecondary) }
-        if (spec.precisionInsufficient)
-            Text(stringResource(R.string.compose_numeric_precision, spec.decimals), style = AapsTheme.type.caption, color = colors.textSecondary)
     }
 }
