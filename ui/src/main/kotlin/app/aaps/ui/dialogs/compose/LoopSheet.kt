@@ -20,10 +20,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.Dot
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsTheme
@@ -61,7 +62,7 @@ fun LoopSheet(
 
             // mode radio list
             if (state.modes.isNotEmpty()) {
-                Text("MODE", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Mode")
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column {
                         state.modes.forEach { m -> ModeRow(m, colors, onAction) }
@@ -71,32 +72,32 @@ fun LoopSheet(
 
             // suspend
             if (state.suspendVisible) {
-                Text("SUSPEND LOOP", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Suspend loop")
                 AapsCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Chip("1h", { onAction(LoopActionId.SUSPEND_1H) }, Modifier.weight(1f))
-                        Chip("2h", { onAction(LoopActionId.SUSPEND_2H) }, Modifier.weight(1f))
-                        Chip("3h", { onAction(LoopActionId.SUSPEND_3H) }, Modifier.weight(1f))
-                        Chip("10h", { onAction(LoopActionId.SUSPEND_10H) }, Modifier.weight(1f))
+                        ActionChip("1h", { onAction(LoopActionId.SUSPEND_1H) }, Modifier.weight(1f))
+                        ActionChip("2h", { onAction(LoopActionId.SUSPEND_2H) }, Modifier.weight(1f))
+                        ActionChip("3h", { onAction(LoopActionId.SUSPEND_3H) }, Modifier.weight(1f))
+                        ActionChip("10h", { onAction(LoopActionId.SUSPEND_10H) }, Modifier.weight(1f))
                     }
                 }
             }
-            if (state.resumeVisible) FullButton("Resume loop") { onAction(LoopActionId.RESUME) }
+            if (state.resumeVisible) PrimaryButton("Resume loop", onClick = { onAction(LoopActionId.RESUME) })
 
             // disconnect
             if (state.disconnectVisible) {
-                Text("DISCONNECT PUMP", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Disconnect pump")
                 AapsCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.disconnect15m) Chip("15m", { onAction(LoopActionId.DISCONNECT_15M) }, Modifier.weight(1f))
-                        if (state.disconnect30m) Chip("30m", { onAction(LoopActionId.DISCONNECT_30M) }, Modifier.weight(1f))
-                        Chip("1h", { onAction(LoopActionId.DISCONNECT_1H) }, Modifier.weight(1f))
-                        Chip("2h", { onAction(LoopActionId.DISCONNECT_2H) }, Modifier.weight(1f))
-                        Chip("3h", { onAction(LoopActionId.DISCONNECT_3H) }, Modifier.weight(1f))
+                        if (state.disconnect15m) ActionChip("15m", { onAction(LoopActionId.DISCONNECT_15M) }, Modifier.weight(1f))
+                        if (state.disconnect30m) ActionChip("30m", { onAction(LoopActionId.DISCONNECT_30M) }, Modifier.weight(1f))
+                        ActionChip("1h", { onAction(LoopActionId.DISCONNECT_1H) }, Modifier.weight(1f))
+                        ActionChip("2h", { onAction(LoopActionId.DISCONNECT_2H) }, Modifier.weight(1f))
+                        ActionChip("3h", { onAction(LoopActionId.DISCONNECT_3H) }, Modifier.weight(1f))
                     }
                 }
             }
-            if (state.reconnectVisible) FullButton("Reconnect pump") { onAction(LoopActionId.RECONNECT) }
+            if (state.reconnectVisible) PrimaryButton("Reconnect pump", onClick = { onAction(LoopActionId.RECONNECT) })
         }
     }
 }
@@ -124,19 +125,3 @@ private fun ModeRow(m: LoopModeOption, colors: app.aaps.core.compose.theme.AapsC
     }
 }
 
-@Composable
-private fun FullButton(label: String, onClick: () -> Unit) {
-    val colors = AapsTheme.colors
-    Text(
-        label,
-        style = AapsTheme.type.title,
-        color = colors.onAccent,
-        textAlign = TextAlign.Center,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.button)
-            .background(colors.accent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp)
-    )
-}

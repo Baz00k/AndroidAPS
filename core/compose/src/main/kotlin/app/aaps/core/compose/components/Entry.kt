@@ -1,25 +1,20 @@
 package app.aaps.core.compose.components
 
 import android.text.format.DateFormat
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -36,15 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.Box
@@ -74,7 +66,7 @@ private fun entryValueStyle(): TextStyle = AapsTheme.type.bigValue.let { it.copy
 fun EntryCard(label: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     AapsCard(modifier, contentPadding = PaddingValues(horizontal = AapsSpacing.cardPad, vertical = AapsSpacing.cardPadSmall)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(label.uppercase(Locale.getDefault()), style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary)
+            SectionLabel(label)
             content()
         }
     }
@@ -255,42 +247,6 @@ fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int) {
             step = 1.0, min = 0.0, max = maxHours.toDouble(), decimals = 0,
             unit = "h", name = "of carb absorption", zeroLabel = "Normal"
         )
-    }
-}
-
-/** A row of equally wide quick choices. */
-@Composable
-fun ChoiceRow(content: @Composable RowScope.() -> Unit) =
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth(), content = content)
-
-@Composable
-fun RowScope.Choice(
-    label: String,
-    selected: Boolean,
-    clickLabel: String? = null,
-    icon: ImageVector? = null,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    val colors = AapsTheme.colors
-    val fg = if (selected) colors.accentOnLight else colors.textSecondary
-    Row(
-        Modifier
-            .weight(1f)
-            .heightIn(min = 36.dp)
-            .disabledAlpha(enabled)
-            .clip(AapsTheme.shape.pill)
-            .background(if (selected) colors.accentTintStrong else colors.controlFill)
-            .clickable(enabled = enabled, role = Role.Button, onClickLabel = clickLabel, onClick = onClick)
-            .wrapContentHeight(Alignment.CenterVertically)
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) Icon(icon, contentDescription = null, tint = fg, modifier = Modifier
-            .size(16.dp)
-            .padding(end = 2.dp))
-        FittedText(label, AapsTheme.type.body.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold), fg, maxLines = 2)
     }
 }
 

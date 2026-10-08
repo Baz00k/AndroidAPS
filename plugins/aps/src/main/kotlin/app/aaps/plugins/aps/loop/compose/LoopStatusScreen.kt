@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.StatusPill
@@ -48,7 +49,7 @@ fun LoopStatusScreen(
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
-                Text("LAST RUN", style = AapsTheme.type.label, color = colors.textSecondary)
+                SectionLabel("Last run")
                 Text(
                     state.lastRun.ifBlank { "Never" },
                     style = AapsTheme.type.listTitle,
@@ -68,7 +69,7 @@ fun LoopStatusScreen(
         if (state.suggestion.isNotBlank()) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column {
-                    Text("NEW SUGGESTION", style = AapsTheme.type.label, color = colors.textSecondary)
+                    SectionLabel("New suggestion")
                     Text(
                         state.suggestion.toString(),
                         style = AapsTheme.type.body,

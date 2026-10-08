@@ -19,8 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.Stepper
@@ -89,17 +90,17 @@ fun ProfileHelperScreen(
             modifier = Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)
         )
 
-        Text("SOURCE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        SectionLabel("Source", Modifier.padding(bottom = 8.dp))
         FlowRow(
             Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap),
             horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)
         ) {
             ProfileKind.entries.forEachIndexed { i, kind ->
-                Chip(
+                Choice(
                     label = state.kindLabels.getOrElse(i) { kind.name },
-                    onClick = { onSlotChange(slot.copy(kind = kind)) },
-                    selected = slot.kind == kind
+                    selected = slot.kind == kind,
+                    onClick = { onSlotChange(slot.copy(kind = kind)) }
                 )
             }
         }
@@ -170,7 +171,7 @@ private fun DefaultProfileInputs(
 
     // Recent TDD table, rendered by TddCalculator as a plain View.
     tddStatsView?.let {
-        Text("YOUR RECENT TDD", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        SectionLabel("Your recent TDD", Modifier.padding(bottom = 8.dp))
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             AndroidView(factory = { _ -> it }, modifier = Modifier.fillMaxWidth())
         }
@@ -202,7 +203,7 @@ private fun PickerCard(label: String, options: List<String>, selected: Int, onSe
                     verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)
                 ) {
                     options.forEachIndexed { i, name ->
-                        Chip(label = name, onClick = { onSelect(i) }, selected = i == selected)
+                        Choice(label = name, selected = i == selected, onClick = { onSelect(i) })
                     }
                 }
         }

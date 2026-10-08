@@ -21,8 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.Stepper
 import app.aaps.core.compose.theme.AapsTheme
@@ -51,7 +51,7 @@ fun TempTargetSheet(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("PICK AN INTENT", style = AapsTheme.type.label, color = colors.textSecondary)
+            SectionLabel("Pick an intent")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.presets.forEach { p ->
                     val selected = reason == p.reason
@@ -73,7 +73,7 @@ fun TempTargetSheet(
                 }
             }
 
-            Text("ADJUST", style = AapsTheme.type.label, color = colors.textSecondary)
+            SectionLabel("Adjust")
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Stepper(

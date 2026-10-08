@@ -6,9 +6,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AbsorptionCard
 import app.aaps.core.compose.components.AmountStepper
-import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
@@ -99,9 +100,9 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
             AmountStepper(carbs, { carbs = it }, step = 1.0, min = -state.maxCarbs, max = state.maxCarbs, decimals = 0, unit = "g", name = "of carbs")
             ChoiceRow {
                 state.quickIncrements.forEach { inc ->
-                    Choice(if (inc > 0) "+$inc g" else "$inc g", selected = false, enabled = if (inc > 0) carbs < state.maxCarbs else carbs > -state.maxCarbs) {
+                    ActionChip(if (inc > 0) "+$inc g" else "$inc g", modifier = Modifier.weight(1f), enabled = if (inc > 0) carbs < state.maxCarbs else carbs > -state.maxCarbs, onClick = {
                         carbs = (carbs + inc).coerceIn(-state.maxCarbs, state.maxCarbs)
-                    }
+                    })
                 }
             }
         }

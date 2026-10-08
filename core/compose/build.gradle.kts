@@ -34,6 +34,10 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.core)
 
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
+
     // The skin file format. Data only — no Android surface, so it stays in the design system
     // module next to the tokens it describes. `api` rather than `implementation` because SkinSpec is
     // @Serializable: its generated serializer() is public API referencing kotlinx types, so a module

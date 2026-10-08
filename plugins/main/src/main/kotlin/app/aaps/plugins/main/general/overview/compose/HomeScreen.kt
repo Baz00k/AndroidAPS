@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.ActionBarButton
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
+import app.aaps.core.compose.components.IconButtonTone
 import app.aaps.core.compose.components.RoundIconButton
 import app.aaps.core.compose.components.FittedText
 import app.aaps.core.compose.components.MeasurementText
@@ -384,7 +385,7 @@ private fun CarbsUndoSheet(
                                     Text(c.grams, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                                     Text(c.time, style = AapsTheme.type.caption, color = colors.textTertiary)
                                 }
-                                RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
+                                RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) }, tone = IconButtonTone.Danger)
                             }
                         }
                     }
@@ -446,7 +447,7 @@ private fun InsulinUndoSheet(
                                         )
                                     }
                                     if (e.removable)
-                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
+                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) }, tone = IconButtonTone.Danger)
                                     else
                                         Text(
                                             "Cancel first", style = AapsTheme.type.caption, color = colors.textTertiary,
@@ -520,7 +521,8 @@ private fun shortcutIcon(shortcut: HomeShortcut) = when (shortcut) {
 @Composable
 private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, actions: HomeActions) {
     var open by remember { mutableStateOf(false) }
-    RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { open = true })
+    // As tall as the action bar it ends.
+    RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { open = true }, size = 58.dp)
     if (open) HomeSheet(onClose = { open = false }) { close ->
         fun run(action: () -> Unit) = close { action() }
         MenuSurface {

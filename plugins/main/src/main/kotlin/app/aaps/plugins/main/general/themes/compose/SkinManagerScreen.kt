@@ -25,7 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.GhostButton
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
@@ -104,7 +106,7 @@ fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
             }
         }
 
-        Text("APPEARANCE", style = AapsTheme.type.label, color = colors.textSecondary)
+        SectionLabel("Appearance")
         AapsCard(Modifier.fillMaxWidth()) {
             Column {
                 state.entries.forEachIndexed { i, entry ->
@@ -116,12 +118,7 @@ fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
 
         PrimaryButton(label = "Import a skin file", onClick = actions.onImport, modifier = Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            Text(
-                "Export a starter template",
-                style = AapsTheme.type.label,
-                color = colors.accentOnLight,
-                modifier = Modifier.clickable(onClick = actions.onExportTemplate).padding(8.dp)
-            )
+            GhostButton("Export a starter template", actions.onExportTemplate)
         }
     }
 }

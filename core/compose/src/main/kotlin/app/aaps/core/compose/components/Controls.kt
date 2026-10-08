@@ -21,6 +21,25 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsTheme
 
+/*
+ * The contract every control in this library keeps, so a screen built from it is accessible without
+ * extra work at the call site:
+ *
+ * - Colours, type and shapes come from AapsTheme only; a control never defines its own palette.
+ * - Anything that can be pressed is at least AapsSpacing.minTap tall, and as wide unless it is a
+ *   full-width row or button.
+ * - Disabled is the whole control at DISABLED_ALPHA, and it is announced as disabled.
+ * - Each control declares its Role and is one node for TalkBack: a row with a checkbox, radio or
+ *   switch is one toggle with its title as the label, not a label next to a separate control.
+ *   Something that only displays information, such as a Tag, has no click action at all.
+ * - An input's label, unit and error belong to the input's own node, so they are read with it.
+ * - Text is laid out for a 200% font scale: it wraps or shrinks (FittedText) rather than clipping.
+ * - Text the library shows on its own comes from resources; everything else is passed in by the
+ *   caller, which owns its wording.
+ *
+ * Each component keeps representative previews (light, dark, 200% font, key states) next to it.
+ */
+
 /**
  * How every disabled control looks: the whole control, container and ink together, at Material's
  * disabled opacity. A greyer label alone is too subtle to read as "not available".

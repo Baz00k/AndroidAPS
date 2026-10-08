@@ -13,7 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import app.aaps.core.compose.components.Chip
+import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.NotesField
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
@@ -70,7 +70,7 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
             if (state.presets.isNotEmpty())
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                     state.presets.forEach { preset ->
-                        Chip(label = String.format(java.util.Locale.getDefault(), "%.${state.insulinDecimals}f", preset), onClick = { insulin = preset.coerceIn(0.0, state.maxInsulin) })
+                        ActionChip(label = String.format(java.util.Locale.getDefault(), "%.${state.insulinDecimals}f", preset), onClick = { insulin = preset.coerceIn(0.0, state.maxInsulin) })
                     }
                 }
 
@@ -86,7 +86,7 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
                 )
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                     listOf("now" to 0, "30m" to 30, "1h" to 60, "2h" to 120, "4h" to 240, "8h" to 480, "12h" to 720)
-                        .forEach { (label, mins) -> Chip(label = label, onClick = { minutesAgo = mins.toDouble() }) }
+                        .forEach { (label, mins) -> ActionChip(label = label, onClick = { minutesAgo = mins.toDouble() }) }
                 }
             }
 

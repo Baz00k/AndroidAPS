@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.TintIcon
 import app.aaps.core.compose.theme.AapsSpacing
@@ -53,7 +54,7 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
         Text("Actions", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.therapy.isNotEmpty()) {
-            SectionLabel("THERAPY")
+            SectionLabel("Therapy", Modifier.padding(top = 6.dp, bottom = 8.dp))
             // 2-column grid
             state.therapy.chunked(2).forEach { rowItems ->
                 Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
@@ -64,7 +65,7 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
         }
 
         if (state.events.isNotEmpty()) {
-            SectionLabel("LOG AN EVENT")
+            SectionLabel("Log an event", Modifier.padding(top = 6.dp, bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column {
                     state.events.chunked(4).forEach { rowItems ->
@@ -78,7 +79,7 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
         }
 
         if (state.tools.isNotEmpty()) {
-            SectionLabel("TOOLS")
+            SectionLabel("Tools", Modifier.padding(top = 6.dp, bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 Column {
                     state.tools.forEachIndexed { i, tool ->
@@ -90,10 +91,6 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
         }
     }
 }
-
-@Composable
-private fun SectionLabel(text: String) =
-    Text(text, style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
 
 @Composable
 private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionId) -> Unit) {

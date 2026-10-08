@@ -13,12 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,10 +26,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import app.aaps.core.compose.components.IconButtonTone
+import app.aaps.core.compose.components.LabeledTextField
+import app.aaps.core.compose.components.RoundIconButton
+import app.aaps.core.compose.components.TonalButton
+import app.aaps.core.compose.components.Choice
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
@@ -120,7 +121,7 @@ fun ProfileEditor(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 state.profileNames.forEachIndexed { i, n ->
-                    Chip(n, onClick = { callbacks.onSelectProfile(i) }, selected = i == state.selectedProfileIndex)
+                    Choice(n, selected = i == state.selectedProfileIndex, onClick = { callbacks.onSelectProfile(i) })
                 }
             }
         }
@@ -128,22 +129,7 @@ fun ProfileEditor(
         // Name + DIA
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("NAME", style = AapsTheme.type.label, color = colors.textSecondary)
-                    Box(
-                        Modifier.fillMaxWidth().clip(AapsTheme.shape.cardSmall).background(colors.surface2)
-                            .padding(horizontal = 12.dp, vertical = 12.dp)
-                    ) {
-                        BasicTextField(
-                            value = state.name,
-                            onValueChange = callbacks::onName,
-                            singleLine = true,
-                            textStyle = AapsTheme.type.listTitle.copy(color = colors.textPrimary),
-                            cursorBrush = SolidColor(colors.accent),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
+                LabeledTextField("Name", state.name, callbacks::onName)
                 NumberField(
                     label = "Insulin duration (DIA)",
                     value = state.dia,
@@ -205,14 +191,7 @@ fun ProfileEditor(
         }
 
         // Add block
-        Row(
-            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap).clip(AapsTheme.shape.pill)
-                .background(colors.accentTint).clickable { callbacks.onAddBlock(tab) }.padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Rounded.Add, contentDescription = null, tint = colors.accentOnLight, modifier = Modifier.size(18.dp))
-            Text("  Add block", style = AapsTheme.type.listTitle, color = colors.accentOnLight)
-        }
+        TonalButton("Add block", { callbacks.onAddBlock(tab) }, Modifier.padding(bottom = AapsSpacing.sectionGap), icon = Icons.Rounded.Add)
 
         // Save
         PrimaryButton(
@@ -256,12 +235,7 @@ private fun BlockRow(
             }
             Box(Modifier.weight(1f))
             if (removable) {
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(colors.controlFill).clickable(onClick = onRemove),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "remove block", tint = colors.low, modifier = Modifier.size(18.dp))
-                }
+                RoundIconButton(Icons.Rounded.Close, "Remove block", onRemove, tone = IconButtonTone.Danger)
             }
         }
 

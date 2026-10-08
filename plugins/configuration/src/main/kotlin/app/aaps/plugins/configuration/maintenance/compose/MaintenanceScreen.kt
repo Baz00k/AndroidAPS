@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
@@ -58,11 +59,7 @@ fun MaintenanceScreen(
             }
         }
 
-        Box(
-            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)
-                .clip(AapsTheme.shape.button).background(colors.accent).clickable(onClick = onExport).padding(vertical = 15.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("Export settings now", style = AapsTheme.type.listTitle, color = colors.onAccent) }
+        PrimaryButton("Export settings now", onExport, Modifier.padding(bottom = AapsSpacing.sectionGap))
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
