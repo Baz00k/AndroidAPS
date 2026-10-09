@@ -7,6 +7,7 @@ import app.aaps.core.interfaces.pump.Medtrum
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -27,6 +28,8 @@ class CommandDeactivate(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.DEACTIVATE
+
+    override val action: CommandAction = CommandAction.Other
 
     override fun execute() {
         val pump = activePlugin.activePump

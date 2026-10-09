@@ -34,6 +34,7 @@ import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.Command.CommandType
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.queue.CustomCommand
+import app.aaps.core.interfaces.queue.QueueSnapshot
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
@@ -230,6 +231,10 @@ class CommandQueueImplementation @Inject constructor(
     override fun size(): Int = queue.size
 
     override fun performing(): Command? = performing
+
+    // pickup(), add() and removal all hold the queue monitor, so reading both under it cannot
+    // observe a command mid-transition (in both lists, or a superseded one next to its replacement).
+    override fun snapshot(): QueueSnapshot = synchronized(queue) { QueueSnapshot(performing, queue.toList()) }
 
     override fun resetPerforming() {
         performing = null

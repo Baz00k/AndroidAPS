@@ -16,10 +16,12 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
+import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.queue.CustomCommand
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -55,7 +57,10 @@ import org.mockito.invocation.InvocationOnMock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.Calendar
 import javax.inject.Provider
@@ -628,6 +633,119 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         assertThat(queued1).isTrue()
         assertThat(queued2).isFalse()
         assertThat(commandQueue.size()).isEqualTo(1)
+    }
+
+    @Test
+    fun snapshotNeverShowsASupersededCommandNextToItsCancellation() {
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        val start = commandQueue.snapshot().queued.single()
+        assertThat(start).isInstanceOf(CommandTempBasalPercent::class.java)
+
+        // The cancellation replaces the waiting start; the start will never execute.
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+        val waiting = commandQueue.snapshot()
+        assertThat(waiting.performing).isNull()
+        assertThat(waiting.queued.single()).isInstanceOf(CommandCancelTempBasal::class.java)
+
+        // Once the worker takes it, it is running and nothing else is listed.
+        commandQueue.pickup()
+        val running = commandQueue.snapshot()
+        assertThat(running.performing).isInstanceOf(CommandCancelTempBasal::class.java)
+        assertThat(running.queued).isEmpty()
+        assertThat(running.queued + running.performing).doesNotContain(start)
+    }
+
+    @Test
+    fun snapshotKeepsExecutionOrderAndDoesNotExposeTheLiveQueue() {
+        commandQueue.customCommand(CustomCommand1(), null)
+        commandQueue.customCommand(CustomCommand2(), null)
+        commandQueue.pickup()
+
+        val snapshot = commandQueue.snapshot()
+        assertThat(snapshot.performing?.status()).isEqualTo("CUSTOM COMMAND 1")
+        assertThat(snapshot.queued.map { it.status() }).containsExactly("CUSTOM COMMAND 2")
+
+        commandQueue.clear()
+        // A later change must not alter what was already read.
+        assertThat(snapshot.queued).hasSize(1)
+        assertThat(commandQueue.snapshot().queued).isEmpty()
+    }
+
+    @Test
+    fun queuedCancelTempBasalIsDescribedAsACancellation() {
+        whenever(rh.gs(app.aaps.core.ui.R.string.uel_cancel_temp_basal)).thenReturn("CANCEL TEMP BASAL")
+        whenever(rh.gs(app.aaps.core.ui.R.string.uel_accepts_temp_basal)).thenReturn("ACCEPTS TEMP BASAL")
+
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+
+        assertThat(commandQueue.snapshot().queued.single().status()).isEqualTo("CANCEL TEMP BASAL")
+    }
+
+    @Test
+    fun queuedInsulinCommandsExposeTheDoseThePumpWillReceive() {
+        whenever(constraintChecker.applyBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(1.0, aapsLogger))
+        whenever(constraintChecker.applyExtendedBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(2.0, aapsLogger))
+        whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(120, aapsLogger))
+        whenever(constraintChecker.applyBasalConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(0.8, aapsLogger))
+
+        // The 1.5 U request is capped to 1 U before queueing; the queue must describe the capped dose.
+        commandQueue.bolus(DetailedBolusInfo().apply { insulin = 1.5 }, null)
+        commandQueue.extendedBolus(2.0, 90, null)
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
+            CommandAction.Bolus(1.0),
+            CommandAction.ExtendedBolus(2.0, 90),
+            CommandAction.TempBasalPercent(120, 30),
+        ).inOrder()
+
+        commandQueue.clear()
+        whenever(constraintChecker.applyBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(0.3, aapsLogger))
+        val smb = DetailedBolusInfo().apply {
+            insulin = 0.5
+            bolusType = BS.Type.SMB
+            lastKnownBolusTime = System.currentTimeMillis()
+        }
+        commandQueue.bolus(smb, null)
+        commandQueue.tempBasalAbsolute(1.2, 45, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
+            CommandAction.AutomaticBolus(0.3),
+            CommandAction.TempBasalAbsolute(0.8, 45),
+        ).inOrder()
+    }
+
+    @Test
+    fun queuedCancellationsAreNotDescribedAsDeliveries() {
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+        commandQueue.cancelExtended(null)
+
+        assertThat(commandQueue.snapshot().queued.map { it.action })
+            .containsExactly(CommandAction.CancelTempBasal, CommandAction.CancelExtendedBolus).inOrder()
+    }
+
+    @Test
+    fun aHundredPercentTempBasalIsDescribedAsTheCancellationItExecutes() {
+        whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(100, aapsLogger))
+
+        // Requested as 100%, and requested as 150% but capped to 100%: both run cancelTempBasal().
+        commandQueue.tempBasalPercent(100, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.single().action).isEqualTo(CommandAction.CancelTempBasal)
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        val queued = commandQueue.snapshot().queued.single()
+        assertThat(queued.action).isEqualTo(CommandAction.CancelTempBasal)
+
+        val pump: Pump = mock { on { cancelTempBasal(any()) } doReturn pumpEnactResultProvider.get().success(true) }
+        whenever(activePlugin.activePump).thenReturn(pump)
+        queued.execute()
+        verify(pump).cancelTempBasal(true)
+        verify(pump, never()).setTempBasalPercent(any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun commandsWithoutAStructuredDescriptionCarryNoDose() {
+        commandQueue.readStatus("test", null)
+        commandQueue.loadTDDs(null)
+
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(CommandAction.Other, CommandAction.Other)
     }
 
     @Test

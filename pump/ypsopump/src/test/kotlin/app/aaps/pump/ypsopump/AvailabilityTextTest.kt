@@ -40,7 +40,7 @@ class AvailabilityTextTest {
         state.connectionState = ConnectionState.CONNECTED
 
         val date: DateUtil = mock { on { minOrSecAgo(org.mockito.kotlin.any(), org.mockito.kotlin.any()) } doReturn "5m ago" }
-        val status = buildPumpStatusState(state, mock(), date, resources(
+        val status = buildPumpStatusState(state, idleCommandQueue(), date, resources(
             R.string.ypsopump_authenticated_no_status to "No readings yet.",
         ))
 
@@ -129,7 +129,7 @@ class AvailabilityTextTest {
 
         val status = buildPumpStatusState(
             state,
-            org.mockito.kotlin.mock<CommandQueue>(),
+            idleCommandQueue(),
             org.mockito.kotlin.mock<DateUtil>(),
             resources
         )
@@ -153,7 +153,7 @@ class AvailabilityTextTest {
             R.string.ypsopump_disconnected to "Not connected",
         )
 
-        val status = buildPumpStatusState(state, org.mockito.kotlin.mock(), org.mockito.kotlin.mock(), resources)
+        val status = buildPumpStatusState(state, idleCommandQueue(), org.mockito.kotlin.mock(), resources)
 
         assertThat(status.rows).isEmpty()
         assertThat(status.connectionAction).isEqualTo("Not checked yet.")
@@ -167,10 +167,7 @@ class AvailabilityTextTest {
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
             connectionState = ConnectionState.DISCONNECTED
         }
-        val queue = org.mockito.kotlin.mock<CommandQueue> {
-            on { performing() } doReturn null
-            on { size() } doReturn 0
-        }
+        val queue = idleCommandQueue()
         val resources = resources()
 
         val status = buildPumpStatusState(state, queue, org.mockito.kotlin.mock(), resources)
@@ -196,7 +193,7 @@ class AvailabilityTextTest {
 
         val status = buildPumpStatusState(
             state,
-            org.mockito.kotlin.mock<CommandQueue>(),
+            idleCommandQueue(),
             org.mockito.kotlin.mock<DateUtil>(),
             resources
         )
@@ -303,7 +300,7 @@ class AvailabilityTextTest {
             R.string.ypsopump_cause_transport to "Keep the pump nearby and awake, then try again.",
         )
 
-        val status = buildPumpStatusState(state, org.mockito.kotlin.mock(), org.mockito.kotlin.mock(), resources)
+        val status = buildPumpStatusState(state, idleCommandQueue(), org.mockito.kotlin.mock(), resources)
 
         assertThat(status.connectionSummary).isEqualTo("Pump not connected")
         assertThat(status.connectionAction).isEqualTo("Keep the pump nearby and awake, then try again.")

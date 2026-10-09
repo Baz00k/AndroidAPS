@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.queue.CustomCommand
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
@@ -28,6 +29,8 @@ class CommandCustomCommand(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.CUSTOM_COMMAND
+
+    override val action: CommandAction = CommandAction.Other
 
     override fun execute() {
         activePlugin.activePump.executeCustomCommand(customCommand)?.let {

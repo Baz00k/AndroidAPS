@@ -37,7 +37,7 @@ class YpsoPumpProfileReadAgeTest {
         val dateUtil: DateUtil = mock()
         whenever(dateUtil.now()).thenReturn(now.toEpochMilli())
 
-        val rows = buildPumpStatusState(pumpState, mock(), dateUtil, rh).rows
+        val rows = buildPumpStatusState(pumpState, idleCommandQueue(), dateUtil, rh).rows
 
         assertThat(rows.map { it.value }).contains("1d 3h")
     }

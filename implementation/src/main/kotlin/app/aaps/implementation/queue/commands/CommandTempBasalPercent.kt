@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -34,6 +35,10 @@ class CommandTempBasalPercent(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.TEMPBASAL
+
+    // 100% is executed as a cancellation below, so it must be described as one.
+    override val action: CommandAction =
+        if (percent == 100) CommandAction.CancelTempBasal else CommandAction.TempBasalPercent(percent, durationInMinutes)
 
     override fun execute() {
         val r =

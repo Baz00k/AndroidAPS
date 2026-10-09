@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDismissBolusProgressIfRunning
@@ -30,6 +31,8 @@ class CommandBolus(
     @Inject lateinit var pumpEnactResultProvider: Provider<PumpEnactResult>
 
     override var commandType: Command.CommandType
+
+    override val action: CommandAction get() = CommandAction.Bolus(detailedBolusInfo.insulin)
 
     init {
         injector.androidInjector().inject(this)
