@@ -177,7 +177,7 @@ fun TimeStepper(
 
 /**
  * Extended carbs: a slow meal spread over [hours], which the loop's single absorption constant cannot
- * describe. Zero, the usual meal, reads "Normal".
+ * describe. Zero is the usual meal; it is announced as "Normal" but drawn as the number it is.
  */
 @Composable
 fun AbsorptionCard(hours: Int, onHours: (Int) -> Unit, maxHours: Int, onValidityChange: (Boolean) -> Unit = {}) {

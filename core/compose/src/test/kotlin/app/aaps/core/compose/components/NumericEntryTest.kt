@@ -21,6 +21,23 @@ class NumericEntryTest {
         assertThat(spec.copy(step = Double.NaN).validate("12.5").error).isEqualTo(NumericError.CONFIGURATION)
     }
 
+    @Test fun aButtonBringsAValueBackToTheNearestBoundButNeverFurtherOut() {
+        assertThat(spec.stepFrom("200", false)).isEqualTo(100.0)
+        assertThat(spec.stepFrom("200", true)).isNull()
+        assertThat(spec.stepFrom("1", true)).isEqualTo(5.0)
+        assertThat(spec.stepFrom("1", false)).isNull()
+        // In range it steps, and does nothing once at the bound it points to.
+        assertThat(spec.stepFrom("10", true)).isEqualTo(10.025)
+        assertThat(spec.stepFrom("100", true)).isNull()
+        assertThat(spec.stepFrom("5", false)).isNull()
+        // Not a number yet, or not a number at all: nothing to step from.
+        listOf("", "-", "1.", "abc", "1e3").forEach {
+            assertThat(spec.stepFrom(it, true)).isNull()
+            assertThat(spec.stepFrom(it, false)).isNull()
+        }
+        assertThat(NumericDraft("200").stepped(spec, false)?.text).isEqualTo("100.00")
+    }
+
     @Test fun decimalSteppingClampsOnlyAtBoundsAndDoesNotQuantizeTypedValues() {
         val dose = spec.copy(min = -0.013, max = 0.063)
         assertThat(dose.increment(0.0, true)).isEqualTo(0.025)

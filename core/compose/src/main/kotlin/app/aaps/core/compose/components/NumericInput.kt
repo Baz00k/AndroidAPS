@@ -120,8 +120,10 @@ fun NumericInput(
             increaseLabel = stringResource(R.string.compose_numeric_add, formatNumeric(spec.step, spec.decimals), unit, name),
             onDecrease = { NumericDraft(text).stepped(spec, false)?.let(::edit) },
             onIncrease = { NumericDraft(text).stepped(spec, true)?.let(::edit) },
-            decreaseEnabled = current != null && current > spec.min,
-            increaseEnabled = current != null && current < spec.max
+            // Enabled exactly when pressing would change the text, so a value typed past a bound can still
+            // be brought back with the button that points toward the range.
+            decreaseEnabled = spec.stepFrom(text, false) != null,
+            increaseEnabled = spec.stepFrom(text, true) != null
         ) {
             // A filled field, so the value reads as typeable, holding the value and its unit centred
             // together on one baseline as one reading. The unit stays outside the text field — the
@@ -172,7 +174,13 @@ fun NumericInput(
                 }
             }
         }
-        if (current == 0.0 && zeroLabel != null) Text(zeroLabel, style = AapsTheme.type.caption, color = colors.textSecondary)
-        (issue ?: limit)?.let { Text(it, style = AapsTheme.type.caption, color = if (issue != null) colors.high else colors.textSecondary) }
+        // The line is always there, empty or not, so a limit or an error appearing as you type does not
+        // push what is below the field down.
+        Text(
+            issue ?: limit.orEmpty(),
+            style = AapsTheme.type.caption,
+            color = if (issue != null) colors.high else colors.textSecondary,
+            minLines = 1
+        )
     }
 }
