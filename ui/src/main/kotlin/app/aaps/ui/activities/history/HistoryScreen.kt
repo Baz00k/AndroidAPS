@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,7 +62,7 @@ fun HistoryScreen(
         // header
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.clip(CircleShape).clickable(enabled = !state.removing, onClick = if (state.selecting) onCancelSelecting else onBack).padding(8.dp)) {
-                Icon(Icons.Rounded.ArrowBack, contentDescription = if (state.selecting) "Cancel" else "Back", tint = colors.textSecondary)
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = if (state.selecting) "Cancel" else "Back", tint = colors.textSecondary)
             }
             Text(
                 if (state.selecting) "${state.selected.size} selected" else "History",

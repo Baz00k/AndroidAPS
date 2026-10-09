@@ -19,7 +19,6 @@
     <string name="permission">Quyền truy cập</string>
     <string name="need_system_window_permission">Ứng dụng cần quyền hiển thị cửa sổ hệ thống để gửi thông báo</string>
     <string name="need_location_permission">Ứng dụng cần quyền vị trí để quét Bluetooth và nhận dạng Wi-Fi</string>
-    <string name="need_background_location_permission">Ứng dụng cần quyền truy cập vị trí ở nền để thực hiện Automations</string>
     <string name="askforpermission">Yêu cầu cấp quyền truy cập</string>
     <string name="need_whitelisting">%1$s cần được loại trừ khỏi tối ưu pin để hoạt động đúng cách</string>
     <string name="storedsettingsfound">Đã tìm thấy cài đặt đã lưu</string>

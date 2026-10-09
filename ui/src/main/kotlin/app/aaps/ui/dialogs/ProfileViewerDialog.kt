@@ -143,7 +143,7 @@ class ProfileViewerDialog : DaggerBottomSheetFragment() {
             name2 = name2,
             dia = rh.gs(app.aaps.core.ui.R.string.format_hours, profile.dia),
             dailyBasal = fmtU(profile.baseBasalSum()),
-            dailyBasal2 = if (compare) fmtU(profile2!!.baseBasalSum()) else null,
+            dailyBasal2 = if (compare) fmtU(profile2.baseBasalSum()) else null,
             date = date,
             unitsLabel = unitsLabel,
             invalid = invalid,

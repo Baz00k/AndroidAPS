@@ -9,6 +9,7 @@ import java.nio.ByteOrder
  * value2(16) | value3(16) | sequence(32) in [low]. Fixed-width fields make equality exact; no
  * string or byte-array allocation is produced in scan loops.
  */
+@ConsistentCopyVisibility
 data class YpsoHistoryFingerprint internal constructor(val high: Long, val low: Long)
 
 /**

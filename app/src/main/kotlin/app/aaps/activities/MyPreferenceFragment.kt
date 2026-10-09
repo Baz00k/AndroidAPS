@@ -260,7 +260,7 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         // Biometric protection activated without set master password
         if ((IntKey.ProtectionTypeSettings == key || IntKey.ProtectionTypeApplication == key || IntKey.ProtectionTypeBolus == key) &&
             preferences.get(StringKey.ProtectionMasterPassword) == "" &&
-            preferences.get(key as IntKey) == BIOMETRIC.ordinal
+            preferences.get(key) == BIOMETRIC.ordinal
         ) {
             activity?.let {
                 val title = rh.gs(app.aaps.core.ui.R.string.unsecure_fallback_biometric)
@@ -273,7 +273,7 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         val isBiometricActivated = preferences.get(IntKey.ProtectionTypeSettings) == BIOMETRIC.ordinal ||
             preferences.get(IntKey.ProtectionTypeApplication) == BIOMETRIC.ordinal ||
             preferences.get(IntKey.ProtectionTypeBolus) == BIOMETRIC.ordinal
-        if (StringKey.ProtectionMasterPassword == key && preferences.get(key as StringKey) == "" && isBiometricActivated) {
+        if (StringKey.ProtectionMasterPassword == key && preferences.get(key) == "" && isBiometricActivated) {
             activity?.let {
                 val title = rh.gs(app.aaps.core.ui.R.string.unsecure_fallback_biometric)
                 val message = rh.gs(app.aaps.core.ui.R.string.unsecure_fallback_descriotion_biometric)

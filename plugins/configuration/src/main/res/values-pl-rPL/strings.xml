@@ -19,7 +19,6 @@
     <string name="permission">Uprawnienia</string>
     <string name="need_system_window_permission">Aplikacja wymaga uprawnienia systemowego okna dla powiadomień</string>
     <string name="need_location_permission">Aplikacja wymaga dostępu do lokalizacji dla zarządzania bluetoothem i identyfikacją Wi-Fi</string>
-    <string name="need_background_location_permission">Aplikacja potrzebuje uprawnień do lokalizacji w tle dla automatyzacji</string>
     <string name="askforpermission">Zapytaj o uprawnienia</string>
     <string name="need_whitelisting">%1$s potrzebuje wyłączenia z optymalizacji baterii, w celu zapewnienia poprawnego działania</string>
     <string name="storedsettingsfound">Znaleziono zapisane ustawienia</string>

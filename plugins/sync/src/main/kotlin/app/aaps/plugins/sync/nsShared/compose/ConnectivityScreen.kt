@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,9 +42,9 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FlowNode(state.cgmName.ifBlank { "CGM" }, Modifier.weight(1f))
-                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
+                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
                 FlowNode("AAPS", Modifier.weight(1f))
-                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
+                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
                 FlowNode(state.cloudName, Modifier.weight(1f))
             }
         }

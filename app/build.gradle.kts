@@ -122,6 +122,15 @@ android {
         localeFilters += "en"
     }
 
+    packaging {
+        // JNA bundles ABIs dropped by modern NDKs. AGP strips dependencies before applying
+        // ABI filters, so skip stripping these unused libraries and exclude them explicitly.
+        listOf("armeabi", "mips", "mips64").forEach { abi ->
+            jniLibs.excludes += "**/$abi/**"
+            jniLibs.keepDebugSymbols += "**/$abi/*.so"
+        }
+    }
+
     flavorDimensions.add("standard")
     productFlavors {
         create("full") {

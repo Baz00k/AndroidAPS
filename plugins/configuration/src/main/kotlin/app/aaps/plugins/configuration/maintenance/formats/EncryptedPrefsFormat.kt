@@ -101,13 +101,13 @@ class EncryptedPrefsFormat @Inject constructor(
                 var masterPasswordUnencrypted = masterPassword
                 if (secureEncrypt.isValidDataString(masterPassword)) {
                     // Password contains valid data string so assuming this is a valid encrypted password
-                    val decryptionResult = secureEncrypt.decrypt(masterPassword!!)
+                    val decryptionResult = secureEncrypt.decrypt(masterPassword)
                     if (decryptionResult.isEmpty())
                         throw PrefIOError("Cannot decrypt cached export password")
                     masterPasswordUnencrypted = decryptionResult
                 }
 
-                encodedContent = cryptoUtil.encrypt(masterPasswordUnencrypted!!, salt, rawContent)
+                encodedContent = cryptoUtil.encrypt(masterPasswordUnencrypted, salt, rawContent)
                     ?: throw PrefIOError("Cannot encrypt settings export")
                 security.put("algorithm", "v1")
                 security.put("salt", salt.toHex())

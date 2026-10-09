@@ -160,7 +160,11 @@ class BLEComm @Inject internal constructor(
         // Reset sequence counter
         mWriteSequenceNumber = 0
         if (mBluetoothGatt == null) {
-            mBluetoothGatt = device.connectGatt(context, false, mGattCallback, BluetoothDevice.TRANSPORT_LE)
+            // The replacement requires API 37 and changes callback dispatch. Keep the verified
+            // transport on supported Android versions until the new API is hardware-tested.
+            @Suppress("DEPRECATION")
+            val gatt = device.connectGatt(context, false, mGattCallback, BluetoothDevice.TRANSPORT_LE)
+            mBluetoothGatt = gatt
         } else {
             // Already connected?, this should not happen force disconnect
             aapsLogger.error(LTag.PUMPBTCOMM, "connectGatt, mBluetoothGatt is not null")

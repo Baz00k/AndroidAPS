@@ -19,7 +19,6 @@
     <string name="permission">Yetki</string>
     <string name="need_system_window_permission">Uygulama, bildirimler için sistem iznine ihtiyaç duyuyor</string>
     <string name="need_location_permission">Uygulamanın BT taraması ve WiFi tanımlaması için konum iznine ihtiyacı var</string>
-    <string name="need_background_location_permission">Uygulamanın otomasyonlar için arka plan konum iznine ihtiyacı var</string>
     <string name="askforpermission">İzin için sorunuz</string>
     <string name="need_whitelisting">%1$s, düzgün bir şekilde çalışması için pil optimizasyonu yapılmalıdır</string>
     <string name="storedsettingsfound">Saklanan ayarlar bulundu</string>
