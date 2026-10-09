@@ -42,7 +42,7 @@ tasks.withType<Test> {
 
 tasks.withType<Test>().configureEach {
     failOnNoDiscoveredTests = false
-    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+    maxParallelForks = minOf(2, gradle.startParameter.maxWorkerCount)
 }
 
 android {
