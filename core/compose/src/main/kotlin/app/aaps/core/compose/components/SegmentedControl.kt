@@ -18,6 +18,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +28,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -57,11 +59,15 @@ fun SegmentedControl(
 ) {
     val colors = AapsTheme.colors
     val shape = AapsTheme.shape.pill
+    // The tallest segment as drawn, so the track still holds a label that wraps at a large font size.
+    val drawnHeights = remember { mutableStateMapOf<Int, Int>() }
     Row(
         modifier = modifier
             // The track is only the visible band; the row around it is as tall as a touch target.
             .drawWithCache {
-                val band = (SEGMENT_HEIGHT + TRACK_INSET * 2).toPx().coerceAtMost(size.height)
+                // Only current segments count, so a shorter set of options shrinks the track back.
+                val tallest = (options.indices.mapNotNull { drawnHeights[it] }.maxOrNull() ?: 0).toFloat()
+                val band = maxOf((SEGMENT_HEIGHT + TRACK_INSET * 2).toPx(), tallest + (TRACK_INSET * 2).toPx()).coerceAtMost(size.height)
                 val outline = shape.createOutline(Size(size.width, band), layoutDirection, this)
                 onDrawBehind { translate(top = (size.height - band) / 2) { drawOutline(outline, colors.controlFill) } }
             }
@@ -79,6 +85,8 @@ fun SegmentedControl(
                     .selectable(selected = active, enabled = enabled, role = Role.Tab, interactionSource = interaction, indication = null) { onSelect(i) }
                     .then(if (!enabled && disabledReason != null) Modifier.semantics { stateDescription = disabledReason } else Modifier)
                     .minimumInteractiveComponentSize()
+                    // Room for the track's inset above and below a segment taller than the touch target.
+                    .padding(vertical = TRACK_INSET)
                     .disabledAlpha(enabled),
                 contentAlignment = Alignment.Center
             ) {
@@ -90,6 +98,7 @@ fun SegmentedControl(
                     // As wide as its touch target, so short labels ("6h") still make even segments.
                     modifier = (if (fillWidth) Modifier.fillMaxWidth() else Modifier.widthIn(min = 48.dp))
                         .heightIn(min = SEGMENT_HEIGHT)
+                        .onSizeChanged { drawnHeights[i] = it.height }
                         .clip(shape)
                         .indication(interaction, ripple())
                         .background(bg)
