@@ -430,7 +430,7 @@ class ImportExportPrefsImpl @Inject constructor(
                 return@launch
             }
 
-            val timeLocal = org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+            val timeLocal = ExportFileName.timestamp()
             val exportFileName = "${timeLocal}_${config.FLAVOR}.json"
             val tempDoc = tempDir.createFile("application/json", exportFileName)
             if (tempDoc == null) {
@@ -473,7 +473,7 @@ class ImportExportPrefsImpl @Inject constructor(
                     return@launch
                 }
 
-                val timeLocal = org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+                val timeLocal = ExportFileName.timestamp()
                 val exportFileName = "${timeLocal}_${config.FLAVOR}.json"
                 val tempDoc = tempDir.createFile("application/json", exportFileName)
                 if (tempDoc == null) {
@@ -617,7 +617,7 @@ class ImportExportPrefsImpl @Inject constructor(
                 return null
             }
 
-            val timeLocal = org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+            val timeLocal = ExportFileName.timestamp()
             val fileName = "${timeLocal}_${config.FLAVOR}.json"
             val tempDoc = tempDir.createFile("application/json", fileName)
             if (tempDoc == null) {
@@ -950,7 +950,7 @@ class ImportExportPrefsImpl @Inject constructor(
                 }
                 
                 val contents = userEntryPresentationHelper.userEntriesToCsv(userEntries)
-                val fileName = "UserEntries_${org.joda.time.LocalDateTime.now().toString(org.joda.time.format.DateTimeFormat.forPattern("yyyy-MM-dd_HHmmss"))}.csv"
+                val fileName = "UserEntries_${ExportFileName.timestamp()}.csv"
                 aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} CSV_EXPORT_CLOUD fileName=$fileName, contents length=${contents.length}")
                 
                 // First locate selected folder to fixed path

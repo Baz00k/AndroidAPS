@@ -13,9 +13,13 @@ import app.aaps.core.interfaces.aps.RT
 import app.aaps.plugins.aps.openAPSSMB.DetermineBasalSMB
 import app.aaps.plugins.main.iob.iobCobCalculator.data.AutosensDataStoreObject
 import app.aaps.shared.tests.TestBaseWithProfile
+import app.aaps.database.persistence.converters.fromDb
+import app.aaps.database.persistence.converters.toDb
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.whenever
+import java.time.Instant
+import java.util.TimeZone
 
 class LoopGridDosingReplayTest : TestBaseWithProfile() {
 
@@ -97,6 +101,46 @@ class LoopGridDosingReplayTest : TestBaseWithProfile() {
     @Test
     fun `a recent bolus still prevents SMB at each eligible grid slot`() {
         replay(180.0, lastBolusAgeMinutes = 1).forEach { assertThat(it.units).isNull() }
+    }
+
+    @Test
+    fun `APS persistence replay keeps decisions and delivery deadline through Warsaw transitions`() {
+        val previousZone = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Europe/Warsaw"))
+            listOf("2026-03-29T00:55:00Z", "2026-10-25T00:55:00Z").forEach { start ->
+                listOf(55.0, 180.0).forEach { glucose ->
+                    now = Instant.parse(start).toEpochMilli()
+                    replay(glucose).forEachIndexed { index, decision ->
+                        val decisionTime = Instant.parse(start).toEpochMilli() + index * 300_000L
+                        // Exercise the actual APS database converters, not just a JSON round trip.
+                        val original = apsResultProvider.get().with(decision).also { it.algorithm = app.aaps.core.interfaces.aps.APSResult.Algorithm.SMB }
+                        val restored = original.toDb().fromDb(apsResultProvider)
+                        val persisted = restored.rawData() as RT
+                        assertThat(restored.deliverAt).isEqualTo(original.deliverAt)
+                        assertThat(restored.smb).isEqualTo(original.smb)
+                        assertThat(persisted.timestamp).isEqualTo(decision.timestamp)
+                        assertThat(persisted.deliverAt).isEqualTo(decision.deliverAt)
+                        assertThat(persisted.rate).isEqualTo(decision.rate)
+                        assertThat(persisted.units).isEqualTo(decision.units)
+                        assertThat(persisted.duration).isEqualTo(decision.duration)
+                        assertThat(persisted.IOB).isEqualTo(decision.IOB)
+                        assertThat(persisted.reason.toString()).isEqualTo(decision.reason.toString())
+                        if (glucose == 55.0) {
+                            assertThat(persisted.rate).isEqualTo(0.0)
+                            assertThat(persisted.units).isNull()
+                        } else {
+                            assertThat(persisted.units!!).isAtMost(0.5)
+                            assertThat(persisted.deliverAt).isEqualTo(decisionTime)
+                            // SMB queue's one-minute expiry must not move after persistence.
+                            assertThat(persisted.deliverAt!! + 60_000).isEqualTo(decisionTime + 60_000)
+                        }
+                    }
+                }
+            }
+        } finally {
+            TimeZone.setDefault(previousZone)
+        }
     }
 
     @Test

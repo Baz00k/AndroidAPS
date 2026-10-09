@@ -30,6 +30,8 @@ dependencies {
     implementation(project(":shared:impl"))
 
     testImplementation(project(":implementation"))
+    testImplementation(project(":database:persistence"))
+    testImplementation(project(":database:impl"))
     testImplementation(project(":plugins:aps"))
     testImplementation(project(":plugins:insulin"))
     testImplementation(project(":plugins:smoothing"))

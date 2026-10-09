@@ -34,9 +34,10 @@ dependencies {
     api(libs.kotlinx.serialization.protobuf)
 
     api(libs.org.apache.commons.lang3)
-    api(libs.net.danlew.android.joda)
 
     //RxBus
     api(libs.io.reactivex.rxjava3.rxkotlin)
     testImplementation(libs.io.reactivex.rxjava3.rxandroid)
+    // Timestamp migration comparisons only; never part of the production runtime.
+    testImplementation(libs.joda.time)
 }
