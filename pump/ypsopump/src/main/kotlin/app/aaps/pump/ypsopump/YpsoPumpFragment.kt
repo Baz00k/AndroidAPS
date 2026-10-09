@@ -18,6 +18,9 @@ import app.aaps.pump.ypsopump.compose.PumpStatusRow
 import app.aaps.pump.ypsopump.compose.PumpStatusScreen
 import app.aaps.pump.ypsopump.compose.PumpStatusState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.crypto.KeyTiming
+import app.aaps.pump.ypsopump.compose.keyDateLabel
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
@@ -30,6 +33,7 @@ class YpsoPumpFragment : DaggerFragment() {
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var provisioning: YpsoProvisioningService
 
     private val state = mutableStateOf(PumpStatusState())
     private val handler = Handler(Looper.getMainLooper())
@@ -61,7 +65,9 @@ class YpsoPumpFragment : DaggerFragment() {
     }
 
     private fun build() {
-        state.value = buildPumpStatusState(pumpState, commandQueue, dateUtil, rh)
+        val installed = provisioning.installed()
+        val timing = installed?.keyTiming?.status(installed.createdAt?.toEpochMilli(), installed.importedAt?.toEpochMilli(), dateUtil.now())
+        state.value = buildPumpStatusState(pumpState, commandQueue, dateUtil, rh, timing)
     }
 }
 
@@ -70,7 +76,8 @@ internal fun buildPumpStatusState(
     pumpState: YpsoPumpState,
     commandQueue: CommandQueue,
     dateUtil: DateUtil,
-    rh: ResourceHelper
+    rh: ResourceHelper,
+    keyTiming: KeyTiming.Status? = null,
 ): PumpStatusState {
     val status = pumpStatusPresentation(pumpState, rh)
     val snapshot = status.snapshot
@@ -85,6 +92,16 @@ internal fun buildPumpStatusState(
             add(PumpStatusRow(rh.gs(R.string.ypsopump_profile_read_at), compactDurationLabel(dateUtil.now() - pumpState.profileConfigurationReadAt)))
         }
         if (pumpState.serialNumber.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_serial), pumpState.serialNumber))
+        keyTiming?.let {
+            val label = when (it.origin) {
+                KeyTiming.Origin.SOURCE -> R.string.ypsopump_key_expiry_source_short
+                KeyTiming.Origin.IMPORT_ESTIMATE -> R.string.ypsopump_key_expiry_estimate_short
+                KeyTiming.Origin.USER -> R.string.ypsopump_key_expiry_user_short
+                KeyTiming.Origin.UNKNOWN -> R.string.ypsopump_key_unknown
+            }
+            add(PumpStatusRow(rh.gs(label), if (it.expiryDue) rh.gs(R.string.ypsopump_key_overdue_short)
+                else it.expiresAt?.let(::keyDateLabel) ?: rh.gs(R.string.ypsopump_key_unknown)))
+        }
         if (pumpState.firmwareVersion.isNotEmpty()) add(PumpStatusRow(rh.gs(R.string.ypsopump_firmware), pumpState.firmwareVersion))
     }
     val presentation = pumpSetupPresentation(

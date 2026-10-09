@@ -1,11 +1,13 @@
 package app.aaps.pump.ypsopump.provisioning
 
 import android.content.Context
+import android.os.SystemClock
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.crypto.KeyTiming
 import app.aaps.pump.ypsopump.crypto.SessionJournal
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import java.io.InputStream
@@ -38,6 +40,12 @@ class YpsoProvisioningService internal constructor(
     private var verificationAttemptRequested = false
     private val mutationEpoch = AtomicLong()
     private val provisioningLock = Any()
+    internal var elapsedRealtime: () -> Long = SystemClock::elapsedRealtime
+    // Monotonic elapsed time continues key age when the wall clock is moved backwards while running.
+    // Across process death the journal's observed high-water instant is the conservative baseline.
+    private var timingGeneration: String? = null
+    private var timingInstant = 0L
+    private var timingElapsed = 0L
 
     init {
         refreshState()
@@ -51,7 +59,9 @@ class YpsoProvisioningService internal constructor(
         val importedAt: Instant?,
         val source: Map<String, String>,
         val verifiedAt: Instant?,
-        val availability: PumpSession.Availability
+        val availability: PumpSession.Availability,
+        val generation: String,
+        val keyTiming: KeyTiming,
     )
 
     /** Credentials selected for the next connection. A candidate is never therapy-capable. */
@@ -84,6 +94,36 @@ class YpsoProvisioningService internal constructor(
     // publisher reads these three while holding its own monitor. The owner and pump state are
     // thread-safe on their own, and neither calls back out.
     fun installed(): InstalledSession? = owner.committedRecord()?.toInstalled(owner.availability())
+
+    /** Observe only the installed key. An unsuccessful candidate cannot replace its reminder. */
+    fun observeKeyTiming(now: Long = System.currentTimeMillis()): KeyTiming.Status? = synchronized(owner) {
+        val record = owner.committedRecord() ?: return null
+        val elapsed = elapsedRealtime()
+        val progressed = if (timingGeneration == record.generation && elapsed >= timingElapsed)
+            timingInstant + (elapsed - timingElapsed).coerceAtMost(Long.MAX_VALUE - timingInstant) else 0L
+        val effectiveNow = maxOf(now, record.keyTiming.observedAt, progressed)
+        timingGeneration = record.generation
+        timingInstant = effectiveNow
+        timingElapsed = elapsed
+        // Observe high-water time at minute resolution; avoid rotating a protected journal every poll.
+        val observation = record.keyTiming.observe(record.createdAt, record.importedAt, effectiveNow)
+        val timing = observation.copy(observedAt = if (effectiveNow - record.keyTiming.observedAt >= 60_000) effectiveNow else record.keyTiming.observedAt)
+        owner.updateKeyTiming(record.generation, timing)
+        timing.status(record.createdAt, record.importedAt, effectiveNow)
+    }
+
+    /** No verification grant, availability reset, transport operation or source timestamp rewrite. */
+    fun setKeyDates(generation: String, expiry: Long?, reminder: Long?, now: Long = System.currentTimeMillis()) = synchronized(owner) {
+        val record = owner.committedRecord() ?: error("No installed session")
+        val old = record.keyTiming
+        val timing = KeyTiming(expiry, reminder,
+            expiryDue = old.expiryDue && expiry == old.expiryOverride,
+            reminderDue = old.reminderDue && reminder == old.reminderOverride && (reminder != null || expiry == old.expiryOverride),
+            observedAt = if (expiry == old.expiryOverride && reminder == old.reminderOverride) old.observedAt else now.coerceAtLeast(0),
+        ).observe(record.createdAt, record.importedAt, now)
+        owner.updateKeyTiming(generation, timing)
+        timingGeneration = null
+    }
 
     /** Public candidate metadata for UI; never contains raw key material. */
     @Synchronized
@@ -719,7 +759,9 @@ class YpsoProvisioningService internal constructor(
         importedAt?.let(Instant::ofEpochMilli),
         source,
         verifiedAt?.let(Instant::ofEpochMilli),
-        availability
+        availability,
+        generation,
+        keyTiming,
     )
 
     companion object {

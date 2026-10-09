@@ -59,6 +59,21 @@ class SessionJournalTest {
     private val old = PumpSession.State(listOf(PumpSession.Record("pump", "00".repeat(32), "generation", 8, 100, null)))
     private val next = old.copy(records = old.records.map { it.copy(read = 101) })
 
+    @Test fun `roundtrip preserves key dates and due latches and reads journals without advisory fields`() {
+        val storage = Storage()
+        val journal = SessionJournal(storage)
+        val timing = app.aaps.pump.ypsopump.crypto.KeyTiming(123456, 234567, true, true, 345678)
+        val timed = old.copy(records = old.records.map { it.copy(createdAt = 123, importedAt = 456, keyTiming = timing) })
+        journal.commit(timed)
+        assertEquals(timed, SessionJournal(storage).load())
+        val envelope = JSONObject(storage.file!!)
+        val alias = envelope.getString("anchor")
+        val body = JSONObject(storage.open(alias, envelope.getString("sealed")))
+        body.getJSONArray("records").getJSONObject(0).remove("keyTiming")
+        storage.file = envelope.put("sealed", storage.seal(alias, body.toString())).toString()
+        assertEquals(timed.copy(records = timed.records.map { it.copy(keyTiming = app.aaps.pump.ypsopump.crypto.KeyTiming()) }), journal.load())
+    }
+
     @Test
     fun `process termination before publication preserves exact committed journal with an extra key`() {
         for (boundary in listOf("after-create", "before-truncate", "after-truncate", "partial-write", "before-sync", "after-sync")) {
