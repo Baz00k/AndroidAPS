@@ -118,21 +118,23 @@ private fun SelectionRow(
     trailing: (@Composable () -> Unit)? = null
 ) {
     val colors = AapsTheme.colors
+    val frame = LocalListRowFrame.current
     Row(
         // The disabled look goes on the row, so the inner control is drawn in its normal colours
         // rather than dimmed twice.
         modifier
             .fillMaxWidth()
-            .heightIn(min = AapsSpacing.minTap)
+            .heightIn(min = frame?.minHeight ?: AapsSpacing.minTap)
             .disabledAlpha(enabled)
-            .padding(vertical = 4.dp),
+            .padding(horizontal = frame?.inset ?: 0.dp, vertical = frame?.vertical ?: 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         leading?.invoke()
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
-            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
+            // A blank sub would still take a line and push the title off centre.
+            if (!sub.isNullOrBlank()) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         trailing?.invoke()
     }

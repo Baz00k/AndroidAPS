@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -32,16 +33,19 @@ fun ListRow(
     trailing: (@Composable RowScope.() -> Unit)? = null
 ) {
     val colors = AapsTheme.colors
+    val frame = LocalListRowFrame.current
     Row(
         modifier = (if (onClick != null) modifier.heightIn(min = AapsSpacing.minTap).clickable(role = Role.Button, onClick = onClick) else modifier)
-            .padding(vertical = 10.dp),
+            .then(if (frame != null) Modifier.fillMaxWidth().heightIn(min = frame.minHeight) else Modifier)
+            .padding(horizontal = frame?.inset ?: 0.dp, vertical = frame?.vertical ?: 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         leading?.invoke()
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            // A blank sub would still take a line and push the title off centre.
+            if (!sub.isNullOrBlank()) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         trailing?.invoke(this)
     }

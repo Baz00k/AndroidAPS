@@ -1,5 +1,7 @@
 package app.aaps.core.compose.theme
 
+import android.content.Context
+import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,82 +49,55 @@ data class AapsSkin(
     // a family and a ready-made set of styles lets the two disagree: a skin could name a pixel font,
     // forget to rebuild the styles, and ship Material components in one font and app text in another.
     // Deriving makes that unrepresentable, and it is what keeps a skin file short enough to hand-write.
-    val fontFamily: androidx.compose.ui.text.font.FontFamily = HankenGrotesk,
+    val fontFamily: androidx.compose.ui.text.font.FontFamily = SystemFont,
     /** Set for a font that ships one weight; the scale then uses size alone for hierarchy. */
     val singleWeightFont: Boolean = false,
     val typeScale: Float = 1f,
     /** One number for the whole shape language. `0.dp` squares every corner, pills included. */
-    val cornerRadius: Dp = 18.dp
+    val cornerRadius: Dp = DefaultCornerRadius,
+    /**
+     * Set for a built-in skin that follows the platform: its colours are then resolved at runtime
+     * from the Material scheme (see [materialScheme]), and [dark] / [light] are only that scheme's
+     * baseline rendering — what previews, validation and skin files inheriting from it see.
+     */
+    val materialGround: MaterialGround? = null
 ) {
 
     val type: AapsTextStyles by lazy(LazyThreadSafetyMode.NONE) { aapsTextStyles(fontFamily, typeScale, singleWeightFont) }
     val shapes: AapsShapes by lazy(LazyThreadSafetyMode.NONE) { aapsShapes(cornerRadius) }
 
     fun colors(dark: Boolean): AapsColors = if (dark) this.dark else this.light
+
+    /** The live Material scheme for a built-in skin, or null for a skin file's fixed palette. */
+    fun materialScheme(context: Context?, dark: Boolean): ColorScheme? =
+        materialGround?.let { materialScheme(context, dark, it) }
+
+    /** The colours this skin renders right now — what Compose and the XML chrome both paint with. */
+    fun resolvedColors(context: Context?, dark: Boolean): AapsColors =
+        materialGround?.let { materialScheme(context, dark, it).toAapsColors(dark, it) } ?: colors(dark)
 }
 
 /** The built-in skins. */
 object AapsSkins {
 
-    /** The redesign's own palette — the dark set the handoff shipped, plus a light ground derived from it. */
+    /** The platform's look: Material 3 colour roles on both grounds, from the wallpaper where available. */
     val Default = AapsSkin(
         id = "default",
         label = "Default",
-        dark = AapsColors(),
-        light = AapsColors(
-            background = AapsLightPalette.background,
-            surface = AapsLightPalette.surface,
-            surface2 = AapsLightPalette.surface2,
-            surface3 = AapsLightPalette.surface3,
-            bar = AapsLightPalette.bar,
-            scrim = AapsLightPalette.scrim,
-            hairline = AapsLightPalette.hairline,
-            divider = AapsLightPalette.divider,
-            controlFill = AapsLightPalette.controlFill,
-            switchTrackOff = AapsLightPalette.switchTrackOff,
-            switchKnobOff = AapsLightPalette.switchKnobOff,
-            textPrimary = AapsLightPalette.textPrimary,
-            textSecondary = AapsLightPalette.textSecondary,
-            textTertiary = AapsLightPalette.textTertiary,
-            textOnSurfaceStrong = AapsLightPalette.textOnSurfaceStrong,
-            inRange = AapsLightSemantic.inRange,
-            high = AapsLightSemantic.high,
-            low = AapsLightSemantic.low,
-            veryLow = AapsLightSemantic.veryLow,
-            veryHigh = AapsLightSemantic.veryHigh,
-            iob = AapsLightSemantic.iob,
-            accent = AapsLightAccent.accent,
-            accentOnLight = AapsLightAccent.onLightSurface,
-            accentTint = AapsLightAccent.tint,
-            accentTintStrong = AapsLightAccent.tintStrong,
-            onAccent = AapsLightAccent.onAccent
-        )
+        dark = BaselineDarkScheme.toAapsColors(dark = true),
+        light = BaselineLightScheme.toAapsColors(dark = false),
+        materialGround = MaterialGround.Tonal
     )
 
-    /**
-     * True black for OLED. Deliberately the *smallest possible* second skin: it changes chrome only,
-     * and lifts the semantic colours slightly because they lose contrast against #000 rather than
-     * against the default near-black. Its job is to prove that swapping skins is a data change.
-     */
+    /** [Default]'s dark ground with every large surface black, for OLED panels — see [MaterialGround.TrueBlack]. */
     val Midnight = AapsSkin(
         id = "midnight",
         label = "Midnight",
-        dark = AapsColors(
-            background = androidx.compose.ui.graphics.Color(0xFF000000),
-            surface = androidx.compose.ui.graphics.Color(0xFF0A0D12),
-            surface2 = androidx.compose.ui.graphics.Color(0xFF11151C),
-            surface3 = androidx.compose.ui.graphics.Color(0xFF05070A),
-            bar = androidx.compose.ui.graphics.Color(0xFF000000),
-            hairline = androidx.compose.ui.graphics.Color(0x1AFFFFFF),
-            divider = androidx.compose.ui.graphics.Color(0x14FFFFFF),
-            controlFill = androidx.compose.ui.graphics.Color(0x14FFFFFF),
-            inRange = androidx.compose.ui.graphics.Color(0xFF4BE8A8),
-            high = androidx.compose.ui.graphics.Color(0xFFFFC266),
-            low = androidx.compose.ui.graphics.Color(0xFFFF6E7D)
-        ),
+        dark = materialScheme(null, dark = true, MaterialGround.TrueBlack).toAapsColors(dark = true, MaterialGround.TrueBlack),
         // No light ground of its own — a true-black skin in light mode is a contradiction, so it
         // borrows the default one rather than inventing a bad third palette.
-        light = Default.light
+        light = Default.light,
+        materialGround = MaterialGround.TrueBlack
     )
 
     val builtIn: List<AapsSkin> = listOf(Default, Midnight)

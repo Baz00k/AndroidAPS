@@ -1,6 +1,7 @@
 package app.aaps.core.compose.theme
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -128,6 +129,11 @@ object SkinValidation {
         }
 
         needContrast("onAccent", colors.onAccent, "accent", colors.accent, MIN_TEXT_CONTRAST)
+        // Selected chips, segments and tonal buttons write accent ink on the tint.
+        needContrast(
+            "accentOnLight", colors.accentOnLight,
+            "accentTintStrong", colors.accentTintStrong.compositeOver(colors.surface), MIN_TEXT_CONTRAST
+        )
 
         needDistinct("low", colors.low, "inRange", colors.inRange)
         needDistinct("high", colors.high, "inRange", colors.inRange)

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material 3 menu: a rounded surface container with breathing room above and below the items. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="16dp" />
+    <solid android:color="@color/menu_container" />
+    <padding
+        android:bottom="8dp"
+        android:top="8dp" />
+</shape>

@@ -38,6 +38,22 @@ data class NumericSpec(
         val result = BigDecimal.valueOf(value).add(BigDecimal.valueOf(step).let { if (increase) it else it.negate() })
         return result.max(BigDecimal.valueOf(min)).min(BigDecimal.valueOf(max)).toDouble()
     }
+
+    /**
+     * What a − or + press does to the text as typed, or null when it does nothing. In range it steps. A
+     * number outside the range can only be brought back to the nearest bound — never past it, and never
+     * further out — so the buttons stay a way out of an error; other drafts (incomplete, not a number)
+     * have no value to step from.
+     */
+    fun stepFrom(text: String, increase: Boolean): Double? {
+        val validation = validate(text)
+        validation.value?.let { return increment(it, increase).takeIf { next -> next != it } }
+        return when {
+            validation.error == NumericError.MAXIMUM && !increase -> max
+            validation.error == NumericError.MINIMUM && increase -> min
+            else -> null
+        }
+    }
 }
 
 enum class NumericError { INCOMPLETE, NUMBER, MINIMUM, MAXIMUM, INTEGER, CONFIGURATION }
@@ -54,7 +70,7 @@ data class NumericDraft(val text: String) {
     }
 
     fun stepped(spec: NumericSpec, increase: Boolean): NumericDraft? =
-        validated(spec)?.let { spec.increment(it, increase) }?.let { from(it, spec.decimals) }
+        spec.stepFrom(text, increase)?.let { from(it, spec.decimals) }
 
     companion object {
         fun from(value: Double, decimals: Int) = NumericDraft(formatNumeric(value, decimals))

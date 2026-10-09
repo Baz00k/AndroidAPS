@@ -19,6 +19,7 @@ open class TranslatedDaggerAppCompatActivity : DaggerAppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        followSkinChrome()
 
         // Add menu items without overriding methods in the Activity
         menuProvider = object : MenuProvider {

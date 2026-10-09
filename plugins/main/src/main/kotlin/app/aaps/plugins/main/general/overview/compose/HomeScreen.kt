@@ -62,6 +62,7 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.interfaces.notifications.Notification
+import androidx.compose.foundation.layout.PaddingValues
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.color
@@ -157,7 +158,9 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
-    AapsCard(shape = AapsTheme.shape.hero) {
+    // The loop pill is drawn 32 dp tall inside a 48 dp touch target; the card gives up that slack above it
+    // so the pill sits as far from the top edge as from the left one.
+    AapsCard(shape = AapsTheme.shape.hero, contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = AapsSpacing.cardPad, top = AapsSpacing.cardPad - 8.dp, bottom = AapsSpacing.cardPad)) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // row 1 — loop pill (tap → Loop mode chooser) + time
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -244,7 +247,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp)
-                    .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f))
+                    .background(colors.divider)
                     .height(1.dp)
             )
             // Shifted left by exactly the stat's own inset (see HeroStat) so the labels still line up
@@ -344,9 +347,13 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
     val ranges = listOf(6, 12, 24)
     val selected = ranges.indexOfFirst { it >= rangeHours }.let { if (it < 0) ranges.lastIndex else it }
     // Match the additional cards so all plots share exactly the same horizontal time mapping.
-    AapsCard(contentPadding = CHART_CARD_PADDING) {
+    // The range picker is drawn 40 dp tall inside a 48 dp touch target, so the card gives up that slack
+    // above it: its drawn edge, not its touch target, then sits one padding from the card's edge.
+    AapsCard(contentPadding = PaddingValues(start = CHART_CARD_PADDING_H, end = CHART_CARD_PADDING_H, top = 12.dp, bottom = 16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // The plot beneath runs wider than the card's content so its time axis lines up with the other
+            // graphs; the header keeps the card's own keyline.
+            Row(Modifier.padding(horizontal = AapsSpacing.cardPad - CHART_CARD_PADDING_H), verticalAlignment = Alignment.CenterVertically) {
                 Text("Glucose", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
                 SegmentedControl(
                     options = ranges.map { "${it}h" },

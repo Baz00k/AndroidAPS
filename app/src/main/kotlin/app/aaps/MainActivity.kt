@@ -2,7 +2,9 @@ package app.aaps
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,10 +27,12 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.widget.Toolbar
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.GravityCompat
 import androidx.core.view.MenuCompat
 import androidx.core.view.MenuProvider
 import app.aaps.activities.PreferencesActivity
+import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
@@ -341,6 +345,25 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         }
     }
 
+    /** Toolbar, tabs and drawer as Material 3 draws them, in the colours of the Compose content. */
+    override fun paintChrome(colors: AapsColors) {
+        binding.toolbar.setBackgroundColor(colors.background.toArgb())
+        actionBarDrawerToggle.drawerArrowDrawable.color = colors.textSecondary.toArgb()
+        binding.toolbar.overflowIcon?.setTint(colors.textSecondary.toArgb())
+        listOf(binding.tabsNormal, binding.tabsCompact).forEach { tabs ->
+            tabs.setTabTextColors(colors.textSecondary.toArgb(), colors.accent.toArgb())
+            tabs.setSelectedTabIndicatorColor(colors.accent.toArgb())
+        }
+        val drawerCorner = 16 * resources.displayMetrics.density
+        binding.mainNavigationView.background = GradientDrawable().apply {
+            setColor(colors.surface3.toArgb())
+            cornerRadii = floatArrayOf(0f, 0f, drawerCorner, drawerCorner, drawerCorner, drawerCorner, 0f, 0f)
+        }
+        binding.mainNavigationView.getHeaderView(0)?.findViewById<TextView>(R.id.drawer_headline)?.setTextColor(colors.textSecondary.toArgb())
+        binding.mainNavigationView.itemTextColor = ColorStateList.valueOf(colors.textPrimary.toArgb())
+        binding.mainNavigationView.itemIconTintList = ColorStateList.valueOf(colors.textSecondary.toArgb())
+    }
+
     private fun setWakeLock() {
         val keepScreenOn = preferences.get(BooleanKey.OverviewKeepScreenOn)
         if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -431,7 +454,14 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
             binding.mainDrawerLayout.closeDrawers()
         }
         val result = super.onMenuOpened(featureId, menu)
-        menu.findItem(R.id.nav_treatments)?.isEnabled = profileFunction.getProfile() != null
+        // History needs a profile to read doses against; without one the item is off, and must look it.
+        menu.findItem(R.id.nav_treatments)?.let { item ->
+            val available = profileFunction.getProfile() != null
+            item.isEnabled = available
+            val title = item.title.toString()
+            item.title = if (available) title
+            else SpannableString(title).also { it.setSpan(ForegroundColorSpan(rh.gac(app.aaps.core.ui.R.attr.disabledTextColor)), 0, it.length, 0) }
+        }
         if (binding.mainPager.currentItem >= 0) {
             val plugin = (binding.mainPager.adapter as TabPageAdapter?)?.getPluginAt(binding.mainPager.currentItem) ?: return result
             this.menu?.findItem(R.id.nav_plugin_preferences)?.title = rh.gs(R.string.nav_preferences_plugin, plugin.name)

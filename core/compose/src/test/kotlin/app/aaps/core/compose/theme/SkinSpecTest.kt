@@ -1,5 +1,6 @@
 package app.aaps.core.compose.theme
 
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.google.common.truth.Truth.assertThat
@@ -29,8 +30,8 @@ class SkinSpecTest {
         assertThat(skin.dark.accent).isEqualTo(Color(0xFFFF0000))
         assertThat(skin.dark.background).isEqualTo(AapsSkins.Default.dark.background)
         assertThat(skin.dark.textPrimary).isEqualTo(AapsSkins.Default.dark.textPrimary)
-        assertThat(skin.cornerRadius).isEqualTo(18.dp)
-        assertThat(skin.fontFamily).isEqualTo(HankenGrotesk)
+        assertThat(skin.cornerRadius).isEqualTo(DefaultCornerRadius)
+        assertThat(skin.fontFamily).isEqualTo(SystemFont)
     }
 
     @Test
@@ -247,5 +248,19 @@ class SkinSpecTest {
         )
         val text = SkinSpec.json.encodeToString(SkinSpec.serializer(), original)
         assertThat(SkinSpec.parse(text)).isEqualTo(original)
+    }
+
+    @Test
+    fun `a template preserves wallpaper colours instead of inheriting the defaults`() {
+        // The starter template is seeded from the live appearance. Whatever it inherited instead
+        // would come from the baseline scheme, not from what the author was looking at.
+        val onScreen = darkColorScheme(primary = Color(0xFFFF8A65), surface = Color(0xFF1B1210)).toAapsColors(dark = true)
+        val template = SkinSpec(id = "my-skin", label = "My skin", palette = SkinSpec.PaletteSpec.from(onScreen))
+        val imported = SkinSpec.parse(SkinSpec.json.encodeToString(SkinSpec.serializer(), template)).toSkin()
+
+        listOf(imported.dark, imported.light).forEach {
+            assertThat(it.accent).isEqualTo(Color(0xFFFF8A65))
+            assertThat(it.background).isEqualTo(Color(0xFF1B1210))
+        }
     }
 }

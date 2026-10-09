@@ -12,15 +12,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.TwoStatePreference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceGroup
 import androidx.preference.PreferenceScreen
-import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.ListCard
 import app.aaps.core.compose.components.ListRow
-import app.aaps.core.compose.components.NumberField
+import app.aaps.core.compose.components.NumericInput
+import app.aaps.core.compose.components.NumericSpec
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -30,6 +32,7 @@ import app.aaps.core.keys.interfaces.IntPreferenceKey
 import app.aaps.core.keys.interfaces.NonPreferenceKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.interfaces.StringPreferenceKey
+import java.math.BigDecimal
 
 /**
  * Renders the native preference tree, preserving visibility, dependencies and typed bounds.
@@ -108,10 +111,8 @@ fun PreferenceScreenCompose(
                     leaves += rows[j] as PrefRow.Leaf; j++
                 }
                 Text(row.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
-                if (leaves.isNotEmpty()) AapsCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        leaves.forEach { PreferenceRow(it, preferences) }
-                    }
+                if (leaves.isNotEmpty()) ListCard {
+                    leaves.forEach { PreferenceRow(it, preferences) }
                 }
                 i = j
             } else {
@@ -120,10 +121,8 @@ fun PreferenceScreenCompose(
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
                     leaves += rows[j] as PrefRow.Leaf; j++
                 }
-                if (leaves.isNotEmpty()) AapsCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        leaves.forEach { PreferenceRow(it, preferences) }
-                    }
+                if (leaves.isNotEmpty()) ListCard {
+                    leaves.forEach { PreferenceRow(it, preferences) }
                 }
                 i = j
             }
@@ -156,32 +155,36 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
 
         is DoublePreferenceKey  -> {
             var v by remember(keyString) { mutableStateOf(preferences.get(typed)) }
-            NumberField(
-                label = title,
-                value = v,
-                onValue = { nv ->
-                    val c = nv.coerceIn(typed.min, typed.max)
-                    if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
-                },
-                step = pickStep(typed.min, typed.max),
-                min = typed.min, max = typed.max,
-                decimals = if (typed.max - typed.min <= 20.0) 2 else 1
-            )
-            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
+            val step = pickStep(typed.min, typed.max)
+            NumberRow(title, valueSummary(pref, sub)) {
+                NumericInput(
+                    value = v,
+                    onValue = { nv ->
+                        val c = nv.coerceIn(typed.min, typed.max)
+                        if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
+                    },
+                    // Shown to the step's precision: a 0.1 step reads "0.5", not "0.50".
+                    spec = NumericSpec(typed.min, typed.max, step, BigDecimal.valueOf(step).stripTrailingZeros().scale().coerceAtLeast(0)),
+                    unit = "",
+                    name = title
+                )
+            }
         }
 
         is IntPreferenceKey     -> {
             var v by remember(keyString) { mutableStateOf(preferences.get(typed)) }
-            NumberField(
-                label = title,
-                value = v.toDouble(),
-                onValue = { nv ->
-                    val c = nv.toInt().coerceIn(typed.min, typed.max)
-                    if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
-                },
-                step = 1.0, min = typed.min.toDouble(), max = typed.max.toDouble(), decimals = 0, integerOnly = true
-            )
-            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
+            NumberRow(title, valueSummary(pref, sub)) {
+                NumericInput(
+                    value = v.toDouble(),
+                    onValue = { nv ->
+                        val c = nv.toInt().coerceIn(typed.min, typed.max)
+                        if (editable && pref.callChangeListener(c.toString())) { preferences.put(typed, c); v = c }
+                    },
+                    spec = NumericSpec(typed.min.toDouble(), typed.max.toDouble(), 1.0, 0, integerOnly = true),
+                    unit = "",
+                    name = title
+                )
+            }
         }
 
         is StringPreferenceKey  -> {
@@ -204,6 +207,31 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
         }
     }
 }
+
+/**
+ * A numeric preference as a row of its own: the title in the same style as every other setting, the
+ * field under it. Inset like the rows around it, because a field is not a row that can span the card.
+ */
+@Composable
+private fun NumberRow(title: String, sub: String?, field: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = AapsSpacing.cardPad, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(title, style = AapsTheme.type.listTitle, color = AapsTheme.colors.textOnSurfaceStrong)
+        if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
+        field()
+    }
+}
+
+/**
+ * A summary that only restates the stored value — what an edit-text preference shows by default — is
+ * dropped, since the field right under it already shows the value. A written description is kept.
+ */
+internal fun valueSummary(pref: Preference, summary: String?): String? =
+    summary?.takeUnless { pref is EditTextPreference && (pref.summaryProvider != null || it == pref.text) }
 
 /** Disabled and non-selectable preferences must not expose click actions. */
 internal fun clickHandler(pref: Preference): (() -> Unit)? =

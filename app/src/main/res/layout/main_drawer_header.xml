@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Anchors the drawer's list under a headline, aligned with the item icons, as Material drawers do. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/drawer_headline"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="28dp"
+    android:paddingTop="24dp"
+    android:paddingEnd="28dp"
+    android:paddingBottom="12dp"
+    android:fontFamily="sans-serif-medium"
+    android:text="@string/app_name"
+    android:textSize="14sp" />

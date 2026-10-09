@@ -3,40 +3,26 @@ package app.aaps.core.compose.theme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import app.aaps.core.compose.R
 
 /**
- * Hanken Grotesk is vendored as a single variable font (`res/font/hanken_grotesk.ttf`).
- * We derive each static weight via [FontVariation] (`wght` axis) — requires API 26+, below every module minSdk.
+ * The built-in skins write in the system font — Roboto on most devices, the maker's or the user's own
+ * choice on others — so the app reads like the platform around it and honours a font picked for
+ * legibility. A skin file can still bring its own.
  */
-@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
-private fun hanken(weight: FontWeight) =
-    Font(
-        R.font.hanken_grotesk,
-        weight = weight,
-        variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight))
-    )
-
-val HankenGrotesk = FontFamily(
-    hanken(FontWeight.Normal),     // 400
-    hanken(FontWeight.Medium),     // 500
-    hanken(FontWeight.SemiBold),   // 600
-    hanken(FontWeight.Bold),       // 700
-    hanken(FontWeight.ExtraBold)   // 800
-)
+val SystemFont: FontFamily = FontFamily.Default
 
 /** Tabular figures for every numeric readout, so digits don't jitter as values change. */
 val TabularNums = "tnum"
 
 /**
- * The redesign type scale. Not all roles map onto M3's [Typography] names, so the app-specific
- * roles (hero BG value, big value, card value, uppercase label, …) live here.
+ * The app type scale. Not all roles map onto M3's [Typography] names, so the app-specific roles
+ * (hero BG value, big value, card value, …) live here, with Material's weights: regular for reading,
+ * medium for titles, labels and the readouts, which carry emphasis by size rather than by the
+ * extra-bold weights Material does not use.
  *
  * Read it through [AapsTheme.type], never as a constant: a skin supplies its own scale, and a style
  * captured outside composition would pin the screen to whatever font happened to be loaded first.
@@ -62,7 +48,7 @@ data class AapsTextStyles(
  * on size for hierarchy instead.
  */
 fun aapsTextStyles(
-    family: FontFamily = HankenGrotesk,
+    family: FontFamily = SystemFont,
     scale: Float = 1f,
     singleWeight: Boolean = false
 ): AapsTextStyles {
@@ -70,72 +56,75 @@ fun aapsTextStyles(
     return AapsTextStyles(
         // Huge hero BG value, colored by glucose range at the call site.
         hero = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.ExtraBold),
+            fontFamily = family, fontWeight = w(FontWeight.Medium),
             fontSize = (78 * scale).sp, lineHeight = (78 * scale).sp, letterSpacing = (-0.02).em,
             fontFeatureSettings = TabularNums
         ),
         // Big value (dose, %).
         bigValue = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.ExtraBold),
-            fontSize = (48 * scale).sp, lineHeight = (50 * scale).sp, letterSpacing = (-0.02).em,
+            fontFamily = family, fontWeight = w(FontWeight.Medium),
+            fontSize = (48 * scale).sp, lineHeight = (52 * scale).sp, letterSpacing = (-0.01).em,
             fontFeatureSettings = TabularNums
         ),
         cardValue = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.ExtraBold),
-            fontSize = (24 * scale).sp, lineHeight = (26 * scale).sp, letterSpacing = (-0.01).em,
+            fontFamily = family, fontWeight = w(FontWeight.Normal),
+            fontSize = (24 * scale).sp, lineHeight = (30 * scale).sp,
             fontFeatureSettings = TabularNums
         ),
-        // Screen / sheet title.
+        // Screen / sheet title — Material "title medium".
         title = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.ExtraBold),
-            fontSize = (16 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = (-0.01).em
-        ),
-        listTitle = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.Bold),
-            fontSize = (14 * scale).sp, lineHeight = (18 * scale).sp
-        ),
-        body = TextStyle(
             fontFamily = family, fontWeight = w(FontWeight.Medium),
-            fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp
+            fontSize = (16 * scale).sp, lineHeight = (24 * scale).sp, letterSpacing = 0.01.em
         ),
-        // Uppercase label, wide tracking.
+        // "Title small".
+        listTitle = TextStyle(
+            fontFamily = family, fontWeight = w(FontWeight.Medium),
+            fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.007.em
+        ),
+        // "Body medium".
+        body = TextStyle(
+            fontFamily = family, fontWeight = w(FontWeight.Normal),
+            fontSize = (14 * scale).sp, lineHeight = (20 * scale).sp, letterSpacing = 0.018.em
+        ),
+        // "Label small".
         label = TextStyle(
-            fontFamily = family, fontWeight = w(FontWeight.Bold),
-            fontSize = (11 * scale).sp, lineHeight = (13 * scale).sp, letterSpacing = 0.07.em
+            fontFamily = family, fontWeight = w(FontWeight.Medium),
+            fontSize = (11 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.045.em
         ),
+        // "Body small".
         caption = TextStyle(
             fontFamily = family, fontWeight = w(FontWeight.Normal),
-            fontSize = (12 * scale).sp, lineHeight = (15 * scale).sp
+            fontSize = (12 * scale).sp, lineHeight = (16 * scale).sp, letterSpacing = 0.033.em
         )
     )
 }
 
-/** The scale the redesign shipped with. */
+/** The scale of the built-in skins. */
 val DefaultAapsTextStyles = aapsTextStyles()
 
 /**
- * Baseline M3 [Typography] so any Material component (dialogs, switches, menus) picks up the skin's
- * font rather than staying on the platform default while everything around it changes.
+ * Material's own [Typography] in the skin's font, so any Material component (dialogs, switches,
+ * menus) matches the app text rather than staying on the platform default.
  */
 fun aapsM3Typography(family: FontFamily, singleWeight: Boolean = false): Typography {
-    fun w(weight: FontWeight) = if (singleWeight) FontWeight.Normal else weight
+    fun TextStyle.inFamily() = copy(fontFamily = family, fontWeight = if (singleWeight) FontWeight.Normal else fontWeight)
     return Typography().run {
         copy(
-            displayLarge = displayLarge.copy(fontFamily = family),
-            displayMedium = displayMedium.copy(fontFamily = family),
-            displaySmall = displaySmall.copy(fontFamily = family),
-            headlineLarge = headlineLarge.copy(fontFamily = family),
-            headlineMedium = headlineMedium.copy(fontFamily = family),
-            headlineSmall = headlineSmall.copy(fontFamily = family),
-            titleLarge = titleLarge.copy(fontFamily = family, fontWeight = w(FontWeight.Bold)),
-            titleMedium = titleMedium.copy(fontFamily = family, fontWeight = w(FontWeight.Bold)),
-            titleSmall = titleSmall.copy(fontFamily = family, fontWeight = w(FontWeight.SemiBold)),
-            bodyLarge = bodyLarge.copy(fontFamily = family),
-            bodyMedium = bodyMedium.copy(fontFamily = family),
-            bodySmall = bodySmall.copy(fontFamily = family),
-            labelLarge = labelLarge.copy(fontFamily = family, fontWeight = w(FontWeight.Bold)),
-            labelMedium = labelMedium.copy(fontFamily = family, fontWeight = w(FontWeight.Bold)),
-            labelSmall = labelSmall.copy(fontFamily = family, fontWeight = w(FontWeight.Bold))
+            displayLarge = displayLarge.inFamily(),
+            displayMedium = displayMedium.inFamily(),
+            displaySmall = displaySmall.inFamily(),
+            headlineLarge = headlineLarge.inFamily(),
+            headlineMedium = headlineMedium.inFamily(),
+            headlineSmall = headlineSmall.inFamily(),
+            titleLarge = titleLarge.inFamily(),
+            titleMedium = titleMedium.inFamily(),
+            titleSmall = titleSmall.inFamily(),
+            bodyLarge = bodyLarge.inFamily(),
+            bodyMedium = bodyMedium.inFamily(),
+            bodySmall = bodySmall.inFamily(),
+            labelLarge = labelLarge.inFamily(),
+            labelMedium = labelMedium.inFamily(),
+            labelSmall = labelSmall.inFamily()
         )
     }
 }

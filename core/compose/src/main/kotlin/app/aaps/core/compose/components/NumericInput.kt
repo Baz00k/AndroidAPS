@@ -3,6 +3,7 @@ package app.aaps.core.compose.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -119,15 +120,17 @@ fun NumericInput(
             increaseLabel = stringResource(R.string.compose_numeric_add, formatNumeric(spec.step, spec.decimals), unit, name),
             onDecrease = { NumericDraft(text).stepped(spec, false)?.let(::edit) },
             onIncrease = { NumericDraft(text).stepped(spec, true)?.let(::edit) },
-            decreaseEnabled = current != null && current > spec.min,
-            increaseEnabled = current != null && current < spec.max
+            // Enabled exactly when pressing would change the text, so a value typed past a bound can still
+            // be brought back with the button that points toward the range.
+            decreaseEnabled = spec.stepFrom(text, false) != null,
+            increaseEnabled = spec.stepFrom(text, true) != null
         ) {
             // A filled field, so the value reads as typeable, holding the value and its unit centred
             // together on one baseline as one reading. The unit stays outside the text field — the
             // field's semantics are exactly the number — and the whole fill focuses it on a tap.
             val focus = remember { FocusRequester() }
             val keyboard = LocalSoftwareKeyboardController.current
-            Row(
+            Box(
                 Modifier
                     .weight(1f)
                     .padding(horizontal = 8.dp)
@@ -137,38 +140,47 @@ fun NumericInput(
                     // Focus alone does not bring back a keyboard dismissed while the field kept focus.
                     .pointerInput(Unit) { detectTapGestures { focus.requestFocus(); keyboard?.show() } }
                     .padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                contentAlignment = Alignment.Center
             ) {
-                // A single-line field fills whatever width it is offered, so offer it the width of its
-                // own text (plus the cursor). Past the space available it scrolls internally rather
-                // than displacing the separately measured unit.
-                val valueWidth = with(LocalDensity.current) { measurer.measure(text, valueStyle).size.width.toDp() } + 2.dp
-                BasicTextField(
-                    value = text,
-                    onValueChange = { edit(NumericDraft(it)) },
-                    singleLine = true,
-                    textStyle = valueStyle,
-                    cursorBrush = SolidColor(colors.accent),
-                    // Compose's numeric keyboard types do not request TYPE_NUMBER_FLAG_SIGNED. A text
-                    // keyboard is intentional for signed entries: both minus and decimal separators work.
-                    keyboardOptions = KeyboardOptions(keyboardType = if (spec.min < 0) KeyboardType.Text else KeyboardType.Decimal),
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .width(valueWidth)
-                        .alignByBaseline()
-                        .focusRequester(focus)
-                        .semantics {
-                            contentDescription = name
-                            issue?.let { error(it) }
-                            stateDescription = listOfNotNull(unit.takeIf { it.isNotBlank() }, zeroLabel.takeIf { current == 0.0 }, limit).joinToString(", ")
-                        }
-                )
-                if (unit.isNotBlank())
-                    Text(unit, style = AapsTheme.type.body, color = colors.textSecondary, maxLines = 1, modifier = Modifier.alignByBaseline().padding(start = 4.dp))
+                // Baseline alignment places the pair from the top of its row, so the row wraps the pair
+                // and the box centres it — otherwise the number rides high in a field taller than it.
+                Row {
+                    // A single-line field fills whatever width it is offered, so offer it the width of its
+                    // own text (plus the cursor). Past the space available it scrolls internally rather
+                    // than displacing the separately measured unit.
+                    val valueWidth = with(LocalDensity.current) { measurer.measure(text, valueStyle).size.width.toDp() } + 2.dp
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { edit(NumericDraft(it)) },
+                        singleLine = true,
+                        textStyle = valueStyle,
+                        cursorBrush = SolidColor(colors.accent),
+                        // Compose's numeric keyboard types do not request TYPE_NUMBER_FLAG_SIGNED. A text
+                        // keyboard is intentional for signed entries: both minus and decimal separators work.
+                        keyboardOptions = KeyboardOptions(keyboardType = if (spec.min < 0) KeyboardType.Text else KeyboardType.Decimal),
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .width(valueWidth)
+                            .alignByBaseline()
+                            .focusRequester(focus)
+                            .semantics {
+                                contentDescription = name
+                                issue?.let { error(it) }
+                                stateDescription = listOfNotNull(unit.takeIf { it.isNotBlank() }, zeroLabel.takeIf { current == 0.0 }, limit).joinToString(", ")
+                            }
+                    )
+                    if (unit.isNotBlank())
+                        Text(unit, style = AapsTheme.type.body, color = colors.textSecondary, maxLines = 1, modifier = Modifier.alignByBaseline().padding(start = 4.dp))
+                }
             }
         }
-        if (current == 0.0 && zeroLabel != null) Text(zeroLabel, style = AapsTheme.type.caption, color = colors.textSecondary)
-        (issue ?: limit)?.let { Text(it, style = AapsTheme.type.caption, color = if (issue != null) colors.high else colors.textSecondary) }
+        // The line is always there, empty or not, so a limit or an error appearing as you type does not
+        // push what is below the field down.
+        Text(
+            issue ?: limit.orEmpty(),
+            style = AapsTheme.type.caption,
+            color = if (issue != null) colors.high else colors.textSecondary,
+            minLines = 1
+        )
     }
 }

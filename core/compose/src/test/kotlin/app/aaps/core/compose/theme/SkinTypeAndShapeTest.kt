@@ -31,15 +31,6 @@ class SkinTypeAndShapeTest {
     }
 
     @Test
-    fun `the default seed reproduces the handoff radii`() {
-        val s = aapsShapes()
-        assertThat(s.card).isEqualTo(RoundedCornerShape(18.dp))
-        assertThat(s.hero).isEqualTo(RoundedCornerShape(18.dp * 1.33f))
-        assertThat(s.pill).isEqualTo(RoundedCornerShape(999.dp))
-        assertThat(DefaultAapsShapes).isEqualTo(s)
-    }
-
-    @Test
     fun `a negative radius is clamped rather than producing an inverted shape`() {
         assertThat(aapsShapes((-8).dp).card).isEqualTo(RoundedCornerShape(0.dp))
     }
@@ -56,15 +47,6 @@ class SkinTypeAndShapeTest {
         ).forEach { (name, style) ->
             assertWithMessage("$name weight").that(style.fontWeight).isEqualTo(FontWeight.Normal)
         }
-    }
-
-    @Test
-    fun `the default scale keeps its weight hierarchy`() {
-        val t = aapsTextStyles()
-        assertThat(t.hero.fontWeight).isEqualTo(FontWeight.ExtraBold)
-        assertThat(t.body.fontWeight).isEqualTo(FontWeight.Medium)
-        assertThat(t.caption.fontWeight).isEqualTo(FontWeight.Normal)
-        assertThat(DefaultAapsTextStyles).isEqualTo(t)
     }
 
     @Test

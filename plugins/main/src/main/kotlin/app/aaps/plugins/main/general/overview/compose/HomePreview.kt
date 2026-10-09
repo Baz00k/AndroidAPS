@@ -18,7 +18,7 @@ import app.aaps.core.compose.theme.AapsTone
  * handoff mockup `screenshots/02-home.png`). Open in Android Studio's Compose preview — this is not
  * used at runtime.
  */
-@Preview(name = "Home", widthDp = 412, heightDp = 892, showBackground = true, backgroundColor = 0xFF0E1116)
+@Preview(name = "Home", widthDp = 412, heightDp = 892, showBackground = true, backgroundColor = 0xFF141218)
 @Composable
 private fun HomeScreenPreview(@PreviewParameter(GlucoseFreshnessPreviewProvider::class) stale: Boolean) {
     AapsTheme {

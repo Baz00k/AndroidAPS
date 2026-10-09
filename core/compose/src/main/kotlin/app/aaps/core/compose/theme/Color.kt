@@ -1,44 +1,30 @@
 package app.aaps.core.compose.theme
 
+import android.content.Context
+import android.os.Build
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
 /**
- * AAPS redesign color tokens (dark theme).
+ * AAPS colour tokens.
  *
  * Three families, kept strictly separate — this separation is the core UX fix for
  * "unclear what's interactive":
- *  - [AapsPalette] surfaces / text  — neutral chrome, non-semantic.
- *  - Semantic (glucose / health)     — greens/ambers/reds, RESERVED for glucose & status. Never a control.
- *  - Accent (interactive / brand)    — the "is-tappable" signal. Anything the user can tap.
+ *  - Chrome (surfaces / text)    — neutral, non-semantic.
+ *  - Semantic (glucose / health) — greens/ambers/reds, RESERVED for glucose & status. Never a control.
+ *  - Accent (interactive)        — the "is-tappable" signal. Anything the user can tap.
  *
- * Source of truth: design handoff "Design tokens" table.
+ * The built-in appearances take chrome and accent from Material 3 colour roles, so the app looks like
+ * the platform around it: the device's dynamic (wallpaper) scheme on Android 12+, Material's baseline
+ * scheme below that. Semantic colours never come from the wallpaper — personalisation must not change
+ * what a glucose colour means.
  */
-object AapsPalette {
 
-    // Surfaces / chrome
-    val background = Color(0xFF0E1116)   // screen background
-    val surface = Color(0xFF141922)      // cards, sheets
-    val surface2 = Color(0xFF171C24)     // nested cards
-    val surface3 = Color(0xFF12161D)     // bottom sheet
-    val bar = Color(0xFF10141B)          // bottom action / confirm bars
-    val scrim = Color(0x99060810)        // dims the content behind a bottom sheet
-
-    val hairline = Color(0x0FFFFFFF)     // rgba(255,255,255,0.06) card borders
-    val divider = Color(0x0DFFFFFF)      // rgba(255,255,255,0.05) list separators
-    val controlFill = Color(0x0FFFFFFF)  // rgba(255,255,255,0.06) icon buttons, inert chips
-
-    // Text
-    val textPrimary = Color(0xFFEDF0F4)  // headings, values
-    val textSecondary = Color(0xFF98A2B2)// labels
-    val textTertiary = Color(0xFF6A7482) // captions, hints
-    val textOnSurfaceStrong = Color(0xFFC4CCD8) // list item titles
-
-    // Toggle track / knob (Material Switch)
-    val switchTrackOff = Color(0x1FFFFFFF) // rgba(255,255,255,0.12)
-    val switchKnobOff = Color(0xFF8A93A3)
-}
-
-/** Semantic glucose / status colors — RESERVED. Never use for generic controls. */
+/** Semantic glucose / status colors for a dark ground — RESERVED. Never use for generic controls. */
 object AapsSemantic {
 
     val inRange = Color(0xFF3ED598)    // green — in-range / good
@@ -49,50 +35,11 @@ object AapsSemantic {
     val iob = Color(0xFFFF9AA2)        // soft red — IOB / insulin-reducing
 }
 
-/** Accent (interactive / brand) — the "is-tappable" signal. */
-object AapsAccent {
-
-    val accent = Color(0xFF6E8BFF)             // periwinkle / indigo
-    val onLightSurface = Color(0xFFAEBEFF)     // accent text on light surface
-    val tint = Color(0x1F6E8BFF)               // rgba(110,139,255,0.12) fills
-    val tintStrong = Color(0x296E8BFF)         // rgba(110,139,255,0.16) fills
-    val onAccent = Color(0xFF0B0E14)           // text / icon on accent buttons
-}
-
-// ---------------------------------------------------------------------------------------------
-// LIGHT
-//
-// The same three families again, re-picked for a light ground. This is not a tint of the dark set:
-// amber and green are the hardest colours to keep legible on white, so the semantic family is
-// noticeably deeper here, and the accent inks invert (ink ON accent goes white, ink on an accent
-// TINT goes dark). Contrast targets: >=4.5:1 for body text and for anything that carries clinical
-// meaning at small sizes, >=3:1 for the hero readouts.
-// ---------------------------------------------------------------------------------------------
-
-/** Light counterpart of [AapsPalette]. */
-object AapsLightPalette {
-
-    val background = Color(0xFFF5F7FA)
-    val surface = Color(0xFFFFFFFF)
-    val surface2 = Color(0xFFF0F3F7)
-    val surface3 = Color(0xFFFFFFFF)
-    val bar = Color(0xFFFFFFFF)
-    val scrim = Color(0x99101418)        // scrims stay dark — they dim, whatever the skin
-
-    val hairline = Color(0x14000000)     // rgba(0,0,0,0.08)
-    val divider = Color(0x0F000000)      // rgba(0,0,0,0.06)
-    val controlFill = Color(0x0D000000)  // rgba(0,0,0,0.05)
-
-    val textPrimary = Color(0xFF12161D)
-    val textSecondary = Color(0xFF5A6472)
-    val textTertiary = Color(0xFF737C8A)
-    val textOnSurfaceStrong = Color(0xFF232A34)
-
-    val switchTrackOff = Color(0x1F000000)
-    val switchKnobOff = Color(0xFFFFFFFF)
-}
-
-/** Light counterpart of [AapsSemantic] — deeper, because these sit on white. */
+/**
+ * Light counterpart of [AapsSemantic]. Not a tint of the dark set: amber and green are the hardest
+ * colours to keep legible on white, so this family is noticeably deeper. Contrast targets: >=4.5:1
+ * for anything that carries clinical meaning at small sizes, >=3:1 for the hero readouts.
+ */
 object AapsLightSemantic {
 
     val inRange = Color(0xFF0F7A55)
@@ -103,15 +50,85 @@ object AapsLightSemantic {
     val iob = Color(0xFFB5485A)
 }
 
-/** Light counterpart of [AapsAccent]. Note both inks flip role relative to the dark set. */
-object AapsLightAccent {
+/** Material's baseline schemes: what a built-in appearance renders where dynamic colour is unavailable. */
+internal val BaselineDarkScheme = darkColorScheme()
+internal val BaselineLightScheme = lightColorScheme()
 
-    val accent = Color(0xFF3F5FD6)
-    val onLightSurface = Color(0xFF2B44A8)     // accent ink ON an accent tint
-    val tint = Color(0x1A3F5FD6)               // rgba(63,95,214,0.10)
-    val tintStrong = Color(0x293F5FD6)         // rgba(63,95,214,0.16)
-    val onAccent = Color(0xFFFFFFFF)           // ink on a SOLID accent fill
+/** How a built-in skin derives its colours from a Material scheme. */
+enum class MaterialGround {
+
+    /** The scheme as Material defines it. */
+    Tonal,
+
+    /**
+     * For OLED panels, where an unlit pixel draws no power and is genuinely black: the tonal dark
+     * ground with the screen itself and its bars #000 — the areas that are always on and always large.
+     * Everything placed on that ground keeps its tone: cards stay filled, and sheets, drawers and
+     * dialogs stay lifted, so they separate from black by fill rather than by outlines.
+     */
+    TrueBlack
 }
+
+/** The Material scheme for one ground: dynamic where the device offers it, else the baseline. */
+fun materialScheme(context: Context?, dark: Boolean, ground: MaterialGround = MaterialGround.Tonal): ColorScheme {
+    val scheme = when {
+        context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+
+        dark                                                               -> BaselineDarkScheme
+        else                                                               -> BaselineLightScheme
+    }
+    return if (dark && ground == MaterialGround.TrueBlack) scheme.withBlackGrounds() else scheme
+}
+
+private fun ColorScheme.withBlackGrounds(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceDim = Color.Black,
+    surfaceContainerLowest = Color.Black
+)
+
+/**
+ * Map Material roles onto the app's tokens.
+ *
+ * Cards are brighter than the screen on both grounds, as in current Android system apps: white cards on
+ * a grey screen in light, lifted cards on a near-black screen in dark. Accent text uses `primary`
+ * rather than an on-container ink because it also marks tappable text on plain cards, where a
+ * neutral ink would stop reading as a control.
+ */
+fun ColorScheme.toAapsColors(dark: Boolean, ground: MaterialGround = MaterialGround.Tonal): AapsColors {
+    val colors = tonalColors(dark)
+    return if (dark && ground == MaterialGround.TrueBlack) colors.copy(background = Color.Black, bar = Color.Black) else colors
+}
+
+private fun ColorScheme.tonalColors(dark: Boolean): AapsColors = AapsColors(
+    background = if (dark) surface else surfaceContainer,
+    surface = if (dark) surfaceContainer else surfaceContainerLowest,
+    surface2 = surfaceContainerHigh,
+    surface3 = surfaceContainerLow,
+    bar = surfaceContainer,
+    scrim = scrim.copy(alpha = 0.32f),
+    hairline = outlineVariant,
+    divider = outlineVariant,
+    controlFill = surfaceContainerHighest,
+    switchTrackOff = surfaceContainerHighest,
+    switchKnobOff = outline,
+    textPrimary = onSurface,
+    textSecondary = onSurfaceVariant,
+    textTertiary = outline,
+    textOnSurfaceStrong = onSurface,
+    inRange = if (dark) AapsSemantic.inRange else AapsLightSemantic.inRange,
+    high = if (dark) AapsSemantic.high else AapsLightSemantic.high,
+    low = if (dark) AapsSemantic.low else AapsLightSemantic.low,
+    veryLow = if (dark) AapsSemantic.veryLow else AapsLightSemantic.veryLow,
+    veryHigh = if (dark) AapsSemantic.veryHigh else AapsLightSemantic.veryHigh,
+    iob = if (dark) AapsSemantic.iob else AapsLightSemantic.iob,
+    accent = primary,
+    accentOnLight = primary,
+    accentTint = secondaryContainer,
+    accentTintStrong = secondaryContainer,
+    onAccent = onPrimary
+)
 
 /**
  * A semantic tone named where the *meaning* is known but the theme is not.

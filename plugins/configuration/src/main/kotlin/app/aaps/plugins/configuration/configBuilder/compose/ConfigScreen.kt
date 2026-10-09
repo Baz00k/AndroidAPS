@@ -1,33 +1,31 @@
 package app.aaps.plugins.configuration.configBuilder.compose
 
-import app.aaps.core.compose.components.CheckboxRow
-import app.aaps.core.compose.components.RadioRow
-import app.aaps.core.compose.components.SectionLabel
-import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.CheckboxRow
 import app.aaps.core.compose.components.Dot
+import app.aaps.core.compose.components.ListCard
+import app.aaps.core.compose.components.ListRow
+import app.aaps.core.compose.components.RadioRow
+import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.ToggleRow
+import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 
@@ -44,94 +42,72 @@ fun ConfigScreen(
 ) {
     val colors = AapsTheme.colors
     Column(
-        Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
+        // The screen's title is the toolbar's (or the tab's); it is not repeated here.
+        Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState())
+            .padding(horizontal = AapsSpacing.screenH).padding(top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
     ) {
-        Text("Config Builder", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
-
-        if (state.summary.isNotEmpty()) {
-            Text("YOUR LOOP, RIGHT NOW", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
-            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-                Column {
-                    state.summary.forEachIndexed { i, s ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Dot(if (s.ok) colors.inRange else colors.high, size = 9.dp)
-                            Text(s.label, style = AapsTheme.type.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                            Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+        if (state.summary.isNotEmpty()) Section("Your loop, right now") {
+            ListCard(Modifier.fillMaxWidth()) {
+                state.summary.forEach { s ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.cardPad, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Dot(if (s.ok) colors.inRange else colors.high, size = 9.dp)
+                        Text(s.label, style = AapsTheme.type.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp).weight(1f))
+                        Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
         }
 
         state.categories.forEach { category ->
-            SectionLabel(category.title)
-            if (category.description.isNotBlank())
-                Text(category.description, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
-            else Box(Modifier.height(8.dp))
-            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-                Column(if (category.multiple) Modifier else Modifier.selectableGroup()) {
-                    category.options.forEachIndexed { i, option ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        val sub = option.description.ifBlank { null }
-                        if (category.multiple)
-                            CheckboxRow(option.name, option.selected, { onSelect(option.index, it) }, sub = sub, enabled = !option.fixed)
-                        else
-                            // Choosing the active option again would ask to switch to it again (and reconnect a pump).
-                            RadioRow(option.name, option.selected, { if (!option.selected) onSelect(option.index, true) }, sub = sub, enabled = !option.fixed)
-                    }
-                }
-            }
-        }
-
-        if (state.plugins.isNotEmpty()) {
-            SectionLabel("Plugins", Modifier.padding(bottom = 8.dp))
-            AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                Column {
-                    state.plugins.forEachIndexed { i, p ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(p.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (p.sub.isNotBlank()) Text(p.sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            Switch(
-                                checked = p.enabled,
-                                onCheckedChange = { onToggle(p.index, it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = colors.onAccent,
-                                    checkedTrackColor = colors.accent,
-                                    uncheckedTrackColor = colors.controlFill,
-                                    uncheckedThumbColor = colors.textSecondary,
-                                    uncheckedBorderColor = colors.hairline
-                                )
-                            )
+            Section(category.title, category.description) {
+                ListCard(Modifier.fillMaxWidth()) {
+                    Column(if (category.multiple) Modifier else Modifier.selectableGroup()) {
+                        category.options.forEach { option ->
+                            val sub = option.description.ifBlank { null }
+                            if (category.multiple)
+                                CheckboxRow(option.name, option.selected, { onSelect(option.index, it) }, sub = sub, enabled = !option.fixed)
+                            else
+                                // Choosing the active option again would ask to switch to it again (and reconnect a pump).
+                                RadioRow(option.name, option.selected, { if (!option.selected) onSelect(option.index, true) }, sub = sub, enabled = !option.fixed)
                         }
                     }
                 }
             }
         }
 
-        if (state.prefs.isNotEmpty()) {
-            SectionLabel("Settings", Modifier.padding(bottom = 8.dp))
+        if (state.plugins.isNotEmpty()) Section("Plugins") {
+            ListCard(Modifier.fillMaxWidth()) {
+                state.plugins.forEach { p -> ToggleRow(p.name, p.enabled, { onToggle(p.index, it) }, sub = p.sub.ifBlank { null }) }
+            }
+        }
+
+        if (state.prefs.isNotEmpty()) Section("Settings") {
             state.prefs.groupBy { it.group }.forEach { (group, rows) ->
-                Text(group, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp, top = 4.dp))
-                AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap)) {
-                    Column {
-                        rows.forEachIndexed { i, p ->
-                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                            Row(
-                                Modifier.fillMaxWidth().clickable { onOpenPrefs(p.index) }.padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(p.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                                Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
-                            }
+                Text(group, style = AapsTheme.type.caption, color = colors.textTertiary)
+                ListCard(Modifier.fillMaxWidth()) {
+                    rows.forEach { p ->
+                        ListRow(p.name, onClick = { onOpenPrefs(p.index) }) {
+                            Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
-            Box(Modifier.height(24.dp))
         }
+    }
+}
+
+/** A heading, an optional line saying what it is for, and its content — spaced the same everywhere. */
+@Composable
+private fun Section(title: String, description: String = "", content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            SectionLabel(title)
+            if (description.isNotBlank()) Text(description, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
+        }
+        content()
     }
 }

@@ -97,6 +97,24 @@ data class SkinSpec(
         val onAccent: String? = null
     ) {
 
+        companion object {
+
+            /** Every token of [colors], so a file built from it reproduces them without inheriting anything. */
+            fun from(colors: AapsColors) = with(colors) {
+                PaletteSpec(
+                    background = background.toSkinHex(), surface = surface.toSkinHex(), surface2 = surface2.toSkinHex(),
+                    surface3 = surface3.toSkinHex(), bar = bar.toSkinHex(), scrim = scrim.toSkinHex(), hairline = hairline.toSkinHex(),
+                    divider = divider.toSkinHex(), controlFill = controlFill.toSkinHex(), switchTrackOff = switchTrackOff.toSkinHex(),
+                    switchKnobOff = switchKnobOff.toSkinHex(), textPrimary = textPrimary.toSkinHex(), textSecondary = textSecondary.toSkinHex(),
+                    textTertiary = textTertiary.toSkinHex(), textOnSurfaceStrong = textOnSurfaceStrong.toSkinHex(),
+                    inRange = inRange.toSkinHex(), high = high.toSkinHex(), low = low.toSkinHex(), veryLow = veryLow.toSkinHex(),
+                    veryHigh = veryHigh.toSkinHex(), iob = iob.toSkinHex(), accent = accent.toSkinHex(),
+                    accentOnLight = accentOnLight.toSkinHex(), accentTint = accentTint.toSkinHex(),
+                    accentTintStrong = accentTintStrong.toSkinHex(), onAccent = onAccent.toSkinHex()
+                )
+            }
+        }
+
         /** Resolve against [base], which supplies anything this palette did not name. */
         fun toColors(base: AapsColors): AapsColors = AapsColors(
             background = background.orDefault(base.background),
@@ -152,10 +170,10 @@ data class SkinSpec(
             // A single-look skin renders its one palette on both grounds rather than falling back to
             // the default light one, which would silently discard its identity in light mode.
             light = light?.toColors(single ?: AapsSkins.Default.light) ?: darkColors,
-            fontFamily = fontFamily ?: HankenGrotesk,
+            fontFamily = fontFamily ?: SystemFont,
             singleWeightFont = font?.singleWeight ?: false,
             typeScale = font?.scale ?: 1f,
-            cornerRadius = cornerRadius?.dp ?: 18.dp
+            cornerRadius = cornerRadius?.dp ?: DefaultCornerRadius
         )
     }
 

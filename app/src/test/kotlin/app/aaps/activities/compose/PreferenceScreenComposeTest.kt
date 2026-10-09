@@ -1,6 +1,7 @@
 package app.aaps.activities.compose
 
 import android.text.TextUtils
+import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.SwitchPreference
@@ -40,6 +41,18 @@ class PreferenceScreenComposeTest : TestBaseWithProfile() {
             entries = arrayOf("No protection", "Biometric"),
             entryValues = arrayOf("0", "1")
         ).apply { isPersistent = false; isVisible = true }
+    }
+
+    @Test fun `a numeric row drops a summary that only restates its value and keeps a description`() {
+        // The field under the title already shows the value; the same number again below it is noise.
+        val provided = EditTextPreference(context).apply {
+            isPersistent = false; text = "0.5"; summaryProvider = EditTextPreference.SimpleSummaryProvider.getInstance()
+        }
+        assertThat(valueSummary(provided, provided.summary?.toString())).isNull()
+        val restated = EditTextPreference(context).apply { isPersistent = false; text = "48"; summary = "48" }
+        assertThat(valueSummary(restated, "48")).isNull()
+        val described = EditTextPreference(context).apply { isPersistent = false; text = "48"; summary = "Warn this long after a change" }
+        assertThat(valueSummary(described, "Warn this long after a change")).isEqualTo("Warn this long after a change")
     }
 
     @Test fun `nested graph groups have no stacked headings and cannot absorb parent siblings`() {
