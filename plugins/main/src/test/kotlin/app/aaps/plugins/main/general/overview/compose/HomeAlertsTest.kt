@@ -23,7 +23,7 @@ class HomeAlertsTest {
             listOf(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.LOW), alert(4, Notification.URGENT))
         )!!
         assertThat(summary.top.id).isEqualTo(4)
-        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more")
+        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more alerts")
     }
 
     @Test fun `other urgent alerts are counted by name, not folded into the total`() {
@@ -34,12 +34,17 @@ class HomeAlertsTest {
         assertThat(summary.top.id).isEqualTo(2)
         assertThat(summary.moreUrgent).isEqualTo(1)
         assertThat(summary.moreOther).isEqualTo(2)
-        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more · 1 urgent")
+        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more alerts · 1 urgent")
+    }
+
+    @Test fun `a single alert behind the shown one`() {
+        val summary = alertSummary(listOf(alert(1, Notification.NORMAL), alert(2, Notification.INFO)))!!
+        assertThat(moreAlertsLabel(summary)).isEqualTo("1 more alert")
     }
 
     @Test fun `only urgent alerts behind the shown one`() {
         val summary = alertSummary(List(3) { alert(it, Notification.URGENT) })!!
-        assertThat(moreAlertsLabel(summary)).isEqualTo("2 more urgent")
+        assertThat(moreAlertsLabel(summary)).isEqualTo("2 more urgent alerts")
     }
 
     @Test fun `the list is ordered by severity and keeps arrival order within a level`() {

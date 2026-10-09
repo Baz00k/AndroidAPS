@@ -45,7 +45,7 @@ class HomeAlertsScreenTest {
 
         compose.onNodeWithText("Alert text 3").assertExists()
         compose.onNodeWithText("Urgent").assertExists()
-        compose.onNodeWithText("4 more · 1 urgent").assertExists()
+        compose.onNodeWithText("4 more alerts · 1 urgent").assertExists()
         for (id in listOf(1, 2, 4, 5)) compose.onAllNodesWithText("Alert text $id").assertCountEquals(0)
         compose.onNodeWithText("120").assertExists()
     }
