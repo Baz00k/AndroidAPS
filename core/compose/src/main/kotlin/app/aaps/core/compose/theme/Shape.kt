@@ -41,10 +41,13 @@ fun aapsShapes(radius: Dp = DefaultCornerRadius): AapsShapes {
     // A pill is fully rounded by definition — unless the skin has no curves at all, in which case a
     // stadium shape would be the one thing breaking the language. Material buttons are pills too.
     val pill = if (r <= 0.dp) RoundedCornerShape(0.dp) else RoundedCornerShape(50)
+    // Every card has the same corners whatever its size. Side by side on one screen, a larger radius
+    // on the bigger card reads as inconsistency rather than hierarchy.
+    val card = step(1f)            // 16, Material "large"
     return AapsShapes(
-        hero = step(1.5f),         // 24
-        card = step(1f),           // 16, Material "large"
-        cardSmall = step(0.75f),   // 12, "medium"
+        hero = card,
+        card = card,
+        cardSmall = card,
         pill = pill,
         button = pill,
         iconButton = pill,

@@ -33,8 +33,8 @@ class SkinTypeAndShapeTest {
     @Test
     fun `the default seed reproduces Material's shape scale`() {
         val s = aapsShapes()
-        assertThat(s.card).isEqualTo(RoundedCornerShape(16.dp))
-        assertThat(s.cardSmall).isEqualTo(RoundedCornerShape(12.dp))
+        // One radius for every card, however large, so neighbouring cards never disagree.
+        listOf(s.hero, s.card, s.cardSmall).forEach { assertThat(it).isEqualTo(RoundedCornerShape(16.dp)) }
         assertThat(s.extraSmall).isEqualTo(RoundedCornerShape(8.dp))
         assertThat(s.sheet).isEqualTo(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
         // Material buttons are fully rounded.

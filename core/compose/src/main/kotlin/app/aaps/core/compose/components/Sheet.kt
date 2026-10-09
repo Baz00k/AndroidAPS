@@ -112,7 +112,9 @@ fun SheetSurface(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = if (onBack != null) 4.dp else AapsSpacing.screenH, end = 4.dp)
+                    // The icon buttons reach the sheet's edges so their glyphs, not their touch
+                    // targets, sit on the same keyline as the title and the content below.
+                    .padding(start = if (onBack != null) 0.dp else AapsSpacing.screenH, end = if (onClose != null) 0.dp else AapsSpacing.screenH)
                     .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

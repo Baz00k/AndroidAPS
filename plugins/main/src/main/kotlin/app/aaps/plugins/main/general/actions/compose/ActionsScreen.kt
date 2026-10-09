@@ -9,11 +9,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -31,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.ListCard
 import app.aaps.core.compose.components.TintIcon
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -50,8 +50,9 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
             .background(colors.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = AapsSpacing.screenH)
+            // The tab already names the screen; it is not repeated as a heading here.
+            .padding(top = 6.dp)
     ) {
-        Text("Actions", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.therapy.isNotEmpty()) {
             SectionLabel("Therapy", Modifier.padding(top = 6.dp, bottom = 8.dp))
@@ -80,13 +81,8 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
 
         if (state.tools.isNotEmpty()) {
             SectionLabel("Tools", Modifier.padding(top = 6.dp, bottom = 8.dp))
-            AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                Column {
-                    state.tools.forEachIndexed { i, tool ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        ToolRow(tool, onAction)
-                    }
-                }
+            ListCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                state.tools.forEach { tool -> ToolRow(tool, onAction) }
             }
         }
     }
@@ -111,12 +107,15 @@ private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionI
             else -> null
         },
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Tall enough for a title and one line under it, so a card without that line keeps its title
+        // level with the icon and the cards of a grid stay the same height.
+        Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
             TintIcon(iconFor(t.id), tint = if (!t.enabled) colors.textTertiary else if (accent) colors.accentOnLight else colors.accent, background = colors.controlFill)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
                 Text(t.label, style = AapsTheme.type.listTitle, color = if (t.enabled) colors.textPrimary else colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    if (!t.enabled && t.disabledSub.isNotBlank()) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
+                val sub = if (!t.enabled && t.disabledSub.isNotBlank()) t.disabledSub else t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" }
+                if (sub.isNotBlank()) Text(
+                    sub,
                     style = AapsTheme.type.caption,
                     color = if (accent) colors.accentOnLight else colors.textTertiary,
                     maxLines = if (t.active) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis
@@ -131,14 +130,14 @@ private fun EventTile(e: EventAction, modifier: Modifier, onAction: (ActionId) -
     val colors = AapsTheme.colors
     Column(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(AapsTheme.shape.cardSmall)
             .clickable { onAction(e.id) }
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
-            Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(colors.controlFill),
+            Modifier.size(46.dp).clip(AapsTheme.shape.cardSmall).background(colors.controlFill),
             contentAlignment = Alignment.Center
         ) { Icon(iconFor(e.id), contentDescription = e.label, tint = colors.textSecondary, modifier = Modifier.size(22.dp)) }
         Text(e.label, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -149,7 +148,7 @@ private fun EventTile(e: EventAction, modifier: Modifier, onAction: (ActionId) -
 private fun ToolRow(tool: ToolAction, onAction: (ActionId) -> Unit) {
     val colors = AapsTheme.colors
     Row(
-        Modifier.fillMaxWidth().clickable { onAction(tool.id) }.padding(vertical = 14.dp),
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { onAction(tool.id) }.padding(horizontal = AapsSpacing.cardPad, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {

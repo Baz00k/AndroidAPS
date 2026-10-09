@@ -244,7 +244,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp)
-                    .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f))
+                    .background(colors.divider)
                     .height(1.dp)
             )
             // Shifted left by exactly the stat's own inset (see HeroStat) so the labels still line up

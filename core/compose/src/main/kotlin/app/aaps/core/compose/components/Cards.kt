@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -16,6 +17,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +58,27 @@ fun AapsCard(
         Box(Modifier.padding(contentPadding)) { content() }
     }
 }
+
+/** Where a row inside a [ListCard] keeps its content, so the row itself can reach the card's edges. */
+@Immutable
+internal data class ListRowFrame(val inset: Dp, val minHeight: Dp, val vertical: Dp)
+
+/** Set by [ListCard]; null elsewhere, where rows keep their own compact defaults. */
+internal val LocalListRowFrame = staticCompositionLocalOf<ListRowFrame?> { null }
+
+/**
+ * A card holding a list of rows ([ListRow], [ToggleRow], [RadioRow], [CheckboxRow]), as grouped
+ * lists are drawn in current Android settings: each row spans the card, so its press highlight does
+ * too, and rows are separated by their own height rather than by divider lines. Any other content
+ * placed in it pads itself by [AapsSpacing.cardPad] horizontally.
+ */
+@Composable
+fun ListCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) =
+    AapsCard(modifier, contentPadding = PaddingValues(vertical = 8.dp)) {
+        CompositionLocalProvider(LocalListRowFrame provides ListRowFrame(inset = AapsSpacing.cardPad, minHeight = 56.dp, vertical = 8.dp)) {
+            Column(content = content)
+        }
+    }
 
 /**
  * Compact stat card: uppercase label, big value, optional sub, chevron when tappable.

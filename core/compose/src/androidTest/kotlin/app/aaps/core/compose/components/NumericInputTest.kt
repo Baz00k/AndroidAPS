@@ -95,9 +95,12 @@ class NumericInputTest {
 
     @Test fun valueAndUnitReadAsOneCentredGroupAndTheWholeFieldTakesTheTap() {
         compose.setContent {
-            AapsTheme { Column(Modifier.width(360.dp)) {
-                NumericInput(2.5, {}, NumericSpec(0.0, 10.0, 0.5, 1), "U", "Insulin")
-            } }
+            // At the default font scale the field's 44 dp minimum is taller than one line of digits.
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1f)) {
+                AapsTheme { Column(Modifier.width(360.dp)) {
+                    NumericInput(2.5, {}, NumericSpec(0.0, 10.0, 0.5, 1), "U", "Insulin")
+                } }
+            }
         }
         val minus = compose.onNodeWithContentDescription("Subtract 0.5 U Insulin").fetchSemanticsNode().boundsInRoot
         val plus = compose.onNodeWithContentDescription("Add 0.5 U Insulin").fetchSemanticsNode().boundsInRoot
@@ -117,6 +120,9 @@ class NumericInputTest {
         val groupCentre = (digitsLeft + unit.right) / 2
         val gapCentre = (minus.right + plus.left) / 2
         assertThat(groupCentre).isWithin(4 * dp).of(gapCentre)
+        // The number sits level with − and +, not riding at the top of a field taller than it.
+        val lineCentre = entry.top + (layout.getLineTop(0) + layout.getLineBottom(0)) / 2
+        assertThat(lineCentre).isWithin(3 * dp).of(minus.center.y)
         // Tapping the fill beside the digits still lands in the field.
         compose.onRoot().performTouchInput { click(Offset(plus.left - 24 * dp, entry.center.y)) }
         field.assertIsFocused()
