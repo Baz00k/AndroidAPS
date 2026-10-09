@@ -59,7 +59,11 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
             // A form is either open or gone: no half-open peek state to drag through.
             behavior.skipCollapsed = true
             behavior.state = BottomSheetBehavior.STATE_EXPANDED
-            window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+            // Material's View-based BottomSheetDialog still uses resize for IME handling.
+            // Preserve it until a window-insets migration is verified across the therapy forms.
+            @Suppress("DEPRECATION")
+            val inputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+            window?.setSoftInputMode(inputMode)
         }
 
     override fun onStart() {

@@ -19,7 +19,6 @@
     <string name="permission">Tillatelse</string>
     <string name="need_system_window_permission">App trenger tillatelse til å bruke varslinger for å vise meldinger</string>
     <string name="need_location_permission">App trenger tilgang til posisjon for å søke etter Bluetooth og Wifi-enheter</string>
-    <string name="need_background_location_permission">Appen trenger bakgrunnsposisjonstillatelser for automasjoner</string>
     <string name="askforpermission">Spør om tillatelse</string>
     <string name="need_whitelisting">%1$s trenger tillatelse til å omgå batterisparefunksjonene slik at appen fungerer tilfredsstillende</string>
     <string name="storedsettingsfound">Lagrede innstillinger funnet</string>

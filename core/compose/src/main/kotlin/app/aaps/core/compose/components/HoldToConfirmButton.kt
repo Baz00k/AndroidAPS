@@ -123,12 +123,11 @@ fun HoldToConfirmButton(
                         detectTapGestures(
                             onPress = {
                                 holding = true
-                                val released = try {
+                                try {
                                     tryAwaitRelease()
                                 } finally {
                                     holding = false
                                 }
-                                released
                             }
                         )
                     } else Modifier

@@ -46,6 +46,9 @@ internal class YpsoTbrBleLink(
     private val now: () -> Long = System::currentTimeMillis,
 ) : YpsoTbrLink {
 
+    // Keep a stable reference identity for the CAS while retaining null for "never dispatched".
+    private class DispatchTime(val value: Long)
+
     override fun status(): YpsoTbrObservation? {
         if (!readStatus()) return null
         return bleManager.observedTbr()
@@ -58,7 +61,7 @@ internal class YpsoTbrBleLink(
         beforeDispatch: (dispatchedAt: Long) -> Unit,
     ): YpsoTbrCommandEvidence {
         val writeId = "tbr-${UUID.randomUUID()}"
-        val dispatchedAt = AtomicReference<Long?>(null)
+        val dispatchedAt = AtomicReference<DispatchTime?>(null)
         val latch = CountDownLatch(1)
         val delivered = AtomicReference<Pair<YpsoWriteOutcome, YpsoBleManager.TbrCommandOwner?>?>()
         bleManager.writeTbr(
@@ -68,7 +71,7 @@ internal class YpsoTbrBleLink(
             beforeDispatch = {
                 val at = now()
                 beforeDispatch(at)
-                dispatchedAt.compareAndSet(null, at)
+                dispatchedAt.compareAndSet(null, DispatchTime(at))
             },
         ) { outcome, owner ->
             delivered.set(outcome to owner)
@@ -78,12 +81,12 @@ internal class YpsoTbrBleLink(
             // The transport deadline normally answers first. A missing callback means the link is
             // wedged: tearing it down releases write ownership and leaves the effect to later status.
             bleManager.disconnect()
-            return YpsoTbrCommandEvidence(YpsoTbrWriteResult.Uncertain("no write outcome arrived"), null, dispatchedAt.get(), null)
+            return YpsoTbrCommandEvidence(YpsoTbrWriteResult.Uncertain("no write outcome arrived"), null, dispatchedAt.get()?.value, null)
         }
         val (outcome, owner) = checkNotNull(delivered.get())
         val result = YpsoTbrWriteCoordinator.classify(outcome)
         val acknowledgedAt = if (result == YpsoTbrWriteResult.Acknowledged) now() else null
-        if (owner == null) return YpsoTbrCommandEvidence(result, acknowledgedAt, dispatchedAt.get(), null)
+        if (owner == null) return YpsoTbrCommandEvidence(result, acknowledgedAt, dispatchedAt.get()?.value, null)
         val (status, body) = readOwnedStatus(owner)
         val after = status?.toObservation(now())
         val hash = sha256(body ?: "$writeId:no-status".toByteArray())
@@ -97,7 +100,7 @@ internal class YpsoTbrBleLink(
             else -> false
         }
         if (!reconciled) bleManager.recordTbrUnresolved(owner, writeId, hash, detail)
-        return YpsoTbrCommandEvidence(result, acknowledgedAt, dispatchedAt.get(), after)
+        return YpsoTbrCommandEvidence(result, acknowledgedAt, dispatchedAt.get()?.value, after)
     }
 
     private fun readOwnedStatus(owner: YpsoBleManager.TbrCommandOwner): Pair<StatusCommand?, ByteArray?> {

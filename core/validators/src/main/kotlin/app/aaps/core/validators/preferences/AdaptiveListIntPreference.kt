@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AttributeSet
 import androidx.annotation.StringRes
 import androidx.preference.ListPreference
+import androidx.preference.PreferenceManager
 import app.aaps.core.keys.interfaces.IntPreferenceKey
 import app.aaps.core.keys.interfaces.Preferences
 import dagger.android.HasAndroidInjector
@@ -36,7 +37,7 @@ open class AdaptiveListIntPreference(
         // but old code may have stored IntKey values as actual Integers.
         // This causes ClassCastException when ListPreference tries to read the value.
         intKey?.let { prefKey ->
-            val sp = android.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+            val sp = PreferenceManager.getDefaultSharedPreferences(ctx)
             try {
                 val oldValue = sp.getInt(prefKey.key, -1)
                 if (oldValue != -1) {

@@ -981,7 +981,7 @@ class YpsoPumpPlugin @Inject constructor(
                     .comment(rh.gs(R.string.ypsopump_bolus_completed, delivered))
             }
             val status = readBolusStatusBlocking()
-            val provenSequence = attempt?.pumpFastSequence
+            val provenSequence = attempt.pumpFastSequence
             if (status != null && provenSequence != null &&
                 status.fastSequence == provenSequence &&
                 Math.round(status.totalProgrammedUnits * 100.0).toInt() == attempt.requestedCentiUnits

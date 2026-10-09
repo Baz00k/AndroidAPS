@@ -19,7 +19,6 @@
     <string name="permission">Permiso</string>
     <string name="need_system_window_permission">La aplicación necesita permisos del sistema para poder mostrar notificaciones sobre otras aplicaciones</string>
     <string name="need_location_permission">La aplicación necesita permiso de ubicación para poder buscar dispositivos Bluetooth y redes WiFi</string>
-    <string name="need_background_location_permission">La aplicación necesita el permiso de ubicación en segundo plano para las automatizaciones</string>
     <string name="askforpermission">Pedir permiso</string>
     <string name="need_whitelisting">%1$s necesita añadir la optimización de la batería a la lista blanca, para obtener un rendimiento adecuado</string>
     <string name="storedsettingsfound">Encontrados ajustes de configuración</string>

@@ -309,7 +309,7 @@ class SessionJournal internal constructor(
                 checkpoint("after-sync")
             }
             check(temporary.renameTo(file)) { "Unable to atomically publish session journal" }
-            FileChannel.open(file.parentFile.toPath(), StandardOpenOption.READ).use { it.force(true) }
+            FileChannel.open(checkNotNull(file.parentFile).toPath(), StandardOpenOption.READ).use { it.force(true) }
         }
     }
 

@@ -127,7 +127,7 @@ class SWDefinition @Inject constructor(
             .toObservable(listener.clazz)
             .observeOn(aapsSchedulers.main)
             .subscribe { event ->
-                processListeners(event as EventStatus)
+                processListeners(event)
             }
     }
 

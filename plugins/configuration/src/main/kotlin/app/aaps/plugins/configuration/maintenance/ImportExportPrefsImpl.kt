@@ -80,6 +80,7 @@ import dagger.Reusable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.DelicateCoroutinesApi
 import org.json.JSONObject
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -535,6 +536,8 @@ class ImportExportPrefsImpl @Inject constructor(
         }
     }
 
+    // A bounded unattended upload must outlive the caller; it uses prepared bytes, not an Activity.
+    @OptIn(DelicateCoroutinesApi::class)
     override fun exportSharedPreferencesNonInteractive(context: Context, password: String): Boolean {
         // Check export destination preferences (same logic as manual export)
         val localEnabled = exportOptionsDialog.isSettingsLocalEnabled()
@@ -781,7 +784,7 @@ class ImportExportPrefsImpl @Inject constructor(
                 cloudPrefsFiles = prefsFiles // Store file list temporarily
                 val intent = Intent(activity, CloudPrefImportListActivity::class.java)
                 if (activity is DaggerAppCompatActivityWithResult) {
-                    activity.startActivityForResult(intent, CloudConstants.CLOUD_IMPORT_REQUEST_CODE)
+                    activity.callForCloudPrefFile?.launch(intent)
                 }
                 
             } catch (e: Exception) {

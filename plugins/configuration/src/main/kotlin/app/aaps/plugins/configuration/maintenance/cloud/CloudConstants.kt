@@ -15,9 +15,6 @@ object CloudConstants {
     const val CLOUD_PATH_LOGS = "${CLOUD_PATH_EXPORT}/logs"
     const val CLOUD_PATH_USER_ENTRIES = "${CLOUD_PATH_EXPORT}/user_entries"
     
-    // Activity request codes
-    const val CLOUD_IMPORT_REQUEST_CODE = 1001
-    
     // SharedPreferences keys (provider-agnostic)
     // Use the same key as GoogleDriveManager for backward compatibility
     const val PREF_CLOUD_STORAGE_TYPE = "google_drive_storage_type"

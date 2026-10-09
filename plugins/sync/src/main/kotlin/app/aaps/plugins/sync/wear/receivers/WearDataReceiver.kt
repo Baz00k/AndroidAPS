@@ -46,7 +46,7 @@ open class WearDataReceiver : DaggerBroadcastReceiver() {
                 }
             }
 
-            else                          -> null
+            else                          -> Unit
         }
     }
 

@@ -154,7 +154,7 @@ open class TestBaseWithProfile : TestBase() {
     lateinit var profileSwitch: PS
     lateinit var testPumpPlugin: TestPumpPlugin
 
-    private lateinit var mockedPreferenceManager: MockedStatic<android.preference.PreferenceManager>
+    private lateinit var mockedPreferenceManager: MockedStatic<PreferenceManager>
 
     var now = 1656358822000L
 
@@ -176,9 +176,9 @@ open class TestBaseWithProfile : TestBase() {
         whenever(sharedPreferencesEditor.putString(any(), any())).thenReturn(sharedPreferencesEditor)
 
         // Mock static PreferenceManager.getDefaultSharedPreferences
-        mockedPreferenceManager = Mockito.mockStatic(android.preference.PreferenceManager::class.java)
+        mockedPreferenceManager = Mockito.mockStatic(PreferenceManager::class.java)
         mockedPreferenceManager.`when`<SharedPreferences> {
-            android.preference.PreferenceManager.getDefaultSharedPreferences(any())
+            PreferenceManager.getDefaultSharedPreferences(any())
         }.thenReturn(sharedPreferences)
 
         preferenceManager = PreferenceManager(context)

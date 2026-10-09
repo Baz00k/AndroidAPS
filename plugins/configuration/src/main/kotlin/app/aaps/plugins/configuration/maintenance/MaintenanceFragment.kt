@@ -101,7 +101,7 @@ class MaintenanceFragment : DaggerFragment() {
                     app.aaps.plugins.configuration.maintenance.compose.MaintenanceScreen(
                         state = maintState.value,
                         onExport = { importExportPrefs.exportSharedPreferences(this@MaintenanceFragment) },
-                        onImport = { importExportPrefs.importSharedPreferences(requireActivity() as FragmentActivity) },
+                        onImport = { importExportPrefs.importSharedPreferences(requireActivity()) },
                         onExportLogs = { maintenancePlugin.sendLogs() },
                         onMore = { visibility = View.GONE }
                     )

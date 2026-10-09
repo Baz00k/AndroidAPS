@@ -54,7 +54,7 @@ object YpsoBolusIdentityPoll {
                     cents(status.comboImmediateTotalUnits) == attempt.immediateCentiUnits &&
                     status.bolusStatusCode == BolusCommand.STATUS_IDLE
         }
-        return if (proven) Step.Proven(status!!) else Step.KeepGoing(firstObserved)
+        return if (proven) Step.Proven(status) else Step.KeepGoing(firstObserved)
     }
 
     private fun cents(units: Double): Int = Math.round(units * 100.0).toInt()

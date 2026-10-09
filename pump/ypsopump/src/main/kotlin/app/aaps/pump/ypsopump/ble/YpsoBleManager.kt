@@ -304,6 +304,9 @@ class YpsoBleManager @Inject constructor(
                 pumpState.connectionState = ConnectionState.DISCONNECTED
                 return
             }
+            // The API 37 replacement changes callback dispatch. Retain the verified transport
+            // on supported Android versions until that path has been exercised with a test pump.
+            @Suppress("DEPRECATION")
             val openedGatt = runCatching { device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE) }
                 .getOrElse {
                     pumpState.connectionState = ConnectionState.DISCONNECTED
@@ -645,7 +648,7 @@ class YpsoBleManager @Inject constructor(
             currentGatt = gatt
             currentTimeout = timeout
             Triple(op, gatt, timeout)
-        } ?: return
+        }
         val (op, gatt, timeout) = start
         if (gatt == null || timeout == null) {
             runCatching { op.onResult(null, null, -1) }
@@ -1372,9 +1375,9 @@ class YpsoBleManager @Inject constructor(
                     "count=$countBefore, headSeq=${headBefore?.sequence}, oldestScannedSeq=${rows.lastOrNull()?.sequence}, " +
                     "cursorSeq=${cursor?.identity?.sequence}, seekingOverlap=$overlapPending, " +
                     "cursorSequenceAt=${rows.indexOfFirst { it.sequence == cursor?.identity?.sequence }}, " +
-                    "cursorExactAt=${rows.indexOfFirst { it.sequence == cursor?.identity?.sequence && it.fingerprint() == cursor?.fingerprint }}, " +
+                    "cursorExactAt=${rows.indexOfFirst { it.sequence == cursor?.identity?.sequence && it.fingerprint() == cursor.fingerprint }}, " +
                     "trackedTbrSeq=${cursor?.activeTbr?.identity?.sequence}, " +
-                    "trackedTbrExactAt=${rows.indexOfFirst { it.sequence == cursor?.activeTbr?.identity?.sequence && it.fingerprint() == cursor?.activeTbr?.fingerprint }}",
+                    "trackedTbrExactAt=${rows.indexOfFirst { it.sequence == cursor?.activeTbr?.identity?.sequence && it.fingerprint() == cursor.activeTbr.fingerprint }}",
             )
             finish(null)
             return true

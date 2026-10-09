@@ -432,7 +432,7 @@ abstract class PumpPluginAbstract protected constructor(
                 aapsLogger.error(LTag.PUMP, "We got key ($key}) with value null.")
                 continue
             }
-            if (value!! > 0 && System.currentTimeMillis() > value) {
+            if (value > 0 && System.currentTimeMillis() > value) {
                 return true
             }
         }

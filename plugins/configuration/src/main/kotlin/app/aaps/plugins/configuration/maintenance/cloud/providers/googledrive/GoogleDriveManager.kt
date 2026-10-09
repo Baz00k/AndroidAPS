@@ -169,7 +169,7 @@ class GoogleDriveManager @Inject constructor(
                     .build()
                 
                 val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val responseBody = response.body.string()
                 
                 if (response.isSuccessful) {
                     val jsonResponse = JSONObject(responseBody)
@@ -234,7 +234,7 @@ class GoogleDriveManager @Inject constructor(
                 .build()
 
             val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val responseBody = response.body.string()
 
             if (response.isSuccessful) {
                 val jsonResponse = JSONObject(responseBody)
@@ -310,7 +310,7 @@ class GoogleDriveManager @Inject constructor(
                     .header("Authorization", "Bearer $accessToken")
                     .build()
                 val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val responseBody = response.body.string()
                 if (response.isSuccessful) {
                     clearConnectionError()
                     val jsonResponse = JSONObject(responseBody)
@@ -358,7 +358,7 @@ class GoogleDriveManager @Inject constructor(
                     .build()
                 
                 val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val responseBody = response.body.string()
                 
                 if (response.isSuccessful) {
                     clearConnectionError()
@@ -429,7 +429,7 @@ class GoogleDriveManager @Inject constructor(
                     .build()
 
                 val response = client.newCall(request).execute()
-                val responseBodyStr = response.body?.string() ?: ""
+                val responseBodyStr = response.body.string()
                 aapsLogger.info(LTag.CORE, "$LOG_PREFIX UPLOAD_RESPONSE code=${response.code} message='${response.message}' hasBody=${responseBodyStr.isNotEmpty()} folderId=$folderId file=$fileName")
                 if (responseBodyStr.isNotEmpty()) aapsLogger.info(LTag.CORE, "$LOG_PREFIX UPLOAD_RESPONSE_BODY ${responseBodyStr.take(500)}")
 
@@ -508,7 +508,7 @@ class GoogleDriveManager @Inject constructor(
             if (ensured != null) {
                 val stored = getSelectedFolderId()
                 if (stored != ensured) {
-                    aapsLogger.info(LTag.CORE, "$LOG_PREFIX FOLDER_RESOLVE_UPDATE path='$pathHint' newId=$ensured oldId=${stored?.ifEmpty { "<empty>" } ?: "<null>"}")
+                    aapsLogger.info(LTag.CORE, "$LOG_PREFIX FOLDER_RESOLVE_UPDATE path='$pathHint' newId=$ensured oldId=${stored.ifEmpty { "<empty>" }}")
                     setSelectedFolderId(ensured)
                 } else {
                     aapsLogger.info(LTag.CORE, "$LOG_PREFIX FOLDER_RESOLVE_REUSE path='$pathHint' id=$ensured")
@@ -519,7 +519,7 @@ class GoogleDriveManager @Inject constructor(
             return ensured
         }
 
-        val stored = getSelectedFolderId()?.ifEmpty { null }
+        val stored = getSelectedFolderId().ifEmpty { null }
         if (stored != null) {
             aapsLogger.info(LTag.CORE, "$LOG_PREFIX FOLDER_RESOLVE_USE_STORED storedId=$stored pathHint='<none>'")
             return stored
@@ -936,7 +936,7 @@ class GoogleDriveManager @Inject constructor(
     suspend fun listSettingsFiles(): List<DriveFile> = withContext(Dispatchers.IO) {
         try {
             val accessToken = getValidAccessToken() ?: return@withContext emptyList()
-            val folderId = getSelectedFolderId()?.ifEmpty { "root" } ?: "root"
+            val folderId = getSelectedFolderId().ifEmpty { "root" }
             val query = "'$folderId' in parents and trashed=false"
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
             val url = "$DRIVE_API_URL/files?q=$encodedQuery&fields=files(id,name,modifiedTime,mimeType)&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true"
@@ -946,7 +946,7 @@ class GoogleDriveManager @Inject constructor(
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: ""
+            val body = response.body.string()
             if (!response.isSuccessful) {
                 aapsLogger.error(LTag.CORE, "$LOG_PREFIX FOLDER_LIST_FAIL folderId=$folderId code=${response.code} body=${body.take(300)}")
                 showConnectionError(rh.gs(R.string.google_drive_list_settings_failed))
@@ -985,13 +985,13 @@ class GoogleDriveManager @Inject constructor(
                 .build()
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
-                val msg = response.body?.string()
+                val msg = response.body.string()
                 aapsLogger.error(LTag.CORE, "$LOG_PREFIX Failed to download file: ${msg}")
                 showConnectionError(rh.gs(R.string.google_drive_download_failed))
                 return@withContext null
             }
             clearConnectionError()
-            response.body?.bytes()
+            response.body.bytes()
         } catch (e: Exception) {
             aapsLogger.error(LTag.CORE, "$LOG_PREFIX Error downloading file", e)
             showConnectionError(rh.gs(R.string.google_drive_download_error, e.message ?: ""))
@@ -1020,7 +1020,7 @@ class GoogleDriveManager @Inject constructor(
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: ""
+            val body = response.body.string()
             if (!response.isSuccessful) {
                 aapsLogger.error(LTag.CORE, "$LOG_PREFIX Failed to list settings files (paged): $body")
                 showConnectionError(rh.gs(R.string.google_drive_list_settings_failed))
@@ -1075,7 +1075,7 @@ class GoogleDriveManager @Inject constructor(
                     .header("Authorization", "Bearer $accessToken")
                     .build()
                 val response = client.newCall(request).execute()
-                val body = response.body?.string() ?: ""
+                val body = response.body.string()
                 
                 if (!response.isSuccessful) {
                     aapsLogger.error(LTag.CORE, "$LOG_PREFIX Failed to count settings files: $body")
@@ -1176,7 +1176,7 @@ class GoogleDriveManager @Inject constructor(
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: ""
+            val body = response.body.string()
             if (!response.isSuccessful) return@withContext null
             val json = JSONObject(body)
             val arr = json.optJSONArray("files") ?: JSONArray()
@@ -1230,7 +1230,7 @@ class GoogleDriveManager @Inject constructor(
                     .build()
 
                 val response = client.newCall(request).execute()
-                val responseBodyStr = response.body?.string() ?: ""
+                val responseBodyStr = response.body.string()
                 aapsLogger.info(LTag.CORE, "$LOG_PREFIX UPLOAD_PATH_RESPONSE code=${response.code} message='${response.message}' hasBody=${responseBodyStr.isNotEmpty()} path='$path' file=$fileName")
                 if (responseBodyStr.isNotEmpty()) aapsLogger.info(LTag.CORE, "$LOG_PREFIX UPLOAD_PATH_RESPONSE_BODY ${responseBodyStr.take(500)}")
                 if (response.isSuccessful) {
@@ -1292,7 +1292,7 @@ class GoogleDriveManager @Inject constructor(
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             client.newCall(req).execute().use { resp ->
-                val bodyStr = resp.body?.string() ?: ""
+                val bodyStr = resp.body.string()
                 if (!resp.isSuccessful) {
                     aapsLogger.error(LTag.CORE, "$LOG_PREFIX VERIFY_FAIL id=$fileId code=${resp.code} body='${bodyStr.take(300)}'")
                     return false
@@ -1319,7 +1319,7 @@ class GoogleDriveManager @Inject constructor(
                 .header("Authorization", "Bearer $accessToken")
                 .build()
             client.newCall(req).execute().use { resp ->
-                val body = resp.body?.string() ?: ""
+                val body = resp.body.string()
                 if (resp.isSuccessful) {
                     runCatching { JSONObject(body).optJSONObject("user") }.getOrNull()?.let { u ->
                         aapsLogger.info(LTag.CORE, "$LOG_PREFIX USER email=${u.optString("emailAddress")} display=${u.optString("displayName")}")
@@ -1339,7 +1339,7 @@ class GoogleDriveManager @Inject constructor(
             val url = "$DRIVE_API_URL/files?q=${Uri.encode(query)}&fields=files(id,name,mimeType,modifiedTime),nextPageToken&pageSize=20&supportsAllDrives=true&includeItemsFromAllDrives=true"
             val req = Request.Builder().url(url).header("Authorization", "Bearer $accessToken").build()
             client.newCall(req).execute().use { resp ->
-                val body = resp.body?.string() ?: ""
+                val body = resp.body.string()
                 if (!resp.isSuccessful) {
                     aapsLogger.debug(LTag.CORE, "$LOG_PREFIX FOLDER_LIST_FAIL_DEBUG (non-critical) folderId=$folderId code=${resp.code}")
                     return
@@ -1371,7 +1371,7 @@ class GoogleDriveManager @Inject constructor(
                     .header("Authorization", "Bearer $accessToken")
                     .build()
                 client.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string() ?: ""
+                    val body = resp.body.string()
                     if (!resp.isSuccessful) {
                         aapsLogger.debug(LTag.CORE, "$LOG_PREFIX PATH_CHAIN_FAIL_DEBUG (non-critical) id=$currentId code=${resp.code} partial='${chain.joinToString("/")}'")
                         abort = true

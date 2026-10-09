@@ -223,7 +223,7 @@ class NSClientV3Plugin @Inject constructor(
     internal var firstLoadContinueTimestamp = LastModified(LastModified.Collections()) // timestamp of last fetched data for every collection during initial load
     internal var initialLoadFinished = false
 
-    private val fullSyncSemaphore = Object()
+    private val fullSyncSemaphore = Any()
 
     /**
      * Set to true if full sync is requested from fragment.
