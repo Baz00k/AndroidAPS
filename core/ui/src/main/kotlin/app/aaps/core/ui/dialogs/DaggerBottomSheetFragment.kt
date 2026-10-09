@@ -3,6 +3,7 @@ package app.aaps.core.ui.dialogs
 import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -69,7 +70,7 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
     override fun onStart() {
         super.onStart()
         // The Compose surface draws its own rounded corners; the platform container must not paint behind them.
-        dialog?.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)?.setBackgroundColor(Color.TRANSPARENT)
+        dialog?.clearSheetBackground()
     }
 
     /** The sheet's Compose content. Its scrolling never drags the sheet; the header is the drag handle. */
@@ -82,6 +83,22 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
                     LocalSheetDragHandle provides { dragHandle = it }
                 ) { content() }
             }
+        }
+    }
+}
+
+/**
+ * Leaves the bottom sheet's container with no background of its own, so a sheet that draws its own
+ * rounded surface does not show a panel behind its corners and under the navigation bar.
+ *
+ * Clearing it once is not enough: the sheet behaviour gives the container a surface-coloured background
+ * when it first lays it out, which is after a dialog has been shown. So it is cleared again after every layout.
+ */
+fun Dialog.clearSheetBackground() {
+    findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)?.apply {
+        setBackgroundColor(Color.TRANSPARENT)
+        addOnLayoutChangeListener { sheet, _, _, _, _, _, _, _, _ ->
+            if (sheet.background !is ColorDrawable) sheet.setBackgroundColor(Color.TRANSPARENT)
         }
     }
 }
