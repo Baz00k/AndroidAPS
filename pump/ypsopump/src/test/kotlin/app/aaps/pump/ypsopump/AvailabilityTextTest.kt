@@ -259,7 +259,51 @@ class AvailabilityTextTest {
             presentation = PumpSetupPresentation.KEY_MAY_NEED_UPDATING,
         )
 
-        assertThat(feedback.message).isEqualTo(R.string.ypsopump_cause_rekey)
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_verification_key_rejected)
+        assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.ERROR)
+    }
+
+    @Test
+    fun `a pending check that cannot reach the pump says AAPS keeps trying`() {
+        val causes = displayedCauses(
+            VerificationPresentation.CHECKING,
+            setOf(AvailabilityCause.SUSPECTED_REKEY_REQUIRED, AvailabilityCause.TRANSPORT),
+        )
+        val feedback = provisioningFeedback(
+            verification = VerificationPresentation.CHECKING,
+            presentation = pumpSetupPresentation(causes, hasSavedDetails = true, verified = true),
+        )
+
+        // The sticky re-key describes the rejected key, not the replacement being checked.
+        assertThat(causes).containsExactly(AvailabilityCause.TRANSPORT)
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_verifying_retry)
+        assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.NEUTRAL)
+    }
+
+    @Test
+    fun `a pending check without a problem only says it is checking`() {
+        val feedback = provisioningFeedback(
+            verification = VerificationPresentation.CHECKING,
+            presentation = pumpSetupPresentation(emptySet(), hasSavedDetails = true, verified = false),
+        )
+
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_verifying)
+    }
+
+    @Test
+    fun `a settled setup keeps its suspected rekey`() {
+        assertThat(displayedCauses(VerificationPresentation.IDLE, setOf(AvailabilityCause.SUSPECTED_REKEY_REQUIRED)))
+            .containsExactly(AvailabilityCause.SUSPECTED_REKEY_REQUIRED)
+    }
+
+    @Test
+    fun `failed check by a different pump names the identity problem`() {
+        val feedback = provisioningFeedback(
+            verification = VerificationPresentation.FAILED,
+            presentation = PumpSetupPresentation.DETAILS_NEED_CHECKING,
+        )
+
+        assertThat(feedback.message).isEqualTo(R.string.ypsopump_cause_identity_mismatch)
         assertThat(feedback.tone).isEqualTo(ProvisioningFeedbackTone.ERROR)
     }
 

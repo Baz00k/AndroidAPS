@@ -1061,15 +1061,12 @@ class YpsoProvisioningServiceTest {
             now = 2_000
         )
 
-        val sameKey = assertThrows(YpsoProvisioningService.ManualValidationException::class.java) {
+        assertThrows(YpsoProvisioningService.ReplacementKeyRequiredException::class.java) {
             service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(3_000))
         }
-        assertEquals(YpsoProvisioningService.ManualField.KEY, sameKey.field)
-
-        val blankKey = assertThrows(YpsoProvisioningService.ManualValidationException::class.java) {
+        assertThrows(YpsoProvisioningService.ReplacementKeyRequiredException::class.java) {
             service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, null), Instant.ofEpochMilli(3_001))
         }
-        assertEquals(YpsoProvisioningService.ManualField.KEY, blankKey.field)
 
         // A genuinely different current key is still accepted as the replacement session.
         service.installManual(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), Instant.ofEpochMilli(3_002))

@@ -63,6 +63,8 @@ class YpsoPumpState @Inject constructor() {
 
     // -- Connection State --
     @Volatile var connectionState: ConnectionState = ConnectionState.DISCONNECTED
+    /** Connection attempts between taking a retry grant and the BLE layer leaving DISCONNECTED or failing. */
+    val connectionsStarting = java.util.concurrent.atomic.AtomicInteger()
     @Volatile var serialNumber: String = ""
     @Volatile var claimedSerialNumber: String = ""
     @Volatile var observedIdentitySerial: String = ""

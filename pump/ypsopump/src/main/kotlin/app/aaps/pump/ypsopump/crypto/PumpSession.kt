@@ -148,7 +148,7 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun install(provisioning: Provisioning): Installation {
         val plan = planInstallation(provisioning)
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         val withoutOldCandidate = retireCandidate(current).copy(lastAttempt = current.candidateAttemptId?.let {
             AttemptResult(it, AttemptStatus.CANCELLED)
         } ?: current.lastAttempt)
@@ -294,17 +294,17 @@ class PumpSession(private val store: Store) {
         require(provisioning.pump.isNotBlank() && provisioning.serial.isNotBlank())
         require(provisioning.sharedKey.size == SessionCrypto.KEY_SIZE && provisioning.sharedKey.any { it.toInt() != 0 })
         require(provisioning.createdAt == null || provisioning.createdAt <= provisioning.importedAt)
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         val id = fingerprint(provisioning.sharedKey)
         val oldCandidate = current.records.singleOrNull { it.generation == current.candidateGeneration }
         val previous = current.records.singleOrNull { it.keyId == id && it.generation != current.candidateGeneration }
-        if (previous != null) check(previous.pump == provisioning.pump) { "Key belongs to another pump" }
+        if (previous != null && previous.pump != provisioning.pump) throw KeyOfAnotherPumpException()
         val active = current.records.singleOrNull { it.generation == current.activeGeneration }
         val currentBundle = active ?: oldCandidate
         val unresolved = listOfNotNull(active, previous, oldCandidate).distinctBy(Record::generation)
             .firstOrNull { it.reservation != null && it.reservation.phase != Phase.VERIFIED }
         if (unresolved != null)
-            throw SecurityException("Cannot replace a session with unresolved pump accounting")
+            throw UnresolvedAccountingException()
         val installation = when {
             previous != null -> Installation.SAME_KEY
             oldCandidate?.keyId == id -> Installation.SAME_KEY
@@ -365,13 +365,13 @@ class PumpSession(private val store: Store) {
 
     @Synchronized
     fun setAvailability(availability: Availability) {
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         persist(if (current.candidateGeneration != null) current.copy(candidateAvailability = availability) else current.copy(availability = availability))
     }
 
     @Synchronized
     fun markVerified(serial: String, at: Long): Boolean {
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         check(current.candidateGeneration == null) { "Stale verification callback" }
         val generation = current.activeGeneration
         val active = current.records.singleOrNull { it.generation == generation }
@@ -387,7 +387,7 @@ class PumpSession(private val store: Store) {
      */
     @Synchronized
     fun markVerified(generation: String, attemptId: String?, serial: String, at: Long): Boolean {
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         if (current.candidateGeneration != null)
             check(current.candidateGeneration == generation && current.candidateAttemptId == attemptId) { "Stale verification callback" }
         else
@@ -435,7 +435,7 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun cancelCandidate(status: AttemptStatus = AttemptStatus.CANCELLED) {
         require(status == AttemptStatus.CANCELLED || status == AttemptStatus.FAILED)
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         if (current.candidateGeneration == null) return
         val attemptId = checkNotNull(current.candidateAttemptId)
         persist(retireCandidate(current).copy(lastAttempt = AttemptResult(attemptId, status)))
@@ -446,7 +446,7 @@ class PumpSession(private val store: Store) {
     @Synchronized
     fun cancelCandidate(generation: String, attemptId: String?, status: AttemptStatus = AttemptStatus.CANCELLED): Boolean {
         require(status == AttemptStatus.CANCELLED || status == AttemptStatus.FAILED)
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         if (current.candidateGeneration != generation || current.candidateAttemptId != attemptId) return false
         persist(retireCandidate(current).copy(lastAttempt = AttemptResult(checkNotNull(attemptId), status)))
         quiesce()
@@ -456,7 +456,7 @@ class PumpSession(private val store: Store) {
     /** Atomically rejects precisely this candidate and retains its actionable failure on the restored bundle. */
     @Synchronized
     fun failCandidate(generation: String, attemptId: String?, availability: Availability): Boolean {
-        val current = state ?: throw SecurityException("Session storage unavailable")
+        val current = state ?: throw StorageUnavailableException()
         if (current.candidateGeneration != generation || current.candidateAttemptId != attemptId) return false
         persist(retireCandidate(current).copy(availability = availability, lastAttempt = AttemptResult(checkNotNull(attemptId), AttemptStatus.FAILED)))
         quiesce()
@@ -606,6 +606,10 @@ class PumpSession(private val store: Store) {
 
     /** Persisted transition; discard this response and reconnect with a new connection token. */
     class RebootAdoptedException : SecurityException("Authenticated reboot adopted; reconnect required")
+    class StorageUnavailableException : SecurityException("Session storage unavailable")
+    class KeyOfAnotherPumpException : IllegalStateException("Key belongs to another pump")
+    /** A delivery reservation must be resolved with the current key before any other key is staged. */
+    class UnresolvedAccountingException : SecurityException("Cannot replace a session with unresolved pump accounting")
 
     /**
      * Reserve above the durable local high-water mark; the pump does not require contiguous counters.

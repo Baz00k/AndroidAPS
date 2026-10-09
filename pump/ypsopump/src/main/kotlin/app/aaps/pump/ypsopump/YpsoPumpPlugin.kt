@@ -381,6 +381,9 @@ class YpsoPumpPlugin @Inject constructor(
     private fun configured(): Boolean = provisioning.isConfigured() && resolvedMac().isNotEmpty()
 
     private fun seedAndConnect() {
+        // Counted from before the retry grant is taken until BLE reports CONNECTING or fails, so setup never
+        // sees a consumed attempt with nothing under way while this one is still starting.
+        pumpState.connectionsStarting.incrementAndGet()
         try {
             if (!provisioning.retryAllowed()) {
                 aapsLogger.info(LTag.PUMP, "YpsoPump retry deferred by durable backoff")
@@ -393,6 +396,8 @@ class YpsoPumpPlugin @Inject constructor(
             pumpState.invalidateStatus()
             provisioning.recordUnavailable(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE), operation = "configure-session")
             aapsLogger.error(LTag.PUMP, "YpsoPump configuration is invalid")
+        } finally {
+            pumpState.connectionsStarting.decrementAndGet()
         }
     }
 
