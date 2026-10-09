@@ -31,6 +31,7 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.plugins.configuration.R
 import app.aaps.plugins.configuration.configBuilder.events.EventConfigBuilderUpdateGui
@@ -53,6 +54,7 @@ class ConfigBuilderFragment : DaggerFragment() {
     @Inject lateinit var loop: Loop
     @Inject lateinit var translator: Translator
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var preferences: Preferences
 
     private var disposable: CompositeDisposable = CompositeDisposable()
     private val pluginViewHolders = ArrayList<ConfigBuilder.PluginViewHolderInterface>()
@@ -142,7 +144,8 @@ class ConfigBuilderFragment : DaggerFragment() {
 
         // Plugins that expose a settings screen → grouped, tappable rows opening their (search-enabled) prefs.
         prefPlugins = activePlugin.getPluginsList().filter {
-            it.preferencesId != PluginDescription.PREFERENCE_NONE && it.pluginDescription.pluginName != -1 && !it.pluginDescription.neverVisible
+            it.pluginDescription.pluginName != -1 && !it.pluginDescription.neverVisible &&
+                it.hasSettingsToOpen(preferences.simpleMode, config.isDev())
         }
         val prefs = prefPlugins.mapIndexed { i, p -> PrefEntry(i, p.name, groupLabel(p.getType())) }
 
