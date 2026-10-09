@@ -508,6 +508,15 @@ class CommandQueueImplementation @Inject constructor(
         return true
     }
 
+    // Synchronized with pickup(): a waiting read cannot start between the check and the return.
+    @Synchronized
+    override fun ensureStatusReadQueued(reason: String) {
+        if (isReadStatusScheduled()) aapsLogger.debug(LTag.PUMPQUEUE, "READSTATUS $reason joins the queued status read")
+        else add(CommandReadStatus(injector, reason, null))
+        // The stuck-worker watchdog in isReadStatusScheduled() may just have cancelled the worker.
+        notifyAboutNewCommand()
+    }
+
     @Synchronized
     override fun statusInQueue(): Boolean {
         if (isRunning(CommandType.READSTATUS)) return true

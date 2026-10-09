@@ -417,6 +417,11 @@ class YpsoPumpPlugin @Inject constructor(
         ) {
             provisioning.requestTherapyConnectionAttempt()
         }
+        // Only a status read checks a pending key. If the queue dropped the read requested on save, the
+        // queue connecting for any other command (a KeepAlive profile sync, say) must also check it.
+        if (reason == "Connection needed" && provisioning.pending() != null && !commandQueue.statusInQueue()) {
+            commandQueue.ensureStatusReadQueued(PENDING_KEY_CHECK_REASON)
+        }
         seedAndConnect()
     }
 
@@ -489,7 +494,10 @@ class YpsoPumpPlugin @Inject constructor(
     }
     override fun stopConnecting() { bleManager.disconnect() }
 
-    override fun getPumpStatus(reason: String) = onLink(reopen = false) {
+    // A pending replacement key is checked by the first status read after it is staged. Staging closes
+    // the old link, so a read picked up just then would only start the connection and be consumed;
+    // reopen and read instead, or the check waits for an unrelated later poll.
+    override fun getPumpStatus(reason: String) = onLink(reopen = provisioning.pending() != null) {
         val callback = commandQueue.performing()
             ?.takeIf { it.commandType == app.aaps.core.interfaces.queue.Command.CommandType.READSTATUS }
             ?.callback as? ConfigurationReadCallback
@@ -2276,6 +2284,7 @@ class YpsoPumpPlugin @Inject constructor(
     companion object {
         internal const val FOREGROUND_CONNECTION_REASON = "Ypso foreground connection"
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
+        internal const val PENDING_KEY_CHECK_REASON = "YpsoPump pending key check"
         private const val HISTORY_WARNING_RETRIES = 3
         /** A notified dose's warning stays while its insulin can still act (typical insulin duration). */
         private const val NOTIFIED_WARNING_WINDOW_MS = 6 * 60 * 60_000L

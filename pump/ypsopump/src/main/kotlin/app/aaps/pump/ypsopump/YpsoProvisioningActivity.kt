@@ -70,8 +70,6 @@ internal data class ProvisioningFeedback(@StringRes val message: Int, val tone: 
 internal fun detachDocumentForInstallation(document: YpsoSessionDocument): YpsoSessionDocument =
     document.copy(sharedKey = document.sharedKey.copyOf()).also { document.sharedKey.fill(0) }
 
-internal class VerificationStartException : IllegalStateException("Verification status read was not accepted")
-
 /**
  * The durable candidate and its verification read are one non-cancellable transaction. This lets
  * a destroyed activity stop rendering without stranding a candidate between staging and enqueue.
@@ -82,24 +80,18 @@ internal class ProvisioningVerificationStarter(
     private val verificationReason: String,
 ) {
     suspend fun installManual(draft: YpsoProvisioningService.ManualDraft): PumpSession.Installation = installThenStart {
-        service.installManualAndStartVerification(draft) { commandQueue.readStatus(verificationReason, null) }
+        service.installManualAndStartVerification(draft) { commandQueue.ensureStatusReadQueued(verificationReason) }
     }
 
     suspend fun installDocument(document: YpsoSessionDocument): PumpSession.Installation = installThenStart {
         try {
-            service.installDocumentAndStartVerification(document) { commandQueue.readStatus(verificationReason, null) }
+            service.installDocumentAndStartVerification(document) { commandQueue.ensureStatusReadQueued(verificationReason) }
         } finally {
             document.sharedKey.fill(0)
         }
     }
 
-    private suspend fun installThenStart(install: () -> PumpSession.Installation): PumpSession.Installation = withContext(NonCancellable + Dispatchers.IO) {
-        try {
-            install()
-        } catch (error: Throwable) {
-            throw error
-        }
-    }
+    private suspend fun installThenStart(install: () -> PumpSession.Installation): PumpSession.Installation = withContext(NonCancellable + Dispatchers.IO) { install() }
 }
 
 internal fun verificationPresentation(
@@ -424,7 +416,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                         getString(R.string.ypsopump_rekey_new_key_required)
                                     else getString(R.string.ypsopump_invalid_key)
                             }
-                            is VerificationStartException -> generalError = getString(R.string.ypsopump_verification_start_failed)
+                            is YpsoProvisioningService.VerificationStartException -> generalError = getString(R.string.ypsopump_verification_start_failed)
                             else -> generalError = getString(R.string.ypsopump_save_failed)
                         }
                     }
@@ -470,7 +462,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                     selectedDocument = null
                                     generalError = if (it.message == "Replacement key required after rejection")
                                         getString(R.string.ypsopump_rekey_new_key_required)
-                                    else if (it is VerificationStartException) getString(R.string.ypsopump_verification_start_failed)
+                                    else if (it is YpsoProvisioningService.VerificationStartException) getString(R.string.ypsopump_verification_start_failed)
                                     else getString(R.string.ypsopump_save_failed)
                                 }
                             }

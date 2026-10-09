@@ -72,6 +72,9 @@ class YpsoProvisioningService internal constructor(
     class ManualValidationException(val field: ManualField, message: String, cause: Throwable? = null) :
         IllegalArgumentException(message, cause)
 
+    /** The candidate was staged but its verification read could not be requested; it was rolled back. */
+    class VerificationStartException(cause: Throwable) : IllegalStateException("Verification status read could not be requested", cause)
+
     // installed(), availability() and notificationRequired() deliberately skip the service monitor: this
     // service publishes availability to the plugin while holding it, and the plugin's notification
     // publisher reads these three while holding its own monitor. The owner and pump state are
@@ -163,11 +166,14 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
-    /** Stage, allow one immediate poll, and either enqueue it or roll back this exact candidate. */
+    /**
+     * Stage, allow one immediate poll, and request it. If [enqueue] throws, roll back this exact
+     * candidate and throw [VerificationStartException].
+     */
     fun installManualAndStartVerification(
         draft: ManualDraft,
         now: Instant = Instant.now(),
-        enqueue: () -> Boolean
+        enqueue: () -> Unit
     ): PumpSession.Installation = synchronized(provisioningLock) {
         startVerification({ installManual(draft, now) }, enqueue)
     }
@@ -347,7 +353,7 @@ class YpsoProvisioningService internal constructor(
     fun installDocumentAndStartVerification(
         document: YpsoSessionDocument,
         now: Instant = Instant.now(),
-        enqueue: () -> Boolean
+        enqueue: () -> Unit
     ): PumpSession.Installation = synchronized(provisioningLock) {
         try {
             startVerification({ installDocument(document, now) }, enqueue)
@@ -356,7 +362,7 @@ class YpsoProvisioningService internal constructor(
         }
     }
 
-    private fun startVerification(install: () -> PumpSession.Installation, enqueue: () -> Boolean): PumpSession.Installation {
+    private fun startVerification(install: () -> PumpSession.Installation, enqueue: () -> Unit): PumpSession.Installation {
         val installation = install()
         val candidate = synchronized(this) {
             val value = connectionSession()
@@ -367,9 +373,10 @@ class YpsoProvisioningService internal constructor(
             value
         }
         try {
-            if (!enqueue()) throw IllegalStateException("Verification status read was not accepted")
+            enqueue()
             return installation
-        } catch (error: Throwable) {
+        } catch (cause: Throwable) {
+            val error = VerificationStartException(cause)
             if (!candidate.candidate) {
                 synchronized(this) { verificationAttemptRequested = false }
                 throw error

@@ -96,12 +96,11 @@ class YpsoProvisioningServiceTest {
         assertEquals(serial, restarted.pending()!!.serial)
         assertEquals(PumpSession.AttemptStatus.PENDING, restarted.verificationState()!!.status)
 
-        val failure = assertThrows(IllegalStateException::class.java) {
+        assertThrows(YpsoProvisioningService.VerificationStartException::class.java) {
             restarted.installManualAndStartVerification(
                 YpsoProvisioningService.ManualDraft(serial, mac, key.hex()), Instant.ofEpochMilli(2_000)
-            ) { false }
+            ) { error("queue unavailable") }
         }
-        assertTrue(failure.message!!.contains("not accepted"))
         assertNull(restarted.installed())
         assertNull(restarted.pending())
         assertEquals(PumpSession.AttemptStatus.CANCELLED, restarted.verificationState()!!.status)
@@ -733,11 +732,11 @@ class YpsoProvisioningServiceTest {
         install(service)
         service.markVerified(serial, 1_500)
 
-        assertThrows(IllegalStateException::class.java) {
+        assertThrows(YpsoProvisioningService.VerificationStartException::class.java) {
             service.installManualAndStartVerification(
                 YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()),
                 Instant.ofEpochMilli(2_000)
-            ) { false }
+            ) { error("queue unavailable") }
         }
 
         val restored = service.connectionSession()!!
@@ -1136,7 +1135,7 @@ class YpsoProvisioningServiceTest {
             Instant.parse("2026-09-20T04:00:00Z"),
         )
 
-        service.installDocumentAndStartVerification(document, Instant.parse("2026-09-20T04:01:00Z")) { true }
+        service.installDocumentAndStartVerification(document, Instant.parse("2026-09-20T04:01:00Z")) {}
 
         val recovered = service.owner.committedRecord()!!
         assertNull(service.pending())

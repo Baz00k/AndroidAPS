@@ -31,6 +31,13 @@ interface CommandQueue {
     fun cancelTempBasal(enforceNew: Boolean, autoForced: Boolean = false, callback: Callback?): Boolean
     fun cancelExtended(callback: Callback?): Boolean
     fun readStatus(reason: String, callback: Callback?): Boolean
+
+    /**
+     * Ensures a status read starts after this call. A read still waiting in the queue already does,
+     * so it is reused rather than refused as a duplicate, as [readStatus] does. For callers that have
+     * just changed what the next pump connection uses and need a read on that connection.
+     */
+    fun ensureStatusReadQueued(reason: String)
     fun statusInQueue(): Boolean
     fun loadHistory(type: Byte, callback: Callback?): Boolean
     fun setUserOptions(callback: Callback?): Boolean

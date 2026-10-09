@@ -209,6 +209,64 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `a status read picked up while a pending key closed the link reconnects and checks it`() {
+        disconnectedConfiguredSession()
+        whenever(provisioning.pending()).thenReturn(installed)
+        var connected = false
+        whenever(manager.isConnected).thenAnswer { connected }
+        whenever(manager.connectConfiguredSession()).thenAnswer { connected = true; Unit }
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(true)
+            YpsoBleManager.StatusReadAttempt()
+        }
+
+        plugin.getPumpStatus("foreground")
+
+        verify(manager).connectConfiguredSession()
+        verify(manager).readStatus(any())
+    }
+
+    @Test
+    fun `an ordinary status read while disconnected only starts the connection`() {
+        disconnectedConfiguredSession()
+        whenever(manager.isConnected).thenReturn(false)
+
+        plugin.getPumpStatus("poll")
+
+        verify(manager).connectConfiguredSession()
+        verify(manager, never()).readStatus(any())
+    }
+
+    @Test
+    fun `a pending key is checked when the queue connects for any command`() {
+        disconnectedConfiguredSession()
+        whenever(provisioning.pending()).thenReturn(installed)
+
+        plugin.connect("Connection needed")
+
+        verify(commandQueue).ensureStatusReadQueued(YpsoPumpPlugin.PENDING_KEY_CHECK_REASON)
+    }
+
+    @Test
+    fun `connecting requests no extra status read without a pending key or when one is queued`() {
+        disconnectedConfiguredSession()
+        plugin.connect("Connection needed")
+        whenever(provisioning.pending()).thenReturn(installed)
+        whenever(commandQueue.statusInQueue()).thenReturn(true)
+        plugin.connect("Connection needed")
+
+        verify(commandQueue, never()).ensureStatusReadQueued(any())
+    }
+
+    private fun disconnectedConfiguredSession() {
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.isConfigured()).thenReturn(true)
+        whenever(provisioning.retryAllowed(any())).thenReturn(true)
+        whenever(manager.installedPumpMac()).thenReturn("12:34:56:78:9A:BC")
+        whenever(manager.configureInstalledSession()).thenReturn(true)
+    }
+
+    @Test
     fun `polling alarms use verified measurements and failed reads cannot fabricate empty reservoir`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.isConfigured()).thenReturn(true)
