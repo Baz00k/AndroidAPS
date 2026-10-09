@@ -15,6 +15,7 @@ interface DecimalFormatter {
     fun to2Decimal(value: Double, unit: String): String
     fun to3Decimal(value: Double): String
     fun to3Decimal(value: Double, unit: String): String
+    /** Step selects minimum precision; formatting must not round the supplied dose. */
     fun toPumpSupportedBolus(value: Double, bolusStep: Double): String
     fun toPumpSupportedBolusWithUnits(value: Double, bolusStep: Double): String
     fun pumpSupportedBolusFormat(bolusStep: Double): DecimalFormat

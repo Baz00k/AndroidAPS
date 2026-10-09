@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.utils.formatBolus
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
 import javax.inject.Provider
@@ -38,7 +39,7 @@ class CommandExtendedBolus(
         callback?.result(r)?.run()
     }
 
-    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.extended_bolus_u_min, insulin, durationInMinutes)
+    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.extended_bolus_u_min, formatBolus(insulin), durationInMinutes)
 
     override fun log(): String = "EXTENDEDBOLUS $insulin U $durationInMinutes min"
     override fun cancel() {

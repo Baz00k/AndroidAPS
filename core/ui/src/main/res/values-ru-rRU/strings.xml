@@ -50,7 +50,7 @@
     <string name="paused">На паузе</string>
     <string name="tdd_total">Суммарный суточный инсулин TDD</string>
     <string name="tdd_old_data">Старые данные</string>
-    <string name="goingtodeliver">Будет подано %1$.2f ед инс</string>
+    <string name="goingtodeliver">Будет подано %1$s ед инс</string>
     <string name="waitingforpump">Ожидание помпы</string>
     <string name="androidaps_start">AAPS запущен</string>
     <string name="formatsignedinsulinunits">%1$+.2f ед</string>
@@ -435,9 +435,9 @@
     <string name="value_out_of_hard_limits">»%1$s« %2$.2f за пределами жестких ограничений</string>
     <string name="basal_value">Величина базала</string>
     <!-- Command Queue + readStatus reasons -->
-    <string name="bolus_u_min">БОЛЮС %1$.2f ЕД</string>
+    <string name="bolus_u_min">БОЛЮС %1$s ЕД</string>
     <string name="carbs_g">УГЛ %1$d г</string>
-    <string name="extended_bolus_u_min">Пролонгированный болюс %1$.2f ед %2$d мин</string>
+    <string name="extended_bolus_u_min">Пролонгированный болюс %1$s ед %2$d мин</string>
     <string name="load_events">ЗАГРУЗИТЬ СОБЫТИЯ</string>
     <string name="clear_alarms">ОЧИСТИТЬ ОПОВЕЩЕНИЯ</string>
     <string name="deactivate">ДЕАКТИВИРОВАТЬ</string>
@@ -446,7 +446,7 @@
     <string name="load_tdds">ЗАГРУЗИТЬ СУТ ДОЗЫ</string>
     <string name="set_profile">ЗАДАТЬ ПРОФИЛЬ</string>
     <string name="set_user_settings">ВЫБРАТЬ НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ</string>
-    <string name="smb_bolus_u">БОЛЮС SMB %1$.2f ЕД</string>
+    <string name="smb_bolus_u">БОЛЮС SMB %1$s ЕД</string>
     <string name="start_pump">ЗАПУСТИТЬ ПОМПУ</string>
     <string name="stop_pump">ОСТАНОВИТЬ ПОМПУ</string>
     <string name="temp_basal_absolute">ВРЕМ БАЗА %1$.2f ЕД/ч %2$d мин</string>
@@ -643,6 +643,7 @@
     <!--    DecimalFormatterImpl -->
     <string name="format_insulin_units1">%1$.1fед</string>
     <string name="format_insulin_units">%1$.2f ед</string>
+    <string name="format_insulin_units_label">%1$s ед</string>
     <string name="percent_rate_duration">Скорость: %1$.2f%% (%2$.2f U/h) Продолжительность: %3$d мин</string>
     <string name="rate_percent_duration">Скорость: %1$.2fед/ч (%2$.2f%%) Продолжительность %3$d мин</string>
     <string name="percent_rate_duration_formatted"><![CDATA[<b>Скорость</b>:%1$.2f %% (%2$.2f ед/ч)<br><b> Продолжительность</b> %3$d мин<br>]]></string>
