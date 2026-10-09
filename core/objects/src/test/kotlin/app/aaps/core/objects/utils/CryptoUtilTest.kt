@@ -5,6 +5,11 @@ import app.aaps.shared.tests.TestBase
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.TruthJUnit.assume
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.any
+import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.mock
+import java.security.SecureRandom
+import java.util.Base64
 
 // https://stackoverflow.com/questions/52344522/joseexception-couldnt-create-aes-gcm-nopadding-cipher-illegal-key-size
 // https://stackoverflow.com/questions/47708951/can-aes-256-work-on-android-devices-with-api-level-26
@@ -36,6 +41,11 @@ class CryptoUtilTest : TestBase() {
         assumeAES256isSupported(cryptoUtil)
         assertThat(encrypted).isNotNull()
 
+        val second = cryptoUtil.encrypt(password, salt, payload)
+        assertThat(second).isNotNull()
+        assertThat(second).isNotEqualTo(encrypted)
+        assertThat(cryptoUtil.decrypt(password, salt, second!!)).isEqualTo(payload)
+
         val decrypted = cryptoUtil.decrypt(password, salt, encrypted!!)
         assumeAES256isSupported(cryptoUtil)
         assertThat(decrypted).isEqualTo(payload)
@@ -55,6 +65,56 @@ class CryptoUtilTest : TestBase() {
         val decrypted = cryptoUtil.decrypt(password, salt, encrypted!!)
         assumeAES256isSupported(cryptoUtil)
         assertThat(decrypted).isEqualTo(payload)
+    }
+
+    private val codecSalt = ByteArray(32) { it.toByte() }
+    private val codecPassword = "synthetic-password"
+    // Frozen Spongy Castle 1.58.0.0 output: salt 00..1f, IV a0..ab; all padding lengths.
+    private val codecFixtures = listOf(
+        "" to "DKChoqOkpaanqKmqq5ssCKMXh7tyuWYhS8Z9UbU=",
+        "A" to "DKChoqOkpaanqKmqq26RsMIIAyoCBGuN8BtWhzEo",
+        "AB" to "DKChoqOkpaanqKmqq26bEwnhdu/0Bjz5ONCIqAYFvA==",
+        "Glucose: 5.5 mmol/L — 糖尿病 💉\n{\"synthetic\":true}" to
+            "DKChoqOkpaanqKmqq2i1fq+dLne8Go4mXnOpNR0Iue0wL3OYQogLi9wWat1Q4erdpi8t4KQ3wDlYvBNoPAcLtSkaR9Y/U0DIYxYtpgSlrIoj4C347mY="
+    )
+
+    @Test
+    fun codecFixturesPreserveExactEncryptionAndDecryptWithWhitespace() {
+        val random = mock<SecureRandom>()
+        doAnswer {
+            ByteArray(12) { (0xa0 + it).toByte() }.copyInto(it.getArgument(0))
+            null
+        }.`when`(random).nextBytes(any())
+        CryptoUtil::class.java.getDeclaredField("secureRandom").apply { isAccessible = true }.set(cryptoUtil, random)
+        for ((plaintext, envelope) in codecFixtures) {
+            assertThat(cryptoUtil.encrypt(codecPassword, codecSalt, plaintext)).isEqualTo(envelope)
+            assertThat(cryptoUtil.decrypt(codecPassword, codecSalt, envelope)).isEqualTo(plaintext)
+            val wrapped = envelope.dropLast(4).chunked(5).joinToString(" \t\r\n") + " \t" + envelope.takeLast(4) + "\r\n"
+            assertThat(cryptoUtil.decrypt(codecPassword, codecSalt, wrapped)).isEqualTo(plaintext)
+            assertThat(cryptoUtil.lastException).isNull()
+        }
+    }
+
+    @Test
+    fun invalidEnvelopeOrPasswordReportsFailureAndSuccessClearsIt() {
+        val (plaintext, envelope) = codecFixtures.last()
+        val bytes = Base64.getDecoder().decode(envelope)
+        val badTag = bytes.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() }
+        val invalid = listOf(
+            "", "!", envelope.dropLast(1), codecFixtures[2].second.dropLast(2),
+            envelope + "=", envelope + "!", envelope + "\u000c", envelope + "\u00a0",
+            envelope.dropLast(2) + "\t" + envelope.takeLast(2),
+            "DA==", "AA==", "/w==", // Missing, zero-length and negative-length IV.
+            Base64.getEncoder().encodeToString(bytes.copyOf(20)), Base64.getEncoder().encodeToString(badTag),
+            // Maintainer-approved rejection of the legacy overlapping-quartet decoder defect.
+            "DKChoqOkpaanqKmqq1T7eLWcKXrjTtJrSWn9JejEPPCFIJhl3CYe18wWKk="
+        )
+        for ((password, input) in invalid.map { codecPassword to it } + ("wrong-password" to envelope)) {
+            assertThat(cryptoUtil.decrypt(password, codecSalt, input)).isNull()
+            assertThat(cryptoUtil.lastException).isNotNull()
+        }
+        assertThat(cryptoUtil.decrypt(codecPassword, codecSalt, envelope)).isEqualTo(plaintext)
+        assertThat(cryptoUtil.lastException).isNull()
     }
 
     @Test
@@ -111,4 +171,3 @@ class CryptoUtilTest : TestBase() {
     }
 
 }
-

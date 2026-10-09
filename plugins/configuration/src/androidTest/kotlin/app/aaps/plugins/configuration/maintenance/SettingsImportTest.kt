@@ -60,6 +60,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.spy
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
@@ -193,7 +194,7 @@ class SettingsImportTest {
         assertThat(secureEncrypt.isValidDataString(wrappedPassword)).isTrue()
         encrypt(mapOf(StringKey.GeneralPatientName.key to "previous synthetic backup".repeat(100)), wrappedPassword)
 
-        for (name in listOf("true", "false")) {
+        for (name in listOf("true", "false", "Synthetic 糖尿病 💉 — café")) {
             preferences.put(StringKey.GeneralPatientName, name)
             val values = settingsImport.exportValues()
             assertThat(values).doesNotContainKey("unknown_source_key")
@@ -341,6 +342,28 @@ class SettingsImportTest {
             encrypt(mapOf(StringKey.GeneralPatientName.key to "new backup"), wrappedPassword)
         }
         assertThat(file.readText()).isEqualTo(existing)
+    }
+
+    @Test
+    fun encryptionFailureCannotCreateOrOverwriteSettingsBackup() {
+        seedExistingSettings()
+        val before = stored.all.toMap()
+        val failingCrypto = spy(CryptoUtil(mock()))
+        // Invalid synthetic salt forces the real key-derivation/encryption failure path.
+        whenever(failingCrypto.mineSalt()).thenReturn(byteArrayOf())
+        val values = settingsImport.exportValues()
+        val backup = encrypt(values)
+        format = EncryptedPrefsFormat(mock(), failingCrypto, FileStorage(), context).apply { secureEncrypt = this@SettingsImportTest.secureEncrypt }
+        for (existing in listOf(null, backup)) {
+            if (existing == null) file.delete() else file.writeText(existing)
+            val error = assertThrows(PrefIOError::class.java) {
+                encrypt(values)
+            }
+            assertThat(error.message).isEqualTo("Cannot encrypt settings export")
+            assertThat(failingCrypto.lastException).isNotNull()
+            if (existing == null) assertThat(file.exists()).isFalse() else assertThat(file.readText()).isEqualTo(existing)
+            assertThat(stored.all).containsExactlyEntriesIn(before)
+        }
     }
 
     @Test
