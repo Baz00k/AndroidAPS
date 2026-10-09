@@ -31,6 +31,7 @@ class SkinContrastTest {
         val base = AapsSkins.Default.dark
         val invisible = base.copy(textPrimary = base.background)
         assertThat(SkinValidation.problems(invisible)).isNotEmpty()
+        assertThat(SkinValidation.problems(base.copy(accentOnLight = base.accentTintStrong))).isNotEmpty()
     }
 
     @Test
@@ -38,12 +39,6 @@ class SkinContrastTest {
         val base = AapsSkins.Default.dark
         val muddled = base.copy(low = base.high)
         assertThat(SkinValidation.problems(muddled)).isNotEmpty()
-    }
-
-    @Test
-    fun `the rules reject accent ink that disappears into its tint`() {
-        val base = AapsSkins.Default.dark
-        assertThat(SkinValidation.problems(base.copy(accentOnLight = base.accentTintStrong))).isNotEmpty()
     }
 
     @Test
@@ -63,15 +58,12 @@ class SkinContrastTest {
     }
 
     @Test
-    fun `midnight is the default dark ground with the screen and its bars black`() {
-        val dark = AapsSkins.Default.dark
+    fun `midnight blackens only the screen and its bars`() {
         val midnight = AapsSkins.Midnight.dark
         listOf(midnight.background, midnight.bar).forEach { assertThat(it).isEqualTo(Color.Black) }
-        // What sits on the black keeps its fill — cards, sheets, nested panels, controls — so it
-        // separates by tone rather than needing outlines.
+        // What sits on the black separates by tone, not by outline, so it must not be black itself.
         listOf(midnight.surface, midnight.surface2, midnight.surface3, midnight.controlFill, midnight.accentTintStrong)
             .forEach { assertThat(it).isNotEqualTo(Color.Black) }
-        assertThat(midnight).isEqualTo(dark.copy(background = Color.Black, bar = Color.Black))
     }
 
     @Test

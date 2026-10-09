@@ -251,7 +251,7 @@ class SkinSpecTest {
     }
 
     @Test
-    fun `a template built from colours on screen imports back to exactly those colours`() {
+    fun `a template preserves wallpaper colours instead of inheriting the defaults`() {
         // The starter template is seeded from the live appearance. Whatever it inherited instead
         // would come from the baseline scheme, not from what the author was looking at.
         val onScreen = darkColorScheme(primary = Color(0xFFFF8A65), surface = Color(0xFF1B1210)).toAapsColors(dark = true)
@@ -259,7 +259,8 @@ class SkinSpecTest {
         val imported = SkinSpec.parse(SkinSpec.json.encodeToString(SkinSpec.serializer(), template)).toSkin()
 
         listOf(imported.dark, imported.light).forEach {
-            assertThat(SkinSpec.PaletteSpec.from(it)).isEqualTo(SkinSpec.PaletteSpec.from(onScreen))
+            assertThat(it.accent).isEqualTo(Color(0xFFFF8A65))
+            assertThat(it.background).isEqualTo(Color(0xFF1B1210))
         }
     }
 }

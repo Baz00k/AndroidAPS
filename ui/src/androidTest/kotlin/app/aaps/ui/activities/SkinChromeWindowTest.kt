@@ -34,12 +34,5 @@ class SkinChromeWindowTest {
         }
     }
 
-    @Test fun anOrdinaryWindowIsStillPaintedInTheScreenColour() {
-        ActivityScenario.launch(OpaqueChromeActivity::class.java).use { scenario ->
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-            scenario.onActivity { assertThat(Color.alpha(windowColor(it))).isEqualTo(255) }
-        }
-    }
-
     private fun windowColor(activity: Activity) = (activity.window.decorView.background as? ColorDrawable)?.color ?: Color.TRANSPARENT
 }

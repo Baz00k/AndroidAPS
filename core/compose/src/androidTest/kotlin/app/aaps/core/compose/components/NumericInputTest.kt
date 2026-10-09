@@ -97,13 +97,22 @@ class NumericInputTest {
         assertThat(entry.right).isAtMost(unit.left)
     }
 
-    @Test fun aValueTypedPastABoundCanBeSteppedBackToItButNotFurtherOut() {
+    @Test fun outOfRangeDraftsRecoverAtTheBoundsWithoutMovingTheNextControl() {
         var value by mutableStateOf(2.0)
-        compose.setContent { AapsTheme { NumericInput(value, { value = it }, NumericSpec(1.0, 3.0, 0.5, 1), "U", "Insulin") } }
+        compose.setContent {
+            AapsTheme { Column(Modifier.width(360.dp)) {
+                NumericInput(value, { value = it }, NumericSpec(1.0, 3.0, 0.5, 1), "U", "Insulin")
+                Text("below", Modifier.testTag("below"))
+            } }
+        }
+        fun belowTop() = compose.onNodeWithTag("below").fetchSemanticsNode().boundsInRoot.top
+        val quiet = belowTop()
         val field = compose.onNodeWithContentDescription("Insulin")
         val minus = compose.onNodeWithContentDescription("Subtract 0.5 U Insulin")
         val plus = compose.onNodeWithContentDescription("Add 0.5 U Insulin")
         field.performTextReplacement("12")
+        compose.onNodeWithText("Max 3.0 U").assertIsDisplayed()
+        assertThat(belowTop()).isEqualTo(quiet)
         // Over the maximum: only the button that points back toward the range works, and it lands on the bound.
         plus.assertIsNotEnabled()
         minus.assertIsEnabled()
@@ -115,30 +124,13 @@ class NumericInputTest {
         plus.assertIsEnabled()
         plus.performClick()
         field.assertTextEquals("1.0")
+        compose.onNodeWithText("Min 1.0 U").assertIsDisplayed()
+        assertThat(belowTop()).isEqualTo(quiet)
         compose.runOnIdle { assertThat(value).isEqualTo(1.0) }
         // A draft that is not a number has nothing to step from.
         field.performTextReplacement("-")
         minus.assertIsNotEnabled()
         plus.assertIsNotEnabled()
-    }
-
-    @Test fun anErrorOrLimitLineDoesNotMoveWhatIsBelowTheField() {
-        var value by mutableStateOf(2.0)
-        compose.setContent {
-            AapsTheme { Column(Modifier.width(360.dp)) {
-                NumericInput(value, { value = it }, NumericSpec(0.0, 3.0, 0.5, 1), "U", "Insulin")
-                Text("below", Modifier.testTag("below"))
-            } }
-        }
-        val field = compose.onNodeWithContentDescription("Insulin")
-        fun belowTop() = compose.onNodeWithTag("below").fetchSemanticsNode().boundsInRoot.top
-        val quiet = belowTop()
-        field.performTextReplacement("12")
-        compose.onNodeWithText("Max 3.0 U").assertIsDisplayed()
-        assertThat(belowTop()).isEqualTo(quiet)
-        field.performTextReplacement("0")
-        compose.onNodeWithText("Min 0.0 U").assertIsDisplayed()
-        assertThat(belowTop()).isEqualTo(quiet)
     }
 
     @Test fun valueAndUnitReadAsOneCentredGroupAndTheWholeFieldTakesTheTap() {
