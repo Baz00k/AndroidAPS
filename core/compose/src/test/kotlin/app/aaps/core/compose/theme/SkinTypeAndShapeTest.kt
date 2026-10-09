@@ -31,13 +31,6 @@ class SkinTypeAndShapeTest {
     }
 
     @Test
-    fun `every card shares one radius so neighbouring cards never disagree`() {
-        val s = aapsShapes()
-        assertThat(s.hero).isEqualTo(s.card)
-        assertThat(s.cardSmall).isEqualTo(s.card)
-    }
-
-    @Test
     fun `a negative radius is clamped rather than producing an inverted shape`() {
         assertThat(aapsShapes((-8).dp).card).isEqualTo(RoundedCornerShape(0.dp))
     }

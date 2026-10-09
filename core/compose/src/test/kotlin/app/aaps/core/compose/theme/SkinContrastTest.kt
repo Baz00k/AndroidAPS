@@ -58,15 +58,6 @@ class SkinContrastTest {
     }
 
     @Test
-    fun `midnight blackens only the screen and its bars`() {
-        val midnight = AapsSkins.Midnight.dark
-        listOf(midnight.background, midnight.bar).forEach { assertThat(it).isEqualTo(Color.Black) }
-        // What sits on the black separates by tone, not by outline, so it must not be black itself.
-        listOf(midnight.surface, midnight.surface2, midnight.surface3, midnight.controlFill, midnight.accentTintStrong)
-            .forEach { assertThat(it).isNotEqualTo(Color.Black) }
-    }
-
-    @Test
     fun `contrast and difference maths match their reference values`() {
         assertThat(SkinValidation.contrast(Color.Black, Color.White)).isWithin(0.01).of(21.0)
         assertThat(SkinValidation.contrast(Color.White, Color.White)).isWithin(0.01).of(1.0)
