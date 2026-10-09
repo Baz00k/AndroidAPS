@@ -28,7 +28,31 @@ class PluginStore @Inject constructor(
     private val aapsLogger: AAPSLogger
 ) : ActivePlugin {
 
-    lateinit var plugins: List<@JvmSuppressWildcards PluginBase>
+    private lateinit var registeredPlugins: List<PluginBase>
+
+    var plugins: List<@JvmSuppressWildcards PluginBase>
+        get() = registeredPlugins
+        set(value) {
+            val candidates = value.toList()
+            // Reject invalid registrations before selection can enable a fallback or disable a
+            // configured therapy plugin. SYNC and the other mixed categories have no single contract.
+            candidates.forEach { plugin ->
+                val contract = when (plugin.getType()) {
+                    PluginType.APS         -> APS::class.java
+                    PluginType.INSULIN     -> Insulin::class.java
+                    PluginType.SENSITIVITY -> Sensitivity::class.java
+                    PluginType.SMOOTHING   -> Smoothing::class.java
+                    PluginType.PROFILE     -> ProfileSource::class.java
+                    PluginType.BGSOURCE    -> BgSource::class.java
+                    PluginType.PUMP        -> Pump::class.java
+                    PluginType.GENERAL, PluginType.CONSTRAINTS, PluginType.LOOP, PluginType.SYNC -> null
+                }
+                require(contract == null || contract.isInstance(plugin)) {
+                    "Plugin ${plugin.javaClass.name} in ${plugin.getType()} must implement ${contract?.name}"
+                }
+            }
+            registeredPlugins = candidates
+        }
 
     private var activeBgSourceStore: BgSource? = null
     private var activePumpStore: Pump? = null
