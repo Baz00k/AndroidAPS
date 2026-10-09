@@ -21,6 +21,11 @@ data class YpsoSessionDocument(
     val fingerprint: String get() = PumpSession.fingerprint(sharedKey).take(16)
 }
 
+/** A session file that cannot be reviewed, classified by what the person can do about it. */
+class SessionDocumentException(val problem: Problem, message: String?, cause: Throwable? = null) : IllegalArgumentException(message, cause) {
+    enum class Problem { NOT_A_SESSION_FILE, UNSUPPORTED_PUMP, DATED_AFTER_PHONE_CLOCK }
+}
+
 /** Strict parser for the canonical ypso-keys schema-v1 document. */
 object YpsoSessionDocumentParser {
     const val MAX_DOCUMENT_BYTES = 64 * 1024
@@ -31,7 +36,15 @@ object YpsoSessionDocumentParser {
     private val canonicalSerial = Regex("[A-Za-z0-9_-]{1,64}")
     private val sourceValue = Regex("[A-Za-z0-9_.:() -]{1,200}")
 
-    fun parse(data: ByteArray, now: Instant = Instant.now()): YpsoSessionDocument {
+    fun parse(data: ByteArray, now: Instant = Instant.now()): YpsoSessionDocument = try {
+        parseCanonical(data, now)
+    } catch (e: SessionDocumentException) {
+        throw e
+    } catch (e: RuntimeException) {
+        throw SessionDocumentException(SessionDocumentException.Problem.NOT_A_SESSION_FILE, e.message, e)
+    }
+
+    private fun parseCanonical(data: ByteArray, now: Instant): YpsoSessionDocument {
         require(data.size <= MAX_DOCUMENT_BYTES) { "Session file is larger than 64 KiB" }
         val root = StrictJson(data.toString(Charsets.UTF_8)).parseObject()
         require(root.keys == canonicalTopLevel) { "Session file does not match schema version 1" }
@@ -49,8 +62,8 @@ object YpsoSessionDocumentParser {
             val created = timestamp(root.string("created_at"))
             val captured = timestamp(root.string("captured_at"))
             require(!created.isAfter(captured.plusSeconds(5 * 60))) { "Key creation time is after capture time" }
-            require(!captured.isAfter(now.plusSeconds(5 * 60))) { "Capture time is in the future" }
-            require(!created.isAfter(now)) { "Key creation time is in the future" }
+            if (captured.isAfter(now.plusSeconds(5 * 60)) || created.isAfter(now))
+                throw SessionDocumentException(SessionDocumentException.Problem.DATED_AFTER_PHONE_CLOCK, "Session file is dated in the future")
             val reboot = when (val value = root["reboot_counter"]) {
                 null -> null
                 is JsonNumber -> value.value.also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()

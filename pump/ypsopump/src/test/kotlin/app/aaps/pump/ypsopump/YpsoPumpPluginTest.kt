@@ -238,6 +238,21 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `a connection counts as starting from its retry grant until BLE takes over`() {
+        disconnectedConfiguredSession()
+        whenever(manager.isConnected).thenReturn(false)
+        val startingDuringGrant = mutableListOf<Int>()
+        whenever(provisioning.retryAllowed(any())).thenAnswer { startingDuringGrant += state.connectionsStarting.get(); true }
+        whenever(manager.connectConfiguredSession()).thenAnswer { startingDuringGrant += state.connectionsStarting.get(); Unit }
+        whenever(manager.configureInstalledSession()).thenReturn(true)
+
+        plugin.connect("Connection needed")
+
+        assertEquals(listOf(1, 1), startingDuringGrant)
+        assertEquals(0, state.connectionsStarting.get())
+    }
+
+    @Test
     fun `a pending key is checked when the queue connects for any command`() {
         disconnectedConfiguredSession()
         whenever(provisioning.pending()).thenReturn(installed)

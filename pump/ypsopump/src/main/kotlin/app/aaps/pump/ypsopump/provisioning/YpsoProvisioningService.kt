@@ -3,6 +3,7 @@ package app.aaps.pump.ypsopump.provisioning
 import android.content.Context
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionJournal
@@ -71,6 +72,9 @@ class YpsoProvisioningService internal constructor(
     enum class ManualField { SERIAL, MAC, KEY }
     class ManualValidationException(val field: ManualField, message: String, cause: Throwable? = null) :
         IllegalArgumentException(message, cause)
+
+    /** A suspected re-key needs different key material; the rejected key is not accepted again. */
+    class ReplacementKeyRequiredException : SecurityException("Replacement key required after rejection")
 
     /** The candidate was staged but its verification read could not be requested; it was rolled back. */
     class VerificationStartException(cause: Throwable) : IllegalStateException("Verification status read could not be requested", cause)
@@ -148,7 +152,7 @@ class YpsoProvisioningService internal constructor(
             if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
                 val currentHex = current?.keyHex
                 if (explicitKey == null || (currentHex != null && explicitKey.toHex().equals(currentHex, ignoreCase = true))) {
-                    throw ManualValidationException(ManualField.KEY, "Replacement key required after rejection")
+                    throw ReplacementKeyRequiredException()
                 }
             }
             val preservesCurrentKey = explicitKey == null || current?.keyHex?.equals(key.toHex(), ignoreCase = true) == true
@@ -178,14 +182,22 @@ class YpsoProvisioningService internal constructor(
         startVerification({ installManual(draft, now) }, enqueue)
     }
 
+    /** Read failures propagate as I/O errors; content problems are a [SessionDocumentException]. */
     fun reviewDocument(stream: InputStream, now: Instant = Instant.now()): YpsoSessionDocument {
-        val data = boundedRead(stream)
+        val data = try {
+            boundedRead(stream)
+        } catch (e: IllegalArgumentException) {
+            throw SessionDocumentException(SessionDocumentException.Problem.NOT_A_SESSION_FILE, e.message, e)
+        }
         return try {
             val document = YpsoSessionDocumentParser.parse(data, now)
             try {
                 val serial = PumpIdentity.normalizeSerial(document.serial)
                 PumpIdentity.validatePair(serial, document.mac)
                 document
+            } catch (e: IllegalArgumentException) {
+                document.sharedKey.fill(0)
+                throw SessionDocumentException(SessionDocumentException.Problem.UNSUPPORTED_PUMP, e.message, e)
             } catch (e: Exception) {
                 document.sharedKey.fill(0)
                 throw e
@@ -324,7 +336,7 @@ class YpsoProvisioningService internal constructor(
             if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in owner.availability().causes) {
                 val currentHex = owner.activeRecord()?.keyHex
                 if (currentHex != null && document.sharedKey.toHex().equals(currentHex, ignoreCase = true)) {
-                    throw SecurityException("Replacement key required after rejection")
+                    throw ReplacementKeyRequiredException()
                 }
             }
             install(
@@ -545,6 +557,19 @@ class YpsoProvisioningService internal constructor(
         if (availability.failures == 0) return true
         return availability.retryAt?.let { now >= it } ?: true
     }
+
+    /**
+     * Non-consuming: whether a pending check is under way or will be attempted without the person acting.
+     * After a suspected re-key only the unused explicit attempt, a connection still starting from it, or a
+     * live connection counts; the grant is in memory, so it is gone after a restart or once a torn-down
+     * connection consumed it.
+     */
+    @Synchronized
+    fun verificationCanProceed(): Boolean =
+        verificationAttemptRequested ||
+            pumpState.connectionsStarting.get() > 0 ||
+            pumpState.connectionState != YpsoBleManager.ConnectionState.DISCONNECTED ||
+            PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in pumpState.availability.causes
 
     /** Each queued-therapy connection cycle may bypass transport backoff; hard rekey remains blocking. */
     @Synchronized

@@ -6,7 +6,15 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,9 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,11 +50,17 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.annotation.StringRes
 import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.GhostButton
+import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.SecondaryButton
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.provisioning.SessionDocumentException
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.queue.CommandQueue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -104,13 +116,46 @@ internal fun verificationPresentation(
     null -> VerificationPresentation.IDLE
 }
 
+/** Causes describing the setup being checked; a sticky suspected re-key belongs to the rejected key. */
+internal fun displayedCauses(
+    verification: VerificationPresentation,
+    causes: Set<PumpSession.AvailabilityCause>,
+): Set<PumpSession.AvailabilityCause> =
+    if (verification == VerificationPresentation.CHECKING) causes - PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED else causes
+
+internal enum class PendingCheck { IN_PROGRESS, RETRYING, STALLED }
+
+/**
+ * How a pending check is going. [canProceed] is [YpsoProvisioningService.verificationCanProceed]: without
+ * it nothing will check the key until the person acts. A fresh candidate starts with a status cause but
+ * no failed attempt, and a failed attempt only matters once no attempt is under way.
+ */
+internal fun pendingCheck(availability: PumpSession.Availability?, canProceed: Boolean): PendingCheck = when {
+    !canProceed -> PendingCheck.STALLED
+    availability == null || availability.failures == 0 -> PendingCheck.IN_PROGRESS
+    PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in availability.causes -> PendingCheck.IN_PROGRESS
+    else -> PendingCheck.RETRYING
+}
+
 internal fun provisioningFeedback(
     verification: VerificationPresentation,
     presentation: PumpSetupPresentation,
+    pendingCheck: PendingCheck = PendingCheck.RETRYING,
 ): ProvisioningFeedback = when (verification) {
-    VerificationPresentation.CHECKING -> ProvisioningFeedback(R.string.ypsopump_verifying, ProvisioningFeedbackTone.NEUTRAL)
+    // Retryable problems keep the check pending, so say what AAPS is waiting for rather than only "checking",
+    // and ask for a new attempt when none will happen on its own.
+    VerificationPresentation.CHECKING -> when {
+        pendingCheck == PendingCheck.STALLED -> ProvisioningFeedback(R.string.ypsopump_verifying_stalled, ProvisioningFeedbackTone.ERROR)
+        pendingCheck == PendingCheck.IN_PROGRESS -> ProvisioningFeedback(R.string.ypsopump_verifying, ProvisioningFeedbackTone.NEUTRAL)
+        presentation == PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.NEUTRAL)
+        presentation == PumpSetupPresentation.CONNECTION_FAILED ||
+            presentation == PumpSetupPresentation.AUTHENTICATION_RETRY_REQUIRED ||
+            presentation == PumpSetupPresentation.STATUS_NEEDS_CHECKING -> ProvisioningFeedback(R.string.ypsopump_verifying_retry, ProvisioningFeedbackTone.NEUTRAL)
+        else -> ProvisioningFeedback(R.string.ypsopump_verifying, ProvisioningFeedbackTone.NEUTRAL)
+    }
     VerificationPresentation.FAILED -> when (presentation) {
-        PumpSetupPresentation.KEY_MAY_NEED_UPDATING -> ProvisioningFeedback(R.string.ypsopump_cause_rekey, ProvisioningFeedbackTone.ERROR)
+        PumpSetupPresentation.KEY_MAY_NEED_UPDATING -> ProvisioningFeedback(R.string.ypsopump_verification_key_rejected, ProvisioningFeedbackTone.ERROR)
+        PumpSetupPresentation.DETAILS_NEED_CHECKING -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.ERROR)
         else -> ProvisioningFeedback(R.string.ypsopump_verification_failed_generic, ProvisioningFeedbackTone.ERROR)
     }
     VerificationPresentation.CANCELLED -> ProvisioningFeedback(R.string.ypsopump_verification_cancelled, ProvisioningFeedbackTone.NEUTRAL)
@@ -122,10 +167,41 @@ internal fun provisioningFeedback(
     }
 }
 
+/** Why a picked file cannot be used. Anything but a content problem means the file could not be read. */
+@StringRes
+internal fun importFailureMessage(error: Throwable): Int = when ((error as? SessionDocumentException)?.problem) {
+    SessionDocumentException.Problem.NOT_A_SESSION_FILE -> R.string.ypsopump_import_invalid
+    SessionDocumentException.Problem.UNSUPPORTED_PUMP -> R.string.ypsopump_import_unsupported_pump
+    SessionDocumentException.Problem.DATED_AFTER_PHONE_CLOCK -> R.string.ypsopump_import_dated_after_clock
+    null -> R.string.ypsopump_import_unreadable
+}
+
+/**
+ * Why saving did not start a check. Only the typed refusals happen before anything is staged; the
+ * fallback makes no claim about what was kept, because the status above reflects the stored state.
+ */
+@StringRes
+internal fun saveFailureMessage(error: Throwable): Int = when (error) {
+    is YpsoProvisioningService.ReplacementKeyRequiredException -> R.string.ypsopump_import_rejected_key
+    is PumpSession.UnresolvedAccountingException -> R.string.ypsopump_save_failed_unresolved
+    is PumpSession.KeyOfAnotherPumpException -> R.string.ypsopump_save_failed_other_pump
+    is PumpSession.StorageUnavailableException -> R.string.ypsopump_save_failed_storage
+    is YpsoProvisioningService.VerificationStartException -> R.string.ypsopump_verification_start_failed
+    else -> R.string.ypsopump_save_failed
+}
+
+/** Exception types only: messages may echo file contents, and keys must never reach the log. */
+internal fun setupFailureLog(operation: String, error: Throwable): String = buildString {
+    append("YpsoPump setup ").append(operation).append(" failed: ").append(error.javaClass.simpleName)
+    (error as? SessionDocumentException)?.let { append('(').append(it.problem).append(')') }
+    error.cause?.let { append(" caused by ").append(it.javaClass.simpleName) }
+}
+
 class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var provisioning: YpsoProvisioningService
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var plugin: YpsoPumpPlugin
+    @Inject lateinit var aapsLogger: AAPSLogger
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -202,14 +278,15 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     }
 
     private var selectedDocument by mutableStateOf<YpsoSessionDocument?>(null)
-    private var importError by mutableStateOf<String?>(null)
+    // The last save or import failure, shown beside the current state rather than in place of it.
+    private var setupFailure by mutableStateOf<Int?>(null)
     private var importingDocument by mutableStateOf(false)
 
     private fun openDocument(uri: Uri?) {
         if (uri == null) return
         selectedDocument?.sharedKey?.fill(0)
         selectedDocument = null
-        importError = null
+        setupFailure = null
         importingDocument = true
         lifecycleScope.launch {
             var reviewed: Result<YpsoSessionDocument>? = null
@@ -218,15 +295,18 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 reviewed = withContext(NonCancellable + Dispatchers.IO) {
                     runCatching {
                         contentResolver.openInputStream(uri)?.use(provisioning::reviewDocument)
-                        ?: throw IllegalArgumentException()
+                        ?: throw java.io.FileNotFoundException()
                     }
                 }
                 currentCoroutineContext().ensureActive()
                 reviewed.onSuccess {
                     selectedDocument = it
                     transferredToScreen = true
-                    importError = null
-                }.onFailure { importError = getString(R.string.ypsopump_import_invalid) }
+                    setupFailure = null
+                }.onFailure {
+                    aapsLogger.warn(LTag.PUMP, setupFailureLog("import review", it))
+                    setupFailure = importFailureMessage(it)
+                }
             } finally {
                 if (!transferredToScreen) reviewed?.getOrNull()?.sharedKey?.fill(0)
                 importingDocument = false
@@ -245,6 +325,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         var installed by remember { mutableStateOf(service.installed()) }
         var pending by remember { mutableStateOf(service.pending()) }
         var verificationState by remember { mutableStateOf(service.verificationState()) }
+        var checkCanProceed by remember { mutableStateOf(service.verificationCanProceed()) }
         var installing by remember { mutableStateOf(false) }
         var serial by remember { mutableStateOf(installed?.serial.orEmpty()) }
         var mac by remember { mutableStateOf(installed?.mac.orEmpty()) }
@@ -253,7 +334,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         var serialError by remember { mutableStateOf<String?>(null) }
         var macError by remember { mutableStateOf<String?>(null) }
         var keyError by remember { mutableStateOf<String?>(null) }
-        var generalError by remember { mutableStateOf<String?>(null) }
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), onPicked)
         val selected = selectedDocument
         val verificationStarter = remember(service, commandQueue) {
@@ -291,6 +371,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 verificationState = updated
                 installed = service.installed()
                 pending = service.pending()
+                checkCanProceed = service.verificationCanProceed()
                 if (updated?.attemptId != attemptId || verificationPresentation(updated) != VerificationPresentation.CHECKING) return@LaunchedEffect
             }
         }
@@ -301,28 +382,31 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             }
         }
         val displayedSession = pending ?: installed
+        val causes = displayedSession?.availability?.causes.orEmpty()
         val feedback = provisioningFeedback(
             verification = verification,
             presentation = pumpSetupPresentation(
-                causes = displayedSession?.availability?.causes.orEmpty(),
+                causes = displayedCauses(verification, causes),
                 hasSavedDetails = displayedSession != null,
                 verified = installed?.verifiedAt != null,
             ),
+            pendingCheck = pendingCheck(displayedSession?.availability, checkCanProceed),
         )
         val busyMessage = when {
             importingDocument -> R.string.ypsopump_importing
             installing -> R.string.ypsopump_saving
-            verification == VerificationPresentation.CHECKING -> R.string.ypsopump_verifying
             else -> null
         }
-        val busy = busyMessage != null
-        val failure = generalError ?: importError
-        val statusText = when {
-            busyMessage != null -> getString(busyMessage)
-            failure != null -> failure
-            else -> getString(feedback.message)
+        val checking = verification == VerificationPresentation.CHECKING
+        val busy = busyMessage != null || checking
+        val statusIsError = busyMessage == null && feedback.tone == ProvisioningFeedbackTone.ERROR
+        val failure = setupFailure.takeIf { busyMessage == null }
+        fun refresh() {
+            installed = service.installed()
+            pending = service.pending()
+            verificationState = service.verificationState()
+            checkCanProceed = service.verificationCanProceed()
         }
-        val statusIsError = !busy && (failure != null || feedback.tone == ProvisioningFeedbackTone.ERROR)
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -335,7 +419,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        statusText,
+                        getString(busyMessage ?: feedback.message),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (statusIsError) MaterialTheme.colorScheme.error else colors.textPrimary,
                         modifier = Modifier.semantics {
@@ -343,14 +427,13 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                         }
                     )
                     if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    if (verification == VerificationPresentation.CHECKING) {
-                        TextButton(onClick = {
+                    if (checking && busyMessage == null) {
+                        GhostButton(getString(R.string.ypsopump_cancel_verification), onClick = {
                             service.cancelCandidate()
-                            installed = service.installed()
-                            pending = service.pending()
-                            verificationState = service.verificationState()
-                        }) { Text(getString(R.string.ypsopump_cancel_verification)) }
+                            refresh()
+                        })
                     }
+                    failure?.let { SetupFailure(getString(it)) }
                 }
             }
             OutlinedTextField(
@@ -390,9 +473,8 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 enabled = !busy,
                 colors = fieldColors
             )
-            Button(onClick = {
-                generalError = null
-                importError = null
+            PrimaryButton(getString(R.string.ypsopump_save_verify), onClick = {
+                setupFailure = null
                 installing = true
                 lifecycleScope.launch {
                     val result = runCatching {
@@ -401,35 +483,35 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                         )
                     }
                     installing = false
+                    refresh()
                     result.onSuccess {
-                        serialError = null; macError = null; keyError = null; generalError = null
-                        key = ""; verificationState = service.verificationState()
+                        serialError = null; macError = null; keyError = null
+                        key = ""
                         plugin.onAppVisibilityChanged(true)
                     }
                     .onFailure {
+                        aapsLogger.warn(LTag.PUMP, setupFailureLog("save", it))
                         when (it) {
                             is YpsoProvisioningService.ManualValidationException -> when (it.field) {
                                 YpsoProvisioningService.ManualField.SERIAL -> serialError = getString(R.string.ypsopump_invalid_serial)
                                 YpsoProvisioningService.ManualField.MAC -> macError = getString(R.string.ypsopump_invalid_mac)
-                                YpsoProvisioningService.ManualField.KEY ->
-                                    keyError = if (it.message == "Replacement key required after rejection")
-                                        getString(R.string.ypsopump_rekey_new_key_required)
-                                    else getString(R.string.ypsopump_invalid_key)
+                                YpsoProvisioningService.ManualField.KEY -> keyError = getString(R.string.ypsopump_invalid_key)
                             }
-                            is YpsoProvisioningService.VerificationStartException -> generalError = getString(R.string.ypsopump_verification_start_failed)
-                            else -> generalError = getString(R.string.ypsopump_save_failed)
+                            is YpsoProvisioningService.ReplacementKeyRequiredException -> keyError = getString(R.string.ypsopump_rekey_new_key_required)
+                            else -> setupFailure = saveFailureMessage(it)
                         }
                     }
                 }
-            }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_save_verify)) }
-            OutlinedButton(
+            }, Modifier.fillMaxWidth(), enabled = !busy)
+            SecondaryButton(
+                getString(R.string.ypsopump_import_session_file),
                 onClick = {
-                    generalError = null
+                    setupFailure = null
                     picker.launch(arrayOf("application/json", "text/json", "text/plain"))
                 },
+                Modifier.fillMaxWidth(),
                 enabled = !busy,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(getString(R.string.ypsopump_import_session_file)) }
+            )
             if (selected == null) Text(
                 getString(R.string.ypsopump_private_transfer_warning),
                 style = MaterialTheme.typography.bodySmall,
@@ -443,33 +525,39 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.textPrimary
                         )
-                        Button(onClick = {
+                        PrimaryButton(getString(R.string.ypsopump_apply_import), onClick = {
                             val operationDocument = detachDocumentForInstallation(document)
                             selectedDocument = null
-                            generalError = null
-                            importError = null
+                            setupFailure = null
                             installing = true
                             lifecycleScope.launch {
                                 val result = runCatching {
                                     verificationStarter.installDocument(operationDocument)
                                 }
                                 installing = false
-                                result.onSuccess {
-                                    generalError = null; verificationState = service.verificationState()
-                                    plugin.onAppVisibilityChanged(true)
-                                }
+                                refresh()
+                                result.onSuccess { plugin.onAppVisibilityChanged(true) }
                                 .onFailure {
-                                    selectedDocument = null
-                                    generalError = if (it.message == "Replacement key required after rejection")
-                                        getString(R.string.ypsopump_rekey_new_key_required)
-                                    else if (it is YpsoProvisioningService.VerificationStartException) getString(R.string.ypsopump_verification_start_failed)
-                                    else getString(R.string.ypsopump_save_failed)
+                                    aapsLogger.warn(LTag.PUMP, setupFailureLog("import", it))
+                                    setupFailure = saveFailureMessage(it)
                                 }
                             }
-                        }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(getString(R.string.ypsopump_apply_import)) }
+                        }, Modifier.fillMaxWidth(), enabled = !busy)
                     }
                 }
             }
+        }
+    }
+
+    /** Primary-colour text behind an error rule: long red body text is hard to read on every skin. */
+    @Composable
+    private fun SetupFailure(message: String) {
+        Row(
+            Modifier.fillMaxWidth().height(IntrinsicSize.Min).semantics { liveRegion = LiveRegionMode.Assertive },
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(Modifier.width(4.dp).fillMaxHeight().background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)))
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = AapsTheme.colors.textPrimary)
         }
     }
 
