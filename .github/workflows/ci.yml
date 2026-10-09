@@ -18,7 +18,7 @@ concurrency:
 env:
   GRADLE_OPTS: >-
     -Dorg.gradle.jvmargs="-Xmx4g -XX:+UseParallelGC -Xss4m"
-    -Dkotlin.daemon.jvm.options=-Xmx2g
+    -Dorg.gradle.project.kotlin.daemon.jvmargs="-Xmx2g -XX:+UseParallelGC -Xss4m"
     -Dorg.gradle.workers.max=4
     -Dorg.gradle.caching=true
 
