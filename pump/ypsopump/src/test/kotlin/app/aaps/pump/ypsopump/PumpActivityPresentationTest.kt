@@ -81,21 +81,21 @@ class PumpActivityPresentationTest {
         val items = pumpActivityItems(
             queue(
                 command(Command.CommandType.READSTATUS),
-                command(Command.CommandType.BOLUS, CommandAction.Bolus(1.5, 0)),
+                command(Command.CommandType.BOLUS, CommandAction.Bolus(1.5)),
                 command(Command.CommandType.TEMPBASAL, CommandAction.TempBasalPercent(120, 30)),
             ),
             rh
         )
 
         assertThat(items).containsExactly(
-            QueueItem("Check pump status", true, "In progress"),
-            QueueItem("Give bolus of 1.50\u00A0U", false, "Waiting"),
-            QueueItem("Set temporary basal rate to 120% for 30\u00A0min", false, "Waiting"),
+            QueueItem("Pump status check", true, "In progress"),
+            QueueItem("Bolus of 1.50\u00A0U", false, "Waiting"),
+            QueueItem("Temporary basal of 120% for 30\u00A0min", false, "Waiting"),
         ).inOrder()
     }
 
     @Test
-    fun `insulin tasks are worded plainly and keep the dose and its units`() {
+    fun `insulin tasks name the dose with its units and an absolute rate is shown as a request`() {
         assertThat(
             texts(
                 command(Command.CommandType.SMB_BOLUS, CommandAction.AutomaticBolus(0.3)),
@@ -104,10 +104,10 @@ class PumpActivityPresentationTest {
                 command(Command.CommandType.TEMPBASAL, CommandAction.TempBasalPercent(0, 90)),
             )
         ).containsExactly(
-            "Give automatic bolus of 0.30\u00A0U",
-            "Give extended bolus of 2.00\u00A0U over 1\u00A0h",
-            "Set temporary basal rate to 0.85\u00A0U/h for 45\u00A0min",
-            "Set temporary basal rate to 0% for 1\u00A0h\u00A030\u00A0min",
+            "Automatic bolus of 0.30\u00A0U",
+            "Extended bolus of 2.00\u00A0U over 1\u00A0h",
+            "Temporary basal request of 0.85\u00A0U/h for 45\u00A0min",
+            "Temporary basal of 0% for 1\u00A0h\u00A030\u00A0min",
         ).inOrder()
     }
 
@@ -118,13 +118,7 @@ class PumpActivityPresentationTest {
                 command(Command.CommandType.TEMPBASAL, CommandAction.CancelTempBasal),
                 command(Command.CommandType.EXTENDEDBOLUS, CommandAction.CancelExtendedBolus),
             )
-        ).containsExactly("Stop temporary basal rate", "Stop extended bolus").inOrder()
-    }
-
-    @Test
-    fun `a carbs-only entry is not described as a bolus`() {
-        assertThat(texts(command(Command.CommandType.BOLUS, CommandAction.Bolus(0.0, 20)))).containsExactly("Record 20\u00A0g of carbs")
-        assertThat(texts(command(Command.CommandType.BOLUS, CommandAction.Bolus(2.0, 20)))).containsExactly("Give bolus of 2.00\u00A0U")
+        ).containsExactly("Return to normal basal rate", "End of extended bolus").inOrder()
     }
 
     @Test
@@ -139,7 +133,7 @@ class PumpActivityPresentationTest {
 
     @Test
     fun `basal profile command is described as a check because Ypso cannot send a profile`() {
-        assertThat(texts(command(Command.CommandType.BASAL_PROFILE))).containsExactly("Check the basal profile on the pump")
+        assertThat(texts(command(Command.CommandType.BASAL_PROFILE))).containsExactly("Basal profile check")
     }
 
     @Test
@@ -161,8 +155,8 @@ class PumpActivityPresentationTest {
                 command(Command.CommandType.READSTATUS, callback = programCheck),
             )
         ).containsExactly(
-            "Read basal profiles from the pump",
-            "Check which basal profile the pump is using",
+            "Basal profile download from the pump",
+            "Active basal profile check",
         ).inOrder()
     }
 

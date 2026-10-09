@@ -20,12 +20,13 @@ internal fun pumpActivityItems(commandQueue: CommandQueue, rh: ResourceHelper): 
     }
 }
 
-/** Every row is one plain task, worded the same way whether it moves insulin or not; doses keep their units. */
+/**
+ * Every row names one task, worded the same way whether it moves insulin or not, and never as an
+ * instruction to the user. Doses keep their units. An absolute temporary basal is shown as a request:
+ * Ypso converts it to a percentage of the scheduled rate when it runs, which may round, cap or cancel.
+ */
 private fun describe(command: Command, rh: ResourceHelper): String = when (val action = command.action) {
-    is CommandAction.Bolus             ->
-        if (action.insulin == 0.0 && action.carbs > 0) rh.gs(R.string.ypsopump_queue_carbs, action.carbs)
-        else rh.gs(R.string.ypsopump_queue_bolus, action.insulin)
-
+    is CommandAction.Bolus             -> rh.gs(R.string.ypsopump_queue_bolus, action.insulin)
     is CommandAction.AutomaticBolus    -> rh.gs(R.string.ypsopump_queue_automatic_bolus, action.insulin)
     is CommandAction.TempBasalPercent  -> rh.gs(R.string.ypsopump_queue_temp_basal_percent, action.percent, duration(action.durationInMinutes, rh))
     is CommandAction.TempBasalAbsolute -> rh.gs(R.string.ypsopump_queue_temp_basal_absolute, action.unitsPerHour, duration(action.durationInMinutes, rh))

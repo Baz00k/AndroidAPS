@@ -32,7 +32,7 @@ class CommandBolus(
 
     override var commandType: Command.CommandType
 
-    override val action: CommandAction get() = CommandAction.Bolus(detailedBolusInfo.insulin, detailedBolusInfo.carbs.toInt())
+    override val action: CommandAction get() = CommandAction.Bolus(detailedBolusInfo.insulin)
 
     init {
         injector.androidInjector().inject(this)

@@ -16,6 +16,7 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
+import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
@@ -56,7 +57,10 @@ import org.mockito.invocation.InvocationOnMock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.Calendar
 import javax.inject.Provider
@@ -689,21 +693,22 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         commandQueue.extendedBolus(2.0, 90, null)
         commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
         assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
-            CommandAction.Bolus(1.0, 0),
+            CommandAction.Bolus(1.0),
             CommandAction.ExtendedBolus(2.0, 90),
             CommandAction.TempBasalPercent(120, 30),
         ).inOrder()
 
         commandQueue.clear()
+        whenever(constraintChecker.applyBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(0.3, aapsLogger))
         val smb = DetailedBolusInfo().apply {
-            insulin = 0.3
+            insulin = 0.5
             bolusType = BS.Type.SMB
             lastKnownBolusTime = System.currentTimeMillis()
         }
         commandQueue.bolus(smb, null)
         commandQueue.tempBasalAbsolute(1.2, 45, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
         assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
-            CommandAction.AutomaticBolus(1.0),
+            CommandAction.AutomaticBolus(0.3),
             CommandAction.TempBasalAbsolute(0.8, 45),
         ).inOrder()
     }
@@ -718,7 +723,25 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun commandsThatDoNotChangeDeliveryCarryNoDose() {
+    fun aHundredPercentTempBasalIsDescribedAsTheCancellationItExecutes() {
+        whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(100, aapsLogger))
+
+        // Requested as 100%, and requested as 150% but capped to 100%: both run cancelTempBasal().
+        commandQueue.tempBasalPercent(100, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.single().action).isEqualTo(CommandAction.CancelTempBasal)
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        val queued = commandQueue.snapshot().queued.single()
+        assertThat(queued.action).isEqualTo(CommandAction.CancelTempBasal)
+
+        val pump: Pump = mock { on { cancelTempBasal(any()) } doReturn pumpEnactResultProvider.get().success(true) }
+        whenever(activePlugin.activePump).thenReturn(pump)
+        queued.execute()
+        verify(pump).cancelTempBasal(true)
+        verify(pump, never()).setTempBasalPercent(any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun commandsWithoutAStructuredDescriptionCarryNoDose() {
         commandQueue.readStatus("test", null)
         commandQueue.loadTDDs(null)
 

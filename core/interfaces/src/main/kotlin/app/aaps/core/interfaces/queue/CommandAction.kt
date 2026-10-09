@@ -6,7 +6,8 @@ package app.aaps.core.interfaces.queue
  */
 sealed interface CommandAction {
 
-    data class Bolus(val insulin: Double, val carbs: Int) : CommandAction
+    /** Insulin only: the queue records carbs separately, after the bolus is delivered. */
+    data class Bolus(val insulin: Double) : CommandAction
     data class AutomaticBolus(val insulin: Double) : CommandAction
     data class TempBasalPercent(val percent: Int, val durationInMinutes: Int) : CommandAction
     data class TempBasalAbsolute(val unitsPerHour: Double, val durationInMinutes: Int) : CommandAction
@@ -14,6 +15,9 @@ sealed interface CommandAction {
     data class ExtendedBolus(val insulin: Double, val durationInMinutes: Int) : CommandAction
     data object CancelExtendedBolus : CommandAction
 
-    /** Does not change insulin delivery; [Command.commandType] says what kind of command it is. */
+    /**
+     * No structured description; [Command.commandType] says what kind of command it is. This does not
+     * mean delivery is unaffected: stopping the pump or setting a profile also use it.
+     */
     data object Other : CommandAction
 }

@@ -36,7 +36,9 @@ class CommandTempBasalPercent(
 
     override val commandType: Command.CommandType = Command.CommandType.TEMPBASAL
 
-    override val action: CommandAction = CommandAction.TempBasalPercent(percent, durationInMinutes)
+    // 100% is executed as a cancellation below, so it must be described as one.
+    override val action: CommandAction =
+        if (percent == 100) CommandAction.CancelTempBasal else CommandAction.TempBasalPercent(percent, durationInMinutes)
 
     override fun execute() {
         val r =
