@@ -60,6 +60,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.spy
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
@@ -341,6 +342,47 @@ class SettingsImportTest {
             encrypt(mapOf(StringKey.GeneralPatientName.key to "new backup"), wrappedPassword)
         }
         assertThat(file.readText()).isEqualTo(existing)
+    }
+
+    @Test
+    fun encryptionFailureCannotCreateOrOverwriteSettingsBackup() {
+        seedExistingSettings()
+        val before = stored.all.toMap()
+        val failingCrypto = spy(CryptoUtil(mock()))
+        // Invalid synthetic salt forces the real key-derivation/encryption failure path.
+        whenever(failingCrypto.mineSalt()).thenReturn(byteArrayOf())
+        val failingFormat = EncryptedPrefsFormat(mock(), failingCrypto, FileStorage(), context).apply {
+            secureEncrypt = this@SettingsImportTest.secureEncrypt
+        }
+        val prefs = Prefs(
+            mapOf(StringKey.GeneralPatientName.key to "synthetic Unicode 糖尿病 💉"),
+            mapOf(PrefsMetadataKeyImpl.ENCRYPTION to PrefMetadata("Enabled", PrefsStatusImpl.OK))
+        )
+        for (existing in listOf(null, encrypt(settingsImport.exportValues()))) {
+            if (existing == null) file.delete() else file.writeText(existing)
+            val error = assertThrows(PrefIOError::class.java) {
+                failingFormat.savePreferences(DocumentFile.fromFile(file), prefs, password)
+            }
+            assertThat(error.message).isEqualTo("Cannot encrypt settings export")
+            assertThat(failingCrypto.lastException).isNotNull()
+            if (existing == null) assertThat(file.exists()).isFalse() else assertThat(file.readText()).isEqualTo(existing)
+            assertThat(stored.all).containsExactlyEntriesIn(before)
+        }
+    }
+
+    @Test
+    fun unicodeSettingsExportImportUsesRealPlatformCryptoAndStorage() {
+        val name = "Synthetic 糖尿病 💉 — café"
+        preferences.put(StringKey.GeneralPatientName, name)
+        preferences.put(DoubleKey.SafetyMaxBolus, 1.0)
+        val backup = encrypt(settingsImport.exportValues())
+        preferences.put(StringKey.GeneralPatientName, "changed after export")
+        val checked = settingsImport.check(backup, password)
+        assertThat(checked.importOk).isTrue()
+        assertThat(settingsImport.apply(checked)).isTrue()
+        assertThat(preferences.get(StringKey.GeneralPatientName)).isEqualTo(name)
+        assertThat(preferences.get(DoubleKey.SafetyMaxBolus)).isWithin(0.000001).of(1.0)
+        assertThat(crypto.lastException).isNull()
     }
 
     @Test

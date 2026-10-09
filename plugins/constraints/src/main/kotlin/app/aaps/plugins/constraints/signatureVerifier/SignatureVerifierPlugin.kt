@@ -14,9 +14,9 @@ import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.utils.toHex
 import app.aaps.plugins.constraints.R
 import app.aaps.plugins.constraints.signatureVerifier.keys.SignatureVerifierLongKey
-import org.spongycastle.util.encoders.Hex
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -146,7 +146,7 @@ class SignatureVerifierPlugin @Inject constructor(
                 for (signature in signatures) {
                     val digest = MessageDigest.getInstance("SHA256")
                     val fingerprint = digest.digest(signature.toByteArray())
-                    val hash = Hex.toHexString(fingerprint)
+                    val hash = fingerprint.toHex()
                     aapsLogger.debug("Found signature: $hash")
                     aapsLogger.debug("Found signature (short): " + singleCharMap(fingerprint))
                     hashes.add(singleCharMap(fingerprint))
@@ -235,8 +235,19 @@ class SignatureVerifierPlugin @Inject constructor(
         val revokedCerts: MutableList<ByteArray> = ArrayList()
         for (line in file!!.split("\n").toTypedArray()) {
             if (line.startsWith("#")) continue
-            revokedCerts.add(Hex.decode(line.replace(" ", "").replace(":", "")))
+            revokedCerts.add(decodeCertificateFingerprint(line))
         }
         return revokedCerts
+    }
+
+    private fun decodeCertificateFingerprint(line: String): ByteArray {
+        // Keep the legacy list syntax, including empty lines and ASCII whitespace.
+        // Do not use the shared hex decoder: it silently accepts invalid digits.
+        val hex = line.filterNot { it == ':' || it == ' ' || it == '\t' || it == '\r' || it == '\n' }
+        require(hex.length % 2 == 0) { "Odd-length certificate fingerprint" }
+        require(hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) { "Invalid certificate fingerprint" }
+        return ByteArray(hex.length / 2) { index ->
+            ((hex[index * 2].digitToInt(16) shl 4) or hex[index * 2 + 1].digitToInt(16)).toByte()
+        }
     }
 }

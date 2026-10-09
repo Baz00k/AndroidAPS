@@ -2,11 +2,11 @@ package app.aaps.core.objects.crypto
 
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.utils.toHex
-import org.spongycastle.util.encoders.Base64
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.spec.KeySpec
+import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.SecretKey
@@ -75,7 +75,7 @@ class CryptoUtil @Inject constructor(
             byteBuffer.put(iv.size.toByte())
             byteBuffer.put(iv)
             byteBuffer.put(encrypted)
-            String(Base64.encode(byteBuffer.array()))
+            Base64.getEncoder().encodeToString(byteBuffer.array())
         } catch (e: Exception) {
             lastException = e
             aapsLogger.error("Encryption failed due to technical exception: $e")
@@ -88,7 +88,7 @@ class CryptoUtil @Inject constructor(
         val encrypted: ByteArray?
         return try {
             lastException = null
-            val byteBuffer = ByteBuffer.wrap(Base64.decode(encryptedData))
+            val byteBuffer = ByteBuffer.wrap(decodeEnvelope(encryptedData))
             val ivLength = byteBuffer.get().toInt()
             iv = ByteArray(ivLength)
             byteBuffer[iv]
@@ -103,6 +103,21 @@ class CryptoUtil @Inject constructor(
             aapsLogger.error("Decryption failed due to technical exception: $e")
             null
         }
+    }
+
+    private fun decodeEnvelope(encoded: String): ByteArray {
+        // The legacy codec ignores only these four ASCII whitespace characters,
+        // and only before or after (not within) the final four encoded characters.
+        // The MIME decoder would also ignore invalid digits; the basic decoder
+        // alone would accept missing padding that legacy settings did not accept.
+        fun isCodecWhitespace(char: Char) = char == ' ' || char == '\t' || char == '\r' || char == '\n'
+        val trimmed = encoded.trimEnd(::isCodecWhitespace)
+        require(trimmed.length >= 4) { "Invalid Base64 envelope" }
+        val finalQuartet = trimmed.takeLast(4)
+        require(finalQuartet.none(::isCodecWhitespace)) { "Invalid Base64 final quartet" }
+        val normalized = trimmed.dropLast(4).filterNot(::isCodecWhitespace) + finalQuartet
+        require(normalized.length % 4 == 0) { "Invalid Base64 padding" }
+        return Base64.getDecoder().decode(normalized)
     }
 
     fun checkPassword(password: String, referenceHash: String): Boolean {

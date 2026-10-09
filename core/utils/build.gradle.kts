@@ -25,8 +25,6 @@ dependencies {
     // the same information to AndroidAPS.log. Cost recovered: ~4.9 MB of dex (GMS + Firebase +
     // datatransport), 6 background threads, and two telemetry databases.
 
-    //CryptoUtil
-    api(libs.com.madgag.spongycastle)
     api(libs.com.google.crypto.tink)
 
     //WorkManager
