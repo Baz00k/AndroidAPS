@@ -454,7 +454,14 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
             binding.mainDrawerLayout.closeDrawers()
         }
         val result = super.onMenuOpened(featureId, menu)
-        menu.findItem(R.id.nav_treatments)?.isEnabled = profileFunction.getProfile() != null
+        // History needs a profile to read doses against; without one the item is off, and must look it.
+        menu.findItem(R.id.nav_treatments)?.let { item ->
+            val available = profileFunction.getProfile() != null
+            item.isEnabled = available
+            val title = item.title.toString()
+            item.title = if (available) title
+            else SpannableString(title).also { it.setSpan(ForegroundColorSpan(rh.gac(app.aaps.core.ui.R.attr.disabledTextColor)), 0, it.length, 0) }
+        }
         if (binding.mainPager.currentItem >= 0) {
             val plugin = (binding.mainPager.adapter as TabPageAdapter?)?.getPluginAt(binding.mainPager.currentItem) ?: return result
             this.menu?.findItem(R.id.nav_plugin_preferences)?.title = rh.gs(R.string.nav_preferences_plugin, plugin.name)

@@ -32,10 +32,21 @@ fun AppCompatActivity.followSkinChrome(paintMore: (AapsColors) -> Unit = {}) {
     }
 }
 
+private fun AppCompatActivity.isTranslucent(): Boolean {
+    val attrs = obtainStyledAttributes(intArrayOf(android.R.attr.windowIsTranslucent))
+    return try {
+        attrs.getBoolean(0, false)
+    } finally {
+        attrs.recycle()
+    }
+}
+
 private fun AppCompatActivity.applySkinChrome(): AapsColors {
     val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     val colors = AapsSkinState.skin.resolvedColors(this, dark)
-    window.decorView.setBackgroundColor(colors.background.toArgb())
+    // A translucent window (the bolus progress and error sheets) is see-through on purpose: the screen
+    // behind it is part of what it shows, so painting it would turn it into a blank screen.
+    if (!isTranslucent()) window.decorView.setBackgroundColor(colors.background.toArgb())
     supportActionBar?.apply {
         setBackgroundDrawable(ColorDrawable(colors.background.toArgb()))
         elevation = 0f
