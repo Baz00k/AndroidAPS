@@ -65,7 +65,8 @@ import kotlin.math.roundToLong
 data class ChartInsets(val start: Dp, val end: Dp)
 
 /** Shared card inset: labels use the canvas gutter rather than another wide layer of padding. */
-internal val CHART_CARD_PADDING = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 16.dp)
+internal val CHART_CARD_PADDING_H = 8.dp
+internal val CHART_CARD_PADDING = androidx.compose.foundation.layout.PaddingValues(horizontal = CHART_CARD_PADDING_H, vertical = 16.dp)
 
 /** Measure the labels actually enabled, once per snapshot — never reserve an unused right axis. */
 @Composable
