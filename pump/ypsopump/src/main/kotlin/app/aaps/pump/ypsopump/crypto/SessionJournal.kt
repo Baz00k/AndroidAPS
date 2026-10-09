@@ -79,6 +79,10 @@ class SessionJournal internal constructor(
                 writeBootstrapState = PumpSession.WriteBootstrapState.valueOf(r.getString("writeBootstrapState")),
                 counterRecoveryExponent = r.getInt("counterRecoveryExponent"),
                 lowerBoundRecoveryReboot = r.optIntOrNull("lowerBoundRecoveryReboot"),
+                keyTiming = r.optJSONObject("keyTiming")?.let {
+                    KeyTiming(it.optLongOrNull("expiryOverride"), it.optLongOrNull("reminderOverride"),
+                        it.getBoolean("expiryDue"), it.getBoolean("reminderDue"), it.optLong("observedAt", 0))
+                } ?: KeyTiming(),
             )
         }
         return PumpSession.State(
@@ -182,6 +186,11 @@ class SessionJournal internal constructor(
                 .put("writeBootstrapState", r.writeBootstrapState.name)
                 .put("counterRecoveryExponent", r.counterRecoveryExponent)
                 .put("lowerBoundRecoveryReboot", r.lowerBoundRecoveryReboot ?: JSONObject.NULL)
+                .put("keyTiming", JSONObject()
+                    .put("expiryOverride", r.keyTiming.expiryOverride ?: JSONObject.NULL)
+                    .put("reminderOverride", r.keyTiming.reminderOverride ?: JSONObject.NULL)
+                    .put("expiryDue", r.keyTiming.expiryDue).put("reminderDue", r.keyTiming.reminderDue)
+                    .put("observedAt", r.keyTiming.observedAt))
                 .put("writeEvidence", JSONArray(r.writeEvidence.map { evidence ->
                     JSONObject()
                         .put("operationId", evidence.operationId)

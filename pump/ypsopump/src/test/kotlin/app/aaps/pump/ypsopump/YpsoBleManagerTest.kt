@@ -1826,7 +1826,8 @@ class YpsoBleManagerTest {
         val gatt: BluetoothGatt = mock()
         val installed = YpsoProvisioningService.InstalledSession(
             "10000001", "EC:2A:F0:00:00:01", "fingerprint", null, null, emptyMap(), null,
-            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
+            "test-generation", app.aaps.pump.ypsopump.crypto.KeyTiming(),
         )
         whenever(provisioning.installed()).thenReturn(installed)
         val installedKey = ByteArray(32) { 1 }
