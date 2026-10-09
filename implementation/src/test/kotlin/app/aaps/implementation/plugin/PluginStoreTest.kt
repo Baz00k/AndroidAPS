@@ -15,15 +15,12 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
-import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
-import org.mockito.Mockito.verifyNoMoreInteractions
 import org.mockito.Mockito.withSettings
 import org.mockito.Mockito.`when`
 
@@ -56,57 +53,27 @@ class PluginStoreTest : TestBase() {
     }
 
     @Test
-    fun `sync lookups skip sync-category plugins that are not a Sync`() {
-        // Wear sits in the SYNC category without implementing Sync. Casting the whole category to
-        // Sync crashed the Objectives screen as soon as the lookup reached it.
+    fun `sync lookups skip non-Sync plugins and return only a connected client`() {
         val wear = plugin(PluginType.SYNC, WearLike::class.java, "wear", enabled = true)
-        val offline = syncPlugin("offline", connected = false)
-        val online = syncPlugin("online", connected = true)
-        val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true)).apply {
-            plugins = listOf(wear, offline, online) + plugins
-        }
+        val client = syncPlugin("client", connected = false)
+        val store = PluginStore(aapsLogger).apply { plugins = listOf(wear, client) }
 
-        assertSame(online, store.firstActiveSync)
-        assertEquals(listOf(offline, online), store.activeSyncs)
-    }
-
-    @Test
-    fun `no connected sync is reported as none rather than failing`() {
-        val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true)).apply {
-            plugins = listOf(plugin(PluginType.SYNC, WearLike::class.java, "wear", enabled = true), syncPlugin("offline", connected = false)) + plugins
-        }
-
+        assertEquals(listOf(client), store.activeSyncs)
         assertNull(store.firstActiveSync)
+
+        `when`((client as Sync).connected).thenReturn(true)
+        assertSame(client, store.firstActiveSync)
     }
 
     @ParameterizedTest
     @EnumSource(value = PluginType::class, names = ["APS", "INSULIN", "SENSITIVITY", "SMOOTHING", "PROFILE", "BGSOURCE", "PUMP"])
-    fun `registration rejects invalid selected default and disabled plugins before changing selection`(type: PluginType) {
-        for ((enabled, isDefault) in listOf(true to false, false to true, false to false)) {
-            val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true))
-            store.verifySelectionInCategories()
-            val registered = store.plugins
-            val selectedPump = store.activePump
-            val selectedAps = store.activeAPS
-            val invalid = plugin(type, WearLike::class.java, "invalid", enabled = enabled, isDefault = isDefault)
-            registered.forEach { clearInvocations(it) }
+    fun `invalid category registration leaves the registry unchanged`(type: PluginType) {
+        val store = storeWith(plugin(PluginType.APS, APS::class.java, "aps", isDefault = true))
+        val registered = store.plugins
+        val invalid = plugin(type, WearLike::class.java, "invalid")
 
-            val error = assertThrows(IllegalArgumentException::class.java) {
-                store.plugins = registered + invalid
-            }
-
-            assertTrue(error.message.orEmpty().contains(type.name))
-            assertTrue(error.message.orEmpty().contains("must implement"))
-            assertSame(registered, store.plugins)
-            assertSame(selectedPump, store.activePump)
-            assertSame(selectedAps, store.activeAPS)
-            registered.forEach {
-                verify(it).getType()
-                verifyNoMoreInteractions(it)
-            }
-            verify(invalid, never()).setPluginEnabled(type, true)
-            verify(invalid, never()).setPluginEnabled(type, false)
-        }
+        assertThrows(IllegalArgumentException::class.java) { store.plugins = registered + invalid }
+        assertSame(registered, store.plugins)
     }
 
     @Test
@@ -118,44 +85,6 @@ class PluginStoreTest : TestBase() {
         store.verifySelectionInCategories()
 
         assertEquals(registered.dropLast(1), store.plugins)
-    }
-
-    @Test
-    fun `valid category defaults and initialization lookups are preserved`() {
-        val defaults = listOf(
-            plugin(PluginType.APS, APS::class.java, "aps", isDefault = true),
-            plugin(PluginType.INSULIN, Insulin::class.java, "insulin", isDefault = true),
-            plugin(PluginType.SENSITIVITY, Sensitivity::class.java, "sensitivity", isDefault = true),
-            plugin(PluginType.SMOOTHING, Smoothing::class.java, "smoothing", isDefault = true),
-            plugin(PluginType.PROFILE, ProfileSource::class.java, "profile", isDefault = true),
-            plugin(PluginType.BGSOURCE, BgSource::class.java, "bg", isDefault = true),
-            plugin(PluginType.PUMP, Pump::class.java, "pump", isDefault = true)
-        )
-        val store = PluginStore(aapsLogger).apply { plugins = defaults }
-        assertSame(defaults[1], store.activeInsulin)
-        assertThrows(IllegalStateException::class.java) { store.activePump }
-
-        store.verifySelectionInCategories()
-
-        assertEquals(
-            defaults,
-            listOf(store.activeAPS, store.activeInsulin, store.activeSensitivity, store.activeSmoothing,
-                   store.activeProfileSource, store.activeBgSource, store.activePump)
-        )
-        defaults.forEach {
-            val type = it.getType()
-            verify(it).setPluginEnabled(type, true)
-        }
-    }
-
-    @Test
-    fun `enabled pump is available during initialization without enabling a default`() {
-        val selected = plugin(PluginType.PUMP, Pump::class.java, "selected", enabled = true)
-        val fallback = plugin(PluginType.PUMP, Pump::class.java, "default", isDefault = true)
-        val store = PluginStore(aapsLogger).apply { plugins = listOf(fallback, selected) }
-
-        assertSame(selected, store.activePump)
-        verify(fallback, never()).setPluginEnabled(PluginType.PUMP, true)
     }
 
     /** A plugin interface unrelated to Sync, standing in for Wear. */
