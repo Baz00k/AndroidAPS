@@ -169,9 +169,9 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_CONTROL_VERSION: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
         // Provisional control-notification UUID. Non-auth write transport is unsupported in this artifact.
         // App-error 0x8C (140) is documented as NO_SHARED_KEY / key exchange required. It was observed
-        // after prolonged access on V05.00.52, but the exact invalidating event and lifetime remain
-        // unresolved. Treat it as suspected re-key/session loss and preserve target evidence rather than
-        // claiming a fixed 28-day expiry.
+        // after prolonged access on V05.00.52. Advisory tracking uses the maintainer-reported 28-day
+        // maximum (issue #211); this error is still suspected re-key/session loss, not a measured
+        // expiry countdown. Date edits must never clear it or authorize another rejected-key retry.
         private const val ERR_NO_SHARED_KEY = 140
     }
 

@@ -64,7 +64,8 @@ class YpsoPumpPluginTest {
     private val commandQueue: CommandQueue = idleCommandQueue()
     private val installed = YpsoProvisioningService.InstalledSession(
         "10000001", "12:34:56:78:9A:BC", "fingerprint", null, Instant.EPOCH, emptyMap(), null,
-        PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE))
+        PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
+        "test-generation", app.aaps.pump.ypsopump.crypto.KeyTiming(),
     )
     private val profileFunction: ProfileFunction = mock()
     private val maxBolusConstraint: Constraint<Double> = mock {
@@ -79,6 +80,20 @@ class YpsoPumpPluginTest {
         AAPSLoggerTest(), rh, preferences, commandQueue, state, manager, sync, rxBus, ui,
         Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker, appLifecycle
     )
+
+    @Test fun `key reminder publication uses advisory channel and never invokes pump or therapy accounting`() {
+        val timing = app.aaps.pump.ypsopump.crypto.KeyTiming()
+        whenever(provisioning.observeKeyTiming(any())).thenReturn(timing.status(1000, 1000, 1000 + 25 * 86_400_000L))
+        plugin.publishKeyExpiryNotification()
+        plugin.publishKeyExpiryNotification()
+        verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.NORMAL))
+        whenever(provisioning.observeKeyTiming(any())).thenReturn(timing.status(1000, 1000, 1000 + 28 * 86_400_000L))
+        plugin.publishKeyExpiryNotification()
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.URGENT))
+        verifyNoInteractions(manager, sync, commandQueue, constraintsChecker)
+        verify(provisioning, never()).requestVerificationAttempt()
+        verify(provisioning, never()).refreshState()
+    }
 
     @Test
     fun `direct Pump requests return non enacted outcomes with a verified status`() {

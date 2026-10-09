@@ -51,7 +51,8 @@ class YpsoStatusIntegrationTest {
             whenever(provisioning.installed()).thenReturn(
                 YpsoProvisioningService.InstalledSession(
                     "10000001", "12:34:56:78:9A:BC", "fingerprint", null, null, emptyMap(), null,
-                    PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN))
+                    PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
+                    "test-generation", app.aaps.pump.ypsopump.crypto.KeyTiming(),
                 )
             )
             whenever(provisioning.isConfigured()).thenReturn(true)
