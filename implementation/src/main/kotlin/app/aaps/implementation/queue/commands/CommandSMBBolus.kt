@@ -10,6 +10,7 @@ import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.IntKey
@@ -38,6 +39,8 @@ class CommandSMBBolus(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.SMB_BOLUS
+
+    override val action: CommandAction get() = CommandAction.AutomaticBolus(detailedBolusInfo.insulin)
 
     override fun execute() {
         val r: PumpEnactResult

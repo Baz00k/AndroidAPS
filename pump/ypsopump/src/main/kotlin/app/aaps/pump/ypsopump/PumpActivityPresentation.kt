@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.pump.ypsopump.compose.QueueItem
@@ -19,19 +20,38 @@ internal fun pumpActivityItems(commandQueue: CommandQueue, rh: ResourceHelper): 
     }
 }
 
-/**
- * Housekeeping commands get plain wording that says what the pump is doing. Commands that move
- * insulin keep their own description, which carries the dose and its units.
- */
-private fun describe(command: Command, rh: ResourceHelper): String = when (command.commandType) {
-    Command.CommandType.READSTATUS   -> rh.gs(
-        when ((command.callback as? YpsoPumpPlugin.ConfigurationReadCallback)?.reason) {
-            YpsoPumpPlugin.PROFILE_READ_REASON  -> R.string.ypsopump_queue_read_profiles
-            YpsoPumpPlugin.ACTIVE_PROGRAM_REASON -> R.string.ypsopump_queue_check_program
-            else                                 -> R.string.ypsopump_queue_read_status
+/** Every row is one plain task, worded the same way whether it moves insulin or not; doses keep their units. */
+private fun describe(command: Command, rh: ResourceHelper): String = when (val action = command.action) {
+    is CommandAction.Bolus             ->
+        if (action.insulin == 0.0 && action.carbs > 0) rh.gs(R.string.ypsopump_queue_carbs, action.carbs)
+        else rh.gs(R.string.ypsopump_queue_bolus, action.insulin)
+
+    is CommandAction.AutomaticBolus    -> rh.gs(R.string.ypsopump_queue_automatic_bolus, action.insulin)
+    is CommandAction.TempBasalPercent  -> rh.gs(R.string.ypsopump_queue_temp_basal_percent, action.percent, duration(action.durationInMinutes, rh))
+    is CommandAction.TempBasalAbsolute -> rh.gs(R.string.ypsopump_queue_temp_basal_absolute, action.unitsPerHour, duration(action.durationInMinutes, rh))
+    CommandAction.CancelTempBasal      -> rh.gs(R.string.ypsopump_queue_cancel_temp_basal)
+    is CommandAction.ExtendedBolus     -> rh.gs(R.string.ypsopump_queue_extended_bolus, action.insulin, duration(action.durationInMinutes, rh))
+    CommandAction.CancelExtendedBolus  -> rh.gs(R.string.ypsopump_queue_cancel_extended_bolus)
+    CommandAction.Other                -> rh.gs(
+        when (command.commandType) {
+            Command.CommandType.READSTATUS    -> when ((command.callback as? YpsoPumpPlugin.ConfigurationReadCallback)?.reason) {
+                YpsoPumpPlugin.PROFILE_READ_REASON   -> R.string.ypsopump_queue_read_profiles
+                YpsoPumpPlugin.ACTIVE_PROGRAM_REASON -> R.string.ypsopump_queue_check_program
+                else                                 -> R.string.ypsopump_queue_read_status
+            }
+
+            Command.CommandType.BASAL_PROFILE -> R.string.ypsopump_queue_check_profile
+            Command.CommandType.LOAD_HISTORY,
+            Command.CommandType.LOAD_EVENTS,
+            Command.CommandType.LOAD_TDD      -> R.string.ypsopump_queue_read_history
+
+            else                              -> R.string.ypsopump_queue_other
         }
     )
+}
 
-    Command.CommandType.BASAL_PROFILE -> rh.gs(R.string.ypsopump_queue_check_profile)
-    else                              -> command.status()
+private fun duration(minutes: Int, rh: ResourceHelper): String = when {
+    minutes < 60      -> rh.gs(R.string.ypsopump_queue_minutes, minutes)
+    minutes % 60 == 0 -> rh.gs(R.string.ypsopump_queue_hours, minutes / 60)
+    else              -> rh.gs(R.string.ypsopump_queue_hours_minutes, minutes / 60, minutes % 60)
 }

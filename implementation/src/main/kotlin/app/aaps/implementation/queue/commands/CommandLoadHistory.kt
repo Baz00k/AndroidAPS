@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.pump.Diaconn
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -29,6 +30,8 @@ class CommandLoadHistory(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.LOAD_HISTORY
+
+    override val action: CommandAction = CommandAction.Other
 
     override fun execute() {
         val pump = activePlugin.activePump

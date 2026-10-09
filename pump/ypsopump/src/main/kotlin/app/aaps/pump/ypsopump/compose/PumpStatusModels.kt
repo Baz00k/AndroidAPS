@@ -23,6 +23,6 @@ data class PumpStatusState(
     val rows: List<PumpStatusRow> = emptyList(),
     /** Running command first, then waiting ones in execution order; empty when the pump is idle. */
     val queue: List<QueueItem> = emptyList(),
-    val queueTitle: String = "Pump commands",
-    val queueIdleLabel: String = "Idle",
+    val queueTitle: String = "Pump tasks",
+    val queueIdleLabel: String = "Nothing in progress or waiting.",
 )

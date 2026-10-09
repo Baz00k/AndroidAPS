@@ -9,6 +9,7 @@ import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
@@ -37,6 +38,8 @@ class CommandSetProfile(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.BASAL_PROFILE
+
+    override val action: CommandAction = CommandAction.Other
 
     override fun execute() {
         if (commandQueue.isThisProfileSet(profile) && persistenceLayer.getEffectiveProfileSwitchActiveAt(dateUtil.now()) != null) {

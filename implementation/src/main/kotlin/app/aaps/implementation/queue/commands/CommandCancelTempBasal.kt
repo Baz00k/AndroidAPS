@@ -7,6 +7,7 @@ import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import dagger.android.HasAndroidInjector
@@ -33,6 +34,8 @@ class CommandCancelTempBasal(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.TEMPBASAL
+
+    override val action: CommandAction = CommandAction.CancelTempBasal
 
     override fun execute() {
         val r = activePlugin.activePump.cancelTempBasal(enforceNew)

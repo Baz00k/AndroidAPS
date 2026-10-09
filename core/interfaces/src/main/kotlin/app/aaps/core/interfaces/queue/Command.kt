@@ -4,6 +4,7 @@ interface Command {
 
     val commandType: CommandType
     val callback: Callback?
+    val action: CommandAction
 
     enum class CommandType {
         BOLUS,

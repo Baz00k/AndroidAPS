@@ -20,6 +20,7 @@ import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.queue.CustomCommand
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -674,6 +675,54 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
 
         assertThat(commandQueue.snapshot().queued.single().status()).isEqualTo("CANCEL TEMP BASAL")
+    }
+
+    @Test
+    fun queuedInsulinCommandsExposeTheDoseThePumpWillReceive() {
+        whenever(constraintChecker.applyBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(1.0, aapsLogger))
+        whenever(constraintChecker.applyExtendedBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(2.0, aapsLogger))
+        whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(120, aapsLogger))
+        whenever(constraintChecker.applyBasalConstraints(anyOrNull(), anyOrNull())).thenReturn(ConstraintObject(0.8, aapsLogger))
+
+        // The 1.5 U request is capped to 1 U before queueing; the queue must describe the capped dose.
+        commandQueue.bolus(DetailedBolusInfo().apply { insulin = 1.5 }, null)
+        commandQueue.extendedBolus(2.0, 90, null)
+        commandQueue.tempBasalPercent(150, 30, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
+            CommandAction.Bolus(1.0, 0),
+            CommandAction.ExtendedBolus(2.0, 90),
+            CommandAction.TempBasalPercent(120, 30),
+        ).inOrder()
+
+        commandQueue.clear()
+        val smb = DetailedBolusInfo().apply {
+            insulin = 0.3
+            bolusType = BS.Type.SMB
+            lastKnownBolusTime = System.currentTimeMillis()
+        }
+        commandQueue.bolus(smb, null)
+        commandQueue.tempBasalAbsolute(1.2, 45, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, null)
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(
+            CommandAction.AutomaticBolus(1.0),
+            CommandAction.TempBasalAbsolute(0.8, 45),
+        ).inOrder()
+    }
+
+    @Test
+    fun queuedCancellationsAreNotDescribedAsDeliveries() {
+        commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
+        commandQueue.cancelExtended(null)
+
+        assertThat(commandQueue.snapshot().queued.map { it.action })
+            .containsExactly(CommandAction.CancelTempBasal, CommandAction.CancelExtendedBolus).inOrder()
+    }
+
+    @Test
+    fun commandsThatDoNotChangeDeliveryCarryNoDose() {
+        commandQueue.readStatus("test", null)
+        commandQueue.loadTDDs(null)
+
+        assertThat(commandQueue.snapshot().queued.map { it.action }).containsExactly(CommandAction.Other, CommandAction.Other)
     }
 
     @Test

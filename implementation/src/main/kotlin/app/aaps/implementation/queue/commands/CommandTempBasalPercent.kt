@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -34,6 +35,8 @@ class CommandTempBasalPercent(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.TEMPBASAL
+
+    override val action: CommandAction = CommandAction.TempBasalPercent(percent, durationInMinutes)
 
     override fun execute() {
         val r =

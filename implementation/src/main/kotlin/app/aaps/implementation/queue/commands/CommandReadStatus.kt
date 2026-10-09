@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
+import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -31,6 +32,8 @@ class CommandReadStatus(
     }
 
     override val commandType: Command.CommandType = Command.CommandType.READSTATUS
+
+    override val action: CommandAction = CommandAction.Other
 
     override fun execute() {
         activePlugin.activePump.getPumpStatus(reason)
