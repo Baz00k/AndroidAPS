@@ -30,9 +30,10 @@ dependencies {
     api(libs.kotlinx.datetime)
 
     api(libs.io.reactivex.rxjava3.rxandroid)
-    api(libs.net.danlew.android.joda)
 
     api(libs.com.google.dagger.android.support)
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)
+    // DateUtilOldImpl is retained as a test-only comparison implementation.
+    testImplementation(libs.joda.time)
 }

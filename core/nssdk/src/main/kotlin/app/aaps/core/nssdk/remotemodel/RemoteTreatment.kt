@@ -2,8 +2,7 @@ package app.aaps.core.nssdk.remotemodel
 
 import com.google.gson.annotations.SerializedName
 import app.aaps.core.nssdk.localmodel.treatment.EventType
-import org.joda.time.DateTime
-import org.joda.time.format.ISODateTimeFormat
+import app.aaps.core.data.time.IsoTimestamp
 
 /*
 * Depending on the type, different other fields are present.
@@ -93,9 +92,7 @@ internal data class RemoteTreatment(
 
     private fun fromISODateString(isoDateString: String): Long =
         try {
-            val parser = ISODateTimeFormat.dateTimeParser()
-            val dateTime = DateTime.parse(isoDateString, parser)
-            dateTime.toDate().time
+            IsoTimestamp.parse(isoDateString).toInstant().toEpochMilli()
         } catch (e: Exception) {
             0L
         }

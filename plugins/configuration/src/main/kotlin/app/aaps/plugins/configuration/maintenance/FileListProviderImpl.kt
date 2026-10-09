@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import androidx.documentfile.provider.DocumentFile
+import app.aaps.core.data.time.IsoTimestamp
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.maintenance.FileListProvider
 import app.aaps.core.interfaces.maintenance.PrefMetadata
@@ -26,12 +27,11 @@ import app.aaps.plugins.configuration.maintenance.formats.EncryptedPrefsFormat
 import app.aaps.shared.impl.weardata.ZipWatchfaceFormat
 import dagger.Lazy
 import dagger.Reusable
-import org.joda.time.DateTime
-import org.joda.time.Days
-import org.joda.time.Hours
-import org.joda.time.LocalDateTime
-import org.joda.time.format.DateTimeFormat
 import java.io.File
+import java.time.Clock
+import java.time.Duration
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import kotlin.math.abs
 
@@ -47,6 +47,9 @@ class FileListProviderImpl @Inject constructor(
     private val context: Context,
     private val rxBus: RxBus
 ) : FileListProvider {
+
+    internal var clockProvider: () -> Clock = { Clock.systemDefaultZone() }
+    private val clock: Clock get() = clockProvider()
 
     private val documentsPath get() = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "AAPS")
     override val resultPath get() = File(documentsPath, File.separator + "results")
@@ -172,25 +175,25 @@ class FileListProviderImpl @Inject constructor(
     }
 
     override fun newPreferenceFile(): DocumentFile? {
-        val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+        val timeLocal = ExportFileName.timestamp(clock)
         val dir = ensurePreferenceDirExists()
         return dir?.createFile("application/json", timeLocal + "_" + config.get().FLAVOR)
     }
 
     override fun newExportCsvFile(): DocumentFile? {
-        val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+        val timeLocal = ExportFileName.timestamp(clock)
         val dir = ensureExportDirExists()
         return dir?.createFile("application/csv", timeLocal + "_UserEntry.csv")
     }
 
     override fun newCwfFile(filename: String, withDate: Boolean): DocumentFile? {
-        val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+        val timeLocal = ExportFileName.timestamp(clock)
         val dir = ensureExportDirExists()
         return dir?.createFile("application/${ZipWatchfaceFormat.CWF_EXTENSION}", if (withDate) "${filename}_$timeLocal" else filename)
     }
 
     override fun newResultFile(): File {
-        val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
+        val timeLocal = ExportFileName.timestamp(clock)
         return File(resultPath, "$timeLocal.json")
     }
 
@@ -215,10 +218,10 @@ class FileListProviderImpl @Inject constructor(
 
         meta[PrefsMetadataKeyImpl.CREATED_AT]?.let { createdAt ->
             try {
-                val date1 = DateTime.parse(createdAt.value)
-                val date2 = DateTime.now()
-
-                val daysOld = Days.daysBetween(date1.toLocalDate(), date2.toLocalDate()).days
+                val clock = clock
+                val date1 = IsoTimestamp.parse(createdAt.value, clock.zone, requireDate = true)
+                // Compare dates in their respective zones, not elapsed 24-hour periods.
+                val daysOld = Math.toIntExact(ChronoUnit.DAYS.between(date1.localDateTime.toLocalDate(), LocalDate.now(clock)))
 
                 if (daysOld > IMPORT_AGE_NOT_YET_OLD_DAYS) {
                     createdAt.status = PrefsStatusImpl.WARN
@@ -249,10 +252,11 @@ class FileListProviderImpl @Inject constructor(
     }
 
     override fun formatExportedAgo(utcTime: String): String {
-        val refTime = DateTime.now()
-        val itTime = DateTime.parse(utcTime)
-        val days = Days.daysBetween(itTime, refTime).days
-        val hours = Hours.hoursBetween(itTime, refTime).hours
+        val clock = clock
+        val refTime = clock.instant()
+        val itTime = IsoTimestamp.parse(utcTime, clock.zone, requireDate = true)
+        val days = itTime.daysUntil(refTime)
+        val hours = Math.toIntExact(Duration.between(itTime.toInstant(), refTime).toHours())
 
         return if (hours == 0) {
             rh.gs(R.string.exported_less_than_hour_ago)

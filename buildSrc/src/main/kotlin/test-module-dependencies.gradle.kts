@@ -12,7 +12,6 @@ dependencies {
     testRuntimeOnlyFromCatalog("org-junit-platform-launcher")
     testImplementationFromCatalog("org-mockito-junit-jupiter")
     testImplementationFromCatalog("org-mockito-kotlin")
-    testImplementationFromCatalog("joda-time")
     testImplementationFromCatalog("com-google-truth")
     testImplementationFromCatalog("org-skyscreamer-jsonassert")
 
