@@ -50,7 +50,7 @@
     <string name="paused">Pausiert</string>
     <string name="tdd_total">TDD Gesamt</string>
     <string name="tdd_old_data">Veraltete Daten</string>
-    <string name="goingtodeliver">Werde %1$.2f IE abgeben</string>
+    <string name="goingtodeliver">Werde %1$s IE abgeben</string>
     <string name="waitingforpump">Warte auf Pumpe</string>
     <string name="androidaps_start">AAPS gestartet</string>
     <string name="formatsignedinsulinunits">%1$+.2f IE</string>
@@ -368,9 +368,9 @@
     <string name="value_out_of_hard_limits">»%1$s« %2$.2f ist außerhalb der fest programmierten Grenzen</string>
     <string name="basal_value">Basal-Wert</string>
     <!-- Command Queue + readStatus reasons -->
-    <string name="bolus_u_min">BOLUS %1$.2f IE</string>
+    <string name="bolus_u_min">BOLUS %1$s IE</string>
     <string name="carbs_g">KH %1$d g</string>
-    <string name="extended_bolus_u_min">VERLÄNGERTER BOLUS %1$.2f IE %2$d min</string>
+    <string name="extended_bolus_u_min">VERLÄNGERTER BOLUS %1$s IE %2$d min</string>
     <string name="load_events">Lade Ereignisse</string>
     <string name="clear_alarms">ALARME LÖSCHEN</string>
     <string name="deactivate">DEAKTIVIEREN</string>
@@ -379,7 +379,7 @@
     <string name="load_tdds">Lade TDDs</string>
     <string name="set_profile">PROFIL SETZEN</string>
     <string name="set_user_settings">NUTZER-EINSTELLUNGEN SETZEN</string>
-    <string name="smb_bolus_u">SMB BOLUS %1$.2f IE</string>
+    <string name="smb_bolus_u">SMB BOLUS %1$s IE</string>
     <string name="start_pump">PUMPE STARTEN</string>
     <string name="stop_pump">PUMPE STOPPEN</string>
     <string name="temp_basal_absolute">TEMP BASAL %1$.2f IE/h %2$d min</string>
@@ -553,5 +553,6 @@
     <!--    DecimalFormatterImpl -->
     <string name="format_insulin_units1">%1$.1f IE</string>
     <string name="format_insulin_units">%1$.2f IE</string>
+    <string name="format_insulin_units_label">%1$s IE</string>
     <!--    Playback-->
 </resources>

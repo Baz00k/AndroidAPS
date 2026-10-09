@@ -4,7 +4,6 @@ import android.os.Bundle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.data.model.BS
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -142,14 +141,7 @@ class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
         val items = mutableListOf<HistoryItem>()
 
         persistenceLayer.getBolusesFromTimeToTime(from, now, false).forEach { bs ->
-            if (!bs.isValid || bs.type == BS.Type.PRIMING) return@forEach
-            val smb = bs.type == BS.Type.SMB
-            items += HistoryItem(
-                bs.id, bs.timestamp, dayLabel(bs.timestamp, now), dateUtil.timeString(bs.timestamp),
-                if (smb) HistoryKind.SMB else HistoryKind.BOLUS,
-                if (smb) "SMB" else "Bolus", bs.notes ?: "",
-                rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bs.amount)
-            )
+            bs.toHistoryItem(dayLabel(bs.timestamp, now), dateUtil.timeString(bs.timestamp), rh)?.let(items::add)
         }
         // NOT the expanded query: it splits one meal into its absorption series, which showed a single
         // 90 g entry as a run of identical rows — and those slices carry synthetic ids that cannot be

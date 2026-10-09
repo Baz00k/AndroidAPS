@@ -27,6 +27,13 @@ class ExtendedBolusHistoryTest {
     }
 
     @Test
+    fun `recorded extended bolus precision survives a cancelled partial dose`() {
+        val item = row(extended().copy(amount = 0.025))
+        assertThat(item.value.replace(',', '.')).isEqualTo("0.025 U")
+        assertThat(item.auditValues).contains(ValueWithUnit.Insulin(0.025))
+    }
+
+    @Test
     fun `running extended bolus is listed but not removable`() {
         val item = row(extended(), now = start + duration - 1)
         assertThat(item.removable).isFalse()

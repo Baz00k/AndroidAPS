@@ -3,6 +3,7 @@ package app.aaps.core.interfaces.rx.events
 import app.aaps.core.interfaces.R
 import app.aaps.core.interfaces.pump.BolusProgressData
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.utils.formatBolus
 import kotlin.math.min
 
 /**
@@ -19,29 +20,28 @@ class EventOverviewBolusProgress(status: String, val id: Long? = null, percent: 
     }
 
     /**
-     * Delivering %1$.2fU and percent is calculated
+     * Display the reported delivered amount and calculate percent.
      */
     constructor(rh: ResourceHelper, delivered: Double, id: Long? = null) :
         this(
-            status = rh.gs(R.string.bolus_delivering, delivered),
+            status = rh.gs(R.string.bolus_delivering, formatBolus(delivered)),
             id = id,
             percent = min((delivered / BolusProgressData.insulin * 100).toInt(), 100),
-            wearStatus = rh.gs(R.string.bolus_delivered_so_far, delivered, BolusProgressData.insulin)
+            wearStatus = rh.gs(R.string.bolus_delivered_so_far, formatBolus(delivered), formatBolus(BolusProgressData.insulin))
         )
 
     /**
-     * For 100%: Bolus %1$.2fU delivered successfully.
-     * else: Delivering %1$.2fU.
+     * Display completion or the existing percentage-based estimate without rounding the dose label.
      */
     constructor(rh: ResourceHelper, percent: Int, id: Long? = null) :
         this(
             status =
-                if (percent == 100) rh.gs(R.string.bolus_delivered_successfully, BolusProgressData.insulin)
-                else rh.gs(R.string.bolus_delivering, BolusProgressData.insulin * percent / 100.0),
+                if (percent == 100) rh.gs(R.string.bolus_delivered_successfully, formatBolus(BolusProgressData.insulin))
+                else rh.gs(R.string.bolus_delivering, formatBolus(BolusProgressData.insulin * percent / 100.0)),
             id = id,
             percent = min(percent, 100),
             wearStatus =
-                if (percent == 100) rh.gs(R.string.bolus_delivered_successfully, BolusProgressData.insulin)
-                else rh.gs(R.string.bolus_delivered_so_far, BolusProgressData.insulin * percent / 100.0, BolusProgressData.insulin)
+                if (percent == 100) rh.gs(R.string.bolus_delivered_successfully, formatBolus(BolusProgressData.insulin))
+                else rh.gs(R.string.bolus_delivered_so_far, formatBolus(BolusProgressData.insulin * percent / 100.0), formatBolus(BolusProgressData.insulin))
     )
 }

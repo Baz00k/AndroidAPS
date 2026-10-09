@@ -26,6 +26,8 @@ import app.aaps.core.interfaces.queue.CustomCommand
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.EventMobileToWear
+import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
@@ -221,7 +223,8 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(percentageConstraint)
         whenever(rh.gs(app.aaps.core.ui.R.string.connectiontimedout)).thenReturn("Connection timed out")
         whenever(rh.gs(app.aaps.core.ui.R.string.format_insulin_units)).thenReturn("%1\$.2f U")
-        whenever(rh.gs(app.aaps.core.ui.R.string.goingtodeliver)).thenReturn("Going to deliver %1\$.2f U")
+        whenever(rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label)).thenReturn("%1\$s U")
+        whenever(rh.gs(app.aaps.core.ui.R.string.goingtodeliver)).thenReturn("Going to deliver %1\$s U")
         whenever(workManager.getWorkInfosForUniqueWork(anyOrNull())).thenReturn(infos)
         doAnswer { invocation: InvocationOnMock ->
             Thread {
@@ -679,6 +682,23 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         commandQueue.cancelTempBasal(enforceNew = false, autoForced = false, callback = null)
 
         assertThat(commandQueue.snapshot().queued.single().status()).isEqualTo("CANCEL TEMP BASAL")
+    }
+
+    @Test
+    fun initialWearProgressRetainsTheConstrainedSmallDose() {
+        whenever(constraintChecker.applyBolusConstraints(anyOrNull())).thenReturn(ConstraintObject(0.025, aapsLogger))
+        val observer = rxBus.toObservable(EventMobileToWear::class.java).test()
+        try {
+            val info = DetailedBolusInfo().apply { insulin = 0.025 }
+            assertThat(commandQueue.bolus(info, null)).isTrue()
+            val message = observer.values().map { it.payload }.filterIsInstance<EventData.BolusProgress>().single()
+            assertThat(message.status).isEqualTo("Going to deliver 0.025 U")
+            assertThat(message.percent).isEqualTo(0)
+            assertThat(commandQueue.snapshot().queued.single().action).isEqualTo(CommandAction.Bolus(0.025))
+            assertThat(info.insulin).isEqualTo(0.025)
+        } finally {
+            observer.dispose()
+        }
     }
 
     @Test
