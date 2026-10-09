@@ -113,6 +113,35 @@ class RTTimestampTest {
     }
 
     @Test
+    fun `fractional offsets preserve compact and separated grammars through APS fields`() {
+        // 12:30 minus 01:00:00.123 = 11:29:59.877 UTC. Short fractions
+        // are decimal fractions of a second, and a negative offset is added.
+        val accepted = mapOf(
+            "+010000123" to "2026-10-09T11:29:59.877Z",
+            "+01:00:00.123" to "2026-10-09T11:29:59.877Z",
+            "+01:00:00,123" to "2026-10-09T11:29:59.877Z",
+            "+0100001" to "2026-10-09T11:29:59.900Z",
+            "+01000012" to "2026-10-09T11:29:59.880Z",
+            "-010000123" to "2026-10-09T13:30:00.123Z",
+            "+000000001" to "2026-10-09T12:29:59.999Z"
+        )
+        accepted.forEach { (offset, expected) ->
+            val input = "2026-10-09T12:30:00$offset"
+            val millis = Instant.parse(expected).toEpochMilli()
+            val result = RT.deserialize("""{"runningDynamicIsf":false,"timestamp":"$input","deliverAt":"$input"}""")
+            assertEquals(millis, result.timestamp, input)
+            assertEquals(millis, result.deliverAt, input)
+            assertEquals(millis, DateTime.parse(input, ISODateTimeFormat.dateTimeParser()).millis, input)
+        }
+        listOf("+010000.123", "+010000,123", "+01:00:00123", "+0100001234", "+01:00:00.1234", "+0100:00.123", "+01:0000.123")
+            .forEach { offset ->
+                val input = "2026-10-09T12:30:00$offset"
+                assertThrows(DateTimeException::class.java, { RT.TimestampToIsoSerializer.fromISODateString(input) }, input)
+                assertThrows(IllegalArgumentException::class.java, { DateTime.parse(input, ISODateTimeFormat.dateTimeParser()) }, input)
+            }
+    }
+
+    @Test
     fun `calendar age calculations match original at DST and offset boundaries`() = inZone("Europe/Warsaw") {
         listOf(
             Triple("2026-03-28T12:00", "2026-03-29T10:00:00Z", 1), // 23 hours, one local day.

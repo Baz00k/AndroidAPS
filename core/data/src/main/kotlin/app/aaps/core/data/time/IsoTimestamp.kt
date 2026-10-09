@@ -25,7 +25,10 @@ object IsoTimestamp {
     private val ordinalDate = Regex("([+-]?\\d{1,9})-(\\d{3})")
     private val weekDate = Regex("([+-]?\\d{1,9})-[Ww](\\d{1,2})(?:-(\\d))?")
     private val time = Regex("(\\d{1,2})(?::(\\d{1,2})(?::(\\d{1,2}))?)?(?:[.,](\\d{1,9}))?")
-    private val offset = Regex("([+-])(\\d{2})(?:(:?)(\\d{2})(?:\\3(\\d{2})(?:[.,](\\d{1,3}))?)?)?")
+    // Compact offsets append fractional digits directly to seconds; separated
+    // offsets require a decimal point or comma. Do not interchange the grammars.
+    private val compactOffset = Regex("([+-])(\\d{2})(?:(\\d{2})(?:(\\d{2})(\\d{1,3})?)?)?")
+    private val separatedOffset = Regex("([+-])(\\d{2}):(\\d{2})(?::(\\d{2})(?:[.,](\\d{1,3}))?)?")
 
     class Parsed internal constructor(
         val localDateTime: LocalDateTime,
@@ -112,8 +115,9 @@ object IsoTimestamp {
     }
 
     private fun parseOffset(value: String): Int {
-        val match = offset.matchEntire(value) ?: throw DateTimeException("Invalid ISO offset: $value")
-        val (sign, hour, _, minute, second, fraction) = match.destructured
+        val grammar = if (':' in value) separatedOffset else compactOffset
+        val match = grammar.matchEntire(value) ?: throw DateTimeException("Invalid ISO offset: $value")
+        val (sign, hour, minute, second, fraction) = match.destructured
         val h = hour.toInt()
         val m = minute.ifEmpty { "0" }.toInt()
         val s = second.ifEmpty { "0" }.toInt()

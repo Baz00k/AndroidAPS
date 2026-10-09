@@ -45,6 +45,40 @@ class RemoteTreatmentTimestampTest {
     }
 
     @Test
+    fun `fractional offset grammar keeps created at fallback and treatment accounting`() {
+        val accepted = mapOf(
+            "+010000123" to 1791545399877L,
+            "+01:00:00.123" to 1791545399877L,
+            "+01:00:00,123" to 1791545399877L,
+            "+0100001" to 1791545399900L,
+            "+01000012" to 1791545399880L,
+            "-010000123" to 1791552600123L
+        )
+        accepted.forEach { (offset, expected) ->
+            val createdAt = "2026-10-09T12:30:00$offset"
+            assertEquals(expected, timestamp("""{"created_at":"$createdAt"}"""), createdAt)
+            val bolus = """{"identifier":"offset-bolus","created_at":"$createdAt","insulin":0.25,"type":"SMB"}""".toNSTreatment() as NSBolus
+            assertEquals(expected, bolus.date, createdAt)
+            assertEquals(0.25, bolus.insulin)
+            val basal = """{"identifier":"offset-basal","created_at":"$createdAt","eventType":"Temp Basal","absolute":1.2,"duration":30}""".toNSTreatment() as NSTemporaryBasal
+            assertEquals(expected, basal.date, createdAt)
+            assertEquals(1_800_000L, basal.duration)
+            assertEquals(1.2, basal.rate)
+        }
+        listOf("+010000.123", "+010000,123", "+01:00:00123", "+0100001234", "+01:00:00.1234")
+            .forEach { offset ->
+                val createdAt = "2026-10-09T12:30:00$offset"
+                assertEquals(0L, timestamp("""{"created_at":"$createdAt"}"""), createdAt)
+                assertEquals(123L, timestamp("""{"date":123,"created_at":"$createdAt"}"""), createdAt)
+                // Preserve the existing mapper's distinct zero-date bolus vs rejected
+                // temp-basal behavior; correcting that policy is outside this refactor.
+                val bolus = """{"created_at":"$createdAt","insulin":0.25}""".toNSTreatment() as NSBolus
+                assertEquals(0L, bolus.date, createdAt)
+                assertEquals(null, """{"created_at":"$createdAt","eventType":"Temp Basal","absolute":1.2,"duration":30}""".toNSTreatment(), createdAt)
+            }
+    }
+
+    @Test
     fun `treatment accounting mapping retains timestamp insulin and duration`() {
         val bolus = """{"identifier":"synthetic-bolus","created_at":"2026-10-25T02:30:00.123+02:00","insulin":0.25,"type":"SMB"}""".toNSTreatment() as NSBolus
         assertEquals(1792888200123L, bolus.date)
