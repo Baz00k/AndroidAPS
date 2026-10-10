@@ -142,7 +142,8 @@ private fun MorePill(label: String, urgent: Boolean, modifier: Modifier) {
             .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = AapsTheme.type.label, color = tint)
+        // Weighted, so a label wrapped at a large font leaves room for the chevron.
+        Text(label, style = AapsTheme.type.label, color = tint, modifier = Modifier.weight(1f, fill = false))
         Icon(AapsIcons.ChevronRight, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
     }
 }
