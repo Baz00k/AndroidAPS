@@ -4,6 +4,7 @@ import app.aaps.core.interfaces.R
 import app.aaps.core.interfaces.pump.BolusProgressData
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.formatBolus
+import java.math.BigDecimal
 import kotlin.math.min
 
 /**
@@ -22,12 +23,12 @@ class EventOverviewBolusProgress(status: String, val id: Long? = null, percent: 
     /**
      * Display the reported delivered amount and calculate percent.
      */
-    constructor(rh: ResourceHelper, delivered: Double, id: Long? = null) :
+    constructor(rh: ResourceHelper, delivered: Double, id: Long? = null, deliveredForDisplay: BigDecimal? = null) :
         this(
-            status = rh.gs(R.string.bolus_delivering, formatBolus(delivered)),
+            status = rh.gs(R.string.bolus_delivering, deliveredForDisplay?.let { formatBolus(it) } ?: formatBolus(delivered)),
             id = id,
             percent = min((delivered / BolusProgressData.insulin * 100).toInt(), 100),
-            wearStatus = rh.gs(R.string.bolus_delivered_so_far, formatBolus(delivered), formatBolus(BolusProgressData.insulin))
+            wearStatus = rh.gs(R.string.bolus_delivered_so_far, deliveredForDisplay?.let { formatBolus(it) } ?: formatBolus(delivered), formatBolus(BolusProgressData.insulin))
         )
 
     /**

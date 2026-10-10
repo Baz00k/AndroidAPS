@@ -27,4 +27,11 @@ class BolusHistoryTest {
         assertThat(BS(timestamp = 1000, amount = 0.025, type = BS.Type.NORMAL, isValid = false).toHistoryItem("Today", "12:30", rh)).isNull()
         assertThat(BS(timestamp = 1000, amount = 0.025, type = BS.Type.PRIMING).toHistoryItem("Today", "12:30", rh)).isNull()
     }
+
+    @Test fun `recorded pulse arithmetic is simplified for display without changing the persisted amount`() {
+        val delivered = 3 * 0.05
+        val bolus = BS(id = 193, timestamp = 1000, amount = delivered, type = BS.Type.NORMAL)
+        assertThat(bolus.toHistoryItem("Today", "12:30", rh)!!.value.replace(',', '.')).isEqualTo("0.15 U")
+        assertThat(bolus.amount).isEqualTo(delivered)
+    }
 }

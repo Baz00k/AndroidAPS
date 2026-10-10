@@ -76,4 +76,24 @@ class BolusDoseLabelsTest {
             assertThat(localized.getString(app.aaps.core.ui.R.string.extended_bolus_u_min, amount, 30)).contains(amount)
         }
     }
+
+    @Test fun pumpArithmeticNoiseDoesNotObscureProgressOrHistoryLabels() {
+        val delivered = 0.1 + 0.1 + 0.1
+        BolusProgressData.set(0.5, false, 193)
+        BolusProgressData.delivered = delivered
+        EventOverviewBolusProgress(rh, delivered = delivered, id = 193)
+        var history by mutableStateOf(false)
+        val amount = 3 * 0.05
+        val row = BS(id = 193, timestamp = System.currentTimeMillis(), amount = amount, type = BS.Type.NORMAL).toHistoryItem("Today", "12:30", rh)!!
+        compose.setContent { AapsTheme {
+            if (history) HistoryScreen(HistoryUiState(loading = false, items = listOf(row)), {})
+            else BolusProgressSheet(BolusProgressData.percent, BolusProgressData.status) { history = true }
+        } }
+        compose.onNodeWithText("Delivering 0.30U").assertIsDisplayed()
+        assertThat(BolusProgressData.wearStatus).isEqualTo("0.30U / 0.50U delivered")
+        assertThat(BolusProgressData.delivered).isEqualTo(delivered)
+        compose.onNodeWithText("Stop").performClick()
+        compose.onNodeWithText("0.15 U").assertIsDisplayed()
+        assertThat(amount).isEqualTo(0.15000000000000002)
+    }
 }
