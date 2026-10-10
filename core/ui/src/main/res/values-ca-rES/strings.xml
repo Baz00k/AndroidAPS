@@ -46,7 +46,7 @@
     <string name="extended_bolus">Bolus estès</string>
     <string name="paused">En pausa</string>
     <string name="tdd_total">TDD Total</string>
-    <string name="goingtodeliver">A punt de lliurar %1$.2f U</string>
+    <string name="goingtodeliver">A punt de lliurar %1$s U</string>
     <string name="waitingforpump">Esperant bomba</string>
     <string name="formatsignedinsulinunits">%1$+.2f U</string>
     <string name="format_carbs">%1$d g</string>
@@ -323,9 +323,9 @@
     <string name="value_out_of_hard_limits">»%1$s« %2$.2f està fora dels límits estrictes</string>
     <string name="basal_value">Valor basal</string>
     <!-- Command Queue + readStatus reasons -->
-    <string name="bolus_u_min">BOLUS %1$.2f U</string>
+    <string name="bolus_u_min">BOLUS %1$s U</string>
     <string name="carbs_g">HIDRATS DE CARBONI %1$d g</string>
-    <string name="extended_bolus_u_min">BOLUS ESTÈS %1$.2f U %2$d min</string>
+    <string name="extended_bolus_u_min">BOLUS ESTÈS %1$s U %2$d min</string>
     <string name="load_events">CARREGAR EVENTS</string>
     <string name="load_history">CARREGAR HITORIAL %1$d</string>
     <string name="load_tdds">CARREGAR TDDs</string>

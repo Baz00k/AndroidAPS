@@ -33,7 +33,7 @@
     <string name="success">Uspješno</string>
     <string name="paused">Pauzirano</string>
     <string name="tdd_total">TDD Total</string>
-    <string name="goingtodeliver">Isporučit ću %1$.2f U</string>
+    <string name="goingtodeliver">Isporučit ću %1$s U</string>
     <string name="waitingforpump">Čekanje pumpe</string>
     <string name="androidaps_start">AAPS je počeo</string>
     <string name="formatsignedinsulinunits">%1$+.2f U</string>

@@ -13,6 +13,7 @@ import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.interfaces.utils.formatBolus
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import dagger.android.HasAndroidInjector
@@ -60,9 +61,9 @@ class CommandSMBBolus(
         BolusProgressData.bolusEnded = true
     }
 
-    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.smb_bolus_u, detailedBolusInfo.insulin)
+    override fun status(): String = rh.gs(app.aaps.core.ui.R.string.smb_bolus_u, formatBolus(detailedBolusInfo.insulin))
 
-    override fun log(): String = "SMB BOLUS ${rh.gs(app.aaps.core.ui.R.string.format_insulin_units, detailedBolusInfo.insulin)}"
+    override fun log(): String = "SMB BOLUS ${rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label, formatBolus(detailedBolusInfo.insulin))}"
     override fun cancel() {
         aapsLogger.debug(LTag.PUMPQUEUE, "Result cancel")
         callback?.result(pumpEnactResultProvider.get().success(false).comment(app.aaps.core.ui.R.string.connectiontimedout))?.run()

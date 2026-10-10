@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--    Events-->
-    <string name="bolus_delivering">Подается %1$.2fед</string>
-    <string name="bolus_delivered_so_far">Введено %1$.2fед / %2$.2fед</string>
-    <string name="bolus_delivered_successfully">Болюс %1$.2fед. введен успешно</string>
+    <string name="bolus_delivering">Подается %1$sед</string>
+    <string name="bolus_delivered_so_far">Введено %1$sед / %2$sед</string>
+    <string name="bolus_delivered_successfully">Болюс %1$sед. введен успешно</string>
     <!-- PumpPluginBase -->
     <string name="pump_driver_changed" comment="26 characters max for translation">Драйвер помпы изменен.</string>
     <!--    DateUtil-->

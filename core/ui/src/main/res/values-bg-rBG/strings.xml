@@ -49,7 +49,7 @@
     <string name="extended_bolus">Удължен болус</string>
     <string name="paused">Пауза</string>
     <string name="tdd_total">ТДД общо</string>
-    <string name="goingtodeliver">Ще стартира %1$.2fЕ болус</string>
+    <string name="goingtodeliver">Ще стартира %1$sЕ болус</string>
     <string name="waitingforpump">Чакаме помпата</string>
     <string name="androidaps_start">AAPS стартирана</string>
     <string name="formatsignedinsulinunits">%1$+.2fЕ</string>
@@ -365,9 +365,9 @@
     <string name="value_out_of_hard_limits">»%1$s« %2$.2f е извън ограниченията</string>
     <string name="basal_value">Базална стойност</string>
     <!-- Command Queue + readStatus reasons -->
-    <string name="bolus_u_min">БОЛУС %1$.2f Е</string>
+    <string name="bolus_u_min">БОЛУС %1$s Е</string>
     <string name="carbs_g">ВЪГЛЕХИДРАТИ %1$d гр</string>
-    <string name="extended_bolus_u_min">УДЪЛЖЕН БОЛУС %1$.2f Е %2$d мин</string>
+    <string name="extended_bolus_u_min">УДЪЛЖЕН БОЛУС %1$s Е %2$d мин</string>
     <string name="load_events">ВЪВЕДИ СЪБИТИЯ</string>
     <string name="clear_alarms">ИЗТРИВАНЕ НА АЛАРМИ</string>
     <string name="deactivate">ДЕАКТИВИРАНЕ</string>
@@ -376,7 +376,7 @@
     <string name="load_tdds">ЗАРЕДИ TDDs</string>
     <string name="set_profile">ЗАДАЙ ПРОФИЛ</string>
     <string name="set_user_settings">ЗАДАЙ ПОТРЕБИТЕЛСКИ НАСТРОЙКИ</string>
-    <string name="smb_bolus_u">SMB БОЛУС %1$.2f Е</string>
+    <string name="smb_bolus_u">SMB БОЛУС %1$s Е</string>
     <string name="start_pump">СТАРТИРАЙ ПОМПА</string>
     <string name="stop_pump">СТОП ПОМПА</string>
     <string name="temp_basal_absolute">ВРЕМЕНЕН БАЗАЛ %1$.2f Е/ч %2$d мин</string>
@@ -545,5 +545,6 @@
     <string name="sunday_short">Н</string>
     <!--    DecimalFormatterImpl -->
     <string name="format_insulin_units">%1$.2fЕ</string>
+    <string name="format_insulin_units_label">%1$sЕ</string>
     <!--    Playback-->
 </resources>
