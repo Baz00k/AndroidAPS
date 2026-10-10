@@ -72,7 +72,7 @@ data class HomeUiState(
 
     // Active notifications (pump unreachable, NS alarms, profile failures...). The legacy overview
     // showed these in a RecyclerView under the graph; nothing displayed them after that hierarchy
-    // was hidden, so they live above the hero now: one summary card, the rest in a list (HomeAlerts).
+    // was hidden, so they live above the hero now, folded into one stack (HomeAlerts).
     val notifications: List<Alert> = emptyList()
 ) {
 
