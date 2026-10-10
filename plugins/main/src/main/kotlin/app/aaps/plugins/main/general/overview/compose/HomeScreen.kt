@@ -61,7 +61,6 @@ import app.aaps.core.compose.components.MeasurementText
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.interfaces.notifications.Notification
 import androidx.compose.foundation.layout.PaddingValues
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -96,7 +95,8 @@ fun HomeScreen(
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
-                if (state.notifications.isNotEmpty()) AlertsCard(state.notifications, actions.onDismissAlert)
+                // Alerts are the reason the loop may not be doing what the hero says, so they sit above it.
+                AlertsStack(state.notifications, actions.onDismissAlert)
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
@@ -107,50 +107,6 @@ fun HomeScreen(
         }
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
         if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
-    }
-}
-
-/**
- * Active notifications. Urgent/normal alerts are the reason the loop may not be doing what the hero
- * says, so they sit above it. Tapping the button runs the notification's action and clears it — the
- * same behaviour as the legacy dismiss button.
- */
-@Composable
-private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.Alert) -> Unit) {
-    val colors = AapsTheme.colors
-    Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
-        alerts.forEach { alert ->
-            val tint = when (alert.level) {
-                Notification.URGENT -> colors.low
-                Notification.NORMAL -> colors.high
-                Notification.LOW    -> colors.inRange
-                else                -> colors.accent
-            }
-            AapsCard(shape = AapsTheme.shape.cardSmall) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .padding(end = 10.dp)
-                            .size(width = 3.dp, height = 30.dp)
-                            .clip(AapsTheme.shape.pill)
-                            .background(tint)
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(alert.text, style = AapsTheme.type.body, color = colors.textPrimary)
-                        Text(alert.time, style = AapsTheme.type.caption, color = colors.textTertiary)
-                    }
-                    Text(
-                        alert.buttonText,
-                        style = AapsTheme.type.label,
-                        color = tint,
-                        modifier = Modifier
-                            .clip(AapsTheme.shape.button)
-                            .clickable { onDismiss(alert) }
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    )
-                }
-            }
-        }
     }
 }
 
