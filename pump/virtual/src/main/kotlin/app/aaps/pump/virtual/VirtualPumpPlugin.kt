@@ -53,6 +53,7 @@ import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
+import java.math.BigDecimal
 
 @Singleton
 open class VirtualPumpPlugin @Inject constructor(
@@ -186,10 +187,13 @@ open class VirtualPumpPlugin @Inject constructor(
             .enacted(detailedBolusInfo.insulin > 0 || detailedBolusInfo.carbs > 0)
             .comment(rh.gs(app.aaps.core.ui.R.string.virtualpump_resultok))
         var delivering = 0.0
+        // Independent decimal label arithmetic; the simulator's timing, progress and result are unchanged.
+        var deliveringForDisplay = BigDecimal.ZERO
         while (delivering < detailedBolusInfo.insulin) {
             SystemClock.sleep(200)
-            rxBus.send(EventOverviewBolusProgress(rh, delivering, id = detailedBolusInfo.id))
+            rxBus.send(EventOverviewBolusProgress(rh, delivering, id = detailedBolusInfo.id, deliveredForDisplay = deliveringForDisplay))
             delivering += 0.1
+            deliveringForDisplay = deliveringForDisplay.add(BigDecimal("0.1"))
             if (BolusProgressData.stopPressed)
                 return pumpEnactResultProvider.get()
                     .success(false)

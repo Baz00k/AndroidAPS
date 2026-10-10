@@ -59,4 +59,14 @@ class DecimalFormatterTest : TestBase() {
         whenever(rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label, amount)).thenReturn("$amount U")
         assertThat(sut.toPumpSupportedBolusWithUnits(0.025, 0.025).replace(',', '.')).isEqualTo("0.025 U")
     }
+
+    @Test fun pumpBolusFormattingRemovesArithmeticNoiseWithoutQuantizingToTheCurrentStep() {
+        for (step in listOf(0.025, 0.05, 0.1)) {
+            val delivered = 3 * 0.05
+            val text = sut.toPumpSupportedBolus(delivered, step)
+            assertThat(text.replace(',', '.').toDouble()).isEqualTo(0.15)
+            assertThat(sut.pumpSupportedBolusFormat(step).format(delivered)).isEqualTo(text)
+            assertThat(sut.toPumpSupportedBolus(0.0125, step).replace(',', '.')).isEqualTo("0.0125")
+        }
+    }
 }
