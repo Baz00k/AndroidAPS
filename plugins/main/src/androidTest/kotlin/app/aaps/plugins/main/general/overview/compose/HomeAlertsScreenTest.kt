@@ -15,7 +15,6 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -38,7 +37,7 @@ class HomeAlertsScreenTest {
 
     private fun alert(id: Int, level: Int, text: String = "Alert text $id") = HomeUiState.Alert(id = id, text = text, time = "12:0$id", level = level, buttonText = "Act $id")
 
-    private val openList = SemanticsMatcher("opens the alert list") {
+    private val unfold = SemanticsMatcher("unfolds the alert stack") {
         it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show all alerts"
     }
 
@@ -60,7 +59,7 @@ class HomeAlertsScreenTest {
         show(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.URGENT), alert(4, Notification.LOW), alert(5, Notification.URGENT))
 
         compose.onNodeWithText("Alert text 3").assertExists()
-        compose.onNodeWithText("Urgent").assertExists()
+        compose.onNodeWithText("Urgent · 12:03").assertExists()
         compose.onNodeWithText("4 more alerts · 1 urgent").assertExists()
         for (id in listOf(1, 2, 4, 5)) compose.onAllNodesWithText("Alert text $id").assertCountEquals(0)
         compose.onNodeWithText("120").assertExists()
@@ -80,28 +79,28 @@ class HomeAlertsScreenTest {
         compose.onNodeWithTag("graph middle").assertIsDisplayed()
     }
 
-    @Test fun openingAndClosingTheListDoesNotActOnAnyAlert() {
+    @Test fun unfoldingAndFoldingTheStackDoesNotActOnAnyAlert() {
         show(alert(1, Notification.NORMAL), alert(2, Notification.URGENT))
+        compose.onAllNodesWithText("Alert text 1").assertCountEquals(0)
 
-        compose.onNode(openList).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Active alerts").assertExists()
-        compose.onAllNodesWithText("Alert text 1").assertCountEquals(1)
-        compose.onAllNodesWithText("Warning").assertCountEquals(1)
-        compose.onNodeWithContentDescription("Close").performClick()
-        compose.onAllNodesWithText("Active alerts").assertCountEquals(0)
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("Alert text 1").assertIsDisplayed()
+        compose.onNodeWithText("Warning · 12:01").assertIsDisplayed()
+        compose.onNodeWithText("Show less").performClick()
+        compose.onAllNodesWithText("Alert text 1").assertCountEquals(0)
 
         assertEquals(emptyList<Int>(), acted)
         compose.onNodeWithText("Alert text 2").assertExists()
     }
 
-    @Test fun actionsInTheListFollowTheirAlertWhileItChanges() {
+    @Test fun actionsInTheUnfoldedStackFollowTheirAlertWhileItChanges() {
         show(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
-        compose.onNode(openList).performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
 
-        // An urgent alert arrives and another resolves while the list is open.
+        // An urgent alert arrives and another resolves while the stack is unfolded.
         update(alert(1, Notification.INFO), alert(3, Notification.LOW), alert(4, Notification.URGENT))
         compose.onAllNodesWithText("Alert text 2").assertCountEquals(0)
-        compose.onAllNodesWithText("Act 4").assertCountEquals(2) // summary card and list
+        compose.onNodeWithText("Act 4").assertIsDisplayed()
         compose.onNodeWithText("Act 3").performClick()
         compose.onNodeWithText("Act 1").performClick()
 
@@ -121,27 +120,27 @@ class HomeAlertsScreenTest {
         assertEquals(listOf(2), acted)
     }
 
-    @Test fun aPressInTheListIsDroppedWhenItsAlertResolvesAndAnotherTakesItsPlace() {
+    @Test fun aPressInTheUnfoldedStackIsDroppedWhenItsAlertResolvesAndAnotherTakesItsPlace() {
         show(alert(1, Notification.URGENT), alert(2, Notification.LOW), alert(3, Notification.LOW))
-        compose.onNode(openList).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Act 2").performTouchInput { down(center) } // only in the list, second row
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("Act 2").performTouchInput { down(center) } // second card
 
-        // Alert 2 resolves while the finger is down on its button, and a new warning takes the second row.
+        // Alert 2 resolves while the finger is down on its button, and a new warning takes the second card.
         update(alert(1, Notification.URGENT), alert(3, Notification.LOW), alert(4, Notification.NORMAL))
         compose.onNodeWithText("Act 4").performTouchInput { up() }
 
         assertEquals(emptyList<Int>(), acted)
     }
 
-    @Test fun theListClosesWithItsLastAlertAndDoesNotReopenForTheNext() {
-        show(alert(1, Notification.NORMAL))
-        compose.onNode(openList).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Active alerts").assertExists()
+    @Test fun theStackFoldsWhenOneAlertIsLeftAndStaysFoldedForTheNext() {
+        show(alert(1, Notification.NORMAL), alert(2, Notification.LOW))
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("Show less").assertExists()
 
-        update()
-        compose.onAllNodesWithText("Active alerts").assertCountEquals(0)
-        update(alert(2, Notification.URGENT))
-        compose.onNodeWithText("Alert text 2").assertExists()
-        compose.onAllNodesWithText("Active alerts").assertCountEquals(0)
+        update(alert(1, Notification.NORMAL))
+        compose.onAllNodesWithText("Show less").assertCountEquals(0)
+        update(alert(1, Notification.NORMAL), alert(3, Notification.LOW))
+        compose.onAllNodesWithText("Alert text 3").assertCountEquals(0)
+        compose.onNodeWithText("1 more alert").assertExists()
     }
 }

@@ -29,7 +29,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import app.aaps.core.compose.components.disabledAlpha
 import app.aaps.core.compose.components.LocalSheetDraggable
@@ -81,10 +80,6 @@ fun HomeScreen(
     val colors = AapsTheme.colors
     var showCarbs by remember { mutableStateOf(false) }
     var showInsulin by remember { mutableStateOf(false) }
-    var showAlerts by remember { mutableStateOf(false) }
-    // The list closes once its last alert is gone, so a later alert does not reopen it on its own.
-    val noAlerts = state.notifications.isEmpty()
-    LaunchedEffect(noAlerts) { if (noAlerts) showAlerts = false }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -101,7 +96,7 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
                 // Alerts are the reason the loop may not be doing what the hero says, so they sit above it.
-                AlertsSummary(state.notifications, actions.onDismissAlert, onOpenList = { showAlerts = true })
+                AlertsStack(state.notifications, actions.onDismissAlert)
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
@@ -112,7 +107,6 @@ fun HomeScreen(
         }
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
         if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
-        if (showAlerts && !noAlerts) AlertsSheet(state.notifications, actions.onDismissAlert, onClose = { showAlerts = false })
     }
 }
 
@@ -560,7 +554,7 @@ private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.Ima
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) {
+private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var closing by remember { mutableStateOf(false) }
