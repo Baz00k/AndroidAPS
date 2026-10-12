@@ -13,6 +13,8 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -21,6 +23,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso.pressBack
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.notifications.Notification
 import org.junit.Assert.assertEquals
@@ -91,6 +94,55 @@ class HomeAlertsScreenTest {
 
         assertEquals(emptyList<Int>(), acted)
         compose.onNodeWithText("Alert text 2").assertExists()
+    }
+
+    @Test fun theExpandedTopCardDoesNotHideTheOtherAlertsWhenTapped() {
+        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL))
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+
+        compose.onNodeWithText("Alert text 1").assertHasNoClickAction().performTouchInput { click() }
+        compose.onNodeWithText("Alert text 2").assertIsDisplayed()
+        compose.onNodeWithText("Show less").assertIsDisplayed()
+        assertEquals(emptyList<Int>(), acted)
+    }
+
+    @Test fun unfoldingDoesNotMoveTheTopAlertsAction() {
+        show(alert(1, Notification.URGENT, List(8) { "Long urgent message with more than three lines." }.joinToString(" ")), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
+        val before = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        val after = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
+
+        assertEquals(before, after)
+    }
+
+    @Test fun backFoldsTheStackWithoutActingOnAlerts() {
+        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL))
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        pressBack()
+
+        compose.onAllNodesWithText("Alert text 2").assertCountEquals(0)
+        compose.onNodeWithText("Alert text 1").assertIsDisplayed()
+        assertEquals(emptyList<Int>(), acted)
+    }
+
+    @Test fun theTopActionStaysAnchoredDuringExpansionAndCollapse() {
+        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
+        val before = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
+        compose.mainClock.autoAdvance = false
+        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        repeat(18) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.waitForIdle()
+            assertEquals(before, compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot)
+        }
+        compose.onNodeWithText("Show less").performClick()
+        repeat(18) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.waitForIdle()
+            assertEquals(before, compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot)
+        }
+        compose.mainClock.autoAdvance = true
+        assertEquals(emptyList<Int>(), acted)
     }
 
     @Test fun actionsInTheUnfoldedStackFollowTheirAlertWhileItChanges() {

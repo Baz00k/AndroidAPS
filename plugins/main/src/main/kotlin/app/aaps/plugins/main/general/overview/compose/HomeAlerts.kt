@@ -1,11 +1,9 @@
 package app.aaps.plugins.main.general.overview.compose
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -107,7 +105,7 @@ private fun severityTint(level: Int): Color {
 /**
  * The alerts above the hero, as a stack. Folded, it is one card, the most severe alert with its own
  * action, with the edges of the others showing beneath it and a line saying how many wait there.
- * Tapping the card unfolds the stack in place into one card per alert; "Show less" folds it again,
+ * Tapping the folded card unfolds it in place; only "Show less" or Back folds it again,
  * as does the stack shrinking to a single alert.
  *
  * Every card is keyed by its alert, so a press that began on one alert's button is cancelled, not
@@ -121,15 +119,11 @@ internal fun AlertsStack(alerts: List<HomeUiState.Alert>, onAction: (HomeUiState
     val canUnfold = summary.more > 0
     // Folds once a single alert is left, so the next one to arrive joins a folded stack.
     LaunchedEffect(canUnfold) { if (!canUnfold) unfolded = false }
-    val toggle = { unfolded = !unfolded }
+    BackHandler(enabled = unfolded) { unfolded = false }
 
-    Column(Modifier.animateContentSize()) {
-        AnimatedVisibility(unfolded, enter = fadeIn(), exit = fadeOut()) {
-            Row(Modifier.fillMaxWidth().padding(start = AapsSpacing.cardPad), verticalAlignment = Alignment.CenterVertically) {
-                Text("${alerts.size} alerts", style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.weight(1f))
-                GhostButton("Show less", toggle)
-            }
-        }
+    // One size animation owns the whole transition; per-row expand/shrink animations would make
+    // their parent chase changing heights. Keep the top card and its action anchored throughout.
+    Column(Modifier.animateContentSize(animationSpec = tween(240, easing = FastOutSlowInEasing))) {
         orderedAlerts(alerts).forEachIndexed { index, alert ->
             key(alert.id) {
                 if (index == 0) {
@@ -137,18 +131,22 @@ internal fun AlertsStack(alerts: List<HomeUiState.Alert>, onAction: (HomeUiState
                         alert,
                         maxLines = if (unfolded) Int.MAX_VALUE else 3,
                         onAction = onAction,
-                        onClick = if (canUnfold) toggle else null,
-                        onClickLabel = if (unfolded) "Show fewer alerts" else "Show all alerts",
+                        onClick = if (canUnfold && !unfolded) ({ unfolded = true }) else null,
+                        onClickLabel = "Show all alerts",
                         footer = if (unfolded || more == null) null else ({ MoreLine(more, urgent = summary.moreUrgent > 0) })
                     )
-                } else {
-                    AnimatedVisibility(unfolded, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                        AlertCard(alert, maxLines = Int.MAX_VALUE, onAction = onAction, modifier = Modifier.padding(top = 8.dp))
+                    if (unfolded) {
+                        Row(Modifier.fillMaxWidth().padding(start = AapsSpacing.cardPad), verticalAlignment = Alignment.CenterVertically) {
+                            Text("${alerts.size} alerts", style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.weight(1f))
+                            GhostButton("Show less", { unfolded = false })
+                        }
                     }
+                } else if (unfolded) {
+                    AlertCard(alert, maxLines = Int.MAX_VALUE, onAction = onAction, modifier = Modifier.padding(top = 8.dp))
                 }
             }
         }
-        AnimatedVisibility(!unfolded && summary.more > 0, enter = fadeIn(), exit = fadeOut()) {
+        if (!unfolded && summary.more > 0) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 StackEdge(inset = 12.dp, alpha = 0.75f)
                 if (summary.more > 1) StackEdge(inset = 24.dp, alpha = 0.45f)
@@ -194,7 +192,7 @@ private fun AlertCard(
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick) else Modifier),
         contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = 4.dp, top = AapsSpacing.cardPadSmall, bottom = AapsSpacing.cardPadSmall)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 // Severity in words beside its colour, so it is never carried by colour alone.
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
