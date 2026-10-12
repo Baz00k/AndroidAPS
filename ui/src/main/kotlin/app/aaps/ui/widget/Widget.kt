@@ -13,7 +13,6 @@ import android.os.HandlerThread
 import android.view.View
 import android.widget.RemoteViews
 import app.aaps.core.data.model.GlucoseUnit
-import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
@@ -39,7 +38,7 @@ import app.aaps.core.keys.IntComposedKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.directionToIcon
 import app.aaps.core.objects.extensions.displayText
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.IobDisplay
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
@@ -200,13 +199,10 @@ class Widget : AppWidgetProvider() {
         views.setViewVisibility(R.id.extended_layout, (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) != null && !pump.isFakingTempsByExtendedBoluses).toVisibility())
     }
 
-    private fun bolusIob(): IobTotal = iobCobCalculator.calculateIobFromBolus().round()
-    private fun basalIob(): IobTotal = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-    private fun iobText(): String =
-        rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob)
-
     private fun updateIobCob(views: RemoteViews) {
-        views.setTextViewText(R.id.iob, iobText())
+        val iob = IobDisplay.load(profileFunction.getProfile(), iobCobCalculator, rh)
+        views.setTextViewText(R.id.iob, iob.total)
+        views.setContentDescription(R.id.iob, listOf(iob.total, iob.unavailableReason).filter { it.isNotBlank() }.joinToString(" · "))
         // cob
         var cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter) ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
 

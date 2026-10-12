@@ -39,7 +39,6 @@ private fun HomeScreenPreview(@PreviewParameter(GlucoseFreshnessPreviewProvider:
                 stateLine = "In target range",
                 targetRange = "5.5–7.0 mmol/L",
                 iob = "1.24 U",
-                iobSub = "bolus + basal",
                 cob = "18 g",
                 basal = "0.42 U/h",
                 basalSub = "50% · 0.85 sched",

@@ -40,7 +40,7 @@ data class HomeUiState(
 
     // Stat row (absorbed into the hero card)
     val iob: String = "",
-    val iobSub: String = "",
+    val iobSub: String = "",               // reason IOB is unavailable; blank when calculated
     val cob: String = "",
     val cobSub: String = "",
     val basal: String = "",

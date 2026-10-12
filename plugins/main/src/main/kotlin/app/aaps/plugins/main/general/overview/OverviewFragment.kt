@@ -12,7 +12,6 @@ import app.aaps.core.data.model.RM
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
@@ -73,7 +72,7 @@ import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.displayText
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.IobDisplay
 import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.extensions.runOnUiThread
@@ -564,7 +563,8 @@ class OverviewFragment : DaggerFragment() {
         val basalSubText = if (basalData?.isTempBasalRunning == true && scheduledBasal > 0)
             "$basalPercent% · ${String.format(Locale.getDefault(), "%.2f", scheduledBasal)} sched" else ""
 
-        // Stats
+        // Stats: without a profile, empty calculator totals do not mean zero active insulin.
+        val iob = IobDisplay.load(profile, iobCobCalculator, rh)
         val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
 
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
@@ -674,8 +674,8 @@ class OverviewFragment : DaggerFragment() {
             eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
             stateLine = stateLine,
             targetRange = targetRange,
-            iob = iobText(),
-            iobSub = rh.gs(app.aaps.core.ui.R.string.bolus) + " + " + rh.gs(app.aaps.core.ui.R.string.basal),
+            iob = iob.total,
+            iobSub = iob.unavailableReason,
             cob = cobText ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short),
             cobSub = "",
             basal = basalText,
@@ -683,8 +683,8 @@ class OverviewFragment : DaggerFragment() {
             supplies = supplies,
             recentCarbs = recentCarbs,
             recentInsulin = recentInsulin,
-            iobBolus = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob),
-            iobBasal = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, basalIob().basaliob),
+            iobBolus = iob.bolus,
+            iobBasal = iob.basal,
             graphRangeHours = overviewData.rangeToDisplay,
             tempTarget = tempTarget,
             ready = true,
@@ -857,12 +857,6 @@ class OverviewFragment : DaggerFragment() {
         task = UpdateRunnable()
         task?.let { handler.postDelayed(it, 500) }
     }
-
-    @SuppressLint("SetTextI18n")
-    private fun bolusIob(): IobTotal = iobCobCalculator.calculateIobFromBolus().round()
-    private fun basalIob(): IobTotal = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-    private fun iobText(): String =
-        rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob)
 
     private fun updateIobCob() {
         // Recent boluses and extended boluses for the IOB-tap undo sheet (newest first). The 6h window is

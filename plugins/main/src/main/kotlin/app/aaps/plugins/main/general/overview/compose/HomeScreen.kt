@@ -253,7 +253,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             // Shifted left by exactly the stat's own inset (see HeroStat) so the labels still line up
             // with the BG value above while their tap/ripple area keeps clear of the rounded corners.
             Row(Modifier.fillMaxWidth().padding(top = 4.dp).offset(x = -HeroStatInset)) {
-                HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = onIobClick)
+                HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), sub = state.iobSub, onClick = onIobClick)
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
             }
@@ -431,6 +431,8 @@ private fun InsulinUndoSheet(
                         DetailRow("Total", state.iob.ifBlank { "--" })
                         DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
                         DetailRow("From basal", state.iobBasal.ifBlank { "--" })
+                        if (state.iobSub.isNotBlank())
+                            Text(state.iobSub, style = AapsTheme.type.caption, color = colors.textSecondary)
                     }
                 }
                 if (state.recentInsulin.isEmpty()) {
