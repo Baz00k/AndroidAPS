@@ -1,6 +1,15 @@
 package app.aaps.plugins.main.general.overview.compose
 
 import app.aaps.core.compose.theme.AapsTone
+import app.aaps.core.interfaces.pump.Pump
+
+internal fun keyExpirySupply(key: Pump.KeyExpiryIndicator, title: String, value: String): HomeUiState.Supply =
+    HomeUiState.Supply(title, value, when {
+        key.remainingMs == null -> AapsTone.Neutral
+        key.due -> AapsTone.Low
+        key.reminderDue -> AapsTone.High
+        else -> AapsTone.InRange
+    })
 
 /** [level] is NaN when the pump has no reading to show. */
 internal fun reservoirSupply(level: Double, critical: Double, warning: Double, format: (Double) -> String): HomeUiState.Supply =

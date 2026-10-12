@@ -96,6 +96,19 @@ class YpsoPumpPluginTest {
         verify(provisioning, never()).refreshState()
     }
 
+    @Test fun `overview key indicator is opt in and only reads cached advisory state`() {
+        assertNull(plugin.keyExpiryIndicator)
+        verify(provisioning, never()).installed()
+        whenever(preferences.get(app.aaps.core.keys.BooleanKey.YpsoShowKeyExpiry)).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed.copy(keyDatesLoaded = false))
+        assertNull(plugin.keyExpiryIndicator)
+        val expired = installed.copy(createdAt = Instant.ofEpochMilli(1000), importedAt = Instant.now(), keyDatesLoaded = true)
+        whenever(provisioning.installed()).thenReturn(expired)
+        assertEquals(true, plugin.keyExpiryIndicator?.due)
+        verify(provisioning, never()).observeKeyTiming(any())
+        verifyNoInteractions(manager, sync, commandQueue, constraintsChecker)
+    }
+
     @Test fun `slow reminder observation does not hold plugin monitor and stopped publisher cannot repost`() {
         val entered = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)

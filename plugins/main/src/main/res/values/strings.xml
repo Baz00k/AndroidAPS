@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="pump_key">Pump key</string>
+    <string name="pump_key_due">Renew key</string>
+    <string name="pump_key_estimated_remaining">~%1$s</string>
 
     <!-- SMS Communicator & OTP Authenticator -->
 

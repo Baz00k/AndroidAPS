@@ -137,6 +137,10 @@ interface Pump {
     /** [reservoir] is NaN when there is nothing to show. */
     data class LastKnownLevels(val reservoir: Double, val battery: Int?)
 
+    /** Cache-only advisory presentation. Never use for dosing or pump availability. */
+    val keyExpiryIndicator: KeyExpiryIndicator? get() = null
+    data class KeyExpiryIndicator(val remainingMs: Long?, val due: Boolean, val reminderDue: Boolean, val estimated: Boolean)
+
     /**
      * Request a bolus to be delivered, carbs to be stored on pump or both.
      *

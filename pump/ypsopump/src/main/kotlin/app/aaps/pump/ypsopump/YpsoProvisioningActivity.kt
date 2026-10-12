@@ -59,7 +59,6 @@ import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.SessionDocumentException
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
 import app.aaps.pump.ypsopump.crypto.PumpSession
-import app.aaps.pump.ypsopump.compose.KeyTimingControls
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.queue.CommandQueue
@@ -328,9 +327,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         var verificationState by remember { mutableStateOf(service.verificationState()) }
         var checkCanProceed by remember { mutableStateOf(service.verificationCanProceed()) }
         var installing by remember { mutableStateOf(false) }
-        var keyStatus by remember { mutableStateOf(installed?.let { it.keyTiming.status(it.createdAt?.toEpochMilli(), it.importedAt?.toEpochMilli(), System.currentTimeMillis()) }) }
-        var savingDates by remember { mutableStateOf(false) }
-        var dateError by remember { mutableStateOf(false) }
         var serial by remember { mutableStateOf(installed?.serial.orEmpty()) }
         var mac by remember { mutableStateOf(installed?.mac.orEmpty()) }
         var key by remember { mutableStateOf("") }
@@ -403,22 +399,10 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         }
         val checking = verification == VerificationPresentation.CHECKING
         val busy = busyMessage != null || checking
-        LaunchedEffect(service) {
-            while (true) {
-                val result = withContext(Dispatchers.IO) { runCatching { service.observeKeyTiming() } }
-                result.onSuccess { keyStatus = it }
-                    .onFailure { dateError = true; aapsLogger.warn(LTag.PUMP, setupFailureLog("key date observation", it)) }
-                installed = service.installed()
-                // Keep storage and publication off the UI thread; failures are advisory only.
-                withContext(Dispatchers.IO) { runCatching { plugin.publishKeyExpiryNotification() } }
-                delay(30_000)
-            }
-        }
         val statusIsError = busyMessage == null && feedback.tone == ProvisioningFeedbackTone.ERROR
         val failure = setupFailure.takeIf { busyMessage == null }
         fun refresh() {
             installed = service.installed()
-            keyStatus = installed?.let { it.keyTiming.status(it.createdAt?.toEpochMilli(), it.importedAt?.toEpochMilli(), System.currentTimeMillis()) }
             pending = service.pending()
             verificationState = service.verificationState()
             checkCanProceed = service.verificationCanProceed()
@@ -533,31 +517,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.textSecondary
             )
-            installed?.let { session ->
-                keyStatus?.let { status ->
-                    fun saveDate(expiryField: Boolean, value: Long?) {
-                        savingDates = true
-                        dateError = false
-                        lifecycleScope.launch {
-                            val result = withContext(NonCancellable + Dispatchers.IO) {
-                                runCatching {
-                                    if (expiryField) service.setKeyExpiry(session.generation, value)
-                                    else service.setKeyReminder(session.generation, value)
-                                    service.observeKeyTiming()
-                                }
-                            }
-                            result.onSuccess { keyStatus = it }
-                                .onFailure { dateError = true; aapsLogger.warn(LTag.PUMP, setupFailureLog("key dates", it)) }
-                            refresh()
-                            savingDates = false
-                            withContext(Dispatchers.IO) { runCatching { plugin.publishKeyExpiryNotification() } }
-                        }
-                    }
-                    KeyTimingControls(status, session.keyTiming, enabled = session.keyDatesLoaded && !busy && !savingDates,
-                        onExpiry = { saveDate(true, it) }, onReminder = { saveDate(false, it) })
-                    if (dateError) SetupFailure(getString(R.string.ypsopump_key_dates_failed))
-                }
-            }
             selected?.let { document ->
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

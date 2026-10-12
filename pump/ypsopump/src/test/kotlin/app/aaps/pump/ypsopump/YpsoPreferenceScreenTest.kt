@@ -37,9 +37,9 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
 
         plugin.addPreferenceScreen(preferenceManager, screen, context, null)
 
-        assertThat(screen.preferenceCount).isEqualTo(2)
+        assertThat(screen.preferenceCount).isEqualTo(3)
         // Connection setup, then both explicit configuration read actions.
         assertThat((0 until screen.preferenceCount).map { (screen.getPreference(it) as PreferenceGroup).preferenceCount })
-            .containsExactly(1, 2)
+            .containsExactly(1, 4, 2)
     }
 }

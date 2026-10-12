@@ -20,7 +20,6 @@ import app.aaps.pump.ypsopump.compose.PumpStatusState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.KeyTiming
-import app.aaps.pump.ypsopump.compose.keyDateLabel
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
 
