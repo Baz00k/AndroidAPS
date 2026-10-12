@@ -32,37 +32,76 @@ import app.aaps.pump.ypsopump.compose.KeyTimingControls
 import app.aaps.pump.ypsopump.compose.keyDateLabel
 import app.aaps.pump.ypsopump.crypto.KeyTiming
 import app.aaps.pump.ypsopump.crypto.PumpSession
-import app.aaps.pump.ypsopump.crypto.SessionJournal
+import app.aaps.pump.ypsopump.provisioning.KeyTimingRepository
+import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
+import app.aaps.pump.ypsopump.data.YpsoPumpState
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import java.time.Instant
 
 /** No BLE, dosing or patient data: only synthetic advisory metadata in a test-owned journal. */
 class KeyTimingControlsTest {
     @get:Rule val compose = createComposeRule()
+    private lateinit var dateFile: java.io.File
+    @Before fun createAdvisoryFile() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        dateFile = java.io.File(context.noBackupFilesDir, "synthetic-key-timing-${System.nanoTime()}.json")
+    }
+    @After fun cleanUpSyntheticData() {
+        dateFile.delete()
+        java.io.File(dateFile.path + ".bak").delete()
+        java.io.File(dateFile.path + ".new").delete()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.getSystemService(NotificationManager::class.java).apply {
+            cancel(211)
+            deleteNotificationChannel("synthetic-key-timing")
+        }
+    }
+
+    @Test fun corruptAdvisoryFileDoesNotLoadOnTherapyConstructionOrMutateLiveOwnership() {
+        dateFile.writeText("invalid advisory metadata")
+        val key = ByteArray(32) { 1 }
+        val record = PumpSession.Record("synthetic", PumpSession.fingerprint(key), "test", 1, 1, null)
+        val storage = object : PumpSession.Store {
+            override fun load() = PumpSession.State(listOf(record), "test")
+            override fun commit(state: PumpSession.State) { error("Advisory controls must never write the therapy journal") }
+        }
+        val owner = PumpSession(storage)
+        val provisioning = YpsoProvisioningService(owner, YpsoPumpState(),
+            keyDates = KeyTimingRepository(KeyTimingRepository.FileStore(dateFile)))
+        val token = owner.open("synthetic", key)
+        val transaction = owner.begin(token)
+        assertNotNull(provisioning.installed())
+        assertTrue(runCatching { provisioning.observeKeyTiming() }.isFailure)
+        assertTrue(runCatching { provisioning.setKeyDates("test", 12345, 6789) }.isFailure)
+        assertEquals(record, owner.snapshot())
+        assertEquals(record, owner.committedRecord())
+        // Existing ownership still accepts transaction completion and another owned operation.
+        owner.finish(token, transaction)
+        owner.finish(token, owner.begin(token))
+    }
 
     @Test fun editExpiryAndReminderThenRestartJournalAndRenderDueNotification() {
         val now = Instant.parse("2026-10-09T12:00:00Z").toEpochMilli()
         val created = Instant.parse("2026-09-10T12:00:00Z").toEpochMilli()
         val original = PumpSession.Record("synthetic", "00".repeat(32), "test", null, null, null,
             createdAt = created, importedAt = now)
-        val storage = object : SessionJournal.Storage {
-            var file: String? = null
-            val anchors = mutableSetOf<String>()
-            override fun read() = file
-            override fun anchors() = anchors.toList()
-            override fun create(alias: String) { anchors.add(alias) }
-            override fun delete(alias: String) { anchors.remove(alias) }
-            override fun seal(alias: String, body: String) = body
-            override fun open(alias: String, sealed: String) = sealed
-            override fun writeAndSync(value: String) { file = value }
+        val storage = object : PumpSession.Store {
+            override fun load() = PumpSession.State(listOf(original), "test")
+            override fun commit(state: PumpSession.State) { error("Advisory controls must never write the therapy journal") }
         }
-        val journal = SessionJournal(storage)
-        journal.commit(PumpSession.State(listOf(original), "test"))
-        var record by mutableStateOf(journal.load().records.single())
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        fun service() = YpsoProvisioningService(PumpSession(storage), YpsoPumpState(),
+            keyDates = KeyTimingRepository(KeyTimingRepository.FileStore(dateFile))).apply {
+                elapsedRealtime = { 0 }
+                observeKeyTiming(now)
+            }
+        var provisioning = service()
+        var record by mutableStateOf(provisioning.installed()!!)
         if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission(context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
         val manager = context.getSystemService(NotificationManager::class.java)
         val channel = "synthetic-key-timing"
@@ -71,24 +110,29 @@ class KeyTimingControlsTest {
         val notifications = mutableListOf<Pair<Long?, Boolean>>()
         val publisher = KeyExpiryNotification()
         fun notify() {
-            publisher.publish(record.keyTiming.status(record.createdAt, record.importedAt, now), { manager.cancel(notificationId) },
-                { date, due ->
+            publisher.publish(record.keyTiming.status(record.createdAt?.toEpochMilli(), record.importedAt?.toEpochMilli(), now)) { value ->
+                manager.cancel(notificationId)
+                value?.let { (date, due) ->
                     notifications.add(date to due)
                     val message = context.getString(if (due) R.string.ypsopump_key_due_notification else R.string.ypsopump_key_reminder_notification, keyDateLabel(date))
                     manager.notify(notificationId, Notification.Builder(context, channel)
                         .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Synthetic YpsoPump key reminder")
                         .setContentText(message).setStyle(Notification.BigTextStyle().bigText(message)).build())
-                })
+                }
+            }
         }
         compose.setContent {
             AapsTheme {
                 Surface(Modifier.fillMaxSize()) {
                 Column(Modifier.safeDrawingPadding().verticalScroll(rememberScrollState())) {
-                    KeyTimingControls(record.keyTiming.status(record.createdAt, record.importedAt, now), record.keyTiming, true) { expiry, reminder ->
-                        record = record.copy(keyTiming = KeyTiming(expiry, reminder).observe(record.createdAt, record.importedAt, now))
-                        journal.commit(PumpSession.State(listOf(record), "test"))
+                    fun saveDate(expiryField: Boolean, value: Long?) {
+                        if (expiryField) provisioning.setKeyExpiry(record.generation, value, now)
+                        else provisioning.setKeyReminder(record.generation, value, now)
+                        record = provisioning.installed()!!
                         notify()
                     }
+                    KeyTimingControls(record.keyTiming.status(record.createdAt?.toEpochMilli(), record.importedAt?.toEpochMilli(), now), record.keyTiming, record.keyDatesLoaded,
+                        onExpiry = { saveDate(true, it) }, onReminder = { saveDate(false, it) })
                 }
                 }
             }
@@ -108,15 +152,15 @@ class KeyTimingControlsTest {
         onView(isAssignableFrom(TimePicker::class.java)).perform(PickerActions.setTime(12, 0))
         onView(withId(android.R.id.button1)).perform(click())
         compose.runOnIdle {
-            val restarted = SessionJournal(storage).load().records.single()
+            provisioning = service()
+            val restarted = provisioning.installed()!!
             assertEquals(record, restarted)
-            assertEquals(created, restarted.createdAt)
+            assertEquals(Instant.ofEpochMilli(created), restarted.createdAt)
             assertTrue(restarted.keyTiming.reminderDue)
             assertFalse(restarted.keyTiming.expiryDue)
             assertEquals(false, notifications.last().second)
             // Backwards clock and fresh notification publisher must still show the due reminder.
-            KeyExpiryNotification().publish(restarted.keyTiming.status(created, now, created), {},
-                { date, due -> notifications.add(date to due) })
+            KeyExpiryNotification().publish(restarted.keyTiming.status(created, now, created)) { value -> value?.let(notifications::add) }
             assertEquals(false, notifications.last().second)
             record = restarted
         }

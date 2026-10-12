@@ -24,6 +24,7 @@ class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
     private val durableBolusRecoveryEvidence: () -> YpsoBolusAttemptFileStore.RecoveryEvidence? = { null },
+    private val keyDates: KeyTimingRepository = KeyTimingRepository(),
 ) {
 
     @Inject constructor(context: Context, pumpState: YpsoPumpState, logger: AAPSLogger) : this(
@@ -33,6 +34,7 @@ class YpsoProvisioningService internal constructor(
         }),
         pumpState,
         { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },
+        KeyTimingRepository(KeyTimingRepository.FileStore(File(context.noBackupFilesDir, "ypsopump-key-dates.json"))),
     )
 
     internal var quiesceConnection: () -> Unit = {}
@@ -42,10 +44,11 @@ class YpsoProvisioningService internal constructor(
     private val provisioningLock = Any()
     internal var elapsedRealtime: () -> Long = SystemClock::elapsedRealtime
     // Monotonic elapsed time continues key age when the wall clock is moved backwards while running.
-    // Across process death the journal's observed high-water instant is the conservative baseline.
+    // Across process death the separate advisory store's high-water instant is the baseline.
     private var timingGeneration: String? = null
     private var timingInstant = 0L
     private var timingElapsed = 0L
+    private val timingLock = Any()
 
     init {
         refreshState()
@@ -62,6 +65,7 @@ class YpsoProvisioningService internal constructor(
         val availability: PumpSession.Availability,
         val generation: String,
         val keyTiming: KeyTiming,
+        val keyDatesLoaded: Boolean = true,
     )
 
     /** Credentials selected for the next connection. A candidate is never therapy-capable. */
@@ -96,33 +100,58 @@ class YpsoProvisioningService internal constructor(
     fun installed(): InstalledSession? = owner.committedRecord()?.toInstalled(owner.availability())
 
     /** Observe only the installed key. An unsuccessful candidate cannot replace its reminder. */
-    fun observeKeyTiming(now: Long = System.currentTimeMillis()): KeyTiming.Status? = synchronized(owner) {
+    fun observeKeyTiming(now: Long = System.currentTimeMillis()): KeyTiming.Status? = synchronized(timingLock) {
         val record = owner.committedRecord() ?: return null
+        val old = keyDates.get(record.timingIdentity())
         val elapsed = elapsedRealtime()
         val progressed = if (timingGeneration == record.generation && elapsed >= timingElapsed)
             timingInstant + (elapsed - timingElapsed).coerceAtMost(Long.MAX_VALUE - timingInstant) else 0L
-        val effectiveNow = maxOf(now, record.keyTiming.observedAt, progressed)
+        val effectiveNow = maxOf(now, old.observedAt, progressed)
         timingGeneration = record.generation
         timingInstant = effectiveNow
         timingElapsed = elapsed
-        // Observe high-water time at minute resolution; avoid rotating a protected journal every poll.
-        val observation = record.keyTiming.observe(record.createdAt, record.importedAt, effectiveNow)
-        val timing = observation.copy(observedAt = if (effectiveNow - record.keyTiming.observedAt >= 60_000) effectiveNow else record.keyTiming.observedAt)
-        owner.updateKeyTiming(record.generation, timing)
+        // Persist advisory clock at minute resolution, without touching the session journal.
+        val observation = old.observe(record.createdAt, record.importedAt, effectiveNow)
+        val timing = observation.copy(observedAt = if (effectiveNow - old.observedAt >= 60_000) effectiveNow else old.observedAt)
+        keyDates.save(record.timingIdentity(), timing)
+        // Verification may have promoted a different key during slow advisory I/O. Never publish
+        // the old key's date as the successor's; the next independent poll observes the successor.
+        if (owner.committedRecord()?.timingIdentity() != record.timingIdentity()) return null
         timing.status(record.createdAt, record.importedAt, effectiveNow)
     }
 
     /** No verification grant, availability reset, transport operation or source timestamp rewrite. */
-    fun setKeyDates(generation: String, expiry: Long?, reminder: Long?, now: Long = System.currentTimeMillis()) = synchronized(owner) {
+    fun setKeyDates(generation: String, expiry: Long?, reminder: Long?, now: Long = System.currentTimeMillis()) = synchronized(timingLock) {
         val record = owner.committedRecord() ?: error("No installed session")
-        val old = record.keyTiming
+        check(record.generation == generation) { "Installed key changed; reopen the date controls" }
+        require(expiry == null || expiry > 0)
+        require(reminder == null || reminder > 0)
+        val old = keyDates.get(record.timingIdentity())
+        val expiryChanged = expiry != old.expiryOverride
+        val elapsed = elapsedRealtime()
+        val progressed = if (timingGeneration == generation && elapsed >= timingElapsed)
+            timingInstant + (elapsed - timingElapsed).coerceAtMost(Long.MAX_VALUE - timingInstant) else 0L
+        val expiryNow = if (expiryChanged) now.coerceAtLeast(0) else maxOf(now, old.observedAt, progressed)
         val timing = KeyTiming(expiry, reminder,
-            expiryDue = old.expiryDue && expiry == old.expiryOverride,
-            reminderDue = old.reminderDue && reminder == old.reminderOverride && (reminder != null || expiry == old.expiryOverride),
-            observedAt = if (expiry == old.expiryOverride && reminder == old.reminderOverride) old.observedAt else now.coerceAtLeast(0),
-        ).observe(record.createdAt, record.importedAt, now)
-        owner.updateKeyTiming(generation, timing)
-        timingGeneration = null
+            expiryDue = old.expiryDue && !expiryChanged,
+            reminderDue = old.reminderDue && reminder == old.reminderOverride && (reminder != null || !expiryChanged),
+            observedAt = expiryNow,
+        ).observe(record.createdAt, record.importedAt, expiryNow)
+        keyDates.save(record.timingIdentity(), timing)
+        timingGeneration = generation
+        timingInstant = expiryNow
+        timingElapsed = elapsed
+    }
+
+    /** Field edits preserve the other choice from authoritative storage, not stale UI state. */
+    fun setKeyExpiry(generation: String, expiry: Long?, now: Long = System.currentTimeMillis()) = synchronized(timingLock) {
+        val record = owner.committedRecord() ?: error("No installed session")
+        setKeyDates(generation, expiry, keyDates.get(record.timingIdentity()).reminderOverride, now)
+    }
+
+    fun setKeyReminder(generation: String, reminder: Long?, now: Long = System.currentTimeMillis()) = synchronized(timingLock) {
+        val record = owner.committedRecord() ?: error("No installed session")
+        setKeyDates(generation, keyDates.get(record.timingIdentity()).expiryOverride, reminder, now)
     }
 
     /** Public candidate metadata for UI; never contains raw key material. */
@@ -761,8 +790,12 @@ class YpsoProvisioningService internal constructor(
         verifiedAt?.let(Instant::ofEpochMilli),
         availability,
         generation,
-        keyTiming,
+        keyDates.cached(timingIdentity()),
+        keyDates.isLoaded(),
     )
+
+    // Full fingerprint and pump address bind dates to this key, independent of verification staging.
+    private fun PumpSession.Record.timingIdentity(): String = "$pump/$keyId"
 
     companion object {
         private val RETRY_DELAYS_MS = longArrayOf(5_000, 15_000, 30_000, 60_000, 5 * 60_000)

@@ -69,18 +69,33 @@ class KeyTimingTest {
         var dismissed = 0
         val posted = mutableListOf<Pair<Long?, Boolean>>()
         val publisher = KeyExpiryNotification()
-        fun publish(at: Long) = publisher.publish(KeyTiming().status(created, created, at), { dismissed++ }, { date, due -> posted.add(date to due) })
+        fun publish(at: Long) = publisher.publish(KeyTiming().status(created, created, at)) { value -> dismissed++; value?.let(posted::add) }
         publish(created)
         publish(deadline - 3 * KeyTiming.DAY_MS)
         publish(deadline - 1)
-        assertEquals(listOf(deadline to false), posted)
+        assertEquals(listOf(deadline to false, deadline to false), posted)
         publish(deadline)
-        assertEquals(listOf(deadline to false, deadline to true), posted)
-        publisher.reset()
+        assertEquals(listOf(deadline to false, deadline to false, deadline to true), posted)
         publish(deadline)
-        assertEquals(3, posted.size)
-        assertEquals(4, dismissed)
-        publisher.publish(null, { dismissed++ }, { _, _ -> fail("No active key") })
+        assertEquals(4, posted.size)
         assertEquals(5, dismissed)
+        publisher.publish(null) { value -> dismissed++; assertNull(value) }
+        assertEquals(6, dismissed)
+    }
+
+    @Test fun `lost startup event is retried after actual RxBus subscriber attaches`() {
+        val bus = app.aaps.shared.impl.rx.bus.RxBusImpl(app.aaps.shared.tests.rx.TestAapsSchedulers(), app.aaps.shared.tests.AAPSLoggerTest())
+        val publisher = KeyExpiryNotification()
+        val received = mutableListOf<app.aaps.core.interfaces.rx.events.EventSetNotification>()
+        fun poll() = publisher.publish(KeyTiming().status(created, created, deadline)) { value ->
+            bus.send(app.aaps.core.interfaces.rx.events.EventSetNotification(103, value?.let {
+                app.aaps.core.interfaces.notifications.Notification(103, "Expired", 0)
+            }))
+        }
+        poll()
+        val subscription = bus.toObservable(app.aaps.core.interfaces.rx.events.EventSetNotification::class.java).subscribe(received::add)
+        poll()
+        assertEquals(1, received.size)
+        subscription.dispose()
     }
 }

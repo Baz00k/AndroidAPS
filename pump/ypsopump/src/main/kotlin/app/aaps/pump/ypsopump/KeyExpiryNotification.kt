@@ -2,19 +2,13 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.KeyTiming
 
-/** Reconcile the shared notification store once per lifetime and on advisory state changes. */
+/** Reconcile on every poll; only the consumer can know whether it already received a warning. */
 internal class KeyExpiryNotification {
-    private var synchronized = false
-    private var published: Pair<Long?, Boolean>? = null
-
-    fun publish(status: KeyTiming.Status?, dismiss: () -> Unit, add: (Long?, Boolean) -> Unit) {
+    fun publish(status: KeyTiming.Status?, set: (Pair<Long?, Boolean>?) -> Unit) {
         val next = status?.takeIf { it.reminderDue || it.expiryDue }?.let { it.expiresAt to it.expiryDue }
-        if (synchronized && next == published) return
-        dismiss()
-        next?.let { add(it.first, it.second) }
-        published = next
-        synchronized = true
+        // Emission is not acknowledgement: retry each poll for consumers attaching after startup.
+        // The ordered consumer makes identical replacements idempotent without re-alerting.
+        set(next)
     }
 
-    fun reset() { synchronized = false; published = null }
 }

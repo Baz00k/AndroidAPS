@@ -44,7 +44,8 @@ internal fun KeyTimingControls(
     status: KeyTiming.Status,
     timing: KeyTiming,
     enabled: Boolean,
-    onDates: (expiry: Long?, reminder: Long?) -> Unit,
+    onExpiry: (Long?) -> Unit,
+    onReminder: (Long?) -> Unit,
 ) {
     val context = LocalContext.current
     val colors = AapsTheme.colors
@@ -73,16 +74,16 @@ internal fun KeyTimingControls(
             if (status.reminderDue) Text(text(R.string.ypsopump_key_reminder_due), color = MaterialTheme.colorScheme.error)
             Text(text(R.string.ypsopump_key_advisory), style = MaterialTheme.typography.bodySmall, color = colors.textSecondary)
             SecondaryButton(text(R.string.ypsopump_key_set_expiry), onClick = {
-                chooseKeyDate(context, status.expiresAt) { onDates(it, timing.reminderOverride) }
+                chooseKeyDate(context, status.expiresAt, onExpiry)
             }, enabled = enabled)
             if (timing.expiryOverride != null) GhostButton(text(R.string.ypsopump_key_reset_expiry), onClick = {
-                onDates(null, timing.reminderOverride)
+                onExpiry(null)
             }, enabled = enabled)
             SecondaryButton(text(R.string.ypsopump_key_set_reminder), onClick = {
-                chooseKeyDate(context, status.reminderAt) { onDates(timing.expiryOverride, it) }
+                chooseKeyDate(context, status.reminderAt, onReminder)
             }, enabled = enabled)
             if (timing.reminderOverride != null) GhostButton(text(R.string.ypsopump_key_reset_reminder), onClick = {
-                onDates(timing.expiryOverride, null)
+                onReminder(null)
             }, enabled = enabled)
         }
     }

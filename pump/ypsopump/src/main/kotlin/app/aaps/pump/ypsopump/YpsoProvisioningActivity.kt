@@ -409,7 +409,8 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 result.onSuccess { keyStatus = it }
                     .onFailure { dateError = true; aapsLogger.warn(LTag.PUMP, setupFailureLog("key date observation", it)) }
                 installed = service.installed()
-                plugin.publishKeyExpiryNotification()
+                // Keep storage and publication off the UI thread; failures are advisory only.
+                withContext(Dispatchers.IO) { runCatching { plugin.publishKeyExpiryNotification() } }
                 delay(30_000)
             }
         }
@@ -534,22 +535,26 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             )
             installed?.let { session ->
                 keyStatus?.let { status ->
-                    KeyTimingControls(status, session.keyTiming, enabled = !busy && !savingDates) { expiry, reminder ->
+                    fun saveDate(expiryField: Boolean, value: Long?) {
                         savingDates = true
                         dateError = false
                         lifecycleScope.launch {
                             val result = withContext(NonCancellable + Dispatchers.IO) {
                                 runCatching {
-                                    service.setKeyDates(session.generation, expiry, reminder)
+                                    if (expiryField) service.setKeyExpiry(session.generation, value)
+                                    else service.setKeyReminder(session.generation, value)
                                     service.observeKeyTiming()
                                 }
                             }
-                            result.onSuccess { keyStatus = it; plugin.publishKeyExpiryNotification() }
+                            result.onSuccess { keyStatus = it }
                                 .onFailure { dateError = true; aapsLogger.warn(LTag.PUMP, setupFailureLog("key dates", it)) }
                             refresh()
                             savingDates = false
+                            withContext(Dispatchers.IO) { runCatching { plugin.publishKeyExpiryNotification() } }
                         }
                     }
+                    KeyTimingControls(status, session.keyTiming, enabled = session.keyDatesLoaded && !busy && !savingDates,
+                        onExpiry = { saveDate(true, it) }, onReminder = { saveDate(false, it) })
                     if (dateError) SetupFailure(getString(R.string.ypsopump_key_dates_failed))
                 }
             }

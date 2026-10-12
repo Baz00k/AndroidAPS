@@ -131,6 +131,10 @@ class YpsoPumpPlugin @Inject constructor(
     }
     private var keyExpiryTask: ScheduledFuture<*>? = null
     private var keyReminderEnabled = false
+    private var keyReminderEpoch = 0L
+    // Reminder storage/notification work must never hold the plugin's therapy monitor.
+    private val keyReminderLock = Any()
+    private val keyObservationLock = Any()
     /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
     private var availabilityNotificationSynchronized = false
     /** Last published mismatch text, or null when no mismatch is currently published. */
@@ -2105,18 +2109,13 @@ class YpsoPumpPlugin @Inject constructor(
         provisioning.refreshState()
         publishAvailabilityNotification()
         publishUnresolvedBolusWarningIfNeeded()
-        synchronized(this) {
-            keyExpiryNotification.reset()
-            keyReminderEnabled = true
-            keyExpiryTask?.cancel(false)
-            keyExpiryTask = keyExpiryExecutor.scheduleWithFixedDelay({
-                synchronized(this) {
-                    if (keyReminderEnabled) runCatching { publishKeyExpiryNotification() }.onFailure {
-                        aapsLogger.error(LTag.PUMP, "YpsoPump key reminder failed: ${it.javaClass.simpleName}")
-                    }
-                }
-            }, 0, 30, TimeUnit.SECONDS)
-        }
+        setKeyReminderEnabled(true)
+        keyExpiryTask?.cancel(false)
+        keyExpiryTask = keyExpiryExecutor.scheduleWithFixedDelay({
+            runCatching { publishKeyExpiryNotification() }.onFailure {
+                aapsLogger.error(LTag.PUMP, "YpsoPump key reminder failed: ${it.javaClass.simpleName}")
+            }
+        }, 0, 30, TimeUnit.SECONDS)
         publishedUncertainTbr = false
         publishedUnmatchedTbrs = 0
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
@@ -2127,12 +2126,9 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun onStop() {
-        synchronized(this) {
-            keyReminderEnabled = false
-            keyExpiryTask?.cancel(false)
-            keyExpiryTask = null
-            uiInteraction.dismissNotification(Notification.YPSOPUMP_KEY_EXPIRY)
-        }
+        setKeyReminderEnabled(false)
+        keyExpiryTask?.cancel(false)
+        keyExpiryTask = null
         appLifecycle.removeVisibilityListener(visibilityListener)
         foregroundConnectionLease.set(false)
         stopHistoryNotifications()
@@ -2297,16 +2293,29 @@ class YpsoPumpPlugin @Inject constructor(
         availabilityNotificationSynchronized = true
     }
 
-    @Synchronized
-    internal fun publishKeyExpiryNotification() {
-        keyExpiryNotification.publish(provisioning.observeKeyTiming(),
-            dismiss = { uiInteraction.dismissNotification(Notification.YPSOPUMP_KEY_EXPIRY) },
-            add = { deadline, due ->
-                uiInteraction.addNotification(Notification.YPSOPUMP_KEY_EXPIRY,
-                    rh.gs(if (due) R.string.ypsopump_key_due_notification else R.string.ypsopump_key_reminder_notification,
-                        deadline?.let(::keyDateLabel) ?: rh.gs(R.string.ypsopump_key_unknown)),
-                    if (due) Notification.URGENT else Notification.NORMAL)
-            })
+    internal fun setKeyReminderEnabled(enabled: Boolean) = synchronized(keyReminderLock) {
+        keyReminderEnabled = enabled
+        keyReminderEpoch++
+        if (!enabled) uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+    }
+
+    internal fun publishKeyExpiryNotification() = synchronized(keyObservationLock) observation@ {
+        val epoch = synchronized(keyReminderLock) { if (!keyReminderEnabled) return@observation; keyReminderEpoch }
+        // No lifecycle, plugin or therapy lock during potentially slow advisory persistence.
+        val status = provisioning.observeKeyTiming()
+        synchronized(keyReminderLock) {
+            if (!keyReminderEnabled || epoch != keyReminderEpoch) return@observation
+            keyExpiryNotification.publish(status) { value ->
+                if (value == null) uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+                else {
+                    val (deadline, due) = value
+                    uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY,
+                        rh.gs(if (due) R.string.ypsopump_key_due_notification else R.string.ypsopump_key_reminder_notification,
+                            deadline?.let(::keyDateLabel) ?: rh.gs(R.string.ypsopump_key_unknown)),
+                        if (due) Notification.URGENT else Notification.NORMAL)
+                }
+            }
+        }
     }
 
     @Synchronized

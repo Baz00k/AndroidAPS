@@ -82,17 +82,71 @@ class YpsoPumpPluginTest {
     )
 
     @Test fun `key reminder publication uses advisory channel and never invokes pump or therapy accounting`() {
+        plugin.setKeyReminderEnabled(true)
         val timing = app.aaps.pump.ypsopump.crypto.KeyTiming()
         whenever(provisioning.observeKeyTiming(any())).thenReturn(timing.status(1000, 1000, 1000 + 25 * 86_400_000L))
         plugin.publishKeyExpiryNotification()
         plugin.publishKeyExpiryNotification()
-        verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.NORMAL))
+        verify(ui, times(2)).setNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.NORMAL))
         whenever(provisioning.observeKeyTiming(any())).thenReturn(timing.status(1000, 1000, 1000 + 28 * 86_400_000L))
         plugin.publishKeyExpiryNotification()
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.URGENT))
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any(), eq(Notification.URGENT))
         verifyNoInteractions(manager, sync, commandQueue, constraintsChecker)
         verify(provisioning, never()).requestVerificationAttempt()
         verify(provisioning, never()).refreshState()
+    }
+
+    @Test fun `slow reminder observation does not hold plugin monitor and stopped publisher cannot repost`() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val status = app.aaps.pump.ypsopump.crypto.KeyTiming().status(1000, 1000, Long.MAX_VALUE)
+        whenever(provisioning.observeKeyTiming(any())).thenAnswer {
+            entered.countDown()
+            check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            status
+        }
+        plugin.setKeyReminderEnabled(true)
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val work = executor.submit { plugin.publishKeyExpiryNotification() }
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            executor.submit {
+                synchronized(plugin) { plugin.setKeyReminderEnabled(false) }
+            }.get(2, java.util.concurrent.TimeUnit.SECONDS)
+            release.countDown()
+            work.get(2, java.util.concurrent.TimeUnit.SECONDS)
+            verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any<String>(), any())
+            verify(ui).setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+        } finally { release.countDown(); executor.shutdownNow() }
+    }
+
+    @Test fun `concurrent publishers cannot observe successor then emit predecessor last`() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val old = app.aaps.pump.ypsopump.crypto.KeyTiming().status(1000, 1000, Long.MAX_VALUE)
+        val successor = app.aaps.pump.ypsopump.crypto.KeyTiming().status(2000, 2000, 2000)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        whenever(provisioning.observeKeyTiming(any())).thenAnswer {
+            if (calls.incrementAndGet() == 1) {
+                entered.countDown()
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                old
+            } else successor
+        }
+        plugin.setKeyReminderEnabled(true)
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val first = executor.submit { plugin.publishKeyExpiryNotification() }
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            val second = executor.submit { plugin.publishKeyExpiryNotification() }
+            release.countDown()
+            first.get(2, java.util.concurrent.TimeUnit.SECONDS)
+            second.get(2, java.util.concurrent.TimeUnit.SECONDS)
+            val ordered = inOrder(ui)
+            ordered.verify(ui).setNotification(eq(Notification.YPSOPUMP_KEY_EXPIRY), any<String>(), eq(Notification.URGENT))
+            ordered.verify(ui).setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+            assertEquals(2, calls.get())
+        } finally { release.countDown(); executor.shutdownNow() }
     }
 
     @Test

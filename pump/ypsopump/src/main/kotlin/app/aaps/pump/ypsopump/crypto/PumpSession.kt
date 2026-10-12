@@ -93,7 +93,6 @@ class PumpSession(private val store: Store) {
         val counterRecoveryExponent: Int = 0,
         /** Exact epoch of independently bound lower-bound evidence; present only during recovery. */
         val lowerBoundRecoveryReboot: Int? = null,
-        val keyTiming: KeyTiming = KeyTiming(),
     )
     data class State(
         val records: List<Record> = emptyList(),
@@ -353,22 +352,6 @@ class PumpSession(private val store: Store) {
 
     @Synchronized
     fun committedRecord(): Record? = state?.records?.singleOrNull { it.generation == state?.activeGeneration }
-
-    /** Changes only advisory metadata on the committed key, including a same-key staged copy. */
-    @Synchronized
-    fun updateKeyTiming(generation: String, timing: KeyTiming) {
-        val current = state ?: throw StorageUnavailableException()
-        val active = committedRecord() ?: error("No installed session")
-        check(active.generation == generation) { "Installed key changed; reopen the date controls" }
-        require(timing.expiryOverride == null || timing.expiryOverride > 0)
-        require(timing.reminderOverride == null || timing.reminderOverride > 0)
-        if (active.keyTiming == timing) return
-        persist(current.copy(records = current.records.map {
-            if (it.keyId == active.keyId && it.pump == active.pump) it.copy(keyTiming = timing) else it
-        }))
-        // A live counter transaction must retain the edited metadata on its next update.
-        record = record?.let { live -> state?.records?.singleOrNull { it.generation == live.generation } }
-    }
 
     @Synchronized
     fun candidateRecord(): Record? = state?.records?.singleOrNull { it.generation == state?.candidateGeneration }
@@ -1007,9 +990,6 @@ class PumpSession(private val store: Store) {
                 require(r.keyHex == null || r.keyHex.matches(SHA256_HEX) && fingerprint(r.keyHex.unhex()) == r.keyId)
                 require(r.serial.isNotBlank() || r.keyHex == null)
                 require(r.verifiedSerial == null || r.verifiedSerial == r.serial && r.verifiedAt != null)
-                require(r.keyTiming.expiryOverride == null || r.keyTiming.expiryOverride > 0)
-                require(r.keyTiming.reminderOverride == null || r.keyTiming.reminderOverride > 0)
-                require(r.keyTiming.observedAt >= 0)
                 when (r.writeBootstrapState) {
                     // Unknown floor is reconciled by ordinary allocation starting at zero; `write`
                     // holds the highest allocated search position until acceptance establishes ownership.
