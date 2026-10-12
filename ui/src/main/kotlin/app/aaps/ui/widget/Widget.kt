@@ -200,7 +200,7 @@ class Widget : AppWidgetProvider() {
     }
 
     private fun updateIobCob(views: RemoteViews) {
-        val iob = IobDisplay.load(profileFunction.getProfile(), iobCobCalculator, rh)
+        val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
         views.setTextViewText(R.id.iob, iob.total)
         views.setContentDescription(R.id.iob, listOf(iob.total, iob.unavailableReason).filter { it.isNotBlank() }.joinToString(" · "))
         // cob

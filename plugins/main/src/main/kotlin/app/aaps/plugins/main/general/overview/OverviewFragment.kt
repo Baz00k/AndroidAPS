@@ -564,7 +564,7 @@ class OverviewFragment : DaggerFragment() {
             "$basalPercent% · ${String.format(Locale.getDefault(), "%.2f", scheduledBasal)} sched" else ""
 
         // Stats: without a profile, empty calculator totals do not mean zero active insulin.
-        val iob = IobDisplay.load(profile, iobCobCalculator, rh)
+        val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
         val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
 
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
