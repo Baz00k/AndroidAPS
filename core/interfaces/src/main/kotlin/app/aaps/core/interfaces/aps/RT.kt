@@ -1,5 +1,6 @@
 package app.aaps.core.interfaces.aps
 
+import app.aaps.core.data.time.IsoTimestamp
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -8,8 +9,6 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
-import org.joda.time.DateTime
-import org.joda.time.format.ISODateTimeFormat
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -76,11 +75,7 @@ data class RT(
             return fromISODateString(decoder.decodeString())
         }
 
-        fun fromISODateString(isoDateString: String): Long {
-            val parser = ISODateTimeFormat.dateTimeParser()
-            val dateTime = DateTime.parse(isoDateString, parser)
-            return dateTime.toDate().time
-        }
+        fun fromISODateString(isoDateString: String): Long = IsoTimestamp.parse(isoDateString).toInstant().toEpochMilli()
 
         fun toISOString(date: Long): String {
             @Suppress("SpellCheckingInspection", "LocalVariableName")

@@ -1,8 +1,7 @@
 package app.aaps.core.utils
 
-import org.joda.time.LocalDateTime
-import org.joda.time.Minutes
-import org.joda.time.Seconds
+import java.time.Duration
+import java.time.LocalDateTime
 import java.util.Calendar
 import java.util.GregorianCalendar
 
@@ -33,7 +32,7 @@ object DateTimeUtil {
         val minute = (dateTime / 100L).toInt()
         dateTime -= minute * 100L
         val second = dateTime.toInt()
-        return LocalDateTime(year, month, dayOfMonth, hourOfDay, minute, second)
+        return LocalDateTime.of(year, month, dayOfMonth, hourOfDay, minute, second)
     }
 
     /**
@@ -61,11 +60,11 @@ object DateTimeUtil {
     fun toATechDate(ldt: LocalDateTime): Long {
         var aTechDateTime = 0L
         aTechDateTime += ldt.year * 10000000000L
-        aTechDateTime += ldt.monthOfYear * 100000000L
+        aTechDateTime += ldt.monthValue * 100000000L
         aTechDateTime += ldt.dayOfMonth * 1000000L
-        aTechDateTime += ldt.hourOfDay * 10000L
-        aTechDateTime += ldt.minuteOfHour * 100L
-        aTechDateTime += ldt.secondOfMinute.toLong()
+        aTechDateTime += ldt.hour * 10000L
+        aTechDateTime += ldt.minute * 100L
+        aTechDateTime += ldt.second.toLong()
         return aTechDateTime
     }
 
@@ -159,13 +158,11 @@ object DateTimeUtil {
     }
 
     fun getATechDateDifferenceAsMinutes(date1: Long, date2: Long): Int {
-        val minutes = Minutes.minutesBetween(toLocalDateTime(date1), toLocalDateTime(date2))
-        return minutes.minutes
+        return Math.toIntExact(Duration.between(toLocalDateTime(date1), toLocalDateTime(date2)).toMinutes())
     }
 
     fun getATechDateDifferenceAsSeconds(date1: Long, date2: Long): Int {
-        val seconds = Seconds.secondsBetween(toLocalDateTime(date1), toLocalDateTime(date2))
-        return seconds.seconds
+        return Math.toIntExact(Duration.between(toLocalDateTime(date1), toLocalDateTime(date2)).seconds)
     }
 
     fun getMillisFromATDWithAddedMinutes(atd: Long, minutesDiff: Int): Long {

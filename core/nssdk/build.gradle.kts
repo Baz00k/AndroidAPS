@@ -11,13 +11,13 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:data"))
     api(libs.com.squareup.retrofit2.retrofit)
     api(libs.com.squareup.retrofit2.adapter.rxjava3)
     api(libs.com.squareup.retrofit2.converter.gson)
     api(libs.com.squareup.okhttp3.okhttp)
     api(libs.com.squareup.okhttp3.logging.interceptor)
     api(libs.com.google.code.gson)
-    api(libs.net.danlew.android.joda)
     api(libs.io.reactivex.rxjava3.rxkotlin)
 
     api(libs.androidx.core)

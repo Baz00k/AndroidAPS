@@ -18,8 +18,6 @@ android {
 
 dependencies {
 
-    api(libs.net.danlew.android.joda)
-
     // Firebase removed: this is a personal single-user loop, so Analytics and Crashlytics only
     // shipped health telemetry off-device for reports nobody reads. FabricPrivacyImpl now logs
     // the same information to AndroidAPS.log. Cost recovered: ~4.9 MB of dex (GMS + Firebase +
