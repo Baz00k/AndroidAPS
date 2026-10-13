@@ -34,6 +34,9 @@ wear/pumpcontrol/*
 .claude/settings.local.json
 .claude/CLAUDE_COMMANDS.md
 
+# Optional agent skills restored from skills-lock.json
+/.agents/skills/
+
 # Native (NDK) build intermediates
 .cxx/
 
