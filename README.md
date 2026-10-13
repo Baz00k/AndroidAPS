@@ -9,17 +9,6 @@
 This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) with a redesigned native Android
 UI and YpsoPump support.
 
-## Project status
-
-As of October 2026, development is limited to bug fixes and YpsoPump driver improvements. Broad
-modernization and routine upstream backports are paused, although upstream bug fixes may still be
-adapted when they address a relevant bug here. All new feature work, including closed-loop algorithm
-research and development, is suspended to avoid duplicating upstream effort.
-
-Assessing and attempting a migration of the YpsoPump work onto upstream AndroidAPS will wait until
-AndroidAPS 4.0 stable is released. The migration is not guaranteed. A stable upstream release does not
-make a migrated build ready for therapy use; it will need separate verification first.
-
 ## What this fork changes
 
 - [YpsoPump](pump/ypsopump/README.md): a pump driver with status, event history, boluses and temporary
@@ -47,6 +36,11 @@ upstream behavior, so it may not match the changes listed above.
 ./gradlew :app:assembleFullLoop   # non-debuggable/AOT-eligible
 ./gradlew :app:assembleFullDebug  # debuggable development build
 ```
+
+## Project status
+
+As of October 2026, all modernization and new feature development is suspended and waiting for stable AndroidAPS 4.0 release.
+Current work is limited to bug fixes and YpsoPump driver improvements.
 
 ## Licence
 
