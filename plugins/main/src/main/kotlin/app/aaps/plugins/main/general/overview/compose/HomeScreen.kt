@@ -383,8 +383,6 @@ private fun CarbsUndoSheet(
     HomeSheet(onClose) { close ->
         SheetSurface(title = "Recent carbs", onClose = { close {} }) {
             DetailRow("Carbs on board", state.cob.ifBlank { "--" })
-            val reason = state.cobSub.ifBlank { if (state.cob == "--") state.iobSub else "" }
-            if (reason.isNotBlank()) Text(reason, modifier = Modifier.fillMaxWidth(), style = AapsTheme.type.caption, color = colors.textSecondary)
             val carbs = state.recentCarbs
             if (carbs.isEmpty()) {
                 Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
@@ -439,8 +437,6 @@ private fun InsulinUndoSheet(
                         DetailRow("Total", state.iob.ifBlank { "--" })
                         DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
                         DetailRow("From basal", state.iobBasal.ifBlank { "--" })
-                        if (state.iobSub.isNotBlank())
-                            Text(state.iobSub, style = AapsTheme.type.caption, color = colors.textSecondary)
                     }
                 }
                 if (state.recentInsulin.isEmpty()) {

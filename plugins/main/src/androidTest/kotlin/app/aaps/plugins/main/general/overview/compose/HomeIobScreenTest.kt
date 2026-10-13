@@ -44,7 +44,7 @@ class HomeIobScreenTest {
         compose.onNodeWithText("From basal").assertIsDisplayed()
         compose.onNodeWithText("0.30 U").assertIsDisplayed()
         compose.onAllNodesWithText("--").assertCountEquals(6) // three hero plus three sheet values
-        compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
+        compose.onAllNodesWithText("No active profile").assertCountEquals(1) // one shared Home reason, not repeated in the sheet
         compose.onAllNodesWithText("0.00 U").assertCountEquals(0)
 
         // An open detail sheet must update too when a profile becomes usable or is removed.
@@ -54,10 +54,10 @@ class HomeIobScreenTest {
         compose.onAllNodesWithText("No active profile").assertCountEquals(0)
         compose.runOnIdle { state.value = state.value.copy(iob = "--", iobBolus = "--", iobBasal = "--", iobSub = "No active profile") }
         compose.onAllNodesWithText("--").assertCountEquals(6)
-        compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
+        compose.onAllNodesWithText("No active profile").assertCountEquals(1)
     }
 
-    @Test fun unavailableCobSheetKeepsRecordedCarbsVisibleWithReason() {
+    @Test fun unavailableCobSheetKeepsRecordedCarbsWithoutRepeatingTheHomeReason() {
         compose.setContent {
             AapsTheme {
                 HomeScreen(HomeUiState(
@@ -69,7 +69,7 @@ class HomeIobScreenTest {
         compose.onNodeWithText("COB").performClick()
         compose.onNodeWithText("Carbs on board").assertIsDisplayed()
         compose.onNodeWithText("12 g").assertIsDisplayed()
-        compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
+        compose.onAllNodesWithText("No active profile").assertCountEquals(1)
         compose.onAllNodesWithText("0 g").assertCountEquals(0)
     }
 
