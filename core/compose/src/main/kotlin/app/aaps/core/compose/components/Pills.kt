@@ -26,8 +26,9 @@ import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Status pill: a colored dot (glucose/status color) + label + optional bold value, on a flat
- * control-fill background. This is a *readout*, so it stays flat (no accent). With [onClick] it is
- * also a button with a full touch target (the Home loop pill). Used for the supplies strip too.
+ * control-fill background. This is a *readout*, so it stays flat (no accent); [containerColor] tints it
+ * only where the status itself is the warning (the Home alerts pill). With [onClick] it is also a
+ * button with a full touch target (the Home loop and alerts pills). Used for the supplies strip too.
  */
 @Composable
 fun StatusPill(
@@ -37,6 +38,8 @@ fun StatusPill(
     value: String? = null,
     labelColor: Color = AapsTheme.colors.textSecondary,
     glow: Boolean = false,
+    containerColor: Color = AapsTheme.colors.controlFill,
+    onClickLabel: String? = null,
     onClick: (() -> Unit)? = null
 ) {
     val colors = AapsTheme.colors
@@ -47,13 +50,13 @@ fun StatusPill(
             // read-only one, so a status reads as a status rather than as a big button.
             .then(
                 if (onClick != null) Modifier
-                    .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+                    .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClickLabel = onClickLabel, onClick = onClick)
                     .minimumInteractiveComponentSize()
                 else Modifier
             )
             .clip(AapsTheme.shape.pill)
             .then(if (onClick != null) Modifier.indication(interaction, ripple()) else Modifier)
-            .background(colors.controlFill)
+            .background(containerColor)
             .heightIn(min = 32.dp)
             .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
