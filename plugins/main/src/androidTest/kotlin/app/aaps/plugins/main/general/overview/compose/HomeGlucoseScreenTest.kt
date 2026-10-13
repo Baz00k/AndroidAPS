@@ -7,6 +7,7 @@ import androidx.compose.ui.test.performClick
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -33,6 +34,10 @@ class HomeGlucoseScreenTest {
         compose.onNodeWithText("99").assertExists()
         compose.onNodeWithText("↓ -11").assertExists()
         compose.onNodeWithText("10s ago").assertExists()
+        assertTrue(
+            compose.onNodeWithText("↓ -11").fetchSemanticsNode().boundsInRoot.bottom <=
+                compose.onNodeWithText("10s ago").fetchSemanticsNode().boundsInRoot.top
+        )
         compose.runOnIdle {
             state.value = state.value.copy(bg = "95", trendArrow = "↘", delta = "-12", timeAgo = "0s ago")
         }

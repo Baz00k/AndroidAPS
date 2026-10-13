@@ -158,12 +158,12 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                             }
                         }
                     )
-                    // The reading's age sits with the reading, above its trend.
+                    // Keep the trend above the reading's age.
                     val trend = "${state.trendArrow} ${state.delta}".trim()
                     if (state.timeAgo.isNotBlank() || trend.isNotBlank())
                         Column(Modifier.padding(bottom = 10.dp)) {
-                            if (state.timeAgo.isNotBlank()) Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary)
                             if (trend.isNotBlank()) Text(trend, style = AapsTheme.type.listTitle.copy(fontWeight = FontWeight.ExtraBold), color = bgColor)
+                            if (state.timeAgo.isNotBlank()) Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary)
                         }
                 }
                 if (state.eventualBg.isNotBlank())
