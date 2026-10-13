@@ -1,7 +1,6 @@
 package app.aaps.pump.ypsopump.tbr
 
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
-import app.aaps.pump.ypsopump.ble.YpsoTbrWriteCoordinator
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import java.security.MessageDigest
@@ -84,7 +83,7 @@ internal class YpsoTbrBleLink(
             return YpsoTbrCommandEvidence(YpsoTbrWriteResult.Uncertain("no write outcome arrived"), null, dispatchedAt.get()?.value, null)
         }
         val (outcome, owner) = checkNotNull(delivered.get())
-        val result = YpsoTbrWriteCoordinator.classify(outcome)
+        val result = YpsoTbrWriteResult.of(outcome)
         val acknowledgedAt = if (result == YpsoTbrWriteResult.Acknowledged) now() else null
         if (owner == null) return YpsoTbrCommandEvidence(result, acknowledgedAt, dispatchedAt.get()?.value, null)
         val (status, body) = readOwnedStatus(owner)

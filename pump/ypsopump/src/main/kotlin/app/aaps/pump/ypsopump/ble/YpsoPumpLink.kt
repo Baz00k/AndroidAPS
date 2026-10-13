@@ -104,8 +104,8 @@ internal class YpsoPumpLink(
     private val pumpState: YpsoPumpState,
     private val provisioning: YpsoProvisioningService,
     private val adapter: YpsoGattAdapter,
-    internal val scheduler: YpsoLinkScheduler,
-) {
+    override val scheduler: YpsoLinkScheduler,
+) : YpsoWriteLane.Link {
     @Inject constructor(
         context: Context,
         aapsLogger: AAPSLogger,
@@ -141,7 +141,7 @@ internal class YpsoPumpLink(
     val connectionState: ConnectionState get() = pumpState.connectionState
     val isConnected: Boolean get() = connectionState == ConnectionState.CONNECTED
 
-    @Volatile internal var session: PumpSession? = null
+    @Volatile override var session: PumpSession? = null
     @Volatile private var sessionToken: PumpSession.Token? = null
     private var configuredKey: ByteArray? = null
     private var configuredGeneration: String? = null
@@ -277,7 +277,7 @@ internal class YpsoPumpLink(
     }
 
     /** Ends [lease]. A lease already ended, for example by teardown before a newer claim, is left alone. */
-    fun release(lease: YpsoLinkLease) {
+    override fun release(lease: YpsoLinkLease) {
         synchronized(lock) { if (activeLease === lease) activeLease = null }
         // A therapy write held the queue for its own reads; let anything waiting behind it run.
         if (lease.operation.therapy) pumpOps()
@@ -553,8 +553,8 @@ internal class YpsoPumpLink(
 
     private class AuthorizedFrame(val uuid: UUID, val purpose: YpsoRemoteWrite, val value: ByteArray)
 
-    // Plaintext IDs are allowlisted by the coordinator before encryption/reservation. The final
-    // GATT boundary admits only these bytes, compared with a private copy, during that coordinator's synchronous dispatch.
+    // Plaintext IDs are allowlisted by the write lane before encryption/reservation. The final
+    // GATT boundary admits only these bytes, compared with a private copy, during that lane's synchronous dispatch.
     private var authorizedFrame: AuthorizedFrame? = null
 
     private val authorizer = YpsoWriteAuthorizer { from, purpose, characteristic, descriptor, value ->
@@ -580,7 +580,7 @@ internal class YpsoPumpLink(
      * Sends one frame of [lease]'s selector or therapy write. Only the lease that owns the link may
      * write, only between queued operations, and only this exact frame is admitted at the boundary.
      */
-    fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean = synchronized(lock) {
+    override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean = synchronized(lock) {
         val operation = lease.operation
         val uuid = operation.writeUuid ?: return@synchronized false
         val purpose = operation.writePurpose ?: return@synchronized false
@@ -866,9 +866,11 @@ internal class YpsoPumpLink(
      * Keeps an interrupted write's counter as the session's high-water mark and retires its reservation
      * on the session open now, so later commands can proceed.
      */
-    fun recoverInterruptedWrite() = synchronized(lock) {
-        val token = sessionToken ?: return@synchronized
-        session?.recoverInterruptedWrite(token)
+    override fun recoverInterruptedWrite() {
+        synchronized(lock) {
+            val token = sessionToken ?: return
+            session?.recoverInterruptedWrite(token)
+        }
     }
 
     companion object {

@@ -1,5 +1,7 @@
 package app.aaps.pump.ypsopump.tbr
 
+import app.aaps.pump.ypsopump.ble.YpsoWriteFailure
+import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import kotlin.math.roundToInt
 
 /** A START_STOP_TBR request that the pump accepts over BLE (see docs/protocol.md). */
@@ -50,6 +52,22 @@ sealed interface YpsoTbrWriteResult {
 
     /** The command may have reached the pump. */
     data class Uncertain(val detail: String) : YpsoTbrWriteResult
+
+    companion object {
+        /** Interprets a transport outcome for START_STOP_TBR; only final-frame codes carry pump meaning. */
+        internal fun of(outcome: YpsoWriteOutcome): YpsoTbrWriteResult = when (outcome) {
+            is YpsoWriteOutcome.NotSent -> NotSent(outcome.failure.detail)
+            // Only a pump-confirmed counter rejection produces this; the command was not applied.
+            is YpsoWriteOutcome.ProvenRejected -> NotSent(outcome.failure.detail)
+            is YpsoWriteOutcome.AcceptedUnverified, is YpsoWriteOutcome.Verified -> Acknowledged
+            is YpsoWriteOutcome.PossiblyApplied -> {
+                val failure = outcome.failure
+                val reason = YpsoTbrRejectReason.fromFinalFrameCode(failure.code)
+                    .takeIf { failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK && failure.finalFrame }
+                if (reason != null) Rejected(reason) else Uncertain(failure.detail)
+            }
+        }
+    }
 }
 
 /** Final-frame codes measured on V05.00.52; each left status and history unchanged. */

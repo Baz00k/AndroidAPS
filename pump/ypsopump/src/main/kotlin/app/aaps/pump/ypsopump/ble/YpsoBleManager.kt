@@ -16,12 +16,12 @@ import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_SETTING_VALUE
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_STATUS
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_SYSTEM_DATE
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_SYSTEM_TIME
-import app.aaps.pump.ypsopump.ble.YpsoPumpLink.Companion.OP_TIMEOUT_MS
 import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
+import app.aaps.pump.ypsopump.comm.commands.TbrCommand
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
@@ -96,11 +96,7 @@ class YpsoBleManager @Inject internal constructor(
                 "unresolved write reservation ${record.reservation.operationId ?: record.reservation.id} is ${record.reservation.phase}"
             // Only a write still in flight on this very connection can conflict. A record stranded by a
             // replaced connection is unanswerable and must never hard-block therapy.
-            profileWriteTransportInstance?.hasUnresolvedWriteOn(epoch.connection) == true -> "another pump setting is still being written"
-            historyWriteTransportInstance?.hasUnresolvedWriteOn(epoch.connection) == true -> "pump history is still being read"
-            bolusWriteTransportInstance?.hasUnresolvedWriteOn(epoch.connection) == true -> "a previous bolus command is still being sent"
-            tbrWriteTransportInstance?.hasUnresolvedWriteOn(epoch.connection) == true -> "a previous temporary basal command is still being sent"
-            else -> null
+            else -> lanes.firstOrNull { it.hasUnresolvedWriteOn(epoch.connection) }?.category?.busy
         }
     }
 
@@ -152,84 +148,20 @@ class YpsoBleManager @Inject internal constructor(
     }
     internal var persistProfile: (YpsoProfileReadback.VerifiedReadback) -> Unit = { profileStore.save(it) }
 
-    // ---- write transports and coordinators ----
+    // ---- write lanes ----
 
-    private val scheduleDeadline: (Runnable, Long) -> Unit = { task, delay -> link.scheduler.schedule(task, delay) }
-    private val cancelDeadline: (Runnable) -> Unit = { task -> link.scheduler.cancel(task) }
     private fun continueOnLink(task: () -> Unit) = link.scheduler.execute(task)
+    private fun firmware(): String? = pumpState.masterVersion.takeIf(String::isNotBlank)
 
-    private var profileWriteTransportInstance: YpsoSerializedWriteTransport? = null
-    private var profileSelectorCoordinatorInstance: YpsoProfileSelectorCoordinator? = null
-    private var profileSelectorSession: PumpSession? = null
-    private var historyWriteTransportInstance: YpsoSerializedWriteTransport? = null
-    private var historySelectorCoordinatorInstance: YpsoHistorySelectorCoordinator? = null
-    private var historySelectorSession: PumpSession? = null
-    private var bolusWriteTransportInstance: YpsoSerializedWriteTransport? = null
-    private var bolusWriteCoordinatorInstance: YpsoBolusWriteCoordinator? = null
-    private var bolusWriteSession: PumpSession? = null
-    private var tbrWriteTransportInstance: YpsoSerializedWriteTransport? = null
-    private var tbrWriteCoordinatorInstance: YpsoTbrWriteCoordinator? = null
-    private var tbrWriteSession: PumpSession? = null
-
-    private val profileWriteTransport: YpsoSerializedWriteTransport
-        get() = profileWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleDeadline, cancelDeadline).also {
-            profileWriteTransportInstance = it
-        }
-    private val profileSelectorCoordinator: YpsoProfileSelectorCoordinator
-        get() {
-            val owner = checkNotNull(link.session)
-            if (profileSelectorCoordinatorInstance == null || profileSelectorSession !== owner) {
-                profileSelectorSession = owner
-                profileSelectorCoordinatorInstance = YpsoProfileSelectorCoordinator(owner, sessionCrypto, profileWriteTransport)
-            }
-            return checkNotNull(profileSelectorCoordinatorInstance)
-        }
-    private val historyWriteTransport: YpsoSerializedWriteTransport
-        get() = historyWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleDeadline, cancelDeadline).also {
-            historyWriteTransportInstance = it
-        }
-    private val historySelectorCoordinator: YpsoHistorySelectorCoordinator
-        get() {
-            val owner = checkNotNull(link.session)
-            if (historySelectorCoordinatorInstance == null || historySelectorSession !== owner) {
-                historySelectorSession = owner
-                historySelectorCoordinatorInstance = YpsoHistorySelectorCoordinator(owner, sessionCrypto, historyWriteTransport)
-            }
-            return checkNotNull(historySelectorCoordinatorInstance)
-        }
-    private val bolusWriteTransport: YpsoSerializedWriteTransport
-        get() = bolusWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleDeadline, cancelDeadline).also {
-            bolusWriteTransportInstance = it
-        }
-    private val bolusWriteCoordinator: YpsoBolusWriteCoordinator
-        get() {
-            val owner = checkNotNull(link.session)
-            if (bolusWriteCoordinatorInstance == null || bolusWriteSession !== owner) {
-                bolusWriteSession = owner
-                bolusWriteCoordinatorInstance = YpsoBolusWriteCoordinator(owner, sessionCrypto, bolusWriteTransport)
-            }
-            return checkNotNull(bolusWriteCoordinatorInstance)
-        }
-    private val tbrWriteTransport: YpsoSerializedWriteTransport
-        get() = tbrWriteTransportInstance ?: YpsoSerializedWriteTransport(scheduleDeadline, cancelDeadline).also {
-            tbrWriteTransportInstance = it
-        }
-    private val tbrWriteCoordinator: YpsoTbrWriteCoordinator
-        get() {
-            val owner = checkNotNull(link.session)
-            if (tbrWriteCoordinatorInstance == null || tbrWriteSession !== owner) {
-                tbrWriteSession = owner
-                tbrWriteCoordinatorInstance = YpsoTbrWriteCoordinator(owner, sessionCrypto, tbrWriteTransport)
-            }
-            return checkNotNull(tbrWriteCoordinatorInstance)
-        }
+    private val profileLane = YpsoWriteLane(YpsoWriteLane.Category.PROFILE_SELECTOR, link, sessionCrypto, aapsLogger)
+    private val historyLane = YpsoWriteLane(YpsoWriteLane.Category.HISTORY_SELECTOR, link, sessionCrypto, aapsLogger)
+    private val bolusLane = YpsoWriteLane(YpsoWriteLane.Category.BOLUS, link, sessionCrypto, aapsLogger)
+    private val tbrLane = YpsoWriteLane(YpsoWriteLane.Category.TBR, link, sessionCrypto, aapsLogger)
+    private val lanes = listOf(profileLane, historyLane, bolusLane, tbrLane)
 
     private val linkListener = object : YpsoPumpLink.Listener {
         override fun connectionClosed(connection: YpsoGattConnection, detail: String) {
-            profileSelectorCoordinatorInstance?.ownerDisconnected(connection, detail)
-            historySelectorCoordinatorInstance?.ownerDisconnected(connection, detail)
-            bolusWriteCoordinatorInstance?.ownerDisconnected(connection, detail)
-            tbrWriteCoordinatorInstance?.ownerDisconnected(connection, detail)
+            lanes.forEach { it.ownerDisconnected(connection, detail) }
         }
 
         override fun authenticated(epoch: YpsoConnectionEpoch) {
@@ -242,12 +174,7 @@ class YpsoBleManager @Inject internal constructor(
         }
 
         override fun operationWrite(connection: YpsoGattConnection, uuid: UUID, status: Int) {
-            when (uuid) {
-                YpsoWritePolicy.SETTING_ID_UUID       -> profileWriteTransport.onCharacteristicWrite(connection, uuid, status)
-                YpsoWritePolicy.EVENT_INDEX_UUID      -> historyWriteTransport.onCharacteristicWrite(connection, uuid, status)
-                YpsoWritePolicy.BOLUS_START_STOP_UUID -> bolusWriteTransport.onCharacteristicWrite(connection, uuid, status)
-                YpsoWritePolicy.TBR_START_STOP_UUID   -> tbrWriteTransport.onCharacteristicWrite(connection, uuid, status)
-            }
+            lanes.firstOrNull { it.category.characteristic == uuid }?.onCharacteristicWrite(connection, status)
         }
 
         override fun notification(epochKey: String?, uuid: UUID, value: ByteArray, receivedAtNanos: Long) {
@@ -274,8 +201,8 @@ class YpsoBleManager @Inject internal constructor(
         val reservation = owner.snapshot()?.reservation ?: return
         if (reservation.phase == PumpSession.Phase.VERIFIED || !owner.isAbandonableSelector(reservation)) return
         // Only a selector no transport still holds: the old connection's read was released on disconnect.
-        if (historyWriteTransportInstance?.isIdle() == false || link.isActive(YpsoLinkOperation.HISTORY)) return
-        if (profileWriteTransportInstance?.isIdle() == false || link.isActive(YpsoLinkOperation.PROFILE)) return
+        if (!historyLane.isIdle() || link.isActive(YpsoLinkOperation.HISTORY)) return
+        if (!profileLane.isIdle() || link.isActive(YpsoLinkOperation.PROFILE)) return
         runCatching { owner.retireAbandonedSelector(epoch.token, reservation.id) }
             .onSuccess { if (it) aapsLogger.info(LTag.PUMP, "YpsoPump retired ${reservation.purpose} write ${reservation.id} left by a lost connection") }
             .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire abandoned selector write: ${it.message}") }
@@ -571,7 +498,7 @@ class YpsoBleManager @Inject internal constructor(
             if (attempt.tryComplete()) onDone(false)
             return attempt
         }
-        val owner = YpsoProfileSelectorCoordinator.Owner(epoch.connection, connectionId, epoch.token)
+        val owner = YpsoWriteLane.Owner(epoch, lease, connectionId)
         val startedElapsed = android.os.SystemClock.elapsedRealtime()
         var readback: YpsoProfileReadback? = null
         aapsLogger.debug(LTag.PUMP, "YpsoPump profile acquisition started: evidenceRecords=${link.session?.snapshot()?.writeEvidence?.size}")
@@ -650,15 +577,7 @@ class YpsoBleManager @Inject internal constructor(
             if (shouldYield()) return failProfile("configuration read yielded to queued command")
             if (selectedSettingId == settingId) return failProfile("selector $settingId lacks changed-identity evidence")
             val writeId = "profile-$connectionId-$settingId-${UUID.randomUUID()}"
-            val started = profileSelectorCoordinator.write(
-                writeId,
-                owner,
-                settingId,
-                pumpState.masterVersion.takeIf(String::isNotBlank),
-                OP_TIMEOUT_MS,
-                dispatch = { frame -> link.writeFrame(epoch, lease, frame) },
-            ) { outcome ->
-                if (outcome is YpsoWriteOutcome.Verified) return@write
+            val started = profileLane.write(owner, writeId, YpsoGlb.encode(settingId), firmware()) { outcome ->
                 val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
                     outcome is YpsoWriteOutcome.PossiblyApplied &&
                     outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK &&
@@ -667,11 +586,11 @@ class YpsoBleManager @Inject internal constructor(
                 readExactGlb(YpsoWritePolicy.SETTING_ID_UUID, "selector identity") { selectedId, selectedIdBody ->
                     if (selectedId != settingId) return@readExactGlb failProfile("selector identity mismatch: requested $settingId, read $selectedId")
                     val detail = "same-link exact-GLB selector identity read-back matched setting $settingId"
-                    val evidenceHash = YpsoProfileSelectorCoordinator.sha256(
-                        "${owner.token.generation}|$reboot|$connectionId|$settingId|${YpsoProfileSelectorCoordinator.sha256(selectedIdBody)}".toByteArray(),
+                    val evidenceHash = YpsoWriteAccounting.sha256(
+                        "${epoch.generation}|$reboot|$connectionId|$settingId|${YpsoWriteAccounting.sha256(selectedIdBody)}".toByteArray(),
                     )
                     val reconciled = runCatching {
-                        profileSelectorCoordinator.reconcileAccepted(writeId, owner, evidenceHash, detail)
+                        profileLane.reconcile(owner, writeId, YpsoSemanticEvidence.ACCEPTED, evidenceHash, detail)
                     }.getOrDefault(false)
                     if (!reconciled) return@readExactGlb failProfile("selector $settingId reconciliation failed")
                     selectedSettingId = selectedId
@@ -812,7 +731,7 @@ class YpsoBleManager @Inject internal constructor(
             if (attempt.tryComplete()) onResult(null)
             return attempt
         }
-        val owner = YpsoHistorySelectorCoordinator.Owner(epoch.connection, connectionId, epoch.token)
+        val owner = YpsoWriteLane.Owner(epoch, lease, connectionId)
         var countBefore = -1
         var headBefore: YpsoHistoryEntry? = null
         val rows = mutableListOf<YpsoHistoryEntry>()
@@ -885,22 +804,11 @@ class YpsoBleManager @Inject internal constructor(
             if (!attempt.isActive || !link.isCurrent(epoch)) return failHistory("history ownership changed before selector $index")
             if (previousIndex == index) return failHistory("selector $index lacks changed-value acceptance evidence")
             val writeId = "history-$connectionId-$index-${UUID.randomUUID()}"
-            var transportOutcomeHandled = false
-            val started = historySelectorCoordinator.select(
-                writeId,
-                owner,
-                index,
-                pumpState.masterVersion.takeIf(String::isNotBlank),
-                OP_TIMEOUT_MS,
-                dispatch = { frame -> link.writeFrame(epoch, lease, frame) },
-            ) { outcome ->
-                if (outcome is YpsoWriteOutcome.Verified) return@select
-                if (transportOutcomeHandled) return@select
+            val started = historyLane.write(owner, writeId, YpsoGlb.encode(index), firmware()) { outcome ->
                 val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
                     outcome is YpsoWriteOutcome.PossiblyApplied &&
                     outcome.failure.layer == YpsoWriteFailure.Layer.GATT_CALLBACK
-                if (!canReconcile) return@select failHistory("selector $index was not semantically observable: $outcome")
-                transportOutcomeHandled = true
+                if (!canReconcile) return@write failHistory("selector $index was not semantically observable: $outcome")
                 readEncrypted(YpsoWritePolicy.EVENT_INDEX_UUID) { selectedBody ->
                     val selected = YpsoGlb.decodeExact(selectedBody)
                         ?: return@readEncrypted failHistory("selector identity is not exact GLB")
@@ -909,13 +817,14 @@ class YpsoBleManager @Inject internal constructor(
                         return@readEncrypted failHistory("selector identity mismatch: requested $index, read $selected")
                     }
                     verifiedSelectorIndex = selected
-                    val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
-                        "${owner.token.generation}|$reboot|$connectionId|$index|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
+                    val evidenceHash = YpsoWriteAccounting.sha256(
+                        "${epoch.generation}|$reboot|$connectionId|$index|${YpsoWriteAccounting.sha256(selectedBody)}".toByteArray(),
                     )
                     val reconciled = runCatching {
-                        historySelectorCoordinator.reconcileAccepted(
-                            writeId,
+                        historyLane.reconcile(
                             owner,
+                            writeId,
+                            YpsoSemanticEvidence.ACCEPTED,
                             evidenceHash,
                             "same-link exact-GLB selector identity read-back matched event index $index",
                         )
@@ -1169,7 +1078,7 @@ class YpsoBleManager @Inject internal constructor(
             onResult(LowerBoundRecoveryResult.STOPPED)
             return
         }
-        val owner = YpsoHistorySelectorCoordinator.Owner(epoch.connection, connectionId, epoch.token)
+        val owner = YpsoWriteLane.Owner(epoch, lease, connectionId, lowerBoundRecovery = true)
         var completed = false
         fun finish(result: LowerBoundRecoveryResult) {
             if (completed) return
@@ -1204,19 +1113,10 @@ class YpsoBleManager @Inject internal constructor(
                     }
                     if (!link.isCurrent(epoch)) return@readEncrypted stop("connection owner changed before selector recovery")
                     val writeId = "history-lower-bound-$connectionId-$target-${UUID.randomUUID()}"
-                    val started = historySelectorCoordinator.recoverLowerBound(
-                        writeId,
-                        owner,
-                        target,
-                        pumpState.masterVersion.takeIf(String::isNotBlank),
-                        OP_TIMEOUT_MS,
-                        dispatch = { frame -> link.writeFrame(epoch, lease, frame) },
-                    ) { outcome ->
-                        // Semantic reconciliation publishes the terminal Verified outcome through the
-                        // same callback. The read-back branch below owns final RECOVERED publication.
-                        if (outcome is YpsoWriteOutcome.Verified) return@recoverLowerBound
+                    val started = historyLane.write(owner, writeId, YpsoGlb.encode(target), firmware()) { outcome ->
+                        // The read-back branch below owns final RECOVERED publication.
                         if (outcome is YpsoWriteOutcome.ProvenRejected && outcome.failure.isPumpCounterError()) {
-                            return@recoverLowerBound finish(LowerBoundRecoveryResult.COUNTER_TOO_LOW)
+                            return@write finish(LowerBoundRecoveryResult.COUNTER_TOO_LOW)
                         }
                         val canReconcile = outcome is YpsoWriteOutcome.AcceptedUnverified ||
                             outcome is YpsoWriteOutcome.PossiblyApplied &&
@@ -1228,7 +1128,7 @@ class YpsoBleManager @Inject internal constructor(
                                 is YpsoWriteOutcome.PossiblyApplied -> "${outcome.failure.layer}: ${outcome.failure.detail}"
                                 else -> outcome.javaClass.simpleName
                             }
-                            return@recoverLowerBound stop(
+                            return@write stop(
                                 "selector write stopped at $detail",
                             )
                         }
@@ -1236,13 +1136,14 @@ class YpsoBleManager @Inject internal constructor(
                             val selected = YpsoGlb.decodeExact(selectedBody)
                                 ?: return@readEncrypted stop("selector read-back is not exact GLB (${selectedBody.size} bytes)")
                             if (selected != target) return@readEncrypted stop("selector read-back $selected did not match target $target")
-                            val evidenceHash = YpsoHistorySelectorCoordinator.sha256(
-                                "${owner.token.generation}|$reboot|$connectionId|$target|${YpsoHistorySelectorCoordinator.sha256(selectedBody)}".toByteArray(),
+                            val evidenceHash = YpsoWriteAccounting.sha256(
+                                "${epoch.generation}|$reboot|$connectionId|$target|${YpsoWriteAccounting.sha256(selectedBody)}".toByteArray(),
                             )
                             val reconciled = runCatching {
-                                historySelectorCoordinator.reconcileLowerBoundAccepted(
-                                    writeId,
+                                historyLane.reconcile(
                                     owner,
+                                    writeId,
+                                    YpsoSemanticEvidence.ACCEPTED,
                                     evidenceHash,
                                     "same-link exact-GLB selector identity read-back recovered event index $target from durable lower bound",
                                 )
@@ -1299,11 +1200,9 @@ class YpsoBleManager @Inject internal constructor(
     }
 
     /** Owner of one dispatched bolus write, valid only on the connection that sent it. */
-    class BolusCommandOwner internal constructor(
-        internal val owner: YpsoBolusWriteCoordinator.Owner,
-        internal val epoch: YpsoConnectionEpoch,
-        internal val lease: YpsoLinkLease,
-    )
+    class BolusCommandOwner internal constructor(internal val owner: YpsoWriteLane.Owner) {
+        internal val epoch: YpsoConnectionEpoch get() = owner.epoch
+    }
 
     /**
      * Dispatch one validated bolus command on the authenticated connection [expectedConnectionKey]
@@ -1341,7 +1240,7 @@ class YpsoBleManager @Inject internal constructor(
                 YpsoWriteFailure(
                     YpsoWriteFailure.Layer.READINESS,
                     YpsoWritePolicy.BOLUS_START_STOP_UUID,
-                    pumpState.masterVersion.takeIf(String::isNotBlank),
+                    firmware(),
                     detail = detail,
                 ),
             ),
@@ -1366,43 +1265,24 @@ class YpsoBleManager @Inject internal constructor(
             notSent("The pump is busy. Please try again in a moment.")
             return
         }
-        val owner = YpsoBolusWriteCoordinator.Owner(ready.connection, UUID.randomUUID().toString(), ready.token)
-        val publicOwner = BolusCommandOwner(owner, ready, lease)
+        val owner = YpsoWriteLane.Owner(ready, lease)
+        val publicOwner = BolusCommandOwner(owner)
         link.enableControlNotifications(ready) { setup ->
             if (!setup || !link.isCurrent(ready)) {
                 link.release(lease)
                 notSent("Could not prepare the pump. Please try again.")
                 return@enableControlNotifications
             }
-            val outcome: (YpsoWriteOutcome) -> Unit = {
-                if (it !is YpsoWriteOutcome.AcceptedUnverified && it !is YpsoWriteOutcome.PossiblyApplied) link.release(lease)
-                onOutcome(it, publicOwner)
-            }
-            val dispatch: (ByteArray) -> Boolean = { frame -> link.writeFrame(ready, lease, frame) }
-            val started = if (request != null) {
-                bolusWriteCoordinator.start(
-                    writeId, owner, request, pumpState.masterVersion.takeIf(String::isNotBlank), 30_000, beforeDispatch, dispatch, outcome,
-                )
-            } else {
-                bolusWriteCoordinator.cancel(
-                    writeId, owner, checkNotNull(cancelBlock), pumpState.masterVersion.takeIf(String::isNotBlank), 30_000, beforeDispatch, dispatch, outcome,
-                )
-            }
-            if (!started) link.release(lease)
+            val payload = request?.payload() ?: BolusCommand.cancelPayload(extended = checkNotNull(cancelBlock) == YpsoBolusBlock.SLOW)
+            bolusLane.write(owner, writeId, YpsoCrc.appendCrc(payload), firmware(), beforeDispatch) { onOutcome(it, publicOwner) }
         }
     }
 
-    internal fun verifyBolusAccepted(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean {
-        val verified = bolusWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail)
-        if (verified) link.release(owner.lease)
-        return verified
-    }
+    internal fun verifyBolusAccepted(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
+        bolusLane.reconcile(owner.owner, writeId, YpsoSemanticEvidence.ACCEPTED, evidenceHash, detail)
 
-    internal fun recordBolusUnresolved(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean {
-        val recorded = bolusWriteCoordinator.recordUnresolved(writeId, owner.owner, evidenceHash, detail)
-        link.release(owner.lease)
-        return recorded
-    }
+    internal fun recordBolusUnresolved(owner: BolusCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
+        bolusLane.recordUnresolved(owner.owner, writeId, evidenceHash, detail)
 
     // ---- temporary basal ----
 
@@ -1413,11 +1293,9 @@ class YpsoBleManager @Inject internal constructor(
     }
 
     /** Owner of one dispatched TBR write, valid only on the connection that sent it. */
-    class TbrCommandOwner internal constructor(
-        internal val owner: YpsoTbrWriteCoordinator.Owner,
-        internal val epoch: YpsoConnectionEpoch,
-        internal val lease: YpsoLinkLease,
-    )
+    class TbrCommandOwner internal constructor(internal val owner: YpsoWriteLane.Owner) {
+        internal val epoch: YpsoConnectionEpoch get() = owner.epoch
+    }
 
     /**
      * Dispatch one START_STOP_TBR command on the current authenticated connection. [beforeDispatch]
@@ -1434,7 +1312,7 @@ class YpsoBleManager @Inject internal constructor(
             YpsoWriteOutcome.NotSent(
                 writeId,
                 null,
-                YpsoWriteFailure(layer, YpsoWritePolicy.TBR_START_STOP_UUID, pumpState.masterVersion.takeIf(String::isNotBlank), detail = detail),
+                YpsoWriteFailure(layer, YpsoWritePolicy.TBR_START_STOP_UUID, firmware(), detail = detail),
             ),
             null,
         )
@@ -1446,36 +1324,17 @@ class YpsoBleManager @Inject internal constructor(
             return notSent(YpsoWriteFailure.Layer.CAPABILITY, "This pump does not accept temporary basal commands.")
         }
         val lease = link.acquire(YpsoLinkOperation.TBR) ?: return notSent(YpsoWriteFailure.Layer.READINESS, "The pump is busy. Please try again in a moment.")
-        val owner = YpsoTbrWriteCoordinator.Owner(ready.connection, UUID.randomUUID().toString(), ready.token)
-        val publicOwner = TbrCommandOwner(owner, ready, lease)
+        val owner = YpsoWriteLane.Owner(ready, lease)
+        val publicOwner = TbrCommandOwner(owner)
         link.enableControlNotifications(ready) { setup ->
             if (!setup || !link.isCurrent(ready)) {
                 link.release(lease)
                 return@enableControlNotifications notSent(YpsoWriteFailure.Layer.READINESS, "Could not prepare the pump. Please try again.")
             }
-            // Reconciliation republishes a terminal outcome; the caller acts on the transport one only.
-            val delivered = AtomicBoolean(false)
-            val started = tbrWriteCoordinator.write(
-                writeId,
-                owner,
-                percent,
-                durationMinutes,
-                pumpState.masterVersion.takeIf(String::isNotBlank),
-                OP_TIMEOUT_MS,
-                beforeDispatch,
-                { frame -> link.writeFrame(ready, lease, frame) },
-            ) { outcome ->
-                if (!delivered.compareAndSet(false, true)) return@write
-                // Every sent command is followed by a same-link status read, so its owner keeps the
-                // link until reconciliation releases it. Only an unsent command owns nothing.
-                if (outcome is YpsoWriteOutcome.NotSent || outcome is YpsoWriteOutcome.ProvenRejected) {
-                    link.release(lease)
-                    onOutcome(outcome, null)
-                } else {
-                    onOutcome(outcome, publicOwner)
-                }
+            tbrLane.write(owner, writeId, TbrCommand(percent, durationMinutes).encode(), firmware(), beforeDispatch) { outcome ->
+                // Only a command that still holds the link has a same-link status read to resolve it.
+                onOutcome(outcome, publicOwner.takeIf { tbrLane.category.keepsLink(outcome) })
             }
-            if (!started) link.release(lease)
         }
     }
 
@@ -1495,25 +1354,18 @@ class YpsoBleManager @Inject internal constructor(
 
     /** Status proved the effect of the TBR command. False leaves the write for [recordTbrUnresolved]. */
     internal fun verifyTbrAccepted(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
-        runCatching { tbrWriteCoordinator.reconcileAccepted(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
-            .also { if (it) link.release(owner.lease) }
+        runCatching { tbrLane.reconcile(owner.owner, writeId, YpsoSemanticEvidence.ACCEPTED, evidenceHash, detail) }.getOrDefault(false)
 
     /** A measured rejection code with an unchanged status. False leaves the write for [recordTbrUnresolved]. */
     internal fun verifyTbrRejected(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String): Boolean =
-        runCatching { tbrWriteCoordinator.reconcileRejected(writeId, owner.owner, evidenceHash, detail) }.getOrDefault(false)
-            .also { if (it) link.release(owner.lease) }
+        runCatching { tbrLane.reconcile(owner.owner, writeId, YpsoSemanticEvidence.REJECTED, evidenceHash, detail) }.getOrDefault(false)
 
     /**
      * No evidence resolves the command. Its counter is kept as the high-water mark and the reservation
      * retired, so later therapy can proceed; the TBR journal owns the therapy decision.
      */
     internal fun recordTbrUnresolved(owner: TbrCommandOwner, writeId: String, evidenceHash: String, detail: String) {
-        runCatching { tbrWriteCoordinator.recordUnresolved(writeId, owner.owner, evidenceHash, detail) }
-        tbrWriteCoordinatorInstance?.ownerDisconnected(owner.owner.gatt, detail)
-        // Keep the allocated counter as the high-water mark; the outcome itself stays unknown here.
-        runCatching { link.recoverInterruptedWrite() }
-            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump could not retire unresolved TBR write: ${it.message}") }
-        link.release(owner.lease)
+        runCatching { tbrLane.recordUnresolved(owner.owner, writeId, evidenceHash, detail) }
     }
 
     init {

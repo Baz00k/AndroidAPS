@@ -2,6 +2,7 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.ble.ConnectionState
+import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_CONTROL_VERSION
 import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_EXTREAD
@@ -9,11 +10,15 @@ import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_STATUS
 import app.aaps.pump.ypsopump.ble.YpsoLinkLease
 import app.aaps.pump.ypsopump.ble.YpsoLinkOperation
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
+import app.aaps.pump.ypsopump.ble.YpsoWriteAccounting
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBlock
 import app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.comm.YpsoCrc
+import app.aaps.pump.ypsopump.comm.commands.BolusCommand
+import app.aaps.pump.ypsopump.comm.commands.TbrCommand
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -529,6 +534,48 @@ class YpsoBleManagerTest {
         assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
         assertTrue(pump.writes.none { it.first == YpsoWritePolicy.BOLUS_START_STOP_UUID })
         assertEquals(0L, manager.writeCounter)
+    }
+
+    @Test
+    fun `each therapy command reserves exactly its encoded payload`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.onDescriptorWrite = { pump.ackDescriptor() }
+        val reserved = mutableListOf<String?>()
+        fun acknowledge(uuid: java.util.UUID) {
+            var acknowledged = 0
+            while (acknowledged < pump.writes.count { it.first == uuid }) {
+                acknowledged++
+                pump.ackWrite(uuid)
+            }
+        }
+        val evidence = "ab".repeat(32)
+        val connection = checkNotNull(manager.epoch()).key
+
+        // Outcome callbacks run inside the transport, so each owner is resolved after its acknowledgement.
+        var bolusOwner: YpsoBleManager.BolusCommandOwner? = null
+        manager.startBolus("bolus", YpsoBolusRequestValidator.validate(1.2, YpsoBolusTreatment.NORMAL, 30.0), connection, { reserved += it.payloadHash }) { _, owner ->
+            bolusOwner = owner
+        }
+        acknowledge(YpsoWritePolicy.BOLUS_START_STOP_UUID)
+        assertTrue(manager.verifyBolusAccepted(checkNotNull(bolusOwner), "bolus", evidence, "status showed the bolus"))
+        pump.writes.clear()
+        manager.cancelBolus("cancel", YpsoBolusBlock.SLOW, connection, { reserved += it.payloadHash }) { _, owner -> bolusOwner = owner }
+        acknowledge(YpsoWritePolicy.BOLUS_START_STOP_UUID)
+        assertTrue(manager.verifyBolusAccepted(checkNotNull(bolusOwner), "cancel", evidence, "status showed no slow bolus"))
+        var tbrOwner: YpsoBleManager.TbrCommandOwner? = null
+        manager.writeTbr("tbr", 150, 30, { reserved += it.payloadHash }) { _, owner -> tbrOwner = owner }
+        acknowledge(YpsoWritePolicy.TBR_START_STOP_UUID)
+        assertTrue(manager.verifyTbrAccepted(checkNotNull(tbrOwner), "tbr", evidence, "status showed the TBR"))
+
+        assertEquals(
+            listOf(
+                YpsoCrc.appendCrc(BolusCommand(1.2).encode()),
+                YpsoCrc.appendCrc(BolusCommand.cancelPayload(extended = true)),
+                TbrCommand(150, 30).encode(),
+            ).map(YpsoWriteAccounting::sha256),
+            reserved,
+        )
     }
 
     @Test
