@@ -16,7 +16,7 @@ import java.util.zip.ZipFile
 /**
  * Checks resolved JVM call targets, including generated classes. A direct call to a [BluetoothGatt]
  * write API is allowed only inside the correspondingly named `writeCharacteristic`/`writeDescriptor`
- * dispatch method of [YpsoBleManager], and only when that method carries [YpsoGuardedWrite]. Method
+ * dispatch method of [YpsoAndroidGattConnection], and only when that method carries [YpsoGuardedWrite]. Method
  * references/handles to those APIs are rejected entirely: the guard cannot prove they are invoked
  * inside the guarded boundary, so they must not escape it.
  */
@@ -45,7 +45,7 @@ abstract class VerifyGattWriteOwnership : DefaultTask() {
                                 violations.add("${reader.className}.$name creates a method reference to BluetoothGatt.$target, which can escape the guarded dispatch boundary")
                                 return
                             }
-                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoBleManager" || !guarded || name.substringBefore('$') != target) {
+                            if (reader.className != "app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection" || !guarded || name.substringBefore('$') != target) {
                                 violations.add("${reader.className}.$name calls BluetoothGatt.$target outside its guarded dispatch method")
                             }
                         }

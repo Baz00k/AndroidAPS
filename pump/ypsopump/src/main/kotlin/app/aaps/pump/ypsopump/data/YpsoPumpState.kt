@@ -1,6 +1,6 @@
 package app.aaps.pump.ypsopump.data
 
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.time.Instant
 import java.time.ZoneId
@@ -62,7 +62,16 @@ class YpsoPumpState @Inject constructor() {
     }
 
     // -- Connection State --
+    // Written only by the BLE link, which claims the single writer when it is created.
     @Volatile var connectionState: ConnectionState = ConnectionState.DISCONNECTED
+        private set
+    private val connectionWriterClaimed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    internal fun claimConnectionWriter(): (ConnectionState) -> Unit {
+        check(connectionWriterClaimed.compareAndSet(false, true)) { "connection state already has a writer" }
+        return { connectionState = it }
+    }
+
     /** Connection attempts between taking a retry grant and the BLE layer leaving DISCONNECTED or failing. */
     val connectionsStarting = java.util.concurrent.atomic.AtomicInteger()
     @Volatile var serialNumber: String = ""
@@ -139,6 +148,12 @@ class YpsoPumpState @Inject constructor() {
 
     val isInitialized: Boolean
         get() = serialNumber.isNotEmpty() && firmwareVersion.isNotEmpty()
+
+    /** Firmware and control protocol versions this driver decodes status for, as read on the current link. */
+    internal fun hasCompatibleStatusProtocol(): Boolean =
+        YpsoFirmwareVersion.parse(masterVersion)?.meetsMinimum == true &&
+            YpsoFirmwareVersion.parse(supervisorVersion)?.meetsMinimum == true &&
+            controlServiceVersion == "1.3"
 
     @Synchronized
     fun publishStatus(
@@ -253,7 +268,6 @@ class YpsoPumpState @Inject constructor() {
     }
 
     fun reset() {
-        connectionState = ConnectionState.DISCONNECTED
         invalidateStatus()
         invalidateProfileEvidence()
         lastErrorCode = 0

@@ -83,9 +83,7 @@ class YpsoBolusDeliveryTest {
         override fun stoppedOrEmpty() = false
         override fun reconcileHistoryLater(reason: String) { historyRecoveries += reason }
         override fun reconnect(timeoutMs: Long) = true
-        override fun session() = YpsoBolusLink.Session(KEY_ID, REBOOT)
-        override fun sessionGeneration() = "generation"
-        override fun connectionKey() = CONNECTION
+        override fun epoch() = YpsoBolusLink.Epoch(CONNECTION, "generation", KEY_ID, REBOOT)
 
         override fun status(owner: YpsoBolusLink.Owner?): BolusCommand {
             onRead()
@@ -505,7 +503,7 @@ class YpsoBolusDeliveryTest {
             ids = IDs(pumpId = 48_316L, pumpType = PumpType.YPSOPUMP, pumpSerial = SERIAL))
 
         delivery.bindProvisional(SERIAL, 48_316L, 1_500L, 0.4, BS.Type.NORMAL)
-        delivery.reconcileHistory(SERIAL, ZoneId.of("UTC"), REBOOT, YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
+        delivery.reconcileHistory(SERIAL, ZoneId.of("UTC"), "generation", REBOOT, YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
 
         assertTrue(attempts.all { it.outcome == YpsoBolusOutcome.AWAITING_HISTORY })
         assertNull(records.boluses.single().ids.temporaryId)
@@ -534,7 +532,7 @@ class YpsoBolusDeliveryTest {
         val dose = YpsoHistoryEntry(800_000_100L, 2, 40, 0, 0, 48_001L, 0)
 
         val pass = delivery.reconcileHistory(
-            SERIAL, ZoneId.of("UTC"), REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true),
+            SERIAL, ZoneId.of("UTC"), "generation", REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true),
         )
 
         val attempt = attempts.single()

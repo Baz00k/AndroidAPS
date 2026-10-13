@@ -1,6 +1,6 @@
 package app.aaps.pump.ypsopump
 
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
@@ -30,7 +30,7 @@ class YpsoPumpStateTest {
         assertNull(state.mappedBatteryPercent)
         assertEquals(0L, state.lastStatusTime)
         assertEquals(0L, state.lastConnectionTime)
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         assertFalse(state.hasVerifiedStatus)
         state.publishStatus(40.0, 70, false, 100, 2345L)
         assertEquals(40.0, state.displayStatus().snapshot?.reservoirUnits)
@@ -54,7 +54,7 @@ class YpsoPumpStateTest {
         val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
         state.publishStatus(42.5, 75, false, 100, 1234L)
         elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         assertEquals(42.5, state.displayStatus().snapshot?.reservoirUnits)
         assertFalse(state.displayStatus().isCurrent)
         assertFalse(state.hasVerifiedStatus)
@@ -101,9 +101,9 @@ class YpsoPumpStateTest {
         }
         state.publishProfileEvidence(YpsoProfileReadbackTest.verified())
         assertTrue(state.hasFreshProfileEvidence)
-        state.connectionState = ConnectionState.DISCONNECTED
+        state.testConnectionState = ConnectionState.DISCONNECTED
         assertTrue(state.hasFreshProfileEvidence)
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         assertTrue(state.hasFreshProfileEvidence)
     }
 
@@ -201,7 +201,7 @@ class YpsoPumpStateTest {
         var elapsed = 20_000L
         val state = YpsoPumpState().apply { elapsedRealtime = { elapsed } }
         state.publishStatus(17.25, 63, false, 100, 900_000L)
-        state.connectionState = ConnectionState.DISCONNECTED
+        state.testConnectionState = ConnectionState.DISCONNECTED
         elapsed += 299_999L
         assertEquals(17.25, state.statusSnapshot?.reservoirUnits)
         assertEquals(63, state.statusSnapshot?.batteryPercent)
@@ -209,7 +209,7 @@ class YpsoPumpStateTest {
         elapsed++
         assertNull(state.statusSnapshot)
         assertEquals(0L, state.lastStatusTime)
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         assertNull(state.reservoirUnitsIfFresh())
         state.publishStatus(16.5, 62, false, 100, 100L)
         assertEquals(16.5, state.statusSnapshot?.reservoirUnits)
@@ -282,7 +282,7 @@ class YpsoPumpStateTest {
     fun `successful status remains healthy while queue is idle`() {
         val state = YpsoPumpState()
         state.publishStatus(42.5, 75, false, 100, 1234L)
-        state.connectionState = ConnectionState.DISCONNECTED
+        state.testConnectionState = ConnectionState.DISCONNECTED
 
         assertTrue(state.hasVerifiedStatus)
         assertTrue(state.connectionHealthy)

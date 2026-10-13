@@ -14,8 +14,11 @@ internal interface YpsoBolusLink {
         val connectionKey: String
     }
 
-    /** The active session's key identity and the pump reboot generation its replies carry. */
-    data class Session(val keyId: String, val reboot: Int?)
+    /**
+     * The authenticated connection: [key] names it, [generation] and [keyId] identify its session, and
+     * [reboot] is the pump reboot counter its replies carry.
+     */
+    data class Epoch(val key: String, val generation: String, val keyId: String, val reboot: Int?)
 
     enum class Readiness { READY, CANCELLED, HISTORY_BUSY, STATUS_UNAVAILABLE }
 
@@ -36,13 +39,8 @@ internal interface YpsoBolusLink {
     /** Replaces a lost link; true once it is connected again within [timeoutMs]. */
     fun reconnect(timeoutMs: Long): Boolean
 
-    fun session(): Session?
-
-    /** Generation of the active session record, which bolus attempts are bound to. */
-    fun sessionGeneration(): String?
-
-    /** Identity of the current authenticated connection, or null without one. */
-    fun connectionKey(): String?
+    /** The current authenticated connection, or null without one. */
+    fun epoch(): Epoch?
 
     /** One bolus status read, on [owner]'s connection when given; null when it could not be read. */
     fun status(owner: Owner? = null): BolusCommand?
@@ -80,12 +78,8 @@ internal abstract class YpsoBolusBleLink(private val bleManager: YpsoBleManager)
 
     override val isConnected: Boolean get() = bleManager.isConnected
 
-    override fun session(): YpsoBolusLink.Session? =
-        bleManager.session?.snapshot()?.let { YpsoBolusLink.Session(it.keyId, it.reboot) }
-
-    override fun sessionGeneration(): String? = bleManager.session?.activeRecord()?.generation
-
-    override fun connectionKey(): String? = bleManager.currentBolusConnectionKey()
+    override fun epoch(): YpsoBolusLink.Epoch? =
+        bleManager.epoch()?.let { YpsoBolusLink.Epoch(it.key, it.generation, it.keyId, it.reboot) }
 
     override fun status(owner: YpsoBolusLink.Owner?): BolusCommand? {
         val latch = CountDownLatch(1)
@@ -130,7 +124,7 @@ internal abstract class YpsoBolusBleLink(private val bleManager: YpsoBleManager)
         }
         if (!latch.await(WRITE_CALLBACK_TIMEOUT_S, TimeUnit.SECONDS)) error("bolus write callback did not arrive within 45 seconds")
         val (outcome, owner) = requireNotNull(value.get())
-        return outcome to owner?.let { BleOwner(it, bleManager.connectionKey(it)) }
+        return outcome to owner?.let { BleOwner(it, it.epoch.key) }
     }
 
     private companion object {

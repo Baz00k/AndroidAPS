@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.pump.ypsopump.ble.YpsoBleManager
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.KeyTiming
@@ -637,7 +637,7 @@ class YpsoProvisioningService internal constructor(
     fun verificationCanProceed(): Boolean =
         verificationAttemptRequested ||
             pumpState.connectionsStarting.get() > 0 ||
-            pumpState.connectionState != YpsoBleManager.ConnectionState.DISCONNECTED ||
+            pumpState.connectionState != ConnectionState.DISCONNECTED ||
             PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in pumpState.availability.causes
 
     /** Each queued-therapy connection cycle may bypass transport backoff; hard rekey remains blocking. */

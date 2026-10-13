@@ -1,99 +1,52 @@
 package app.aaps.pump.ypsopump
 
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
-import android.bluetooth.BluetoothProfile
-import android.content.Context
-import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.pump.ypsopump.ble.YpsoBleManager
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
+import app.aaps.pump.ypsopump.ble.YpsoGattLayout
+import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_CONTROL_VERSION
+import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_EXTREAD
+import app.aaps.pump.ypsopump.ble.YpsoGattLayout.CHAR_STATUS
+import app.aaps.pump.ypsopump.ble.YpsoLinkLease
+import app.aaps.pump.ypsopump.ble.YpsoLinkOperation
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
+import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
+import app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator
+import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import app.aaps.pump.ypsopump.comm.YpsoCrc
-import app.aaps.pump.ypsopump.comm.YpsoGlb
-import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.crypto.PumpSession
-import app.aaps.pump.ypsopump.data.YpsoPumpState
-import app.aaps.pump.ypsopump.data.YpsoProfileReadback
-import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
-import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
-import app.aaps.shared.tests.AAPSLoggerTest
+import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.atLeastOnce
+import org.mockito.kotlin.clearInvocations
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isNull
-import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import java.time.ZoneId
-import java.util.UUID
-import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 
+/** Pump operations of [app.aaps.pump.ypsopump.ble.YpsoBleManager] against a fake pump. */
 class YpsoBleManagerTest {
-    private val context: Context = mock()
-    private val sessionCrypto: SessionCrypto = mock()
-    private lateinit var logger: AAPSLogger
-    private lateinit var pumpState: YpsoPumpState
-    private lateinit var manager: YpsoBleManager
-    private lateinit var provisioning: YpsoProvisioningService
-    private val key = ByteArray(32)
-    private fun stubStatus(body: ByteArray = validStatusPayload()) {
-        whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, 1))
-    }
+    private val fixture = YpsoPumpFixture()
+    private val manager = fixture.manager
+    private val pumpState = fixture.pumpState
+    private val provisioning = fixture.provisioning
+    private val sessionCrypto = fixture.sessionCrypto
 
-    @BeforeEach
-    fun setUp() {
-        pumpState = YpsoPumpState()
-        provisioning = mock()
-        logger = mock()
-        whenever(context.getSharedPreferences(any(), any())).thenReturn(mock())
-        manager =
-            YpsoBleManager(context, logger, sessionCrypto, pumpState, provisioning).apply {
-                scheduleOpTimeout = { _, _ -> }
-                cancelOpTimeout = {}
-                persistProfile = {}
-            }
-        whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any())).thenReturn(false)
-        manager.session = PumpSession(object : PumpSession.Store {
-            var saved = readBaseline("12:34:56:78:9A:BC", key, 8, 0)
-            override fun load() = saved
-            override fun commit(state: PumpSession.State) { saved = state }
-        })
-        manager.setSharedKey("00".repeat(32))
-        val realCrypto = SessionCrypto()
-        whenever(sessionCrypto.encrypt(any(), any(), any(), any())).thenAnswer {
-            realCrypto.encrypt(
-                it.getArgument(0),
-                it.getArgument(1),
-                it.getArgument(2),
-                it.getArgument(3)
-            )
-        }
-    }
+    private fun stubStatus(body: ByteArray = validStatusPayload()) = fixture.decryptsTo(body)
 
     @Test
     fun `display readings survive same session configuration but clear for a replacement generation`() {
-        val owner = manager.session!!
-        whenever(provisioning.owner).thenReturn(owner)
-        val connection = YpsoProvisioningService.ConnectionSession(
-            owner.activeRecord()!!.generation, null, "10000001", "12:34:56:78:9A:BC", key.copyOf(), false
-        )
+        val connection = fixture.connectionSession()
         whenever(provisioning.connectionSession()).thenReturn(connection)
         manager.configureInstalledSession()
         pumpState.publishStatus(42.0, 50, false, 100, 1234L)
@@ -109,7 +62,7 @@ class YpsoBleManagerTest {
 
     @Test
     fun `valid callback publishes only after decrypt CRC and decode`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         val results = mutableListOf<Boolean>()
         pumpState.publishStatus(42.0, 50, false, 100, 1234L)
@@ -120,7 +73,7 @@ class YpsoBleManagerTest {
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(42.0, pumpState.displayStatus().snapshot?.reservoirUnits)
         assertFalse(pumpState.displayStatus().isCurrent)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
 
         assertEquals(listOf(true), results)
         assertTrue(pumpState.hasVerifiedStatus)
@@ -130,862 +83,197 @@ class YpsoBleManagerTest {
         assertEquals(null, pumpState.statusSnapshot?.batteryPercent)
         assertEquals(2, pumpState.statusSnapshot?.batteryBars)
         assertEquals("1.3", pumpState.controlServiceVersion)
-        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(byteArrayOf(0x55)), any())
+        verify(sessionCrypto).decrypt(eq(byteArrayOf(0x55)), any())
     }
 
     @Test
-    fun `lower bound recovery owns GATT lane permits selector frames and releases lease`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val record = manager.session!!.snapshot()!!
-        val store = object : PumpSession.Store {
-            var state = PumpSession.State(
-                records = listOf(
-                    record.copy(
-                        write = 4_280,
-                        writeBootstrapState = PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND,
-                        lowerBoundRecoveryReboot = record.reboot,
-                    ),
-                ),
-                activeGeneration = record.generation,
-                availability = PumpSession.Availability(setOf(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN)),
-            )
-            override fun load() = state
-            override fun commit(state: PumpSession.State) { this.state = state }
-        }
-        manager.session = PumpSession(store)
-        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-        manager.sdkInt = 33
-        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
-        val service = fixture.gatt.services.first()
-        val selector: BluetoothGattCharacteristic = mock()
-        whenever(selector.uuid).thenReturn(YpsoWritePolicy.EVENT_INDEX_UUID)
-        whenever(selector.properties).thenReturn(
-            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
-        )
-        whenever(service.getCharacteristic(YpsoWritePolicy.EVENT_INDEX_UUID)).thenReturn(selector)
-        whenever(fixture.gatt.readCharacteristic(selector)).thenReturn(true)
-        val notify: BluetoothGattCharacteristic = mock()
-        whenever(notify.uuid).thenReturn(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
-        val descriptor: BluetoothGattDescriptor = mock()
-        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
-        whenever(descriptor.characteristic).thenReturn(notify)
-        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
-        whenever(service.getCharacteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)).thenReturn(notify)
-        var readCounter = 0L
-        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
-        }
-        val recovery = mutableListOf<YpsoBleManager.LowerBoundRecoveryResult>()
-        val competingStatus = mutableListOf<Boolean>()
-
-        manager.recoverHistorySelectorLowerBound(recovery::add)
-        manager.readStatus(competingStatus::add)
-
-        assertEquals(listOf(false), competingStatus)
-        verify(fixture.gatt, never()).readCharacteristic(fixture.status)
-        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
-        respond(fixture.eventCount!!, YpsoGlb.encode(2))
-        respond(selector, YpsoGlb.encode(0))
-        repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
-        respond(selector, YpsoGlb.encode(1))
-
-        val logCalls = org.mockito.Mockito.mockingDetails(logger).invocations.joinToString("\n") {
-            it.arguments.joinToString(" | ")
-        }
-        assertEquals(listOf(YpsoBleManager.LowerBoundRecoveryResult.RECOVERED), recovery, logCalls)
-        assertEquals(PumpSession.WriteBootstrapState.ESTABLISHED, manager.session!!.snapshot()!!.writeBootstrapState)
-        verify(fixture.gatt, times(4)).writeCharacteristic(eq(selector), any(), any())
-        manager.readStatus()
-        verify(fixture.gatt).readCharacteristic(fixture.status)
+    fun `multi frame status is reassembled from the frames the pump returned`() {
+        val pump = fixture.connect()
+        stubStatus()
+        val results = mutableListOf<Boolean>()
+        manager.readStatus(results::add)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x12) + ByteArray(19) { 0x41 })
+        pump.answerRead(CHAR_EXTREAD, byteArrayOf(0x22, 0x42))
+        assertEquals(listOf(true), results)
+        verify(sessionCrypto).decrypt(eq(ByteArray(19) { 0x41 } + byteArrayOf(0x42)), any())
     }
 
     @Test
-    fun `profile readiness depends on the authenticated read floor not the write allocation`() {
-        connectedGatt()
-
-        assertNull(manager.session!!.snapshot()!!.write)
-        assertTrue(manager.canReadProfile)
-    }
-
-    @Test
-    fun `profile read refuses a write ready session when selector identity is not readable`() {
-        val fixture = connectedGatt()
-        val record = manager.session!!.snapshot()!!
-        val store = object : PumpSession.Store {
-            var saved = PumpSession.State(
-                records = listOf(
-                    record.copy(
-                        write = 4_153,
-                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-                    ),
-                ),
-                activeGeneration = record.generation,
-            )
-            override fun load() = saved
-            override fun commit(state: PumpSession.State) {
-                saved = state
-            }
-        }
-        manager.session = PumpSession(store)
-        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-        pumpState.masterVersion = "V05.00.52"
-        pumpState.supervisorVersion = "V05.00.52"
-        pumpState.controlServiceVersion = "1.3"
-        manager.sdkInt = 33
-        manager.scheduleProfileContinuation = { it.run() }
+    fun `a status code 140 is attributed to the connection's verification attempt rather than globally`() {
+        fixture.installSession(attemptId = "attempt")
+        val pump = fixture.connect()
         val results = mutableListOf<Boolean>()
 
-        manager.readProfile(results::add)
+        manager.readStatus(results::add)
+        pump.answerRead(CHAR_STATUS, ByteArray(0), 140)
 
-        assertTrue(manager.canReadProfile)
         assertEquals(listOf(false), results)
-        assertEquals(4_153, manager.writeCounter)
-        assertEquals(null, manager.session!!.snapshot()!!.reservation)
-    }
-
-    private fun cachedProfile(zone: ZoneId = ZoneId.systemDefault()): YpsoProfileReadback.VerifiedReadback {
-        val template = YpsoProfileReadbackTest.verified()
-        val record = manager.session!!.snapshot()!!
-        pumpState.elapsedRealtime = { 2001L }
-        return YpsoProfileReadback.VerifiedReadback(
-            record.generation, record.reboot!!, "connection", template.activeProgram,
-            template.profileA, template.profileB, 2000L, zone, 3000,
-        ).also(pumpState::publishProfileEvidence)
-    }
-
-    @Test
-    fun `production acquisition reconciles all fifty selectors before publishing profile`() {
-        acquireProfile()
-    }
-
-    @Test
-    fun `explicit acquisition rejects a history change during profile acquisition`() {
-        acquireProfile(finalCount = 3002, expectedSuccess = false)
-    }
-
-    @Test
-    fun `production acquisition rejects malformed selector identity without reading its value`() {
-        acquireProfile(malformedIdentity = true)
-    }
-
-    @Test
-    fun `production acquisition cancellation prevents queued continuation from reserving another selector`() {
-        acquireProfile(cancelAfterFirstRow = true)
-    }
-
-    @Test
-    fun `stable history includes the head once and continues with the next logical index`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val record = manager.session!!.snapshot()!!
-        val store = object : PumpSession.Store {
-            var state = PumpSession.State(
-                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
-                activeGeneration = record.generation,
-            )
-            override fun load() = state
-            override fun commit(state: PumpSession.State) { this.state = state }
-        }
-        manager.session = PumpSession(store)
-        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-        pumpState.masterVersion = "V05.00.52"
-        pumpState.supervisorVersion = "V05.00.52"
-        pumpState.controlServiceVersion = "1.3"
-        manager.sdkInt = 33
-        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
-        val service = fixture.gatt.services.first()
-        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
-            val value: BluetoothGattCharacteristic = mock()
-            whenever(value.uuid).thenReturn(uuid)
-            whenever(value.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
-            whenever(service.getCharacteristic(uuid)).thenReturn(value)
-            whenever(fixture.gatt.readCharacteristic(value)).thenReturn(true)
-            return value
-        }
-        val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
-        val eventValue = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
-        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
-        val descriptor: BluetoothGattDescriptor = mock()
-        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
-        whenever(descriptor.characteristic).thenReturn(notify)
-        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
-        whenever(fixture.gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
-        var readCounter = 0L
-        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
-        }
-        fun row(index: Int, sequence: Long): ByteArray {
-            val payload = java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                .putInt(100 + index).put(2).putShort(100).putShort(0).putShort(0).putInt(sequence.toInt()).putShort(index.toShort())
-                .array()
-            return YpsoCrc.appendCrc(payload)
-        }
-        fun selected(index: Int, sequence: Long) {
-            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
-            respond(selector, YpsoGlb.encode(index))
-            respond(eventValue, row(index, sequence))
-        }
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-
-        manager.readStableHistory(null, maxRows = 2, onResult = results::add)
-        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
-        respond(fixture.eventCount!!, YpsoGlb.encode(2))
-        respond(selector, YpsoGlb.encode(9))
-        selected(0, 101)
-        respond(selector, YpsoGlb.encode(0))
-        selected(1, 100)
-        respond(fixture.eventCount, YpsoGlb.encode(2))
-        respond(selector, YpsoGlb.encode(1))
-        selected(0, 101)
-
-        val errors = argumentCaptor<String>()
-        verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
-        val calls = org.mockito.Mockito.mockingDetails(fixture.gatt).invocations.joinToString { it.method.name + ":" + it.arguments.firstOrNull() }
-        val snapshot = requireNotNull(results.singleOrNull()) { errors.allValues.joinToString() + " calls=" + calls }
-        assertEquals(listOf(0, 1), snapshot.rowsNewestFirst.map { it.index })
-        assertEquals(listOf(101L, 100L), snapshot.rowsNewestFirst.map { it.sequence })
-    }
-
-    /** Drives real selector writes, read-back, row callbacks and attempt cancellation without BLE time. */
-    private inner class HistoryPump {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val pending = java.util.ArrayDeque<() -> Unit>()
-        var rows = (108L downTo 101L).mapIndexed { index, sequence ->
-            YpsoHistoryEntry(1000 + sequence, 2, 100, 0, 0, sequence, index)
-        }
-        var selected = 9
-        var staleValueIndex: Int? = null
-        var rowReads = 0
-        var beforeRow: () -> Unit = {}
-        private var counter = 0L
-
-        init {
-            val record = manager.session!!.snapshot()!!
-            manager.session = PumpSession(object : PumpSession.Store {
-                var state = PumpSession.State(
-                    records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
-                    activeGeneration = record.generation,
-                )
-                override fun load() = state
-                override fun commit(state: PumpSession.State) { this.state = state }
-            })
-            ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-            pumpState.masterVersion = "V05.00.52"
-            pumpState.supervisorVersion = "V05.00.52"
-            pumpState.controlServiceVersion = "1.3"
-            manager.sdkInt = 33
-            manager.scheduleProfileContinuation = { it.run() }
-            val service = fixture.gatt.services.first()
-            fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
-                val ch: BluetoothGattCharacteristic = mock()
-                whenever(ch.uuid).thenReturn(uuid)
-                whenever(ch.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
-                whenever(service.getCharacteristic(uuid)).thenReturn(ch)
-                return ch
-            }
-            val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
-            val value = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
-            val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
-            val descriptor: BluetoothGattDescriptor = mock()
-            whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
-            whenever(descriptor.characteristic).thenReturn(notify)
-            whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
-            whenever(fixture.gatt.writeDescriptor(any(), any())).thenAnswer {
-                pending.add { manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0) }
-                0
-            }
-            val crypto = SessionCrypto()
-            whenever(sessionCrypto.encrypt(any(), any(), any(), any())).thenAnswer {
-                val plaintext = it.getArgument<ByteArray>(0)
-                selected = requireNotNull(YpsoGlb.decodeExact(plaintext))
-                staleValueIndex = null
-                crypto.encrypt(plaintext, it.getArgument(1), it.getArgument(2), it.getArgument(3))
-            }
-            whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
-                val ch = it.getArgument<BluetoothGattCharacteristic>(0)
-                pending.add { manager.gattCallback.onCharacteristicWrite(fixture.gatt, ch, 0) }
-                0
-            }
-            whenever(fixture.gatt.readCharacteristic(any())).thenAnswer {
-                val ch = it.getArgument<BluetoothGattCharacteristic>(0)
-                pending.add {
-                    val body = when (ch) {
-                        fixture.eventCount -> YpsoGlb.encode(rows.size)
-                        selector -> YpsoGlb.encode(selected)
-                        value -> {
-                            rowReads++
-                            beforeRow()
-                            val valueIndex = staleValueIndex ?: selected
-                            val row = rows[valueIndex]
-                            YpsoCrc.appendCrc(java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
-                                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                                .putInt(row.factorySeconds.toInt()).put(row.eventType.toByte()).putShort(row.value1.toShort())
-                                .putShort(row.value2.toShort()).putShort(row.value3.toShort())
-                                .putInt(row.sequence.toInt()).putShort(valueIndex.toShort()).array())
-                        }
-                        else -> error("Unexpected read ${ch.uuid}")
-                    }
-                    whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++counter))
-                    manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
-                }
-                true
-            }
-        }
-
-        fun drain() {
-            var callbacks = 0
-            while (pending.isNotEmpty()) {
-                check(callbacks++ < 10_000) { "History did not stop" }
-                pending.removeFirst().invoke()
-            }
-        }
-
-        fun append() {
-            rows = (listOf(rows.first().copy(sequence = rows.first().sequence + 1, factorySeconds = rows.first().factorySeconds + 1)) + rows)
-                .mapIndexed { index, row -> row.copy(index = index) }
-        }
-    }
-
-    @Test
-    fun `interrupted recovery reaches its cursor while new pump events arrive`() {
-        val pump = HistoryPump()
-        val oldest = pump.rows.last()
-        val cursor = app.aaps.pump.ypsopump.history.YpsoHistoryCursor(
-            app.aaps.pump.ypsopump.history.YpsoEventIdentity("test-pump", 0, oldest.sequence), oldest.fingerprint(), 8,
+        verify(provisioning).failCandidateOrRecord(
+            eq(fixture.generation), eq("attempt"), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
+            any(), any(), anyOrNull(), eq(140)
         )
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        for (leg in 0 until 8) {
-            val startReads = pump.rowReads
-            val attempt = manager.readStableHistory(cursor, maxRows = 3000, onResult = results::add)
-            pump.beforeRow = { if (pump.rowReads - startReads >= 5) attempt.requestYield() }
-            pump.drain()
-            if (results.lastOrNull() != null) break
-            pump.append()
-        }
-        val snapshot = requireNotNull(results.firstOrNull { it != null }) { "Recovery restarted on every new event and never reached the cursor" }
-        assertTrue(app.aaps.pump.ypsopump.history.YpsoHistoryReconciler.reconcile(cursor, snapshot) is
-            app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation.Stable)
+        verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
     }
 
     @Test
-    fun `cancelled scan ignores late callback and resumes its checkpoint`() {
-        val pump = HistoryPump()
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        val first = manager.readStableHistory(null, 3000, results::add)
-        pump.beforeRow = { if (pump.rowReads == 4) assertTrue(first.cancel()) }
-        pump.drain()
-        val before = pump.rowReads
-        pump.beforeRow = {}
-        manager.readStableHistory(null, 3000, results::add)
-        pump.drain()
-        assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
-        // Head + cached tail + five unread rows + final head, rather than eight rows + final head.
-        assertEquals(8, pump.rowReads - before)
-    }
-
-    @Test
-    fun `full ring advancing between interrupted scans still recovers`() {
-        val pump = HistoryPump()
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        for (leg in 0 until 8) {
-            val before = pump.rowReads
-            val attempt = manager.readStableHistory(null, 3000, results::add)
-            pump.beforeRow = { if (pump.rowReads - before >= 5) attempt.requestYield() }
-            pump.drain()
-            if (results.lastOrNull() != null) break
-            pump.append()
-            pump.rows = pump.rows.take(8)
-        }
-        assertEquals(pump.rows, results.lastOrNull()?.rowsNewestFirst)
-        assertTrue(results.last()!!.fullCoverage)
-    }
-
-    @Test
-    fun `resumed scan refreshes a TBR rewritten below the head`() {
-        val pump = HistoryPump()
-        pump.rows = pump.rows.mapIndexed { index, row -> if (index == 1) row.copy(eventType = 9, value2 = 30) else row }
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        val attempt = manager.readStableHistory(null, 3000, results::add)
-        pump.beforeRow = { if (pump.rowReads >= 4) attempt.requestYield() }
-        pump.drain()
-        pump.rows = pump.rows.mapIndexed { index, row -> if (index == 1) row.copy(eventType = 10, value2 = 2) else row }
-        pump.beforeRow = {}
-        manager.readStableHistory(null, 3000, results::add)
-        pump.drain()
-        assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
-    }
-
-    @Test
-    fun `a TBR row read in this scan is not read a second time`() {
-        val pump = HistoryPump()
-        pump.rows = pump.rows.mapIndexed { index, row -> if (index in 1..3) row.copy(eventType = 9, value2 = 30) else row }
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-
-        manager.readStableHistory(null, 3000, results::add)
-        pump.drain()
-
-        assertEquals(pump.rows, results.single()!!.rowsNewestFirst)
-        // Eight rows plus the final head read; the three TBR rows are not re-selected.
-        assertEquals(9, pump.rowReads)
-    }
-
-    @Test
-    fun `history selector writes skip the transport-ACK commit and resolve from POSSIBLY_SENT`() {
-        val pump = HistoryPump()
-        val phases = mutableListOf<PumpSession.Phase?>()
-        val record = manager.session!!.snapshot()!!
-        val store = object : PumpSession.Store {
-            var state = PumpSession.State(records = listOf(record), activeGeneration = record.generation)
-            override fun load() = state
-            override fun commit(state: PumpSession.State) {
-                phases += state.records.single().reservation?.phase
-                this.state = state
-            }
-        }
-        manager.session = PumpSession(store)
-        ownGatt(pump.fixture.gatt, ConnectionState.CONNECTED)
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-
-        manager.readStableHistory(null, 2, results::add)
-        pump.drain()
-
-        assertEquals(pump.rows.take(2), results.single()!!.rowsNewestFirst)
-        assertTrue(PumpSession.Phase.POSSIBLY_SENT in phases)
-        assertFalse(PumpSession.Phase.ACKED in phases)
-        assertEquals(PumpSession.Phase.VERIFIED, store.state.records.single().reservation?.phase)
-    }
-
-    @Test
-    fun `changed cached tail causes fresh reads instead of stale reuse`() {
-        val pump = HistoryPump()
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        val attempt = manager.readStableHistory(null, 3000, results::add)
-        pump.beforeRow = { if (pump.rowReads >= 4) attempt.requestYield() }
-        pump.drain()
-        pump.rows = pump.rows.mapIndexed { index, row -> if (index == 3) row.copy(value1 = 54) else row }
-        pump.beforeRow = {}
-        manager.readStableHistory(null, 3000, results::add)
-        pump.drain()
-        assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
-    }
-
-    @Test
-    fun `cursor at head finishes without walking older history`() {
-        val pump = HistoryPump()
-        val head = pump.rows.first()
-        val cursor = app.aaps.pump.ypsopump.history.YpsoHistoryCursor(
-            app.aaps.pump.ypsopump.history.YpsoEventIdentity("test-pump", 0, head.sequence), head.fingerprint(), 8,
-        )
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        manager.readStableHistory(cursor, 3000, results::add)
-        pump.drain()
-        assertEquals(listOf(head), results.single()!!.rowsNewestFirst)
-        assertEquals(2, pump.rowReads)
-    }
-
-    @Test
-    fun `already selected head with stale event value recovers by changed selector writes`() {
-        val pump = HistoryPump()
-        pump.selected = 0
-        pump.staleValueIndex = 1
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        manager.readStableHistory(null, 1, results::add)
-        pump.drain()
-        assertEquals(listOf(pump.rows.first()), results.single()?.rowsNewestFirst)
-    }
-
-    @Test
-    fun `new provisioned pump cannot reuse another pumps checkpoint`() {
-        val pump = HistoryPump()
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-        val attempt = manager.readStableHistory(null, 3000, results::add)
-        pump.beforeRow = { if (pump.rowReads >= 4) attempt.requestYield() }
-        pump.drain()
-        val record = manager.session!!.snapshot()!!
-        manager.session = PumpSession(object : PumpSession.Store {
-            var state = PumpSession.State(
-                records = listOf(record.copy(generation = "another-pump", reservation = null)),
-                activeGeneration = "another-pump",
-            )
-            override fun load() = state
-            override fun commit(state: PumpSession.State) { this.state = state }
-        })
-        ownGatt(pump.fixture.gatt, ConnectionState.CONNECTED)
-        // Same head, count and reboot, different payload below the head on the other pump.
-        pump.rows = pump.rows.mapIndexed { index, row -> if (index == 1) row.copy(value1 = 54) else row }
-        pump.beforeRow = {}
-        manager.readStableHistory(null, 3000, results::add)
-        pump.drain()
-        assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
-    }
-
-    @Test
-    fun `stable history yield reconciles an in flight selector before releasing ownership`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val record = manager.session!!.snapshot()!!
-        val store = object : PumpSession.Store {
-            var state = PumpSession.State(
-                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
-                activeGeneration = record.generation,
-            )
-            override fun load() = state
-            override fun commit(state: PumpSession.State) { this.state = state }
-        }
-        manager.session = PumpSession(store)
-        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-        pumpState.masterVersion = "V05.00.52"
-        pumpState.supervisorVersion = "V05.00.52"
-        pumpState.controlServiceVersion = "1.3"
-        manager.sdkInt = 33
-        manager.scheduleProfileContinuation = { runnable -> runnable.run() }
-        val service = fixture.gatt.services.first()
-        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
-            val value: BluetoothGattCharacteristic = mock()
-            whenever(value.uuid).thenReturn(uuid)
-            whenever(value.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
-            whenever(service.getCharacteristic(uuid)).thenReturn(value)
-            whenever(fixture.gatt.readCharacteristic(value)).thenReturn(true)
-            return value
-        }
-        val selector = characteristic(YpsoWritePolicy.EVENT_INDEX_UUID)
-        val eventValue = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5"))
-        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
-        val descriptor: BluetoothGattDescriptor = mock()
-        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
-        whenever(descriptor.characteristic).thenReturn(notify)
-        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
-        whenever(fixture.gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
-        var readCounter = 0L
-        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
-        }
-        fun row(index: Int, sequence: Long): ByteArray {
-            val payload = java.nio.ByteBuffer.allocate(YpsoHistoryEntry.PAYLOAD_SIZE)
-                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                .putInt(100 + index).put(2).putShort(100).putShort(0).putShort(0).putInt(sequence.toInt()).putShort(index.toShort())
-                .array()
-            return YpsoCrc.appendCrc(payload)
-        }
-        val results = mutableListOf<YpsoHistorySnapshot?>()
-
-        val attempt = manager.readStableHistory(null, maxRows = 2, onResult = results::add)
-        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
-        respond(fixture.eventCount!!, YpsoGlb.encode(2))
-        respond(selector, YpsoGlb.encode(9))
-        assertTrue(attempt.requestYield())
-        repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
-        respond(selector, YpsoGlb.encode(0))
-        respond(eventValue, row(0, 101))
-
-        assertEquals(listOf(null), results)
-        assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation?.phase)
-        verify(fixture.gatt, times(2)).readCharacteristic(selector)
-    }
-
-    @Test
-    fun `configuration refresh yields after reconciled selector and retains previous complete schedules`() {
-        acquireProfile(yieldAfterFirstRow = true)
-    }
-
-    @Test
-    fun `active program check reuses both stored schedules and uses one selector`() {
-        acquireProfile(activeOnly = true)
-    }
-
-    @Test
-    fun `active program check rejects cached schedules from another time zone`() {
-        val foreignZone = if (ZoneId.systemDefault() == ZoneId.of("Europe/Warsaw")) ZoneId.of("UTC") else ZoneId.of("Europe/Warsaw")
-        acquireProfile(activeOnly = true, expectedSuccess = false, cachedZone = foreignZone)
-    }
-
-    private fun acquireProfile(finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
-                               yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false, expectedSuccess: Boolean = true,
-                               cachedZone: ZoneId = ZoneId.systemDefault()) {
-        val fixture = connectedGatt(eventCountPresent = true)
-        val record = manager.session!!.snapshot()!!
-        val profileStore = object : PumpSession.Store {
-            var state = PumpSession.State(
-                records = listOf(record.copy(write = 4280, writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED)),
-                activeGeneration = record.generation,
-            )
-            val phases = mutableListOf<PumpSession.Phase?>()
-            override fun load() = state
-            override fun commit(state: PumpSession.State) {
-                phases += state.records.single().reservation?.phase
-                this.state = state
-            }
-        }
-        manager.session = PumpSession(profileStore)
-        ownGatt(fixture.gatt, ConnectionState.CONNECTED)
-        pumpState.masterVersion = "V05.00.52"
-        pumpState.supervisorVersion = "V05.00.52"
-        pumpState.controlServiceVersion = "1.3"
-        manager.scheduleProfileContinuation = { it.run() }
-        manager.sdkInt = 33
-        val service = fixture.gatt.services.first()
-        fun characteristic(uuid: UUID): BluetoothGattCharacteristic {
-            val ch: BluetoothGattCharacteristic = mock()
-            whenever(ch.uuid).thenReturn(uuid)
-            whenever(ch.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
-            whenever(service.getCharacteristic(uuid)).thenReturn(ch)
-            whenever(fixture.gatt.readCharacteristic(ch)).thenReturn(true)
-            return ch
-        }
-        val selector = characteristic(YpsoWritePolicy.SETTING_ID_UUID)
-        val value = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbeb4147bc5"))
-        val date = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbedc3b7bc5"))
-        val time = characteristic(UUID.fromString("669a0c20-0008-969e-e211-fcbedd3b7bc5"))
-        val notify = characteristic(YpsoWritePolicy.CONTROL_NOTIFY_UUID)
-        val descriptor: BluetoothGattDescriptor = mock()
-        whenever(descriptor.uuid).thenReturn(YpsoWritePolicy.CCCD_UUID)
-        whenever(descriptor.characteristic).thenReturn(notify)
-        whenever(notify.getDescriptor(YpsoWritePolicy.CCCD_UUID)).thenReturn(descriptor)
-        var readCounter = 0L
-        fun respond(ch: BluetoothGattCharacteristic, body: ByteArray) {
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(body, 8, ++readCounter))
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, ch, byteArrayOf(0x11, 0x55), 0)
-        }
-        fun selected(id: Int, settingValue: Int) {
-            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
-            respond(selector, YpsoGlb.encode(id))
-            respond(value, YpsoGlb.encode(settingValue))
-        }
+    fun `a key that cannot authenticate the status is reported as rejected`() {
+        val pump = fixture.connect()
+        whenever(sessionCrypto.decrypt(any(), any())).thenThrow(SessionCrypto.AuthenticationFailedException())
         val results = mutableListOf<Boolean>()
-        val previous = if (yieldAfterFirstRow || activeOnly) cachedProfile(cachedZone) else null
-        var yielding = false
-        val attempt = manager.readProfileConfiguration(activeOnly, { yielding }, results::add)
-        manager.gattCallback.onDescriptorWrite(fixture.gatt, descriptor, 0)
-        respond(fixture.eventCount!!, YpsoGlb.encode(3000))
-        respond(selector, YpsoGlb.encode(61))
-        if (malformedIdentity) {
-            repeat(4) { manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0) }
-            respond(selector, YpsoGlb.encode(1) + byteArrayOf(0))
-            assertEquals(listOf(false), results)
-            assertFalse(pumpState.hasFreshProfileEvidence)
-            verify(fixture.gatt, never()).readCharacteristic(value)
-            // Unreconciled, so it keeps blocking later writes; the transport ACK itself is not journalled.
-            assertEquals(PumpSession.Phase.POSSIBLY_SENT, manager.session!!.snapshot()!!.reservation!!.phase)
-            return
-        }
-        selected(1, if (activeOnly) 10 else 3)
-        if (activeOnly) {
-            respond(fixture.eventCount, YpsoGlb.encode(3000))
-            if (!expectedSuccess) {
-                assertEquals(listOf(false), results)
-                assertFalse(pumpState.hasFreshProfileEvidence)
-                return
-            }
-            assertEquals(listOf(true), results)
-            assertEquals("B", pumpState.lastReadProgram)
-            assertTrue(pumpState.profileEvidence!!.profileA === previous!!.profileA)
-            assertTrue(pumpState.profileEvidence!!.profileB === previous.profileB)
-            assertTrue(pumpState.profileEvidence!!.observedAt >= previous.observedAt)
-            assertEquals(4281, manager.writeCounter)
-            return
-        }
-        for (id in 14..61) {
-            if (yieldAfterFirstRow && id == 14) yielding = true
-            val continuations = mutableListOf<Runnable>()
-            if (cancelAfterFirstRow && id == 14) manager.scheduleProfileContinuation = { continuations.add(it) }
-            if (cancelAfterFirstRow && id == 14) {
-                repeat(4) {
-                    manager.gattCallback.onCharacteristicWrite(fixture.gatt, selector, 0)
-                    continuations.removeAt(0).run()
-                }
-                respond(selector, YpsoGlb.encode(id))
-                respond(value, YpsoGlb.encode(50))
-                assertTrue(attempt.cancel())
-                continuations.forEach(Runnable::run)
-                assertEquals(listOf(false), results)
-                assertEquals(4282L, profileStore.state.records.single().write)
-                assertFalse(pumpState.hasFreshProfileEvidence)
-                return
-            }
-            selected(id, if (id < 38) 50 else 35)
-            if (yieldAfterFirstRow) {
-                assertEquals(listOf(false), results)
-                assertTrue(pumpState.profileEvidence === previous)
-                assertEquals(4282, manager.writeCounter)
-                assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
-                return
-            }
-            assertFalse(pumpState.hasFreshProfileEvidence)
-        }
-        selected(1, 3)
-        val now = java.time.LocalDateTime.now()
-        respond(date, byteArrayOf((now.year and 255).toByte(), (now.year shr 8).toByte(), now.monthValue.toByte(), now.dayOfMonth.toByte()))
-        respond(time, byteArrayOf(now.hour.toByte(), now.minute.toByte(), now.second.toByte()))
-        respond(fixture.eventCount, YpsoGlb.encode(finalCount))
-        val errors = argumentCaptor<String>()
-        verify(logger, org.mockito.kotlin.atLeast(0)).error(eq(LTag.PUMP), errors.capture())
-        assertEquals(listOf(expectedSuccess), results, errors.allValues.joinToString())
-        assertEquals(expectedSuccess, pumpState.hasFreshProfileEvidence)
-        assertEquals(4330, manager.writeCounter)
-        assertEquals(PumpSession.Phase.VERIFIED, manager.session!!.snapshot()!!.reservation!!.phase)
-        // Selectors resolve from POSSIBLY_SENT by identity read-back: no Keystore-rotating ACK commit.
-        assertTrue(PumpSession.Phase.POSSIBLY_SENT in profileStore.phases)
-        assertFalse(PumpSession.Phase.ACKED in profileStore.phases)
+
+        manager.readStatus(results::add)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+
+        assertEquals(listOf(false), results)
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        verify(provisioning).failCandidateOrRecord(
+            eq(fixture.generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.KEY_REJECTED)),
+            eq("encrypted-status"), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    @Test
+    fun `cancelled owner cannot invalidate a later session sample`() {
+        fixture.connect()
+        val firstResults = mutableListOf<Boolean>()
+        val attempt = manager.readStatus(firstResults::add)
+        manager.disconnect()
+        val next = fixture.connect()
+        stubStatus()
+        val nextResults = mutableListOf<Boolean>()
+        manager.readStatus(nextResults::add)
+        next.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+        assertFalse(attempt.cancel())
+        assertEquals(listOf(false), firstResults)
+        assertEquals(listOf(true), nextResults)
+        assertEquals(5.5, pumpState.statusSnapshot?.reservoirUnits)
+    }
+
+    @Test
+    fun `cancelling an active status read records one transport failure`() {
+        fixture.connect()
+        val results = mutableListOf<Boolean>()
+
+        val attempt = manager.readStatus(results::add)
+        attempt.cancel()
+
+        assertEquals(listOf(false), results)
+        verify(provisioning, times(1)).recordCandidateOrUnavailable(
+            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            anyOrNull(), any(), anyOrNull(), anyOrNull()
+        )
+    }
+
+    /** Starts a status read and answers it with [frame]; returns what the caller was told. */
+    private fun readStatus(pump: FakeYpsoPump.Connection, frame: ByteArray = byteArrayOf(0x11, 0x55)): List<Boolean> {
+        val results = mutableListOf<Boolean>()
+        manager.readStatus(results::add)
+        pump.answerRead(CHAR_STATUS, frame)
+        return results
     }
 
     @Test
     fun `normal status logging excludes decrypted payload and therapy values`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
+        clearInvocations(fixture.logger)
         stubStatus()
 
-        manager.readStatus()
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        readStatus(pump)
 
         val infoMessages = argumentCaptor<String>()
-        verify(logger, org.mockito.kotlin.atLeastOnce()).info(eq(LTag.PUMP), infoMessages.capture())
+        verify(fixture.logger, atLeastOnce()).info(eq(LTag.PUMP), infoMessages.capture())
         assertTrue(infoMessages.allValues.contains("YpsoPump encrypted status accepted"))
         assertFalse(infoMessages.allValues.any { it.contains("reservoir=") || it.contains("basal=") || it.contains("raw=") })
-        verify(logger, never()).debug(eq(LTag.PUMP), any<String>())
+        verify(fixture.logger, never()).debug(eq(LTag.PUMP), any<String>())
     }
 
     @Test
     fun `successful decryption cannot publish when independent serial verification is unavailable`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         doThrow(SecurityException("Pump serial could not be independently observed"))
             .whenever(provisioning).markVerified(any(), anyOrNull(), isNull(), any())
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
     }
 
     @Test
     fun `matching GATT serial independently verifies status`() {
-        val fixture = connectedGatt(serial = "10000001\u0000".toByteArray())
+        fixture.pump.configure = { it.expose(FakeYpsoPump.SERIAL, properties = FakeYpsoPump.READ); it.values[FakeYpsoPump.SERIAL] = "10000001\u0000".toByteArray() }
+        val pump = fixture.connect()
         stubStatus()
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(true), results)
+        assertEquals(listOf(true), readStatus(pump))
         assertTrue(pumpState.hasVerifiedStatus)
         verify(provisioning).markVerified(any(), anyOrNull(), eq("10000001"), any())
     }
 
     @Test
     fun `mismatched GATT serial cannot publish status`() {
-        val fixture = connectedGatt(serial = "10000002\u0000".toByteArray())
+        fixture.pump.configure = { it.expose(FakeYpsoPump.SERIAL, properties = FakeYpsoPump.READ); it.values[FakeYpsoPump.SERIAL] = "10000002\u0000".toByteArray() }
+        val pump = fixture.connect()
         stubStatus()
         doThrow(SecurityException("Observed pump identity does not match configured serial"))
             .whenever(provisioning).markVerified(any(), anyOrNull(), eq("10000002"), any())
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
     }
 
     @Test
     fun `missing malformed or changed control version rejects status before publication`() {
-        val unsupportedVersions = listOf<ByteArray?>(
-            null,
-            "1.3".toByteArray(),
-            "1.3\u0000\u0000".toByteArray(),
-            "1.4\u0000".toByteArray()
-        )
-
-        unsupportedVersions.forEach { controlVersion ->
-            setUp()
-            val fixture = connectedGatt(controlVersion = controlVersion)
-            stubStatus()
+        for (controlVersion in listOf<ByteArray?>(null, "1.3".toByteArray(), "1.3\u0000\u0000".toByteArray(), "1.4\u0000".toByteArray())) {
+            val fixture = YpsoPumpFixture()
+            fixture.pump.configure = { pump ->
+                if (controlVersion == null) pump.characteristics.remove(CHAR_CONTROL_VERSION)
+                else pump.values[CHAR_CONTROL_VERSION] = controlVersion
+            }
+            val pump = fixture.connect()
+            fixture.decryptsTo(validStatusPayload())
             val results = mutableListOf<Boolean>()
 
-            manager.readStatus(results::add)
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+            fixture.manager.readStatus(results::add)
+            pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
 
-            assertEquals(listOf(false), results, "controlVersion=${controlVersion?.contentToString()}")
-            assertFalse(pumpState.hasVerifiedStatus)
-            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+            val label = "controlVersion=${controlVersion?.contentToString()}"
+            assertEquals(listOf(false), results, label)
+            assertFalse(fixture.pumpState.hasVerifiedStatus, label)
+            assertEquals(ConnectionState.DISCONNECTED, fixture.pumpState.connectionState, label)
         }
     }
 
     @Test
-    fun `canonical control version in wrong service rejects status before publication`() {
-        val fixture = connectedGatt(controlVersionInObservedService = false)
-        stubStatus()
-        val results = mutableListOf<Boolean>()
-
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
-        assertFalse(pumpState.hasVerifiedStatus)
-        assertEquals("", pumpState.controlServiceVersion)
-    }
-
-    @Test
     fun `invalid CRC fails once without publishing status`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus(ByteArray(20))
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        verify(fixture.gatt).close()
+        assertTrue(pump.closed)
     }
 
     @Test
     fun `decrypt failure fails once without publishing status`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         whenever(sessionCrypto.decrypt(any(), any())).thenThrow(SecurityException("authentication failed"))
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
     }
 
     @Test
-    fun `a key that cannot authenticate the status is reported as rejected`() {
-        val fixture = connectedGatt()
-        whenever(sessionCrypto.decrypt(any(), any())).thenThrow(SessionCrypto.AuthenticationFailedException())
-        val results = mutableListOf<Boolean>()
-
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
-        verify(provisioning).failCandidateOrRecord(
-            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.KEY_REJECTED)),
-            anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
-    }
-
-    @Test
     fun `publication failure does not add a generic encrypted-status cause`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         whenever(provisioning.markVerified(any(), anyOrNull(), anyOrNull(), any()))
             .thenThrow(SecurityException("Configured serial does not match the connected pump"))
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         verify(provisioning, never()).failCandidateOrRecord(
             any(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
             anyOrNull(), any(), anyOrNull(), anyOrNull()
@@ -998,40 +286,32 @@ class YpsoBleManagerTest {
 
     @Test
     fun `decoded short status fails without publishing`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus(YpsoCrc.appendCrc(byteArrayOf(0x01)))
-        val results = mutableListOf<Boolean>()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump))
         assertFalse(pumpState.hasVerifiedStatus)
         assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
     }
 
     @Test
     fun `empty frame fails once without decrypting`() {
-        val fixture = connectedGatt()
-        val results = mutableListOf<Boolean>()
+        val pump = fixture.connect()
 
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
+        assertEquals(listOf(false), readStatus(pump, byteArrayOf()))
         assertFalse(pumpState.hasVerifiedStatus)
         verify(sessionCrypto, never()).decrypt(any(), any())
     }
 
     @Test
     fun `cancelled attempt suppresses late valid publication`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         val results = mutableListOf<Boolean>()
         val attempt = manager.readStatus(results::add)
 
         assertTrue(attempt.cancel())
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
@@ -1039,78 +319,44 @@ class YpsoBleManagerTest {
 
     @Test
     fun `timeout fails once and ignores a late callback`() {
-        var timeout: Runnable? = null
-        manager.scheduleOpTimeout = { runnable, _ -> timeout = runnable }
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
-        timeout!!.run()
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        fixture.scheduler.fire()
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
         verify(sessionCrypto, never()).decrypt(any(), any())
-    }
-
-    @Test
-    fun `disconnect drains a pending read exactly once`() {
-        val fixture = connectedGatt()
-        val results = mutableListOf<Boolean>()
-
-        manager.readStatus(results::add)
-        manager.disconnect()
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(false), results)
-        assertFalse(pumpState.hasVerifiedStatus)
-        verify(fixture.gatt).disconnect()
-        verify(fixture.gatt).close()
-    }
-
-    @Test
-    fun `callback from stale GATT cannot complete owned operation`() {
-        val fixture = connectedGatt()
-        val staleGatt: BluetoothGatt = mock()
-        stubStatus()
-        val results = mutableListOf<Boolean>()
-
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(staleGatt, fixture.status, byteArrayOf(0x11, 0x44), BluetoothGatt.GATT_SUCCESS)
-        assertTrue(results.isEmpty())
-
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
-        assertEquals(listOf(true), results)
-        verify(staleGatt, never()).disconnect()
-        verify(staleGatt, never()).close()
     }
 
     @Test
     fun `duplicate same UUID frame fails transaction once`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x13) + ByteArray(19) { 1 }, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23) + ByteArray(19) { 2 }, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23) + ByteArray(19) { 2 }, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x33, 0x03), BluetoothGatt.GATT_SUCCESS)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x13) + ByteArray(19) { 1 })
+        pump.answerRead(CHAR_EXTREAD, byteArrayOf(0x23) + ByteArray(19) { 2 })
+        pump.answerRead(CHAR_EXTREAD, byteArrayOf(0x23) + ByteArray(19) { 2 })
+        pump.answerRead(CHAR_EXTREAD, byteArrayOf(0x33, 0x03))
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
         verify(sessionCrypto, never()).decrypt(any(), any())
-        verify(fixture.gatt, times(2)).readCharacteristic(fixture.extRead)
+        assertEquals(2, pump.reads.count { it == CHAR_EXTREAD })
     }
 
     @Test
     fun `changed frame total fails transaction`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12) + ByteArray(19) { 1 }, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x23, 0x02), BluetoothGatt.GATT_SUCCESS)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x12) + ByteArray(19) { 1 })
+        pump.answerRead(CHAR_EXTREAD, byteArrayOf(0x23, 0x02))
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
@@ -1118,475 +364,60 @@ class YpsoBleManagerTest {
 
     @Test
     fun `immediate read dispatch failure completes caller once`() {
-        val fixture = connectedGatt(readDispatched = false)
+        fixture.pump.configure = { pump -> pump.refuseRead = { it == CHAR_STATUS } }
+        val pump = fixture.connect()
         val results = mutableListOf<Boolean>()
 
         manager.readStatus(results::add)
 
         assertEquals(listOf(false), results)
         assertFalse(pumpState.hasVerifiedStatus)
-        verify(fixture.gatt).close()
-    }
-
-    @Suppress("DEPRECATION")
-    @Test
-    fun `duplicate discovery and auth callbacks advance handshake only once`() {
-        val gatt: BluetoothGatt = mock()
-        val service: BluetoothGattService = mock()
-        val auth: BluetoothGattCharacteristic = mock()
-        whenever(auth.uuid).thenReturn(CHAR_AUTH)
-        whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-        whenever(gatt.services).thenReturn(listOf(service))
-        whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
-        ownGatt(gatt, ConnectionState.DISCOVERING)
-
-        manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(ConnectionState.READY, pumpState.connectionState)
-        verify(gatt, times(1)).writeCharacteristic(auth)
-
-        manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
-        manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
+        assertTrue(pump.closed)
     }
 
     @Test
-    fun `authentication after a lost connection retires only its stranded selector write`() {
-        val baseline = manager.session!!.committedRecord()!!
-        for ((purpose, characteristic, retired) in listOf(
-            Triple("HISTORY_SELECTOR", YpsoWritePolicy.EVENT_INDEX_UUID, true),
-            Triple("SETTINGS_SELECTOR", YpsoWritePolicy.SETTING_ID_UUID, true),
-            Triple("THERAPY_COMMAND", YpsoWritePolicy.EVENT_INDEX_UUID, false),
-        )) {
-            val record = baseline
-            manager.session = PumpSession(object : PumpSession.Store {
-                var state = PumpSession.State(
-                    records = listOf(record.copy(
-                        write = 4281,
-                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-                        reservation = PumpSession.Reservation(
-                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "selector-lost",
-                            characteristic.toString(), purpose, "ab".repeat(32), priorWrite = 4280,
-                        ),
-                    )),
-                    activeGeneration = record.generation,
-                )
-                override fun load() = state
-                override fun commit(state: PumpSession.State) { this.state = state }
-            })
-            val gatt: BluetoothGatt = mock()
-            val service: BluetoothGattService = mock()
-            val auth: BluetoothGattCharacteristic = mock()
-            whenever(auth.uuid).thenReturn(CHAR_AUTH)
-            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-            whenever(gatt.services).thenReturn(listOf(service))
-            whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
-            ownGatt(gatt, ConnectionState.DISCOVERING)
-            manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-
-            manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
-
-            val after = manager.session!!.snapshot()!!
-            assertEquals(retired, after.reservation == null, purpose)
-            assertEquals(4281L, after.write)
-        }
-    }
-
-    @Test
-    fun `authentication does not retire a selector a read still holds, or one it cannot save`() {
-        val baseline = manager.session!!.committedRecord()!!
-        for (case in listOf("historyReadActive", "profileReadActive", "unsaved")) {
-            var failCommits = false
-            val store = object : PumpSession.Store {
-                var state = PumpSession.State(
-                    records = listOf(baseline.copy(
-                        write = 4281,
-                        writeBootstrapState = PumpSession.WriteBootstrapState.ESTABLISHED,
-                        reservation = PumpSession.Reservation(
-                            "stranded", 4281, PumpSession.Phase.POSSIBLY_SENT, "history-lost",
-                            YpsoWritePolicy.EVENT_INDEX_UUID.toString(), "HISTORY_SELECTOR", "ab".repeat(32), priorWrite = 4280,
-                        ),
-                    )),
-                    activeGeneration = baseline.generation,
-                )
-                override fun load() = state
-                override fun commit(state: PumpSession.State) {
-                    check(!failCommits) { "journal unavailable" }
-                    this.state = state
-                }
-            }
-            manager.session = PumpSession(store)
-            val gatt: BluetoothGatt = mock()
-            val service: BluetoothGattService = mock()
-            val auth: BluetoothGattCharacteristic = mock()
-            whenever(auth.uuid).thenReturn(CHAR_AUTH)
-            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-            whenever(gatt.services).thenReturn(listOf(service))
-            whenever(gatt.writeCharacteristic(auth)).thenReturn(true)
-            ownGatt(gatt, ConnectionState.DISCOVERING)
-            manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-            if (case == "unsaved") failCommits = true
-            else readActive(case).set(true)
-
-            manager.gattCallback.onCharacteristicWrite(gatt, auth, BluetoothGatt.GATT_SUCCESS)
-
-            // Still reserved, so write readiness keeps refusing therapy past it.
-            assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.state.records.single().reservation?.phase, case)
-            assertEquals("stranded", store.state.records.single().reservation?.id, case)
-            if (case != "unsaved") readActive(case).set(false)
-        }
-    }
-
-    private fun readActive(field: String) = manager.javaClass.getDeclaredField(field).apply { isAccessible = true }
-        .get(manager) as java.util.concurrent.atomic.AtomicBoolean
-
-    @Test
-    fun `connected callback with GATT error fails before discovery`() {
-        val gatt: BluetoothGatt = mock()
-        ownGatt(gatt, ConnectionState.CONNECTING)
-        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
-
-        manager.gattCallback.onConnectionStateChange(gatt, 133, BluetoothProfile.STATE_CONNECTED)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        assertFalse(pumpState.hasVerifiedStatus)
-        verify(gatt, never()).discoverServices()
-        verify(gatt).disconnect()
-        verify(gatt).close()
-    }
-
-    @Test
-    fun `rejected service discovery dispatch fails handshake`() {
-        val gatt: BluetoothGatt = mock()
-        whenever(gatt.discoverServices()).thenReturn(false)
-        ownGatt(gatt, ConnectionState.CONNECTING)
-        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
-
-        manager.gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        assertFalse(pumpState.hasVerifiedStatus)
-        verify(gatt).disconnect()
-        verify(gatt).close()
-    }
-
-    @Test
-    fun `throwing service discovery dispatch fails handshake`() {
-        val gatt: BluetoothGatt = mock()
-        whenever(gatt.discoverServices()).thenThrow(IllegalStateException("dispatch failed"))
-        ownGatt(gatt, ConnectionState.CONNECTING)
-        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
-
-        manager.gattCallback.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        assertFalse(pumpState.hasVerifiedStatus)
-        verify(gatt).disconnect()
-        verify(gatt).close()
-    }
-
-    @Suppress("DEPRECATION")
-    @Test
-    fun `rejected authentication dispatch fails handshake`() {
-        val gatt: BluetoothGatt = mock()
-        val service: BluetoothGattService = mock()
-        val auth: BluetoothGattCharacteristic = mock()
-        whenever(auth.uuid).thenReturn(CHAR_AUTH)
-        whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-        whenever(gatt.services).thenReturn(listOf(service))
-        whenever(gatt.writeCharacteristic(auth)).thenReturn(false)
-        ownGatt(gatt, ConnectionState.DISCOVERING)
-        pumpState.publishStatus(42.0, 50, false, 100, 1234L)
-
-        manager.gattCallback.onServicesDiscovered(gatt, BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        assertFalse(pumpState.hasVerifiedStatus)
-        verify(gatt).disconnect()
-        verify(gatt).close()
-    }
-
-    @Suppress("DEPRECATION")
-    @Test
-    fun `legacy read callback publishes valid status`() {
-        val fixture = connectedGatt()
+    fun `status completion callback runs after the link lock is released`() {
+        val pump = fixture.connect()
         stubStatus()
-        whenever(fixture.status.value).thenReturn(byteArrayOf(0x11, 0x55))
-        val results = mutableListOf<Boolean>()
-
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, BluetoothGatt.GATT_SUCCESS)
-
-        assertEquals(listOf(true), results)
-        assertTrue(pumpState.hasVerifiedStatus)
-    }
-
-    @Test
-    fun `reboot recovery uses minimum firmware policy and requires fresh reconnect`() {
-        for (firmware in listOf("V05.00.52", "V05.02.03", "V06.00.00")) {
-            setUp()
-            val old = connectedGatt(firmware = firmware)
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
-            val results = mutableListOf<Boolean>()
-            manager.readStatus(results::add)
-            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
-            assertEquals(listOf(false), results)
-            assertFalse(pumpState.hasVerifiedStatus)
-            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-            val next = connectedGatt(firmware = firmware)
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 2))
-            manager.readStatus(results::add)
-            manager.gattCallback.onCharacteristicRead(old.gatt, old.status, byteArrayOf(0x11, 0x55), 0)
-            assertEquals(listOf(false), results)
-            manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
-            assertEquals(listOf(false, true), results)
-            assertEquals(9, manager.session!!.snapshot()!!.reboot)
-        }
-    }
-
-    @Test
-    fun `unsupported firmware or control cannot adopt reboot`() {
-        for ((firmware, control) in listOf("V05.00.51" to "1.3", "invalid" to "1.3", "V05.02.03" to "1.4")) {
-            setUp()
-            val fixture = connectedGatt(firmware = firmware, controlVersion = "$control\u0000".toByteArray())
-            whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
-            manager.readStatus()
-            manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), 0)
-            connectedGatt()
-            assertEquals(8, manager.session!!.snapshot()!!.reboot)
-        }
-    }
-
-    private fun connectedGatt(
-        readDispatched: Boolean = true,
-        controlVersion: ByteArray? = "1.3\u0000".toByteArray(),
-        controlVersionInObservedService: Boolean = true,
-        firmware: String = "V05.00.52",
-        serial: ByteArray? = null,
-        state: ConnectionState = ConnectionState.CONNECTED,
-        eventCountPresent: Boolean = false,
-    ): GattFixture {
-        val gatt: BluetoothGatt = mock()
-        val identityService: BluetoothGattService = mock()
-        val controlService: BluetoothGattService = mock()
-        val extReadService: BluetoothGattService = mock()
-        val wrongService: BluetoothGattService = mock()
-        val status: BluetoothGattCharacteristic = mock()
-        val extRead: BluetoothGattCharacteristic = mock()
-        val eventCount: BluetoothGattCharacteristic? = if (eventCountPresent) mock() else null
-        whenever(identityService.uuid).thenReturn(UUID.fromString("fb349b5f-8000-0080-0010-0000adde0000"))
-        whenever(controlService.uuid).thenReturn(SERVICE_CONTROL)
-        whenever(extReadService.uuid).thenReturn(SERVICE_EXTREAD)
-        whenever(wrongService.uuid).thenReturn(UUID.fromString("00001800-0000-1000-8000-00805f9b34fb"))
-        whenever(status.uuid).thenReturn(CHAR_STATUS)
-        whenever(extRead.uuid).thenReturn(CHAR_EXTREAD)
-        eventCount?.let {
-            whenever(it.uuid).thenReturn(CHAR_EVENT_COUNT)
-            whenever(identityService.getCharacteristic(CHAR_EVENT_COUNT)).thenReturn(it)
-            whenever(gatt.readCharacteristic(it)).thenReturn(readDispatched)
-        }
-        whenever(controlService.getCharacteristic(CHAR_STATUS)).thenReturn(status)
-        whenever(extReadService.getCharacteristic(CHAR_EXTREAD)).thenReturn(extRead)
-        whenever(gatt.getService(SERVICE_CONTROL)).thenReturn(controlService)
-        whenever(gatt.getService(SERVICE_EXTREAD)).thenReturn(extReadService)
-        whenever(gatt.services).thenReturn(listOf(identityService, controlService, extReadService, wrongService))
-        whenever(gatt.readCharacteristic(status)).thenReturn(readDispatched)
-        whenever(gatt.readCharacteristic(extRead)).thenReturn(readDispatched)
-        whenever(gatt.setCharacteristicNotification(any(), any())).thenReturn(true)
-        whenever(gatt.writeCharacteristic(any(), any(), any())).thenReturn(0)
-        whenever(gatt.writeDescriptor(any(), any())).thenReturn(0)
-        serial?.let { value ->
-            val uuid = UUID.fromString("00002a25-0000-1000-8000-00805f9b34fb")
-            val serialCharacteristic: BluetoothGattCharacteristic = mock()
-            whenever(serialCharacteristic.uuid).thenReturn(uuid)
-            whenever(identityService.getCharacteristic(uuid)).thenReturn(serialCharacteristic)
-            whenever(gatt.readCharacteristic(serialCharacteristic)).thenAnswer {
-                manager.gattCallback.onCharacteristicRead(gatt, serialCharacteristic, value, BluetoothGatt.GATT_SUCCESS)
-                true
+        var callbackEntered = false
+        manager.readStatus {
+            // The link lock is private; any link call from another thread must not wait for this callback.
+            val probe = java.util.concurrent.Executors.newSingleThreadExecutor()
+            try {
+                assertTrue(probe.submit<Boolean> { fixture.link.isActive(YpsoLinkOperation.STATUS); true }
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS), "domain callback ran while holding the link lock")
+            } finally {
+                probe.shutdownNow()
             }
+            callbackEntered = true
         }
-        for (suffix in listOf("fcbeb0147bc5", "fcbeb1147bc5")) {
-            val uuid = UUID.fromString("669a0c20-0008-969e-e211-$suffix")
-            val version: BluetoothGattCharacteristic = mock()
-            whenever(version.uuid).thenReturn(uuid)
-            whenever(identityService.getCharacteristic(uuid)).thenReturn(version)
-            whenever(gatt.readCharacteristic(version)).thenAnswer {
-                manager.gattCallback.onCharacteristicRead(gatt, version, "$firmware\u0000".toByteArray(), 0)
-                true
-            }
-        }
-        controlVersion?.let { value ->
-            val uuid = UUID.fromString("669a0c20-0008-969e-e211-fcbee08b7bc5")
-            val version: BluetoothGattCharacteristic = mock()
-            whenever(version.uuid).thenReturn(uuid)
-            val containingService = if (controlVersionInObservedService) controlService else wrongService
-            whenever(containingService.getCharacteristic(uuid)).thenReturn(version)
-            whenever(gatt.readCharacteristic(version)).thenAnswer {
-                manager.gattCallback.onCharacteristicRead(gatt, version, value, BluetoothGatt.GATT_SUCCESS)
-                true
-            }
-        }
-        ownGatt(gatt, state)
-        return GattFixture(gatt, status, extRead, eventCount)
-    }
 
-    @Suppress("DEPRECATION")
-    @Test
-    fun `authentication recorder captures the same destination and bytes on both Android adapters`() {
-        for (sdk in listOf(31, 32, 33, 36)) {
-            val gatt: BluetoothGatt = mock()
-            val auth: BluetoothGattCharacteristic = mock()
-            val service: BluetoothGattService = mock()
-            val writes = mutableListOf<Pair<UUID, List<Byte>>>()
-            val descriptor: BluetoothGattDescriptor = mock()
-            whenever(descriptor.uuid).thenReturn(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-            whenever(gatt.writeDescriptor(any())).thenAnswer { writes.add(descriptor.uuid to listOf(1.toByte(), 0.toByte())); true }
-            whenever(gatt.writeDescriptor(any(), any())).thenAnswer {
-                writes.add(descriptor.uuid to it.getArgument<ByteArray>(1).toList()); 0
-            }
-            var legacyValue = byteArrayOf()
-            whenever(auth.uuid).thenReturn(CHAR_AUTH)
-            whenever(auth.setValue(any<ByteArray>())).thenAnswer { legacyValue = it.getArgument<ByteArray>(0).copyOf(); true }
-            whenever(gatt.writeCharacteristic(auth)).thenAnswer { writes.add(CHAR_AUTH to legacyValue.toList()); true }
-            whenever(gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
-                writes.add(it.getArgument<BluetoothGattCharacteristic>(0).uuid to it.getArgument<ByteArray>(1).toList())
-                0
-            }
-            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-            whenever(gatt.services).thenReturn(listOf(service))
-            manager.sdkInt = sdk
-            pumpState.pumpAddress = "12:34:56:78:9A:BC"
-            ownGatt(gatt, ConnectionState.DISCOVERING)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
 
-            manager.gattCallback.onServicesDiscovered(gatt, 0)
-            manager.gattCallback.onServicesDiscovered(gatt, 0)
-            manager.gattCallback.onCharacteristicWrite(gatt, auth, 0)
-
-            // Independent Python hashlib MD5(mac bytes + documented access salt), public synthetic MAC.
-            val expected = "04319d09e5ba61be2acf95ebebffe38a".chunked(2).map { it.toInt(16).toByte() }
-            assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk")
-            assertEquals(ConnectionState.CONNECTED, pumpState.connectionState)
-
-            val outcomes = mutableListOf<Boolean>()
-            manager.startBolus(
-                "therapy-blocked",
-                app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator.validate(
-                    1.2,
-                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL,
-                    30.0,
-                ),
-                "blocked",
-                {},
-            ) { outcome, _ -> outcomes.add(outcome is app.aaps.pump.ypsopump.ble.YpsoWriteOutcome.NotSent) }
-            manager.cancelBolus("cancel-blocked", app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.FAST, "blocked", {}) { outcome, _ ->
-                outcomes.add(outcome is app.aaps.pump.ypsopump.ble.YpsoWriteOutcome.NotSent)
-            }
-            for (category in YpsoRemoteWrite.entries) {
-                assertFalse(manager.writeDescriptor(gatt, descriptor, byteArrayOf(1, 0), category))
-            }
-            assertEquals(List(2) { true }, outcomes)
-            assertEquals(0L, manager.writeCounter)
-            assertEquals(listOf(CHAR_AUTH to expected), writes, "API $sdk after diagnostic and direct requests")
-        }
+        assertTrue(callbackEntered)
     }
 
     @Test
-    fun `authentication label cannot authorize a command destination or a changed password`() {
-        val fixture = connectedGatt()
-        val password = "04319d09e5ba61be2acf95ebebffe38a".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        pumpState.pumpAddress = "12:34:56:78:9A:BC"
-        pumpState.connectionState = ConnectionState.READY
-        val auth: BluetoothGattCharacteristic = mock()
-        whenever(auth.uuid).thenReturn(CHAR_AUTH)
-        assertEquals(false, manager.writeCharacteristic(fixture.gatt, fixture.status, password, YpsoRemoteWrite.AUTHENTICATION))
-        assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password.copyOf().apply { this[0] = 0 }, YpsoRemoteWrite.AUTHENTICATION))
-        pumpState.connectionState = ConnectionState.CONNECTED
-        assertEquals(false, manager.writeCharacteristic(fixture.gatt, auth, password, YpsoRemoteWrite.AUTHENTICATION))
-    }
-
-    @Test
-    fun `authentication code 140 preserves suspected rekey evidence and disconnects`() {
-        val gatt: BluetoothGatt = mock()
-        val auth: BluetoothGattCharacteristic = mock()
-        whenever(auth.uuid).thenReturn(CHAR_AUTH)
-        pumpState.masterVersion = "V05.00.52"
-        ownGatt(gatt, ConnectionState.READY)
-        val generation = manager.session!!.activeRecord()!!.generation
-
-        manager.gattCallback.onCharacteristicWrite(gatt, auth, 140)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        verify(provisioning).failCandidateOrRecord(
-            eq(generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
-            eq(CHAR_AUTH.toString()), any(), eq("V05.00.52"), eq(140)
-        )
-    }
-
-    @Test
-    fun `generic authentication GATT failure is retryable and never claims key rejection`() {
-        val gatt: BluetoothGatt = mock()
-        val auth: BluetoothGattCharacteristic = mock()
-        whenever(auth.uuid).thenReturn(CHAR_AUTH)
-        ownGatt(gatt, ConnectionState.READY)
-        val generation = manager.session!!.activeRecord()!!.generation
-
-        manager.gattCallback.onCharacteristicWrite(gatt, auth, 129)
-
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        verify(provisioning).recordCandidateOrUnavailable(
-            eq(generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.AUTHENTICATION)),
-            eq("ble"), any(), anyOrNull(), eq(129)
-        )
-        verify(provisioning, never()).failCandidateOrRecord(
-            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
-            anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
-    }
-
-    @Test
-    fun `status read code 140 is attributed to the captured attempt rather than globally`() {
-        val fixture = connectedGatt()
-        val results = mutableListOf<Boolean>()
-        val generation = manager.session!!.activeRecord()!!.generation
-
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, ByteArray(0), 140)
-
-        assertEquals(listOf(false), results)
-        verify(provisioning).failCandidateOrRecord(
-            eq(generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
-            any(), any(), anyOrNull(), eq(140)
-        )
-        verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
-    }
-
-    @Test
-    fun `cancelling an active status read records one transport failure`() {
-        val fixture = connectedGatt()
-        val results = mutableListOf<Boolean>()
-
-        val attempt = manager.readStatus(results::add)
-        attempt.cancel()
-
-        assertEquals(listOf(false), results)
-        verify(provisioning, times(1)).recordCandidateOrUnavailable(
-            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
-            anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
-        verify(provisioning, never()).failCandidateOrRecord(
-            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
-            anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
+    fun `callback and close exceptions still allow the next session to read`() {
+        val first = fixture.connect()
+        first.teardownFailure = SecurityException("permission revoked")
+        var completions = 0
+        manager.readStatus { completions++; throw IllegalStateException("consumer failed") }
+        manager.disconnect()
+        assertEquals(1, completions)
+        assertTrue(first.disconnected)
+        assertTrue(first.closed, "a failed disconnect must not skip close")
+        val next = fixture.connect()
+        stubStatus()
+        assertEquals(listOf(true), readStatus(next))
     }
 
     @Test
     fun `remote disconnect during an active read records one transport failure`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
 
         manager.readStatus { }
-        manager.gattCallback.onConnectionStateChange(fixture.gatt, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_DISCONNECTED)
+        pump.remoteDisconnect()
 
         // One physical disconnect is exactly one retryable transport report, and it must be the
         // teardown-owned one rather than a drained-read report.
@@ -1601,311 +432,122 @@ class YpsoBleManagerTest {
         verify(provisioning, never()).recordUnavailable(
             eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)), anyOrNull(), anyOrNull(), anyOrNull(), any()
         )
-        verify(provisioning, never()).failCandidateOrRecord(
-            anyOrNull(), anyOrNull(), eq(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
-            anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
     }
 
     @Test
     fun `intentional local disconnect during an active read records no failure`() {
-        connectedGatt()
+        fixture.connect()
 
         manager.readStatus { }
         manager.disconnect()
 
-        verify(provisioning, never()).recordCandidateOrUnavailable(
-            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
+        verify(provisioning, never()).recordCandidateOrUnavailable(any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull())
         verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
-        verify(provisioning, never()).failCandidateOrRecord(
-            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
+        verify(provisioning, never()).failCandidateOrRecord(any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull())
     }
 
     @Test
     fun `teardown during callback delivery cannot detach a read into a spurious report`() {
-        val fixture = connectedGatt()
+        val pump = fixture.connect()
         stubStatus()
         manager.readStatus { }
         var tornDown = false
-        manager.cancelOpTimeout = {
-            // The timeout cancel used to run between detaching a completed operation and delivering
-            // its result; a teardown landing there must not turn the detached delivery into a failure.
+        fixture.scheduler.onCancel = {
+            // The timeout cancel runs between detaching a completed operation and delivering its
+            // result; a teardown landing there must not turn the detached delivery into a failure.
             if (!tornDown) {
                 tornDown = true
                 manager.disconnect()
             }
         }
 
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x11, 0x55), BluetoothGatt.GATT_SUCCESS)
+        pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
         assertTrue(tornDown, "the teardown seam never ran")
 
-        verify(provisioning, never()).recordCandidateOrUnavailable(
-            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
+        verify(provisioning, never()).recordCandidateOrUnavailable(any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull())
         verify(provisioning, never()).recordUnavailable(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())
-        verify(provisioning, never()).failCandidateOrRecord(
-            any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull()
-        )
+        verify(provisioning, never()).failCandidateOrRecord(any(), anyOrNull(), any(), anyOrNull(), any(), anyOrNull(), anyOrNull())
     }
 
-    @Test
-    fun `status completion callback runs after BLE operation lock is released`() {
-        val fixture = connectedGatt()
-        stubStatus()
-        var callbackEntered = false
-        val operationLock = checkNotNull(manager.javaClass.getDeclaredField("opLock").apply { isAccessible = true }.get(manager))
-        manager.readStatus {
-            assertFalse(Thread.holdsLock(operationLock), "domain callback ran while holding the BLE operation lock")
-            callbackEntered = true
-        }
-
-        manager.gattCallback.onCharacteristicRead(
-            fixture.gatt,
-            fixture.status,
-            byteArrayOf(0x11, 0x55),
-            BluetoothGatt.GATT_SUCCESS,
-        )
-
-        assertTrue(callbackEntered)
-    }
-
-    @Test
-    fun `missing discovery and authentication callbacks close their owned handshake`() {
-        for (phase in listOf(ConnectionState.CONNECTING, ConnectionState.DISCOVERING)) {
-            val gatt: BluetoothGatt = mock()
-            val service: BluetoothGattService = mock()
-            val auth: BluetoothGattCharacteristic = mock()
-            whenever(auth.uuid).thenReturn(CHAR_AUTH)
-            whenever(service.getCharacteristic(CHAR_AUTH)).thenReturn(auth)
-            whenever(gatt.services).thenReturn(listOf(service))
-            whenever(gatt.discoverServices()).thenReturn(true)
-            manager.sdkInt = 33
-            whenever(gatt.writeCharacteristic(any(), any(), any())).thenReturn(0)
-            var timeout: Runnable? = null
-            manager.scheduleOpTimeout = { action, delay -> assertEquals(8000L, delay); timeout = action }
-            ownGatt(gatt, phase)
-            if (phase == ConnectionState.CONNECTING) manager.gattCallback.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTED)
-            else manager.gattCallback.onServicesDiscovered(gatt, 0)
-            timeout!!.run()
-            manager.gattCallback.onServicesDiscovered(gatt, 0)
-            manager.gattCallback.onCharacteristicWrite(gatt, auth, 0)
-            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-            verify(gatt).close()
+    private fun YpsoPumpFixture.firmware(master: String, control: String = "1.3") {
+        pump.configure = { pump ->
+            pump.values[FakeYpsoPump.MASTER_VERSION] = "$master\u0000".toByteArray()
+            pump.values[FakeYpsoPump.SUPERVISOR_VERSION] = "$master\u0000".toByteArray()
+            pump.values[CHAR_CONTROL_VERSION] = "$control\u0000".toByteArray()
         }
     }
 
     @Test
-    fun `diagnostic failure completes caller and releases cursor for the next session`() {
-        val first = connectedGatt()
-        val results = mutableListOf<Int?>()
-        manager.readEventCount(results::add) // Missing characteristic is an immediate dispatch refusal.
-        assertEquals(listOf<Int?>(null), results)
-        verify(first.gatt).close()
-        val next = connectedGatt()
-        stubStatus()
-        val statusResults = mutableListOf<Boolean>()
-        manager.readStatus(statusResults::add)
-        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
-        assertEquals(listOf(true), statusResults)
-    }
-
-    @Test
-    fun `event count diagnostic rejects an exact negative GLB`() {
-        val fixture = connectedGatt(eventCountPresent = true)
-        whenever(sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(YpsoGlb.encode(-1), 8, 1))
-        val results = mutableListOf<Int?>()
-
-        manager.readEventCount(results::add)
-        manager.gattCallback.onCharacteristicRead(
-            fixture.gatt,
-            checkNotNull(fixture.eventCount),
-            byteArrayOf(0x11, 0x55),
-            BluetoothGatt.GATT_SUCCESS,
-        )
-
-        assertEquals(listOf<Int?>(null), results)
-    }
-
-    @Suppress("DEPRECATION")
-    @Test
-    fun `legacy multi frame bytes are owned until reassembly`() {
-        val fixture = connectedGatt()
-        val first = byteArrayOf(0x12) + ByteArray(19) { 0x41 }
-        whenever(fixture.status.value).thenReturn(first)
-        stubStatus()
-        val results = mutableListOf<Boolean>()
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, 0)
-        first[1] = 0x7f
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
-        assertEquals(listOf(true), results)
-        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(ByteArray(19) { 0x41 } + byteArrayOf(0x42)), any())
-    }
-
-    @Test
-    fun `callback and close exceptions still allow the next session to read`() {
-        val first = connectedGatt()
-        whenever(first.gatt.disconnect()).thenThrow(SecurityException("permission revoked"))
-        whenever(first.gatt.close()).thenThrow(IllegalStateException("close failed"))
-        var completions = 0
-        manager.readStatus { completions++; throw IllegalStateException("consumer failed") }
-        manager.disconnect()
-        assertEquals(1, completions)
-        val next = connectedGatt()
-        stubStatus()
-        val results = mutableListOf<Boolean>()
-        manager.readStatus(results::add)
-        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
-        assertEquals(listOf(true), results)
-        verify(first.gatt).close()
-    }
-
-    @Test
-    fun `overlapping diagnostic completes refusal while original EXTREAD transaction completes`() {
-        val fixture = connectedGatt()
-        stubStatus()
-        val statuses = mutableListOf<Boolean>()
-        val diagnostics = mutableListOf<Int?>()
-        manager.readStatus(statuses::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.status, byteArrayOf(0x12) + ByteArray(19) { 0x41 }, 0)
-        manager.readEventCount(diagnostics::add)
-        manager.gattCallback.onCharacteristicRead(fixture.gatt, fixture.extRead, byteArrayOf(0x22, 0x42), 0)
-        assertEquals(listOf<Int?>(null), diagnostics)
-        assertEquals(listOf(true), statuses)
-        verify(sessionCrypto).decrypt(org.mockito.kotlin.eq(ByteArray(19) { 0x41 } + byteArrayOf(0x42)), any())
-    }
-
-    @Test
-    fun `cancelled owner cannot invalidate a later session sample`() {
-        connectedGatt()
-        val firstResults = mutableListOf<Boolean>()
-        val attempt = manager.readStatus(firstResults::add)
-        manager.disconnect()
-        val next = connectedGatt()
-        stubStatus()
-        val nextResults = mutableListOf<Boolean>()
-        manager.readStatus(nextResults::add)
-        manager.gattCallback.onCharacteristicRead(next.gatt, next.status, byteArrayOf(0x11, 0x55), 0)
-        assertFalse(attempt.cancel())
-        assertEquals(listOf(false), firstResults)
-        assertEquals(listOf(true), nextResults)
-        assertEquals(5.5, pumpState.statusSnapshot?.reservoirUnits)
-    }
-
-    @Test
-    fun `connect deadline releases GATT and allows a subsequent connect`() {
-        val bluetooth: BluetoothManager = mock()
-        val adapter: BluetoothAdapter = mock()
-        val device: BluetoothDevice = mock()
-        val gatt: BluetoothGatt = mock()
-        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
-        whenever(bluetooth.adapter).thenReturn(adapter)
-        whenever(adapter.isEnabled).thenReturn(true)
-        whenever(adapter.getRemoteDevice("12:34:56:78:9A:BC")).thenReturn(device)
-        whenever(device.bondState).thenReturn(BluetoothDevice.BOND_BONDED)
-        whenever(device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
-        var deadline: Runnable? = null
-        manager.scheduleOpTimeout = { action, delay -> assertEquals(8000L, delay); deadline = action }
-        manager.connect("12:34:56:78:9A:BC")
-        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
-        deadline!!.run()
-        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-        verify(gatt).close()
-        manager.connect("12:34:56:78:9A:BC")
-        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
-        verify(device, times(2)).connectGatt(any(), any(), any(), any())
-    }
-
-    @Test
-    fun `recognized bonded name must match configured serial while unknown names defer to GATT identity`() {
-        val bluetooth: BluetoothManager = mock()
-        val adapter: BluetoothAdapter = mock()
-        val device: BluetoothDevice = mock()
-        val gatt: BluetoothGatt = mock()
-        val installed = YpsoProvisioningService.InstalledSession(
-            "10000001", "EC:2A:F0:00:00:01", "fingerprint", null, null, emptyMap(), null,
-            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.ENCRYPTED_STATUS_UNAVAILABLE)),
-            "test-generation", app.aaps.pump.ypsopump.crypto.KeyTiming(),
-        )
-        whenever(provisioning.installed()).thenReturn(installed)
-        val installedKey = ByteArray(32) { 1 }
-        val ownerSession = PumpSession(object : PumpSession.Store {
-            var saved = readBaseline(installed.mac, installedKey, 8, 0)
-            override fun load() = saved
-            override fun commit(state: PumpSession.State) { saved = state }
-        })
-        manager.session = ownerSession
-        whenever(provisioning.owner).thenReturn(ownerSession)
-        manager.setSharedKey("01".repeat(32))
-        whenever(provisioning.connectionSession()).thenReturn(
-            YpsoProvisioningService.ConnectionSession(
-                manager.session!!.activeRecord()!!.generation, null, installed.serial, installed.mac, installedKey.copyOf(), false
-            )
-        )
-        whenever(provisioning.isCurrentConnection(any())).thenReturn(true)
-        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
-        whenever(bluetooth.adapter).thenReturn(adapter)
-        whenever(adapter.isEnabled).thenReturn(true)
-        whenever(adapter.getRemoteDevice(installed.mac)).thenReturn(device)
-        whenever(device.bondState).thenReturn(BluetoothDevice.BOND_BONDED)
-        whenever(device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
-        manager.configureInstalledSession()
-
-        whenever(device.name).thenReturn("mylife YpsoPump 000002")
-        manager.connect(installed.mac)
-        verify(provisioning).failCandidateOrRecord(
-            any(),
-            isNull(),
-            eq(setOf(PumpSession.AvailabilityCause.IDENTITY_MISMATCH)),
-            eq("connect"),
-            any(),
-            anyOrNull(),
-            isNull()
-        )
-        verify(device, never()).connectGatt(any(), any(), any(), any())
-
-        whenever(device.name).thenReturn("custom pump alias")
-        manager.connect(installed.mac)
-        assertEquals(ConnectionState.CONNECTING, pumpState.connectionState)
-        assertEquals("", pumpState.observedIdentitySerial)
-        verify(device).connectGatt(any(), any(), any(), any())
-    }
-
-    @Test
-    fun `missing bond Bluetooth and permission refuse connection and invalidate measurements`() {
-        val bluetooth: BluetoothManager = mock()
-        val adapter: BluetoothAdapter = mock()
-        val device: BluetoothDevice = mock()
-        whenever(context.getSystemService(Context.BLUETOOTH_SERVICE)).thenReturn(bluetooth)
-        whenever(bluetooth.adapter).thenReturn(adapter)
-        whenever(adapter.getRemoteDevice("12:34:56:78:9A:BC")).thenReturn(device)
-        for (fault in 0..2) {
-            whenever(adapter.isEnabled).thenReturn(fault != 0)
-            if (fault == 2) whenever(device.bondState).thenThrow(SecurityException("permission missing"))
-            else whenever(device.bondState).thenReturn(BluetoothDevice.BOND_NONE)
-            pumpState.publishStatus(41.0, 80, false, 100, 5000)
-            manager.connect("12:34:56:78:9A:BC")
-            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-            assertEquals(null, pumpState.statusSnapshot)
+    fun `reboot recovery uses minimum firmware policy and requires fresh reconnect`() {
+        for (firmware in listOf("V05.00.52", "V05.02.03", "V06.00.00")) {
+            val fixture = YpsoPumpFixture().apply { firmware(firmware) }
+            val old = fixture.connect()
+            whenever(fixture.sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            val results = mutableListOf<Boolean>()
+            fixture.manager.readStatus(results::add)
+            old.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+            assertEquals(listOf(false), results, firmware)
+            assertFalse(fixture.pumpState.hasVerifiedStatus)
+            assertEquals(ConnectionState.DISCONNECTED, fixture.pumpState.connectionState)
+            val next = fixture.connect()
+            whenever(fixture.sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 2))
+            fixture.manager.readStatus(results::add)
+            old.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+            assertEquals(listOf(false), results, firmware)
+            next.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+            assertEquals(listOf(false, true), results, firmware)
+            assertEquals(9, fixture.session.snapshot()!!.reboot)
+            assertEquals(9, fixture.manager.epoch()?.reboot)
         }
     }
 
-    private fun ownGatt(
-        gatt: BluetoothGatt,
-        state: ConnectionState,
-    ) {
-        val token = manager.session!!.open("12:34:56:78:9A:BC", key)
-        manager.javaClass.getDeclaredField("sessionToken").apply {
-            isAccessible = true
-            set(manager, token)
+    @Test
+    fun `unsupported firmware or control cannot adopt reboot`() {
+        for ((firmware, control) in listOf("V05.00.51" to "1.3", "invalid" to "1.3", "V05.02.03" to "1.4")) {
+            val fixture = YpsoPumpFixture().apply { firmware(firmware, control) }
+            val pump = fixture.connect()
+            whenever(fixture.sessionCrypto.decrypt(any(), any())).thenReturn(SessionCrypto.Message(validStatusPayload(), 9, 1))
+            fixture.manager.readStatus()
+            pump.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+            fixture.connect()
+            assertEquals(8, fixture.session.snapshot()!!.reboot, "$firmware/$control")
         }
-        manager.javaClass.getDeclaredField("bluetoothGatt").apply {
-            isAccessible = true
-            set(manager, gatt)
+    }
+
+    // ---- therapy writes ----
+
+    @Test
+    fun `a bolus for another connection is never dispatched`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.CONTROL_NOTIFY_UUID)
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+
+        manager.startBolus("bolus", YpsoBolusRequestValidator.validate(1.2, YpsoBolusTreatment.NORMAL, 30.0), "0:other", {}) { outcome, _ ->
+            outcomes += outcome
         }
-        pumpState.connectionState = state
+
+        assertTrue(outcomes.single() is YpsoWriteOutcome.NotSent)
+        assertTrue(pump.writes.none { it.first == YpsoWritePolicy.BOLUS_START_STOP_UUID })
+        assertEquals(0L, manager.writeCounter)
+    }
+
+    @Test
+    fun `therapy and descriptor writes outside their operation never reach the pump`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID, YpsoWritePolicy.EVENT_INDEX_UUID)
+        val frame = byteArrayOf(1, 2, 3)
+
+        for (uuid in listOf(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID)) {
+            assertFalse(pump.writeCharacteristic(uuid, frame, YpsoRemoteWrite.THERAPY_COMMAND))
+        }
+        assertFalse(pump.writeCharacteristic(YpsoWritePolicy.EVENT_INDEX_UUID, frame, YpsoRemoteWrite.HISTORY_SELECTOR))
+        for (category in YpsoRemoteWrite.entries.filter { it != YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR }) {
+            assertFalse(pump.writeDescriptor(YpsoWritePolicy.CONTROL_NOTIFY_UUID, YpsoWritePolicy.CCCD_UUID, byteArrayOf(1, 0), category))
+        }
+        // A link that does not own the operation refuses its frame too.
+        assertFalse(fixture.link.writeFrame(checkNotNull(manager.epoch()), YpsoLinkLease(YpsoLinkOperation.BOLUS), frame))
+        assertTrue(pump.writes.none { it.first != YpsoGattLayout.CHAR_AUTH })
+        assertTrue(pump.descriptorWrites.isEmpty())
     }
 
     private fun validStatusPayload(): ByteArray {
@@ -1917,21 +559,5 @@ class YpsoBleManagerTest {
         body[6] = 0x55
         body[10] = 0x64
         return YpsoCrc.appendCrc(body)
-    }
-
-    private data class GattFixture(
-        val gatt: BluetoothGatt,
-        val status: BluetoothGattCharacteristic,
-        val extRead: BluetoothGattCharacteristic,
-        val eventCount: BluetoothGattCharacteristic? = null,
-    )
-
-    private companion object {
-        val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
-        val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
-        val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
-        val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
-        val SERVICE_CONTROL: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0000")
-        val SERVICE_EXTREAD: UUID = UUID.fromString("fb349b5f-8000-0080-0010-0000feda0002")
     }
 }

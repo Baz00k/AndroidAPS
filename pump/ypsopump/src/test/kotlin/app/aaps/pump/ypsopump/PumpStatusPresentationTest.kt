@@ -1,7 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.resources.ResourceHelper
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -27,7 +27,7 @@ class PumpStatusPresentationTest {
 
     @Test
     fun `connected before first reading has one waiting state on both surfaces`() {
-        val state = YpsoPumpState().apply { connectionState = ConnectionState.CONNECTED }
+        val state = YpsoPumpState().apply { testConnectionState = ConnectionState.CONNECTED }
         val presentation = pumpStatusPresentation(state, rh)
         assertEquals("Connected · awaiting readings", presentation.connectionSummary)
         assertEquals(presentation.connectionSummary, presentation.shortStatus)
@@ -47,7 +47,7 @@ class PumpStatusPresentationTest {
 
         elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
         for (connection in ConnectionState.entries) {
-            state.connectionState = connection
+            state.testConnectionState = connection
             presentation = pumpStatusPresentation(state, rh)
             assertEquals(42.5, presentation.snapshot?.reservoirUnits)
             assertEquals(60, presentation.battery)
@@ -55,7 +55,7 @@ class PumpStatusPresentationTest {
             assertFalse(presentation.connectionHealthy)
         }
 
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         state.invalidateStatus(preserveDisplay = true)
         assertEquals(presentation.shortStatus, pumpStatusPresentation(state, rh).shortStatus)
         state.publishStatus(40.0, null, false, 100, 2345L)
@@ -67,7 +67,7 @@ class PumpStatusPresentationTest {
 
     @Test
     fun `reservoir and battery are taken from the same snapshot at expiry`() {
-        val state = YpsoPumpState().apply { elapsedRealtime = { 0L }; connectionState = ConnectionState.CONNECTED }
+        val state = YpsoPumpState().apply { elapsedRealtime = { 0L }; testConnectionState = ConnectionState.CONNECTED }
         state.publishStatus(0.0, 0, false, 100, 1234L)
         var elapsed = YpsoPumpState.STATUS_MAX_AGE_MS - 1
         state.elapsedRealtime = { elapsed++ }

@@ -15,24 +15,25 @@ class VerifyGattWriteOwnershipTest {
     @Test
     fun `only the annotated same-name dispatch method may call BluetoothGatt writes`() {
         for (target in listOf("writeCharacteristic", "writeDescriptor")) {
-            // The real Kotlin internal dispatch method carries the guard annotation and a module suffix.
-            checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$ypsopump_fullDebug", target, guarded = true)
+            // The real dispatch method is the annotated port override; an internal one would carry a module suffix.
+            checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", target, target, guarded = true)
+            checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", "$target\$ypsopump_fullDebug", target, guarded = true)
             // A similarly named helper without the guard annotation fails, even in the owner class.
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$unsafe", target)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", "$target\$unsafe", target)
             }
             // An annotated method with a different name is not a dispatch boundary.
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "dispatch", target, guarded = true)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", "dispatch", target, guarded = true)
             }
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", target, target)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", target, target)
             }
             assertThrows(GradleException::class.java) { checkClass("driver/Other", "dispatch", target, guarded = true) }
-            assertThrows(GradleException::class.java) { checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "bypass", target) }
+            assertThrows(GradleException::class.java) { checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", "bypass", target) }
             // Method references to GATT writes are rejected even inside the guarded dispatch method.
             assertThrows(GradleException::class.java) {
-                checkClass("app/aaps/pump/ypsopump/ble/YpsoBleManager", "$target\$ypsopump_fullDebug", target, reference = true, guarded = true)
+                checkClass("app/aaps/pump/ypsopump/ble/YpsoAndroidGattConnection", "$target\$ypsopump_fullDebug", target, reference = true, guarded = true)
             }
             assertThrows(GradleException::class.java) { checkClass("driver/GeneratedReference", "invoke", target, reference = true) }
         }
