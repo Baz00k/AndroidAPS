@@ -33,7 +33,6 @@
     <string name="statuslights">Durum ışıkları</string>
     <string name="do_ns_upload_title">KŞ verilerini NighScout\'a yükle</string>
     <string name="configbuilder_insulin">İnsülin</string>
-    <string name="value_unavailable_short">yok</string>
     <string name="master_password">Ana parola</string>
     <string name="ue_export_to_csv">Kullanıcı Girişlerini Excel\'e Aktar (csv)</string>
     <string name="confirm">Onayla</string>

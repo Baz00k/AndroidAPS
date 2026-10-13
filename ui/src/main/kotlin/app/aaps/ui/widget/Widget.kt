@@ -37,8 +37,8 @@ import app.aaps.core.keys.BooleanComposedKey
 import app.aaps.core.keys.IntComposedKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.directionToIcon
-import app.aaps.core.objects.extensions.displayText
 import app.aaps.core.objects.ui.IobDisplay
+import app.aaps.core.objects.ui.CobDisplay
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
@@ -134,9 +134,9 @@ class Widget : AppWidgetProvider() {
                 updateBg(views)
                 updateTemporaryBasal(views)
                 updateExtendedBolus(views)
-                updateIobCob(views)
                 updateTemporaryTarget(views)
                 updateProfile(views)
+                updateIobCob(views)
                 updateSensitivity(views)
                 // Instruct the widget manager to update the widget
                 appWidgetManager.updateAppWidget(appWidgetId, views)
@@ -204,7 +204,12 @@ class Widget : AppWidgetProvider() {
         views.setTextViewText(R.id.iob, iob.total)
         views.setContentDescription(R.id.iob, listOf(iob.total, iob.unavailableReason).filter { it.isNotBlank() }.joinToString(" · "))
         // cob
-        var cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter) ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+        val hasProfile = profileFunction.getProfile() != null
+        val cob = CobDisplay.from(if (hasProfile) iobCobCalculator.getCobInfo("Widget COB") else null, rh, decimalFormatter)
+        var cobText = cob.value
+        val reasons = listOf(iob.unavailableReason, if (hasProfile) cob.unavailableReason else "").filter { it.isNotBlank() }.distinct()
+        // Reuse the wrapping profile row, not another row that pushes values out of small widgets.
+        if (reasons.isNotEmpty()) views.setTextViewText(R.id.active_profile, reasons.joinToString(" · "))
 
         val constraintsProcessed = loop.lastRun?.constraintsProcessed
         val lastRun = loop.lastRun
@@ -269,7 +274,7 @@ class Widget : AppWidgetProvider() {
                 }
             } ?: rh.gc(app.aaps.core.ui.R.color.widget_ribbonCritical)
 
-        views.setTextViewText(R.id.active_profile, profileFunction.getProfileNameWithRemainingTime())
+        views.setTextViewText(R.id.active_profile, if (profileFunction.getProfile() == null) rh.gs(app.aaps.core.ui.R.string.value_unavailable_short) else profileFunction.getProfileNameWithRemainingTime())
         // this is crashing, use background as text for now
         //views.setInt(R.id.active_profile, "setBackgroundColor", profileBackgroundColor)
         //views.setTextColor(R.id.active_profile, profileTextColor)
@@ -305,7 +310,7 @@ class Widget : AppWidgetProvider() {
             )
         views.setTextViewText(R.id.sensitivity, lastAutosensData?.let {
             rh.gs(app.aaps.core.ui.R.string.autosens_short, it.autosensResult.ratio * 100)
-        } ?: "")
+        } ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short))
 
         // Show variable sensitivity
         val request = loop.lastRun?.request

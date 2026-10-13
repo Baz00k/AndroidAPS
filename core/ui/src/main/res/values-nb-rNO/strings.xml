@@ -33,7 +33,6 @@
     <string name="statuslights">Statuslys</string>
     <string name="do_ns_upload_title">Last opp BS-data til NS</string>
     <string name="configbuilder_insulin">Insulin</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Hovedpassord</string>
     <string name="ue_export_to_csv">Eksporter brukeroppføringer til Excel (csv)</string>
     <string name="confirm">Bekreft</string>

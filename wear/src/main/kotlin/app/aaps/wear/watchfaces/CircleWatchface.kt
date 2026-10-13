@@ -1,5 +1,7 @@
 package app.aaps.wear.watchfaces
 
+import app.aaps.wear.interaction.utils.withIobUnits
+
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Canvas
@@ -189,7 +191,7 @@ class CircleWatchface : WatchFace() {
         val showBgi = sp.getBoolean(R.string.key_show_bgi, false)
         val iobString =
             if (detailedIob) "${status[0].iobSum} ${status[0].iobDetail}"
-            else status[0].iobSum + getString(R.string.units_short)
+            else status[0].iobSum.withIobUnits(getString(R.string.units_short))
         val externalStatus = if (showBgi)
             "${status[0].externalStatus} $iobString ${status[0].bgi}"
         else

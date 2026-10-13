@@ -29,7 +29,7 @@ class HomeIobScreenTest {
 
     @Test fun missingProfileShowsUnavailableHeroAndSheetWithoutHidingRecordedDose() {
         val state = mutableStateOf(HomeUiState(
-            bg = "99", cob = "0 g", basal = "0.00 U/h",
+            bg = "99", cob = "--", basal = "--",
             iob = "--", iobBolus = "--", iobBasal = "--", iobSub = "No active profile",
             recentInsulin = listOf(HomeUiState.InsulinEntry(1, "10:32", "0.30 U", "", 1, 0.3)),
             ready = true
@@ -43,7 +43,7 @@ class HomeIobScreenTest {
         compose.onNodeWithText("From boluses").assertIsDisplayed()
         compose.onNodeWithText("From basal").assertIsDisplayed()
         compose.onNodeWithText("0.30 U").assertIsDisplayed()
-        compose.onAllNodesWithText("--").assertCountEquals(4) // hero plus three sheet values
+        compose.onAllNodesWithText("--").assertCountEquals(6) // three hero plus three sheet values
         compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
         compose.onAllNodesWithText("0.00 U").assertCountEquals(0)
 
@@ -53,8 +53,24 @@ class HomeIobScreenTest {
         compose.onNodeWithText("-0.05 U").assertIsDisplayed()
         compose.onAllNodesWithText("No active profile").assertCountEquals(0)
         compose.runOnIdle { state.value = state.value.copy(iob = "--", iobBolus = "--", iobBasal = "--", iobSub = "No active profile") }
-        compose.onAllNodesWithText("--").assertCountEquals(4)
+        compose.onAllNodesWithText("--").assertCountEquals(6)
         compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
+    }
+
+    @Test fun unavailableCobSheetKeepsRecordedCarbsVisibleWithReason() {
+        compose.setContent {
+            AapsTheme {
+                HomeScreen(HomeUiState(
+                    bg = "99", iob = "--", cob = "--", basal = "--", iobSub = "No active profile",
+                    recentCarbs = listOf(HomeUiState.CarbEntry(1, "10:32", "12 g", 1, 12)), ready = true
+                ), HomeActions(), graph = {})
+            }
+        }
+        compose.onNodeWithText("COB").performClick()
+        compose.onNodeWithText("Carbs on board").assertIsDisplayed()
+        compose.onNodeWithText("12 g").assertIsDisplayed()
+        compose.onAllNodesWithText("No active profile").assertCountEquals(2)[1].assertIsDisplayed()
+        compose.onAllNodesWithText("0 g").assertCountEquals(0)
     }
 
     @Test fun missingProfileReasonFitsNarrowHomeWithLargeSystemText() {

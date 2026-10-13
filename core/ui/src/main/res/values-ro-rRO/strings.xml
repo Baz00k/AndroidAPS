@@ -33,7 +33,6 @@
     <string name="statuslights">Lumini de stare</string>
     <string name="do_ns_upload_title">Încarcă date glicemie în NS</string>
     <string name="configbuilder_insulin">Insulină</string>
-    <string name="value_unavailable_short">indisponibil</string>
     <string name="master_password">Parola principală</string>
     <string name="ue_export_to_csv">Exportă înregistrările utilizatorului în Excel (csv)</string>
     <string name="confirm">Confirmă</string>

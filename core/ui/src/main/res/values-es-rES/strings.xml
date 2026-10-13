@@ -33,7 +33,6 @@
     <string name="statuslights">Luces de estado</string>
     <string name="do_ns_upload_title">Subir datos de glucosa a Nightscout</string>
     <string name="configbuilder_insulin">Insulina</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Contraseña maestra</string>
     <string name="ue_export_to_csv">Exportar entradas de usuario a Excel (csv)</string>
     <string name="confirm">Confirmar</string>

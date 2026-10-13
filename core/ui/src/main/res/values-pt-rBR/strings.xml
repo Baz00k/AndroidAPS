@@ -33,7 +33,6 @@
     <string name="statuslights">Luzes de estado</string>
     <string name="do_ns_upload_title">Enviar dados Glic. para NS</string>
     <string name="configbuilder_insulin">Insulina</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Senha mestra</string>
     <string name="ue_export_to_csv">Exportar Entradas de Usuário para Excel (csv)</string>
     <string name="confirm">Confirmar</string>

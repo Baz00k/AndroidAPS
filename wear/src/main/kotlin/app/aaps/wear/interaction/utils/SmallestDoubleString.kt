@@ -12,6 +12,7 @@ import java.util.regex.Pattern
  * Created by dlvoy on 2019-11-12
  */
 class SmallestDoubleString(inputString: String, withUnits: Units = Units.SKIP) {
+    private val unavailable = inputString.trim() == "--"
 
     private var sign: String
     private var decimal: String
@@ -26,6 +27,7 @@ class SmallestDoubleString(inputString: String, withUnits: Units = Units.SKIP) {
     }
 
     fun minimise(maxSize: Int): String {
+        if (unavailable) return "--"
         val originalSeparator = separator
         if ("0$fractional".toInt() == 0) {
             separator = ""
@@ -69,6 +71,7 @@ class SmallestDoubleString(inputString: String, withUnits: Units = Units.SKIP) {
     }
 
     override fun toString(): String {
+        if (unavailable) return "--"
         return sign + decimal + separator + fractional +
             if (withUnits == Units.USE) units else ""
     }
@@ -99,3 +102,6 @@ class SmallestDoubleString(inputString: String, withUnits: Units = Units.SKIP) {
         this.withUnits = withUnits
     }
 }
+
+/** Unknown is not a quantity: do not append insulin units to the placeholder. */
+fun String.withIobUnits(units: String): String = if (isBlank() || this == "--") "--" else this + units

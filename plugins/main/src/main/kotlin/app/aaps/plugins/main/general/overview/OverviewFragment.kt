@@ -71,8 +71,9 @@ import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.extensions.displayText
 import app.aaps.core.objects.ui.IobDisplay
+import app.aaps.core.objects.ui.BasalDisplay
+import app.aaps.core.objects.ui.CobDisplay
 import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.extensions.runOnUiThread
@@ -123,7 +124,6 @@ import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -554,18 +554,19 @@ class OverviewFragment : DaggerFragment() {
             "$targetRange · ${dateUtil.untilString(it.end, rh)}"
         }
 
-        // Basal — lead with the delivered rate (U/h); scheduled changes through the day.
+        // Basal is profile-derived, not a confirmed pump delivery rate. Missing is not zero.
         val basalData = profile?.let { iobCobCalculator.getBasalData(it, dateUtil.now()) }
         val scheduledBasal = basalData?.basal ?: 0.0
         val rateNow = if (basalData?.isTempBasalRunning == true) basalData.tempBasalAbsolute else scheduledBasal
         val basalPercent = if (scheduledBasal > 0) (rateNow / scheduledBasal * 100).roundToInt() else 100
-        val basalText = String.format(Locale.getDefault(), "%.2f U/h", rateNow)
+        val basalDisplay = BasalDisplay.from(basalData, rh)
+        val basalText = basalDisplay.rate
         val basalSubText = if (basalData?.isTempBasalRunning == true && scheduledBasal > 0)
-            "$basalPercent% · ${String.format(Locale.getDefault(), "%.2f", scheduledBasal)} sched" else ""
+            "$basalPercent% · ${basalDisplay.scheduled} sched" else ""
 
         // Stats: without a profile, empty calculator totals do not mean zero active insulin.
         val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
-        val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
+        val cob = CobDisplay.from(if (profile != null) iobCobCalculator.getCobInfo("Overview COB") else null, rh, decimalFormatter)
 
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
         // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
@@ -676,8 +677,8 @@ class OverviewFragment : DaggerFragment() {
             targetRange = targetRange,
             iob = iob.total,
             iobSub = iob.unavailableReason,
-            cob = cobText ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short),
-            cobSub = "",
+            cob = cob.value,
+            cobSub = if (profile != null) cob.unavailableReason else "",
             basal = basalText,
             basalSub = basalSubText,
             supplies = supplies,

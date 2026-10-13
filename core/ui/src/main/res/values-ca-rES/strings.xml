@@ -33,7 +33,6 @@
     <string name="statuslights">Llums d\'estat</string>
     <string name="do_ns_upload_title">Enviar dades de glucèmia a NS</string>
     <string name="configbuilder_insulin">Insulina</string>
-    <string name="value_unavailable_short">n/d</string>
     <string name="ue_export_to_csv">Exportar entrades d\'usuari a Excel (csv)</string>
     <string name="confirm">Confirmar</string>
     <string name="pump">Bomba</string>

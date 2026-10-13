@@ -33,7 +33,6 @@
     <string name="statuslights">상태 등</string>
     <string name="do_ns_upload_title">NS에 혈당데이터 업로드하기</string>
     <string name="configbuilder_insulin">인슐린</string>
-    <string name="value_unavailable_short">사용불가</string>
     <string name="master_password">마스터 비밀번호</string>
     <string name="ue_export_to_csv">사용자 항목 엑셀 파일로 내보내기 (csv)</string>
     <string name="confirm">확인</string>

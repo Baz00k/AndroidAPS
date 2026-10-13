@@ -33,7 +33,6 @@
     <string name="statuslights">Ενδείξεις κατάστασης</string>
     <string name="do_ns_upload_title">Ανέβασμα δεδομένων BG στο NS</string>
     <string name="configbuilder_insulin">Ινσουλίνη</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Κύριος κωδικός</string>
     <string name="ue_export_to_csv">Εξαγωγή καταχωρήσεων χρήστη σε Excel (csv)</string>
     <string name="confirm">Επιβεβαίωση</string>

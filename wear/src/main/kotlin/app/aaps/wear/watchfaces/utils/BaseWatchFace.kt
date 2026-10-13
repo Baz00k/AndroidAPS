@@ -1,5 +1,7 @@
 package app.aaps.wear.watchfaces.utils
 
+import app.aaps.wear.interaction.utils.withIobUnits
+
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Canvas
@@ -420,7 +422,7 @@ abstract class BaseWatchFace : WatchFace() {
         binding.bgi?.text = status[0].bgi
         val iobString =
             if (detailedIob) "${status[0].iobSum} ${status[0].iobDetail}"
-            else status[0].iobSum + getString(R.string.units_short)
+            else status[0].iobSum.withIobUnits(getString(R.string.units_short))
         externalStatus = if (showBgi)
             "${status[0].externalStatus} $iobString ${status[0].bgi}"
         else
@@ -474,7 +476,7 @@ abstract class BaseWatchFace : WatchFace() {
             binding.bgiExt1?.text = status[1].bgi
             val iobStringExt1 =
                 if (detailedIob) "${status[1].iobSum} ${status[1].iobDetail}"
-                else status[1].iobSum + getString(R.string.units_short)
+                else status[1].iobSum.withIobUnits(getString(R.string.units_short))
             externalStatusExt1 = if (showBgi)
                 "${status[1].externalStatus} $iobStringExt1 ${status[1].bgi}"
             else
@@ -529,7 +531,7 @@ abstract class BaseWatchFace : WatchFace() {
             binding.bgiExt2?.text = status[2].bgi
             val iobStringExt2 =
                 if (detailedIob) "${status[2].iobSum} ${status[2].iobDetail}"
-                else status[2].iobSum + getString(R.string.units_short)
+                else status[2].iobSum.withIobUnits(getString(R.string.units_short))
             externalStatusExt2 = if (showBgi)
                 "${status[2].externalStatus} $iobStringExt2 ${status[2].bgi}"
             else

@@ -33,7 +33,6 @@
     <string name="statuslights">Būklės indikatoriai</string>
     <string name="do_ns_upload_title">Siųsti glikemijos duomenis į NS</string>
     <string name="configbuilder_insulin">Insulinas</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Pagrindinis slaptažodis</string>
     <string name="ue_export_to_csv">Eksportuoti naudotojo įrašus į Excel (csv)</string>
     <string name="confirm">Patvirtinti</string>

@@ -33,7 +33,6 @@
     <string name="statuslights">Indikátory stavu</string>
     <string name="do_ns_upload_title">Nahrávať glykémie do NS</string>
     <string name="configbuilder_insulin">Inzulín</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Hlavné heslo</string>
     <string name="ue_export_to_csv">Exportovať užívateľské záznamy do Excelu (csv)</string>
     <string name="confirm">Potvrdiť</string>

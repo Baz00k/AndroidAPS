@@ -39,8 +39,8 @@ import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.extensions.generateCOBString
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.IobDisplay
+import app.aaps.core.objects.ui.CobDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.plugins.main.R
 import io.reactivex.rxjava3.disposables.CompositeDisposable
@@ -173,24 +173,22 @@ class PersistentNotificationPlugin @Inject constructor(
                 line1aa += "  " + tempBasalText + "."
             }
             //IOB
-            val bolusIob = iobCobCalculator.calculateIobFromBolus().round()
-            val basalIob = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
+            val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
+            val cob = CobDisplay.from(iobCobCalculator.getCobInfo("PersistentNotificationPlugin"), rh, decimalFormatter, compact = true)
             line2 =
-                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, (bolusIob.iob + basalIob.basaliob)) + " " + rh.gs(
+                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + " " + rh.gs(
                     app.aaps.core.ui.R
                         .string.cob
-                ) + ": " + iobCobCalculator.getCobInfo(
-                    "PersistentNotificationPlugin"
-                ).generateCOBString(decimalFormatter)
+                ) + ": " + cob.value
             // Displaced from the title so it stays short enough to read when bundled.
             listOfNotNull(tempBasalText, avgDeltaText).forEach { line2 += "  " + it }
+            if (!iob.isAvailable) line2 += " · " + iob.unavailableReason
+            if (cob.unavailableReason.isNotBlank()) line2 += " · " + cob.unavailableReason
             val line2aa =
-                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, (bolusIob.iob + basalIob.basaliob)) + ". " + rh.gs(
+                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + ". " + rh.gs(
                     app.aaps.core.ui.R
                         .string.cob
-                ) + ": " + iobCobCalculator.getCobInfo(
-                    "PersistentNotificationPlugin"
-                ).generateCOBString(decimalFormatter) + "."
+                ) + ": " + cob.value + "."
             line3 = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate)
             var line3aa = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate) + "."
             line3 += " - " + profileFunction.getProfileName()
@@ -229,7 +227,11 @@ class PersistentNotificationPlugin @Inject constructor(
             unreadConversationBuilder.addMessage(line3aa)
             /// End Android Auto
         } else {
-            line1 = rh.gs(app.aaps.core.ui.R.string.no_profile_set)
+            line1 = rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)
+            val unavailable = rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+            line2 = rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + unavailable + " · " +
+                rh.gs(app.aaps.core.ui.R.string.cob) + ": " + unavailable
+            line3 = rh.gs(app.aaps.core.ui.R.string.basal) + ": " + unavailable
         }
         val builder = NotificationCompat.Builder(context, notificationHolder.channelID)
         builder.setOngoing(true)
