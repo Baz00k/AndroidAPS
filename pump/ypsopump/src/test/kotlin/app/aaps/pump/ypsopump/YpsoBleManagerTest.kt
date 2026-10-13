@@ -550,6 +550,42 @@ class YpsoBleManagerTest {
         assertTrue(pump.descriptorWrites.isEmpty())
     }
 
+    @Test
+    fun `an identity read delivered after its connection was replaced cannot overwrite the successor`() {
+        val serials = ArrayDeque(listOf(null, "10000002"))
+        fixture.pump.configure = { connection ->
+            connection.expose(FakeYpsoPump.SERIAL, properties = FakeYpsoPump.READ)
+            // The first connection's serial read waits; the successor answers at once.
+            serials.removeFirst()?.let { connection.values[FakeYpsoPump.SERIAL] = "$it\u0000".toByteArray() }
+        }
+        val first = fixture.connect()
+        val firstResults = mutableListOf<Boolean>()
+        manager.readStatus(firstResults::add)
+        lateinit var successor: FakeYpsoPump.Connection
+        var replaced = false
+        // The operation has been detached and accepted for delivery; replace the connection before the
+        // result reaches the identity reader.
+        fixture.scheduler.onCancel = {
+            if (!replaced) {
+                replaced = true
+                manager.disconnect()
+                successor = fixture.connect()
+                manager.readStatus { }
+            }
+        }
+
+        first.answerRead(FakeYpsoPump.SERIAL, "10000001\u0000".toByteArray())
+
+        assertTrue(replaced, "the replacement seam never ran")
+        assertEquals("10000002", pumpState.observedIdentitySerial)
+        assertEquals("V05.00.52", pumpState.masterVersion)
+        assertEquals(listOf(false), firstResults)
+        stubStatus()
+        successor.answerRead(CHAR_STATUS, byteArrayOf(0x11, 0x55))
+        verify(provisioning).markVerified(any(), anyOrNull(), eq("10000002"), any())
+        verify(provisioning, never()).markVerified(any(), anyOrNull(), eq("10000001"), any())
+    }
+
     private fun validStatusPayload(): ByteArray {
         val body = ByteArray(18)
         body[0] = 0x0a

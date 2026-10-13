@@ -360,14 +360,20 @@ class YpsoBleManager @Inject internal constructor(
     }
 
     private fun readIdentity(epoch: YpsoConnectionEpoch, done: () -> Unit) {
-        pumpState.firmwareVersion = ""
-        pumpState.masterVersion = ""
-        pumpState.supervisorVersion = ""
-        pumpState.baseServiceVersion = ""
-        pumpState.settingsServiceVersion = ""
-        pumpState.historyServiceVersion = ""
-        pumpState.controlServiceVersion = ""
-        pumpState.observedIdentitySerial = link.bondedIdentitySerial.orEmpty()
+        // Identity and protocol fields are shared by every connection. Each write is made only while
+        // [epoch] is current, so a result accepted before a teardown and delivered after it cannot
+        // overwrite a successor's evidence. A replaced epoch ends the read; the caller's own read fails.
+        val reset = link.ifCurrent(epoch) {
+            pumpState.firmwareVersion = ""
+            pumpState.masterVersion = ""
+            pumpState.supervisorVersion = ""
+            pumpState.baseServiceVersion = ""
+            pumpState.settingsServiceVersion = ""
+            pumpState.historyServiceVersion = ""
+            pumpState.controlServiceVersion = ""
+            pumpState.observedIdentitySerial = link.bondedIdentitySerial.orEmpty()
+        }
+        if (reset == null) return done()
         var finished = false
         val candidates = listOf(
             "serial" to "00002a25-0000-1000-8000-00805f9b34fb",
@@ -393,29 +399,36 @@ class YpsoBleManager @Inject internal constructor(
             link.read(epoch, uuid) { bytes, status ->
                 if (finished) return@read
                 aapsLogger.info(LTag.PUMP, "YpsoPump identity $name status=$status")
-                if (status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
-                    if (name == "serial") pumpState.observedIdentitySerial = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
-                    // Service versions are dotted ASCII ("1.1\0"); only master/supervisor are firmware.
-                    // Control is consumed by the status decoder, so accept only the independently
-                    // observed canonical wire value. Other service versions remain diagnostic only.
-                    val serviceVersion = if (name == "control-service") {
-                        "1.3".takeIf { bytes.contentEquals(SUPPORTED_CONTROL_SERVICE_VERSION) }.orEmpty()
-                    } else {
-                        bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
-                            .takeIf { it.matches(Regex("[0-9]+\\.[0-9]+")) }.orEmpty()
+                val current = link.ifCurrent(epoch) {
+                    if (status == BluetoothGatt.GATT_SUCCESS && bytes != null) {
+                        if (name == "serial") pumpState.observedIdentitySerial = bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                        // Service versions are dotted ASCII ("1.1\0"); only master/supervisor are firmware.
+                        // Control is consumed by the status decoder, so accept only the independently
+                        // observed canonical wire value. Other service versions remain diagnostic only.
+                        val serviceVersion = if (name == "control-service") {
+                            "1.3".takeIf { bytes.contentEquals(SUPPORTED_CONTROL_SERVICE_VERSION) }.orEmpty()
+                        } else {
+                            bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
+                                .takeIf { it.matches(Regex("[0-9]+\\.[0-9]+")) }.orEmpty()
+                        }
+                        when (name) {
+                            "base-service"     -> pumpState.baseServiceVersion = serviceVersion
+                            "settings-service" -> pumpState.settingsServiceVersion = serviceVersion
+                            "history-service"  -> pumpState.historyServiceVersion = serviceVersion
+                            "control-service"  -> pumpState.controlServiceVersion = serviceVersion
+                        }
+                        val version = YpsoFirmwareVersion.fromWire(bytes)?.toString().orEmpty()
+                        if (name == "master") {
+                            pumpState.masterVersion = version
+                            pumpState.firmwareVersion = version
+                        }
+                        if (name == "supervisor") pumpState.supervisorVersion = version
                     }
-                    when (name) {
-                        "base-service"     -> pumpState.baseServiceVersion = serviceVersion
-                        "settings-service" -> pumpState.settingsServiceVersion = serviceVersion
-                        "history-service"  -> pumpState.historyServiceVersion = serviceVersion
-                        "control-service"  -> pumpState.controlServiceVersion = serviceVersion
-                    }
-                    val version = YpsoFirmwareVersion.fromWire(bytes)?.toString().orEmpty()
-                    if (name == "master") {
-                        pumpState.masterVersion = version
-                        pumpState.firmwareVersion = version
-                    }
-                    if (name == "supervisor") pumpState.supervisorVersion = version
+                }
+                if (current == null) {
+                    finished = true
+                    done()
+                    return@read
                 }
                 if (status == BluetoothGatt.GATT_SUCCESS) step(index + 1) else {
                     finished = true
