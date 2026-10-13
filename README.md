@@ -6,8 +6,19 @@
 > with or endorsed by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab.
 > If you need a supported system, use [upstream AndroidAPS](https://github.com/nightscout/AndroidAPS).
 
-This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) that modernizes the app with a
-native Android UI and develops a closed-loop insulin-delivery algorithm.
+This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) with a redesigned native Android
+UI and YpsoPump support.
+
+## Project status
+
+As of October 2026, development is limited to bug fixes and YpsoPump driver improvements. Broad
+modernization and routine upstream backports are paused, although upstream bug fixes may still be
+adapted when they address a relevant bug here. All new feature work, including closed-loop algorithm
+research and development, is suspended to avoid duplicating upstream effort.
+
+Assessing and attempting a migration of the YpsoPump work onto upstream AndroidAPS will wait until
+AndroidAPS 4.0 stable is released. The migration is not guaranteed. A stable upstream release does not
+make a migrated build ready for therapy use; it will need separate verification first.
 
 ## What this fork changes
 
