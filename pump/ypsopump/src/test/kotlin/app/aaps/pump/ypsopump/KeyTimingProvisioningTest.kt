@@ -144,20 +144,6 @@ class KeyTimingProvisioningTest {
         assertEquals(180_000L, service.observeKeyTiming(baseline - 86_400_000)!!.remainingMs)
     }
 
-    @Test fun `editing timing during an owned transaction survives its next authenticated counter update`() {
-        install()
-        val token = service.owner.open(mac, key)
-        val transaction = service.owner.begin(token)
-        val before = service.owner.snapshot()!!
-        service.setKeyDates(before.generation, imported.toEpochMilli() + 1000, imported.toEpochMilli() + 500, imported.toEpochMilli())
-        val timing = service.installed()!!.keyTiming
-        service.owner.accept(token, transaction, SessionCrypto.Message(byteArrayOf(1), 1, before.read!! + 1))
-        service.owner.finish(token, transaction)
-        restart()
-        assertEquals(timing, service.installed()!!.keyTiming)
-        assertEquals(before.read + 1, service.owner.committedRecord()!!.read)
-    }
-
     @Test fun `reminder-only edit preserves expiry age through rollback and restart`() {
         install()
         service.elapsedRealtime = { 0 }

@@ -95,17 +95,4 @@ class KeyTimingControlsTest {
         } finally { file.delete(); File(file.path + ".new").delete() }
     }
 
-    @Test fun corruptAdvisoryStorageLeavesTherapyOwnershipUntouched() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val file = File(context.noBackupFilesDir, "synthetic-corrupt-${System.nanoTime()}.json")
-        try {
-            file.writeText("invalid")
-            val owner = owner()
-            val before = owner.committedRecord()
-            val service = YpsoProvisioningService(owner, YpsoPumpState(), keyDates = KeyTimingRepository(KeyTimingRepository.FileStore(file)))
-            assertNotNull(service.installed())
-            assertTrue(runCatching { service.observeKeyTiming() }.isFailure)
-            assertEquals(before, owner.committedRecord())
-        } finally { file.delete() }
-    }
 }

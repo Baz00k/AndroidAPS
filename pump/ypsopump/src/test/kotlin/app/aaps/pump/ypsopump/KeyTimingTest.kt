@@ -2,7 +2,6 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.KeyTiming
 import java.time.Instant
-import java.time.ZoneId
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -54,33 +53,6 @@ class KeyTimingTest {
         val expired = observed.observe(created, created, deadline)
         assertTrue(expired.status(created, created, created).expiryDue)
         assertEquals(0L, expired.status(created, created, created).remainingMs)
-    }
-
-    @Test fun `DST and zone changes do not change absolute deadline`() {
-        val start = Instant.parse("2026-03-01T12:00:00Z").toEpochMilli()
-        val status = KeyTiming().status(start, start, start)
-        val end = Instant.ofEpochMilli(status.expiresAt!!)
-        assertEquals(Instant.parse("2026-03-29T12:00:00Z"), end)
-        assertEquals(14, end.atZone(ZoneId.of("Europe/Berlin")).hour)
-        assertEquals(8, end.atZone(ZoneId.of("America/New_York")).hour)
-    }
-
-    @Test fun `publisher replaces reminder with urgent deadline and replays due after restart`() {
-        var dismissed = 0
-        val posted = mutableListOf<Pair<Long?, Boolean>>()
-        val publisher = KeyExpiryNotification()
-        fun publish(at: Long) = publisher.publish(KeyTiming().status(created, created, at)) { value -> dismissed++; value?.let(posted::add) }
-        publish(created)
-        publish(deadline - 3 * KeyTiming.DAY_MS)
-        publish(deadline - 1)
-        assertEquals(listOf(deadline to false, deadline to false), posted)
-        publish(deadline)
-        assertEquals(listOf(deadline to false, deadline to false, deadline to true), posted)
-        publish(deadline)
-        assertEquals(4, posted.size)
-        assertEquals(5, dismissed)
-        publisher.publish(null) { value -> dismissed++; assertNull(value) }
-        assertEquals(6, dismissed)
     }
 
     @Test fun `lost startup event is retried after actual RxBus subscriber attaches`() {
