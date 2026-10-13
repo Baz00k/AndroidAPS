@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "skills": {
+    "android-cli": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "devtools/android-cli/SKILL.md",
+      "computedHash": "1197759e24bcabbe7e2111b51a46f04f95866c65f3dc906ded53384e3b239e81"
+    },
+    "android-intent-security": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "security/android-intent-security/SKILL.md",
+      "computedHash": "9f0e9b26ba6624d174f49225370ed3abcfdc2f8bff49b9b7cc997f81d5e08f6d"
+    },
+    "android-permissions-security": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "security/android-permissions-security/SKILL.md",
+      "computedHash": "9b92b71e414068a7495d303dc683c4ca3040d8a899f94a4af11bb013998ba081"
+    },
+    "android-profiler": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "profilers/android-profiler/SKILL.md",
+      "computedHash": "845c7c63503a3e8e59f38e889a2706214f0a239a68f1887ba1377506df534223"
+    },
+    "edge-to-edge": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "system/edge-to-edge/SKILL.md",
+      "computedHash": "7db3c09f145f5bad71b09da526dad46cb8b2ace56e62e87aa2ca7e81a0b4790e"
+    },
+    "migrate-xml-views-to-jetpack-compose": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "jetpack-compose/migration/migrate-xml-views-to-jetpack-compose/SKILL.md",
+      "computedHash": "c3d009ea327d0c56bf2a062a7b9e69801006af47700e71f7bac38401225df4e8"
+    },
+    "testing-setup": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "testing/testing-setup/SKILL.md",
+      "computedHash": "9e8754753f1fd42f659c98dc0dc9ae638858f3fd813de9e4fe5c4c05b30c4058"
+    },
+    "wear-compose-m3": {
+      "source": "android/skills",
+      "ref": "2ee8c61ff64f29a19213f116807c79740749dccf",
+      "sourceType": "github",
+      "skillPath": "wear/wear-compose-m3/SKILL.md",
+      "computedHash": "ed437831884c3e1f24816453c348fb14079f16df4c738ae08c24933e735d0bfd"
+    }
+  }
+}
