@@ -6,8 +6,8 @@
 > with or endorsed by AndroidAPS, the Nightscout Foundation, Ypsomed or CamDiab.
 > If you need a supported system, use [upstream AndroidAPS](https://github.com/nightscout/AndroidAPS).
 
-This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) that modernizes the app with a
-native Android UI and develops a closed-loop insulin-delivery algorithm.
+This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) with a redesigned native Android
+UI and YpsoPump support.
 
 ## What this fork changes
 
@@ -36,6 +36,11 @@ upstream behavior, so it may not match the changes listed above.
 ./gradlew :app:assembleFullLoop   # non-debuggable/AOT-eligible
 ./gradlew :app:assembleFullDebug  # debuggable development build
 ```
+
+## Project status
+
+As of October 2026, all modernization and new feature development is suspended and waiting for stable AndroidAPS 4.0 release.
+Current work is limited to bug fixes and YpsoPump driver improvements.
 
 ## Licence
 
