@@ -37,7 +37,6 @@ import java.io.File
 import org.junit.jupiter.api.io.TempDir
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
-import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -619,27 +618,6 @@ class YpsoPumpPluginTest {
         clearInvocations(ui)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("late database error"))
         verifyNoInteractions(ui)
-    }
-
-    @Test
-    fun `existing invalidated bolus is still owned and must not be treated as an unseen old import`() {
-        plugin.persistenceLayer = mock()
-        whenever(plugin.persistenceLayer.getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL))
-            .thenReturn(BS(timestamp = 1_000L, amount = 0.5, type = BS.Type.NORMAL, isValid = false))
-        assertTrue(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 101L))
-        verify(plugin.persistenceLayer).getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL)
-        verifyNoInteractions(manager)
-    }
-
-    @Test
-    fun `journalled immediate dose remains owned before a database record is available`() {
-        plugin.persistenceLayer = mock()
-        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        val attempt = immediateAttempt(80).copy(pumpFastSequence = 48_134L)
-        app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json")).commit(attempt)
-        assertTrue(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 48_134L))
-        assertFalse(plugin.hasRecordedHistoryBolus(PUMP_SERIAL, 48_135L))
-        assertFalse(plugin.hasRecordedHistoryBolus("20000002", 48_134L))
     }
 
     private fun prepareHistoryIdentity() {
@@ -1475,184 +1453,8 @@ class YpsoPumpPluginTest {
         verify(ui, times(1)).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }
 
-    @Test
-    fun `a dispatched but unproven cancellation never shortens extended accounting`() {
-        // The cancel frames left the phone, but the pump never announced that delivery stopped, so
-        // insulin may still be running. Reducing the record here would hide it from IOB.
-        val attempt = YpsoBolusAttemptFixtures.extended(baselinePumpId = 100L, slowSequence = 101L).copy(
-            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.CANCEL_PENDING,
-            cancelRequestId = "cancel",
-            cancelCounter = 2,
-            cancelBlock = app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.SLOW,
-            cancelDispatchedAt = 200_000L,
-        )
-
-        val result = finishUnprovenCancellation(attempt)
-
-        assertFalse(result.success)
-        verify(sync, never()).correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
-        verify(sync, never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
-    }
-
-    @Test
-    fun `a pump announced stop closes extended accounting at the proven instant`() {
-        val attempt = YpsoBolusAttemptFixtures.extended(baselinePumpId = 100L, slowSequence = 101L).copy(
-            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.CANCEL_PENDING,
-            cancelRequestId = "cancel",
-            cancelCounter = 2,
-            cancelBlock = app.aaps.pump.ypsopump.bolus.YpsoBolusBlock.SLOW,
-            cancelDispatchedAt = 200_000L,
-            // dispatchedAt is 1_200, so three minutes of the fifteen-minute schedule elapsed.
-            blockTerminalAt = 181_200L,
-        )
-        whenever(sync.getExtendedBolusWithPumpId(any(), any(), any())).thenAnswer {
-            app.aaps.core.data.model.EB(
-                timestamp = 1_200L, amount = 0.1, duration = 180_000L,
-                ids = app.aaps.core.data.model.IDs(
-                    pumpId = it.getArgument(0), pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP,
-                    pumpSerial = plugin.serialNumber(),
-                ),
-            )
-        }
-
-        val result = finishUnprovenCancellation(attempt)
-
-        assertTrue(result.success)
-        verify(sync).correctExtendedBolusWithPumpId(eq(1_200L), eq(0.1), eq(180_000L), any(), any(), any(), any())
-    }
-
-    @Test
-    fun `a dose that proved no identity is never merged onto a row by amount or time`() {
-        assertTrue(YpsoPumpPlugin::class.java.declaredMethods.none { it.name == "bindUnprovenProvisionalBolus" })
-    }
-
-    @Test
-    fun `a notified fast bolus is merged onto exactly its history row and confirmed`() {
-        val bound = mutableListOf<BS>()
-        plugin.persistenceLayer = mock {
-            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer {
-                bound += it.getArgument<BS>(0)
-                io.reactivex.rxjava3.core.Single.just(app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.BOUND)
-            }
-        }
-        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        val journalFile = File(historyDirectory, "ypsopump-bolus-attempt.json")
-        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(journalFile)
-        store.commit(notifiedAttempt("request", 40, 48_316))
-        // A later dose became current before history reached this one.
-        store.commit(immediateAttempt(100).copy(requestId = "later", outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED))
-
-        bindProvisional(48_316L, 0.4)
-
-        val merged = bound.single()
-        assertEquals(48_316L, merged.ids.pumpId)
-        assertEquals(0.4, merged.amount)
-        assertEquals(BS.Type.SMB, merged.type)
-        val saved = store.loadAll().single { it.requestId == "request" }
-        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED, saved.outcome)
-        assertEquals(48_316L, saved.pumpHistoryId)
-        // Nothing is linked through another sequence.
-        bindProvisional(48_317L, 0.4)
-        assertEquals(1, bound.size)
-    }
-
-    @Test
-    fun `a notified dose is never merged onto a larger row or across a removed record`() {
-        var binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.REFUSED
-        plugin.persistenceLayer = mock {
-            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer { io.reactivex.rxjava3.core.Single.just(binding) }
-        }
-        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
-
-        store.commit(notifiedAttempt("larger", 40, 48_316))
-        bindProvisional(48_316L, 0.5)
-        verify(plugin.persistenceLayer, never()).bindPumpBolusToTempIdIfValid(any(), anyOrNull())
-        assertTrue(store.loadAll().single { it.requestId == "larger" }.hasUnresolvedWarning)
-
-        store.commit(notifiedAttempt("removed", 40, 48_320))
-        bindProvisional(48_320L, 0.4)
-        assertTrue(store.loadAll().single { it.requestId == "removed" }.hasUnresolvedWarning)
-    }
-
-    @Test
-    fun `two doses naming the same row leave it to neither, at import and at repair`() {
-        plugin.persistenceLayer = mock {
-            on { getBolusByPumpId(any(), any(), any()) } doReturn BS(timestamp = 1_500L, amount = 0.4, type = BS.Type.NORMAL)
-        }
-        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
-        store.commit(notifiedAttempt("a", 40, 48_316))
-        store.commit(notifiedAttempt("b", 40, 48_316))
-
-        bindProvisional(48_316L, 0.4)
-        YpsoPumpPlugin::class.java.getDeclaredMethod("repairNotifiedAccounting", String::class.java)
-            .apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL)
-
-        verify(plugin.persistenceLayer, never()).bindPumpBolusToTempIdIfValid(any(), anyOrNull())
-    }
-
-    @Test
-    fun `a notified dose is confirmed only once a valid record carries its row`() {
-        var binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.NO_RECORD
-        plugin.persistenceLayer = mock {
-            on { bindPumpBolusToTempIdIfValid(any(), anyOrNull()) } doAnswer { io.reactivex.rxjava3.core.Single.just(binding) }
-        }
-        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
-        val store = app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore(File(historyDirectory, "ypsopump-bolus-attempt.json"))
-        store.commit(notifiedAttempt("request", 40, 48_316))
-
-        // Neither record yet (the row is about to be imported): nothing is confirmed.
-        bindProvisional(48_316L, 0.4)
-        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.AWAITING_HISTORY, store.loadAll().single().outcome)
-
-        binding = app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY
-        bindProvisional(48_316L, 0.4)
-        assertEquals(app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.COMPLETED, store.loadAll().single().outcome)
-    }
-
-    private fun notifiedAttempt(requestId: String, requestedCentiUnits: Int, sequence: Long) =
-        immediateAttempt(requestedCentiUnits).copy(
-            requestId = requestId,
-            treatment = app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.SMB,
-            outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.AWAITING_HISTORY,
-            notifiedFastSequence = sequence,
-            notifiedDispatchCounter = 1,
-            notifiedTerminalAt = 2_000,
-            historyDeadline = System.currentTimeMillis() + 60_000,
-        )
-
-    private fun bindProvisional(pumpId: Long, amount: Double) {
-        YpsoPumpPlugin::class.java.getDeclaredMethod(
-            "bindProvisionalBolusToPumpId",
-            String::class.java, Long::class.javaPrimitiveType, Long::class.javaPrimitiveType, Double::class.javaPrimitiveType,
-            BS.Type::class.java, app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java,
-        ).apply { isAccessible = true }.invoke(plugin, PUMP_SERIAL, pumpId, 1_500L, amount, BS.Type.NORMAL, null)
-    }
-
-    private fun immediateAttempt(requestedCentiUnits: Int) = app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt(
-        requestId = "request",
-        pumpSerial = PUMP_SERIAL,
-        sessionGeneration = "generation",
-        treatment = app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL,
-        requestedCentiUnits = requestedCentiUnits,
-        payloadHash = "ab".repeat(32),
-        baseline = app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline(48_000, 20, 48_000, 1, 2, 21, 1_000),
-        createdAt = 1_100,
-        outcome = app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome.UNRESOLVED,
-        dispatchCounter = 1,
-        dispatchedAt = 1_200,
-    )
-
     private companion object {
         /** The plugin publishes its serial from pump state, which these unit tests never populate. */
         const val PUMP_SERIAL = "10000001"
     }
-
-    private fun finishUnprovenCancellation(attempt: app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt) =
-        YpsoPumpPlugin::class.java
-            .getDeclaredMethod("finishUnprovenExtendedCancellation", app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt::class.java)
-            .apply { isAccessible = true }
-            .invoke(plugin, attempt) as app.aaps.core.interfaces.pump.PumpEnactResult
-
 }

@@ -1,28 +1,25 @@
 package app.aaps.pump.ypsopump.bolus
 
 import app.aaps.core.data.model.BS
-import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoWriteAccounting
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.comm.YpsoBolusNotification
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.commands.BolusCommand
-import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.history.YpsoBolusPumpIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Production owner of one bolus from durable intent through same-link block identity proof. */
 internal class YpsoImmediateBolusController(
-    private val bleManager: YpsoBleManager,
+    private val link: YpsoBolusLink,
     private val journal: YpsoBolusAttemptJournal,
     private val serialNumber: () -> String,
     private val historyCursor: () -> YpsoHistoryCursor?,
     private val now: () -> Long = System::currentTimeMillis,
+    private val sleep: (Long) -> Unit = Thread::sleep,
 ) {
     enum class StopResult { RETRY, DISPATCHED_OR_PENDING, NOT_APPLICABLE }
 
@@ -40,7 +37,7 @@ internal class YpsoImmediateBolusController(
     private val delivering = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
     private val historyYieldRequested = AtomicBoolean(false)
-    private val commandOwner = AtomicReference<YpsoBleManager.BolusCommandOwner?>()
+    private val commandOwner = AtomicReference<YpsoBolusLink.Owner?>()
 
     /** Terminal announcement seen before its block identity was journalled: block, sequence, time. */
     private val pendingTerminal = AtomicReference<Triple<YpsoBolusBlock, Long, Long>?>()
@@ -242,17 +239,17 @@ internal class YpsoImmediateBolusController(
     fun deliver(request: YpsoValidatedBolusRequest): DeliveryResult {
         check(delivering.get()) { "delivery lifecycle was not acquired" }
         run {
-            val session = bleManager.session?.snapshot()
+            val session = link.session()
                 ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_SET_UP)
             // Use the durable cursor maintained by ordinary history synchronization. A bolus must not
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
             val cursor = historyCursor() ?: return DeliveryResult.NotSent(YpsoBolusMessage.SYNC_IN_PROGRESS)
             if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
-            val baselineConnection = bleManager.currentBolusConnectionKey()
+            val baselineConnection = link.connectionKey()
                 ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
-            val baselineStatus = readBolusStatus() ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
-            if (bleManager.currentBolusConnectionKey() != baselineConnection) {
+            val baselineStatus = link.status() ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
+            if (link.connectionKey() != baselineConnection) {
                 return DeliveryResult.NotSent(YpsoBolusMessage.CONNECTION_DROPPED_NO_INSULIN)
             }
             // The pump itself is the only authority on whether it is busy. An unreachable pump cannot be
@@ -264,7 +261,7 @@ internal class YpsoImmediateBolusController(
                 return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_ALREADY_EXTENDED_BOLUSING)
             }
             val serial = serialNumber()
-            val generation = bleManager.session?.activeRecord()?.generation
+            val generation = link.sessionGeneration()
                 ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
             val reboot = session.reboot ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
             if (cursor.identity.pumpSerial != serial || cursor.pumpReboot != reboot.toLong()) {
@@ -297,21 +294,15 @@ internal class YpsoImmediateBolusController(
             journal.prepare(attempt)
             if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
 
-            val outcome = runCatching { awaitWrite { callback ->
-                bleManager.startBolus(
-                    requestId,
-                    request,
-                    baselineConnection,
-                    beforeDispatch = { reservation ->
-                        check(!stopRequested.get()) { "bolus was cancelled before dispatch" }
-                        journal.beforeDispatch(requestId, reservation.counter, now())
-                        // Armed only once the dispatch is durable, before any frame leaves. A re-dispatch
-                        // re-arms, so evidence from the rejected dispatch never carries over.
-                        armDispatchConnection(baselineConnection, reservation.counter)
-                    },
-                    onOutcome = callback,
-                )
-            } }.getOrElse {
+            val outcome = runCatching {
+                link.start(requestId, request, baselineConnection, beforeDispatch = { counter ->
+                    check(!stopRequested.get()) { "bolus was cancelled before dispatch" }
+                    journal.beforeDispatch(requestId, counter, now())
+                    // Armed only once the dispatch is durable, before any frame leaves. A re-dispatch
+                    // re-arms, so evidence from the rejected dispatch never carries over.
+                    armDispatchConnection(baselineConnection, counter)
+                })
+            }.getOrElse {
                 return DeliveryResult.Uncertain(YpsoBolusMessage.PUMP_DID_NOT_RESPOND)
             }
             when (val value = outcome.first) {
@@ -328,8 +319,8 @@ internal class YpsoImmediateBolusController(
                 is YpsoWriteOutcome.Verified -> Unit
             }
             val owner = outcome.second ?: return DeliveryResult.Uncertain(YpsoBolusMessage.CONNECTION_DROPPED_WHILE_SENDING)
-            if (bleManager.connectionKey(owner) != baselineConnection) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "connection changed between dispatch and identity proof")
+            if (owner.connectionKey != baselineConnection) {
+                link.recordUnresolved(owner, requestId, payloadHash, "connection changed between dispatch and identity proof")
                 journal.unresolved(requestId, "connection changed between dispatch and identity proof")
                 return DeliveryResult.Uncertain(YpsoBolusMessage.CONNECTION_DROPPED_WHILE_SENDING)
             }
@@ -337,7 +328,7 @@ internal class YpsoImmediateBolusController(
 
             val proof = pollIdentity(attempt, request, owner)
             if (proof == null) {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, "no bolus status proved this command's block identity")
+                link.recordUnresolved(owner, requestId, payloadHash, "no bolus status proved this command's block identity")
                 // A fast bolus can end before any status read shows its programmed amount. The pump still
                 // named its sequence and announced it stopped, which lets history account for it.
                 awaitHistoryIfNotified(requestId)?.let { return DeliveryResult.AwaitingHistory(it) }
@@ -352,7 +343,7 @@ internal class YpsoImmediateBolusController(
                         journal.observeSlowDelivering(requestId, proof.extendedSequence, cents(proof.extendedTotalUnits))
                 }
             }.getOrElse {
-                bleManager.recordBolusUnresolved(owner, requestId, payloadHash, it.message ?: "delivery identity could not be journalled")
+                link.recordUnresolved(owner, requestId, payloadHash, it.message ?: "delivery identity could not be journalled")
                 journal.unresolved(requestId, it.message ?: "delivery identity could not be journalled")
                 return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
@@ -365,11 +356,11 @@ internal class YpsoImmediateBolusController(
                 YpsoBolusShape.IMMEDIATE -> "fast block ${proof.fastSequence}"
                 YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> "slow block ${proof.extendedSequence}"
             }
-            if (!bleManager.verifyBolusAccepted(owner, requestId, payloadHash, "$proofDetail programmed ${request.centiUnits} centi-units")) {
+            if (!link.verifyAccepted(owner, requestId, payloadHash, "$proofDetail programmed ${request.centiUnits} centi-units")) {
                 journal.unresolved(requestId, "bolus acceptance could not be reconciled with write accounting")
                 return DeliveryResult.Uncertain(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)
             }
-            if (stopRequested.get()) cancelProven(programmed, proof, bleManager.connectionKey(owner))
+            if (stopRequested.get()) cancelProven(programmed, proof, owner.connectionKey)
             val observedDelivered = when (request.shape) {
                 YpsoBolusShape.IMMEDIATE -> proof.deliveredUnits
                 YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> proof.extendedDeliveredUnits
@@ -384,9 +375,8 @@ internal class YpsoImmediateBolusController(
         if (attempt.cancelRequestId != null) return StopResult.DISPATCHED_OR_PENDING
         if (attempt.provenCancelBlock == null) return StopResult.RETRY
         val owner = commandOwner.get()
-        val status = if (owner != null) readBolusStatus(owner) else readBolusStatus()
-        if (status == null) return StopResult.RETRY
-        val connectionKey = owner?.let(bleManager::connectionKey) ?: bleManager.currentBolusConnectionKey() ?: return StopResult.RETRY
+        val status = link.status(owner) ?: return StopResult.RETRY
+        val connectionKey = owner?.connectionKey ?: link.connectionKey() ?: return StopResult.RETRY
         cancelProven(attempt, status, connectionKey)
         return if (journal.current()?.cancelRequestId != null) StopResult.DISPATCHED_OR_PENDING else StopResult.RETRY
     }
@@ -416,15 +406,11 @@ internal class YpsoImmediateBolusController(
         val cancelHash = YpsoWriteAccounting.sha256(
             YpsoCrc.appendCrc(BolusCommand.cancelPayload(extended = block == YpsoBolusBlock.SLOW))
         )
-        val outcome = runCatching { awaitWrite { callback ->
-            bleManager.cancelBolus(
-                cancelId,
-                block,
-                expectedConnection,
-                beforeDispatch = { reservation -> journal.requestCancel(attempt.requestId, cancelId, reservation.counter, block, now()) },
-                onOutcome = callback,
-            )
-        } }.getOrElse {
+        val outcome = runCatching {
+            link.cancel(cancelId, block, expectedConnection, beforeDispatch = { counter ->
+                journal.requestCancel(attempt.requestId, cancelId, counter, block, now())
+            })
+        }.getOrElse {
             journal.unresolved(attempt.requestId, it.message ?: "cancel write callback timed out")
             return
         }
@@ -436,13 +422,13 @@ internal class YpsoImmediateBolusController(
                 if (journal.current()?.cancelRequestId == cancelId) journal.cancelNotSent(attempt.requestId, value.failure.detail)
             }
             is YpsoWriteOutcome.PossiblyApplied -> {
-                outcome.second?.let { bleManager.recordBolusUnresolved(it, cancelId, cancelHash, value.failure.detail) }
+                outcome.second?.let { link.recordUnresolved(it, cancelId, cancelHash, value.failure.detail) }
                 journal.unresolved(attempt.requestId, value.failure.detail)
             }
             is YpsoWriteOutcome.AcceptedUnverified -> {
                 journal.observeCancelDelivery(attempt.requestId, delivered)
                 val owner = outcome.second ?: return
-                val after = readBolusStatus(owner)
+                val after = link.status(owner)
                 if (after != null) observeCancelledStatus(after)
                 val idle = when (block) {
                     YpsoBolusBlock.FAST -> after?.bolusStatusCode == BolusCommand.STATUS_IDLE
@@ -451,20 +437,20 @@ internal class YpsoImmediateBolusController(
                 val detail = if (idle) {
                     "delivery stopped after cancel dispatch; cancel acceptance remains unproven"
                 } else "post-cancel status unavailable or target bolus block still active"
-                bleManager.recordBolusUnresolved(owner, cancelId, cancelHash, detail)
+                link.recordUnresolved(owner, cancelId, cancelHash, detail)
             }
-            is YpsoWriteOutcome.Verified -> outcome.second?.let { readBolusStatus(it) }?.let { observeCancelledStatus(it) }
+            is YpsoWriteOutcome.Verified -> outcome.second?.let { link.status(it) }?.let { observeCancelledStatus(it) }
         }
     }
 
     private fun pollIdentity(
         attempt: YpsoBolusAttempt,
         request: YpsoValidatedBolusRequest,
-        owner: YpsoBleManager.BolusCommandOwner,
+        owner: YpsoBolusLink.Owner,
     ): BolusCommand? {
         var firstObserved: Long? = null
         repeat(8) {
-            val status = readBolusStatus(owner)
+            val status = link.status(owner)
             val immediate = request.shape == YpsoBolusShape.IMMEDIATE
             if (immediate) status?.fastSequence?.let { noteStatusSequence(attempt, it) }
             // Two deliveries were seen across status and notifications: neither identity is this command's.
@@ -482,7 +468,7 @@ internal class YpsoImmediateBolusController(
             // can show its programmed amount, so waiting longer only delays the command.
             if (immediate && status?.bolusStatusCode == BolusCommand.STATUS_IDLE &&
                 journal.current()?.takeIf { it.requestId == attempt.requestId }?.notifiedTerminalAt != null) return null
-            Thread.sleep(150L)
+            sleep(150L)
         }
         return null
     }
@@ -520,33 +506,6 @@ internal class YpsoImmediateBolusController(
         if (current.notifiedAccountingPumpId == null || current.notifiedTerminalAt == null) return null
         if (current.outcome !in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED)) return null
         return runCatching { journal.awaitHistory(requestId, now() + HISTORY_CONFIRMATION_WINDOW_MS) }.getOrNull()
-    }
-
-    private fun readBolusStatus(timeoutMs: Long = 15_000): BolusCommand? {
-        val latch = CountDownLatch(1)
-        val result = AtomicReference<BolusCommand?>()
-        bleManager.readBolusStatus { result.set(it); latch.countDown() }
-        return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) result.get() else null
-    }
-
-    private fun readBolusStatus(owner: YpsoBleManager.BolusCommandOwner, timeoutMs: Long = 15_000): BolusCommand? {
-        val latch = CountDownLatch(1)
-        val result = AtomicReference<BolusCommand?>()
-        bleManager.readBolusStatus(owner) { result.set(it); latch.countDown() }
-        return if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) result.get() else null
-    }
-
-    private fun awaitWrite(
-        dispatch: ((YpsoWriteOutcome, YpsoBleManager.BolusCommandOwner?) -> Unit) -> Unit,
-    ): Pair<YpsoWriteOutcome, YpsoBleManager.BolusCommandOwner?> {
-        val latch = CountDownLatch(1)
-        val value = AtomicReference<Pair<YpsoWriteOutcome, YpsoBleManager.BolusCommandOwner?>?>()
-        dispatch { outcome, owner ->
-            value.set(outcome to owner)
-            latch.countDown()
-        }
-        if (!latch.await(45, TimeUnit.SECONDS)) error("bolus write callback did not arrive within 45 seconds")
-        return requireNotNull(value.get())
     }
 
     private fun cents(units: Double): Int = Math.round(units * 100.0).toInt()

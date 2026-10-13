@@ -268,6 +268,10 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
     @Synchronized
     fun all(): List<YpsoBolusAttempt> = store.loadAll()
 
+    /** Runs [read] under the journal's lock, so no commit interleaves with it. */
+    @Synchronized
+    internal fun <T> locked(read: () -> T): T = read()
+
     /** Preserve finite physical-delivery observation windows across process death. */
     @Synchronized
     fun expireObservationWindow(now: Long, immediateWindowMs: Long, extendedMarginMs: Long): YpsoBolusAttempt? {
