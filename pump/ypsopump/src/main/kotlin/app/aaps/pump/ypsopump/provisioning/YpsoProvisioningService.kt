@@ -23,7 +23,8 @@ import javax.inject.Singleton
 class YpsoProvisioningService internal constructor(
     internal val owner: PumpSession,
     private val pumpState: YpsoPumpState,
-    private val durableBolusRecoveryEvidence: () -> YpsoBolusAttemptFileStore.RecoveryEvidence? = { null },
+    /** Counter-floor evidence from the bolus journal. Its owner, the bolus module, supplies it; none fails closed. */
+    internal var durableBolusRecoveryEvidence: () -> YpsoBolusAttemptFileStore.RecoveryEvidence? = { null },
     private val keyDates: KeyTimingRepository = KeyTimingRepository(),
 ) {
 
@@ -33,8 +34,7 @@ class YpsoProvisioningService internal constructor(
                 "YpsoPump slow session journal commit: elapsedMs=$elapsedMs, bodyBytes=$bodyBytes, evidenceRecords=$evidenceRecords")
         }),
         pumpState,
-        { YpsoBolusAttemptFileStore(File(context.noBackupFilesDir, "ypsopump-bolus-attempt.json")).recoveryEvidence() },
-        KeyTimingRepository(KeyTimingRepository.FileStore(File(context.noBackupFilesDir, "ypsopump-key-dates.json"))),
+        keyDates = KeyTimingRepository(KeyTimingRepository.FileStore(File(context.noBackupFilesDir, "ypsopump-key-dates.json"))),
     )
 
     internal var quiesceConnection: () -> Unit = {}

@@ -37,29 +37,14 @@ import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
-import app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt
-import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
-import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptJournal
-import app.aaps.pump.ypsopump.bolus.YpsoBolusRequestValidator
-import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusController
-import app.aaps.pump.ypsopump.bolus.toYpsoTreatment
+import app.aaps.pump.ypsopump.bolus.YpsoBolusBleLink
+import app.aaps.pump.ypsopump.bolus.YpsoBolusDelivery
+import app.aaps.pump.ypsopump.bolus.YpsoBolusLink
+import app.aaps.pump.ypsopump.bolus.YpsoBolusRecords
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
-import app.aaps.pump.ypsopump.history.YpsoHistoryReconciler
-import app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation
-import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
-import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciler
-import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusReconciliation
-import app.aaps.pump.ypsopump.bolus.YpsoImmediateBolusStatus
-import app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusReconciler
-import app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusReconciliation
-import app.aaps.pump.ypsopump.bolus.YpsoExtendedBolusAccounting
-import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
-import app.aaps.pump.ypsopump.bolus.YpsoBolusOutcome
-import app.aaps.pump.ypsopump.bolus.YpsoValidatedBolusRequest
 import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
-import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt
@@ -138,7 +123,8 @@ class YpsoPumpPlugin @Inject constructor(
     private var availabilityNotificationSynchronized = false
     /** Last published mismatch text, or null when no mismatch is currently published. */
     private var publishedProfileMismatch: String? = null
-    private var publishedUnresolvedBolusWarning: String? = null
+    /** Last published unresolved-bolus warning state, or null before the first publication. */
+    @Volatile private var publishedUnresolvedBolusWarning: Boolean? = null
     private val tbrJournal by lazy {
         YpsoTbrJournal(YpsoTbrAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-tbr-attempts.json")))
     }
@@ -146,8 +132,8 @@ class YpsoPumpPlugin @Inject constructor(
         YpsoHistoryIngestion(
             YpsoHistoryStateFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-history-state.json")),
             pumpSync,
-            hasRecordedBolus = ::hasRecordedHistoryBolus,
-            resolveProvisional = ::bindProvisionalBolusToPumpId,
+            hasRecordedBolus = { serial, pumpId -> bolus.ownsHistoryBolus(serial, pumpId) },
+            resolveProvisional = { serial, pumpId, timestamp, amount, type -> bolus.bindProvisional(serial, pumpId, timestamp, amount, type) },
             registeredAt = ::pumpRegisteredAt,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.
@@ -314,17 +300,83 @@ class YpsoPumpPlugin @Inject constructor(
             else lastSeenMatching[saved.id] = at
         }
     }
-    private val bolusControllerLazy = lazy {
-        YpsoImmediateBolusController(
-            bleManager,
-            YpsoBolusAttemptJournal(
-                YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json")),
-            ),
+    private val bolusLazy: Lazy<YpsoBolusDelivery> = lazy {
+        YpsoBolusDelivery(
+            bolusLink,
+            bolusRecords,
+            java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"),
             ::serialNumber,
-            historyIngestion::currentCursor,
+            historyCursor = { historyIngestion.currentCursor() },
+            historyReadiness = { serial, reboot -> historyIngestion.bolusReadiness(serial, reboot) },
+            showWarning = ::showUnresolvedBolusWarning,
+            aapsLogger = aapsLogger,
         )
     }
-    private val bolusController by bolusControllerLazy
+    private val bolus: YpsoBolusDelivery by bolusLazy
+
+    /** The bolus module's pump: the BLE link, with this plugin handing it over from history. */
+    private val bolusLink: YpsoBolusLink = object : YpsoBolusBleLink(bleManager) {
+        override fun therapyStatus(stopWhen: () -> Boolean) = when (readTherapyStatus(stopWhen = stopWhen)) {
+            TherapyStatusReadiness.READY              -> YpsoBolusLink.Readiness.READY
+            TherapyStatusReadiness.CANCELLED          -> YpsoBolusLink.Readiness.CANCELLED
+            TherapyStatusReadiness.HISTORY_BUSY       -> YpsoBolusLink.Readiness.HISTORY_BUSY
+            TherapyStatusReadiness.STATUS_UNAVAILABLE -> YpsoBolusLink.Readiness.STATUS_UNAVAILABLE
+        }
+
+        override fun yieldHistory() = yieldHistoryRecovery()
+        override fun stoppedOrEmpty() = pumpState.isSuspended || reservoirEmpty()
+        override fun reconcileHistoryLater(reason: String) = scheduleHistoryRecovery(reason)
+
+        override fun reconnect(timeoutMs: Long): Boolean {
+            // Release the stale GATT client first; reconnecting without closing it registers a new
+            // client per attempt and exhausts the platform's client interfaces.
+            bleManager.disconnect(preserveStatus = true)
+            seedAndConnect()
+            val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                if (bleManager.isConnected) return true
+                Thread.sleep(250L)
+            }
+            return false
+        }
+    }
+
+    /** YpsoPump bolus records through PumpSync and the database. */
+    private val bolusRecords: YpsoBolusRecords = object : YpsoBolusRecords {
+        override fun addProvisional(timestamp: Long, units: Double, temporaryId: Long, type: BS.Type, pumpSerial: String) =
+            pumpSync.addBolusWithTempId(timestamp, units, temporaryId, type, PumpType.YPSOPUMP, pumpSerial)
+
+        override fun syncWithTemporaryId(bolus: BS, type: BS.Type) {
+            if (::persistenceLayer.isInitialized) persistenceLayer.syncPumpBolusWithTempId(bolus, type).blockingGet()
+            else pumpSync.syncBolusWithTempId(
+                bolus.timestamp, bolus.amount, checkNotNull(bolus.ids.temporaryId), type, bolus.ids.pumpId,
+                PumpType.YPSOPUMP, checkNotNull(bolus.ids.pumpSerial),
+            )
+        }
+
+        override fun bindNotified(bolus: BS, type: BS.Type) =
+            if (::persistenceLayer.isInitialized) persistenceLayer.bindPumpBolusToTempIdIfValid(bolus, type).blockingGet()
+            else app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.NO_RECORD
+
+        override fun bolus(pumpId: Long, pumpSerial: String) =
+            if (::persistenceLayer.isInitialized) persistenceLayer.getBolusByPumpId(pumpId, PumpType.YPSOPUMP, pumpSerial) else null
+
+        override fun bolusesFrom(from: Long, pumpSerial: String) =
+            if (!::persistenceLayer.isInitialized) emptyList()
+            else persistenceLayer.getBolusesFromTime(from, true).blockingGet()
+                .filter { it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == pumpSerial }
+
+        override fun extended(pumpId: Long, pumpSerial: String) = pumpSync.getExtendedBolusWithPumpId(pumpId, PumpType.YPSOPUMP, pumpSerial)
+
+        override fun syncExtended(start: Long, units: Double, duration: Long, pumpId: Long, pumpSerial: String) =
+            pumpSync.syncExtendedBolusWithPumpId(start, units, duration, false, pumpId, PumpType.YPSOPUMP, pumpSerial)
+
+        override fun correctExtended(start: Long, units: Double, duration: Long, emulatingTempBasal: Boolean, pumpId: Long, pumpSerial: String) {
+            pumpSync.correctExtendedBolusWithPumpId(start, units, duration, emulatingTempBasal, pumpId, PumpType.YPSOPUMP, pumpSerial)
+        }
+
+        override fun extendedRunning() = pumpSync.expectedPumpState().extendedBolus != null
+    }
     private val historyRecoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "ypso-history-recovery").apply { isDaemon = true }
     }
@@ -335,8 +387,6 @@ class YpsoPumpPlugin @Inject constructor(
     private val historyRecoveryLock = Any()
     @Volatile private var historyRecoveryYieldRequested = false
     private val idleDisconnectDeferredToHistory = AtomicBoolean(false)
-    /** Stop was requested for the bolus being prepared, before its controller lifecycle began. */
-    private val bolusStopBeforeStart = AtomicBoolean(false)
     /** Held by every queued pump command and by the idle disconnect; see [onLink]. */
     private val linkUse = java.util.concurrent.locks.ReentrantLock()
     private val lowerBoundRecoveryRequested = AtomicBoolean(false)
@@ -359,6 +409,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     init {
         provisioning.availabilityChanged = { publishAvailabilityNotification() }
+        provisioning.durableBolusRecoveryEvidence = { bolus.recoveryEvidence() }
     }
 
     override val pumpDescription: PumpDescription = PumpDescription().fillFor(PumpType.YPSOPUMP).apply {
@@ -382,7 +433,7 @@ class YpsoPumpPlugin @Inject constructor(
     override fun isInitialized(): Boolean = provisioning.installed()?.verifiedAt != null
     override fun isSuspended(): Boolean = pumpState.isSuspended || reservoirEmpty()
     // Background accounting is abandonable and must never hold the serialized therapy queue.
-    override fun isBusy(): Boolean = bolusController.isBusy || tbrController.isBusy
+    override fun isBusy(): Boolean = bolus.isBusy || tbrController.isBusy
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean =
@@ -476,8 +527,8 @@ class YpsoPumpPlugin @Inject constructor(
         try {
             val user = when {
                 commandQueue.performing() != null || commandQueue.size() > 0 -> "a queued pump command"
-                bolusControllerLazy.isInitialized() && bolusController.isBusy -> "a bolus command"
-                tbrControllerLazy.isInitialized() && tbrController.isBusy     -> "a TBR command"
+                bolusLazy.isInitialized() && bolus.isBusy                   -> "a bolus command"
+                tbrControllerLazy.isInitialized() && tbrController.isBusy   -> "a TBR command"
                 historyRecoveryActive.get()                                 -> "history recovery"
                 else                                                        -> null
             }
@@ -722,424 +773,59 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
-        bolusStopBeforeStart.set(false)
+        bolus.beginRequest()
+        val order = YpsoBolusDelivery.Order(detailedBolusInfo.insulin, detailedBolusInfo.carbs, detailedBolusInfo.bolusType)
         return onLink {
-            // A stop pressed while the link was reopening belongs to this bolus; beginDelivery clears
-            // the controller's own flag, so it is carried across here and nothing is dispatched.
-            if (bolusStopBeforeStart.get()) fail(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
-            else deliverTreatmentNow(detailedBolusInfo)
-        }
-    }
-
-    private fun deliverTreatmentNow(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
-        if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
-        if (bolusStopBeforeStart.get()) bolusController.requestStop()
-        try {
-        return runCatching {
-        if (detailedBolusInfo.carbs != 0.0) return fail(R.string.ypsopump_bolus_invalid, message(YpsoBolusMessage.CARBS_NOT_STORED))
-        val constrainedMaximum = constraintsChecker.getMaxBolusAllowed().value()
-        val request = runCatching {
-            YpsoBolusRequestValidator.validate(
-                detailedBolusInfo.insulin,
-                detailedBolusInfo.bolusType.toYpsoTreatment(),
-                constrainedMaximum,
-            )
-        }.getOrElse { return fail(R.string.ypsopump_bolus_invalid, it.message ?: "invalid request") }
-        when (readTherapyStatus(stopWhen = { bolusController.cancellationRequested })) {
-            TherapyStatusReadiness.READY              -> Unit
-            TherapyStatusReadiness.CANCELLED          -> return fail(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
-            TherapyStatusReadiness.HISTORY_BUSY       -> return fail(YpsoBolusMessage.PUMP_BUSY)
-            TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(YpsoBolusMessage.PUMP_UNREADABLE)
-        }
-        if (pumpState.isSuspended || reservoirEmpty()) return fail(YpsoBolusMessage.PUMP_STOPPED_OR_EMPTY)
-        val reboot = bleManager.session?.snapshot()?.reboot
-            ?: return fail(YpsoBolusMessage.PUMP_UNREADABLE)
-        historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let { return fail(it) }
-        when (val result = bolusController.deliver(request)) {
-            is YpsoImmediateBolusController.DeliveryResult.Started -> {
-                recordProvisionalBolus(result.attempt, detailedBolusInfo.bolusType)
-                awaitBolusTerminal(result.attempt.requestId, detailedBolusInfo.id, result.observedDeliveredUnits)
-            }
-            is YpsoImmediateBolusController.DeliveryResult.NotSent ->
-                fail(result.reason)
-            is YpsoImmediateBolusController.DeliveryResult.Uncertain -> {
-                // Delivery may have happened. Account for it in full now; terminal history corrects the
-                // amount later. Insulin that is possibly in the body must never be invisible to IOB.
-                bolusController.currentAttempt()?.let { recordProvisionalBolus(it, detailedBolusInfo.bolusType) }
-                pumpEnactResultProvider.get()
-                    .success(false)
-                    .enacted(true)
-                    .bolusDelivered(0.0)
-                    .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(result.reason)))
-            }
-            is YpsoImmediateBolusController.DeliveryResult.AwaitingHistory -> {
-                // The pump announced this dose stopped but no status showed its amount. The requested
-                // amount stays counted until its history row, found by the notified sequence, replaces it.
-                // The quiet wait needs that record: without it the dose is urgent at once.
-                if (!recordProvisionalBolus(result.attempt, detailedBolusInfo.bolusType)) {
-                    bolusController.markUnresolved("the provisional record of a notified bolus was not saved")
-                    publishUnresolvedBolusWarningIfNeeded()
-                    return@runCatching pumpEnactResultProvider.get()
-                        .success(false)
-                        .enacted(true)
-                        .bolusDelivered(0.0)
-                        .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN)))
-                }
-                pumpEnactResultProvider.get()
-                    .success(false)
-                    .enacted(true)
-                    .bolusDelivered(0.0)
-                    .comment(message(YpsoBolusMessage.AWAITING_HISTORY_AMOUNT))
-            }
-        }
-        }.getOrElse {
-            aapsLogger.error(LTag.PUMP, "YpsoPump bolus lifecycle failed: ${it.message}")
-            fail(R.string.ypsopump_bolus_failed, it.message ?: message(YpsoBolusMessage.COULD_NOT_COMPLETE))
-        }
-        } finally {
-            bolusController.finishDelivery()
-            // The recorded amount is the requested one until the terminal history row proves what was
-            // actually delivered, so reconcile in the background without delaying this command.
-            scheduleHistoryRecovery("bolus delivery")
+            bolusResult(bolus.deliver(order, { constraintsChecker.getMaxBolusAllowed().value() }, bolusProgress(detailedBolusInfo.id)))
         }
     }
 
     override fun stopBolusDelivering() {
-        bolusStopBeforeStart.set(true)
-        cancelHistoryRecovery()
-        runCatching { bolusController.requestStop() }
-            .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump stop bolus failed: ${it.message}") }
+        bolus.stop(handOverLink = ::cancelHistoryRecovery)
     }
 
-    /**
-     * Records the dispatched dose immediately so it reaches IOB without waiting for pump history. The
-     * full requested amount is the conservative figure; the terminal history row later replaces it with
-     * the delivered amount through [provisionalTemporaryId], which also prevents a duplicate record.
-     */
-    /** Returns whether the record was saved now; a record already present under the same id returns false. */
-    private fun recordProvisionalBolus(attempt: YpsoBolusAttempt, type: BS.Type): Boolean {
-        if (attempt.shape != YpsoBolusShape.IMMEDIATE) return false
-        val timestamp = attempt.dispatchedAt ?: attempt.createdAt
-        return runCatching {
-            pumpSync.addBolusWithTempId(
-                timestamp,
-                attempt.requestedUnits,
-                provisionalTemporaryId(attempt),
-                type,
-                PumpType.YPSOPUMP,
-                serialNumber(),
-            )
-        }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump provisional bolus accounting failed: ${it.message}") }
-            .getOrDefault(false)
-    }
-
-    internal fun hasRecordedHistoryBolus(pumpSerial: String, pumpId: Long): Boolean =
-        persistenceLayer.getBolusByPumpId(pumpId, PumpType.YPSOPUMP, pumpSerial) != null ||
-            journalledImmediateBolus(pumpSerial, pumpId) != null
-
-    private fun journalledImmediateBolus(pumpSerial: String, pumpId: Long): YpsoBolusAttempt? =
-        journalledImmediateBolus(
-            YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json")).loadAll(),
-            pumpSerial, pumpId,
-        )
-
-    /** The one journalled immediate dose a history row belongs to; used for import and repair alike. */
-    private fun journalledImmediateBolus(attempts: List<YpsoBolusAttempt>, pumpSerial: String, pumpId: Long): YpsoBolusAttempt? {
-        val immediate = attempts.filter { it.shape == YpsoBolusShape.IMMEDIATE && it.pumpSerial == pumpSerial }
-        val proven = immediate.filter { it.accountingPumpId == pumpId }
-        check(proven.size <= 1) { "multiple bolus attempts claim the same pump history identity" }
-        proven.singleOrNull()?.let { return it }
-        // A notified sequence is weaker evidence: when two doses name the same row, neither owns it.
-        return immediate.filter { it.historyAccountingId == pumpId }.singleOrNull()
-    }
-
-    /**
-     * The history row a journalled dose accounts to: its status-proven identity, else the sequence the
-     * pump notified for it. Only the proven one attributes the command; both link its provisional record.
-     */
-    private val YpsoBolusAttempt.historyAccountingId: Long?
-        get() = accountingPumpId ?: notifiedAccountingPumpId.takeIf { pumpFastSequence == null }
-
-    /**
-     * Links the provisional record for this dose to the pump identity of its terminal history row, so
-     * the authoritative amount updates that record rather than inserting a second one. A row larger than
-     * the request is another dose: the pump cannot deliver more than was programmed.
-     */
-    private fun bindProvisionalBolusToPumpId(
-        pumpSerial: String,
-        pumpId: Long,
-        timestamp: Long,
-        amount: Double,
-        type: BS.Type,
-        knownAttempt: YpsoBolusAttempt? = null,
-    ) {
-        val attempt = knownAttempt ?: journalledImmediateBolus(pumpSerial, pumpId) ?: return
-        // Linked only by a notified sequence, now or on a replay after it was confirmed.
-        if (knownAttempt == null && attempt.pumpFastSequence == null) {
-            bindNotifiedBolus(attempt, pumpSerial, pumpId, timestamp, Math.round(amount * 100).toInt(), type)
-            return
-        }
-        if (Math.round(amount * 100) > attempt.requestedCentiUnits) {
-            aapsLogger.error(LTag.PUMP, "YpsoPump history row $pumpId exceeds bolus request ${attempt.requestId}; not merged")
-            return
-        }
-        if (::persistenceLayer.isInitialized) {
-            persistenceLayer.syncPumpBolusWithTempId(
-                BS(timestamp = timestamp, amount = amount, type = type,
-                    ids = app.aaps.core.data.model.IDs(temporaryId = provisionalTemporaryId(attempt),
-                        pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = pumpSerial)), type,
-            ).blockingGet()
-            return
-        }
-        run {
-            pumpSync.syncBolusWithTempId(
-                timestamp,
-                amount,
-                provisionalTemporaryId(attempt),
-                type,
-                pumpId,
-                PumpType.YPSOPUMP,
-                pumpSerial,
-            )
-        }
-    }
-
-    /**
-     * Merges a dose whose only link to its history row is the sequence the pump notified for it. The
-     * link is inferred, not proven, so the merge refuses when either record was removed: carrying a
-     * removal across an inferred link could erase another dose. What is refused keeps both records,
-     * counting insulin high, and shows the warning.
-     */
-    private fun bindNotifiedBolus(attempt: YpsoBolusAttempt, pumpSerial: String, pumpId: Long, timestamp: Long, centiUnits: Int, type: BS.Type) {
-        if (!::persistenceLayer.isInitialized) return
-        if (centiUnits > attempt.requestedCentiUnits) {
-            bolusController.rejectNotified(attempt.requestId, "history row $pumpId delivered more than this bolus requested")
-            publishUnresolvedBolusWarningIfNeeded()
-            return
-        }
-        val treatment = when (attempt.treatment) {
-            app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> BS.Type.NORMAL
-            app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.SMB -> BS.Type.SMB
-            app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.PRIME -> BS.Type.PRIMING
-        }
-        val binding = persistenceLayer.bindPumpBolusToTempIdIfValid(
-            BS(timestamp = timestamp, amount = centiUnits / 100.0, type = treatment,
-                ids = app.aaps.core.data.model.IDs(temporaryId = provisionalTemporaryId(attempt),
-                    pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = pumpSerial)), treatment,
-        ).blockingGet()
-        when (binding) {
-            // The dose is confirmed only once one valid record carries the row: the merged one, or the
-            // imported row alone when the provisional record was never written (process death).
-            app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.NO_RECORD -> Unit
-            app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.BOUND,
-            app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY ->
-                if (attempt.outcome != YpsoBolusOutcome.COMPLETED && attempt.outcome != YpsoBolusOutcome.CANCELLED_PARTIAL) {
-                runCatching { bolusController.confirmNotifiedTerminal(attempt.requestId, centiUnits, timestamp, pumpId) }
-                    .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump notified bolus ${attempt.requestId} not confirmed: ${it.message}") }
-            }
-            app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding.REFUSED ->
-                bolusController.rejectNotified(attempt.requestId, "a record of this bolus was removed or belongs to another dose")
-        }
-        aapsLogger.info(LTag.PUMP, "YpsoPump notified bolus ${attempt.requestId} and history row $pumpId: $binding")
-        publishUnresolvedBolusWarningIfNeeded()
-    }
-
-    /** Stable per-attempt identity so the provisional record can be found again after a restart. */
-    private fun provisionalTemporaryId(attempt: YpsoBolusAttempt): Long =
-        attempt.requestId.hashCode().toLong() and 0xffffffffL or ((attempt.createdAt / 1000L) shl 32)
-
-    private fun awaitBolusTerminal(
-        requestId: String,
-        progressId: Long,
-        initiallyDelivered: Double,
-        timeoutMs: Long = 90_000,
-    ): PumpEnactResult {
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+    /** Publishes same-command delivery progress, never backwards and never beyond the requested dose. */
+    private fun bolusProgress(progressId: Long): (Double) -> Unit {
         var reportedDelivered = -1.0
-        fun publishProgress(delivered: Double) {
-            if (delivered <= reportedDelivered || delivered > BolusProgressData.insulin) return
-            reportedDelivered = delivered
-            BolusProgressData.delivered = delivered
-            rxBus.send(EventOverviewBolusProgress(rh, delivered, progressId))
-        }
-        publishProgress(initiallyDelivered)
-        var cancellationSignalled = false
-        /** Highest same-command pump-reported delivered amount, or -1 before any status proved one. */
-        var observedDeliveredCentiUnits = -1
-        while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            if (bolusController.cancellationRequested && !cancellationSignalled) {
-                // Stop is a request, not terminal evidence. Signal it promptly once, then continue
-                // observing same-command status and authoritative type-2 history for partial delivery.
-                cancellationSignalled = bolusController.requestStop() ==
-                    YpsoImmediateBolusController.StopResult.DISPATCHED_OR_PENDING
+        return { delivered ->
+            if (delivered > reportedDelivered && delivered <= BolusProgressData.insulin) {
+                reportedDelivered = delivered
+                BolusProgressData.delivered = delivered
+                rxBus.send(EventOverviewBolusProgress(rh, delivered, progressId))
             }
-            val attempt = bolusController.currentAttempt()
-            if (attempt?.requestId != requestId) {
-                bolusController.markUnresolved("another request owns the bolus journal")
-                publishUnresolvedBolusWarningIfNeeded()
-                return pumpEnactResultProvider.get()
-                    .success(false)
-                    .enacted(true)
-                    .bolusDelivered(0.0)
-                    .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.NOT_MATCHED_TO_PUMP)))
-            }
-            if (attempt.confirmedCentiUnits != null) {
-                val delivered = attempt.confirmedUnits ?: 0.0
-                publishProgress(delivered)
-                return pumpEnactResultProvider.get()
-                    .success(true)
-                    .enacted(true)
-                    .bolusDelivered(delivered)
-                    .comment(rh.gs(R.string.ypsopump_bolus_completed, delivered))
-            }
-            val status = readBolusStatusBlocking()
-            val provenSequence = attempt.pumpFastSequence
-            if (status != null && provenSequence != null &&
-                status.fastSequence == provenSequence &&
-                Math.round(status.totalProgrammedUnits * 100.0).toInt() == attempt.requestedCentiUnits
-            ) {
-                // This is same-command status evidence suitable for UI progress. Pump history remains
-                // authoritative for the final delivered amount and PumpSync accounting.
-                publishProgress(status.deliveredUnits)
-                observedDeliveredCentiUnits = Math.round(status.deliveredUnits * 100.0).toInt()
-            }
-            // The pump announced that this exact dose finished. Insulin is already accounted for, so the
-            // command completes here; background history replaces the requested amount with the
-            // delivered one. History is never read on the therapy path: it cannot finish in time.
-            if (attempt.blockTerminalAt != null) {
-                val delivered = attempt.requestedUnits
-                publishProgress(delivered)
-                // A stop was requested, so the pump may have ended this dose early. The amount is not
-                // knowable here, so report it as uncertain rather than claiming the full request was
-                // given; history reconciliation corrects the record to what was actually delivered.
-                if (cancellationSignalled || bolusController.cancellationRequested) {
-                    publishUnresolvedBolusWarningIfNeeded()
-                    return pumpEnactResultProvider.get()
-                        .success(false)
-                        .enacted(true)
-                        .bolusDelivered(0.0)
-                        .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.STOPPED_AMOUNT_UNKNOWN)))
-                }
-                // The pump uses one terminal code for normal completion and for a cancellation made on
-                // the pump itself, and the announcement carries no amount. Full delivery may therefore
-                // only be claimed when same-command status actually observed it; otherwise the recorded
-                // amount stays the request and history confirms the delivered figure shortly after.
-                val proven = observedDeliveredCentiUnits == attempt.requestedCentiUnits
-                return pumpEnactResultProvider.get()
-                    .success(true)
-                    .enacted(true)
-                    .bolusDelivered(delivered)
-                    .comment(
-                        if (proven) rh.gs(R.string.ypsopump_bolus_completed, delivered)
-                        else rh.gs(R.string.ypsopump_bolus_recorded, delivered)
-                    )
-            }
-            Thread.sleep(250L)
-        }
-        // Insulin was recorded at dispatch, so nothing is unaccounted; only the exact amount is pending.
-        bolusController.markUnresolved("the pump did not report the end of this bolus")
-        publishUnresolvedBolusWarningIfNeeded()
-        return pumpEnactResultProvider.get()
-            .success(false)
-            .enacted(true)
-            .bolusDelivered(0.0)
-            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.NOT_CONFIRMED_FINISHED)))
-    }
-
-    private fun deliverExtended(request: YpsoValidatedBolusRequest): PumpEnactResult {
-        if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
-        try {
-            when (readTherapyStatus()) {
-                TherapyStatusReadiness.READY              -> Unit
-                TherapyStatusReadiness.HISTORY_BUSY       -> return fail(YpsoBolusMessage.PUMP_BUSY)
-                TherapyStatusReadiness.CANCELLED,
-                TherapyStatusReadiness.STATUS_UNAVAILABLE -> return fail(YpsoBolusMessage.PUMP_UNREADABLE)
-            }
-            if (pumpState.isSuspended || reservoirEmpty()) return fail(YpsoBolusMessage.PUMP_STOPPED_OR_EMPTY)
-            val reboot = bleManager.session?.snapshot()?.reboot
-                ?: return fail(YpsoBolusMessage.PUMP_UNREADABLE)
-            historyIngestion.bolusReadiness(serialNumber(), reboot.toLong())?.let { return fail(it) }
-            return when (val result = bolusController.deliver(request)) {
-                is YpsoImmediateBolusController.DeliveryResult.Started -> {
-                    val attempt = result.attempt
-                    val start = requireNotNull(attempt.dispatchedAt)
-                    val pumpId = attempt.pumpSlowSequence
-                        ?.let { bolusHistoryPumpId(attempt.baseline.historyPumpId, it) }
-                        ?: return uncertainExtendedDelivery(
-                            YpsoBolusMessage.EXTENDED_NOT_SAVED,
-                            "extended delivery identity was never journalled",
-                        )
-                    val synced = pumpSync.syncExtendedBolusWithPumpId(
-                        start,
-                        request.units,
-                        request.durationMinutes * 60_000L,
-                        false,
-                        pumpId,
-                        PumpType.YPSOPUMP,
-                        serialNumber(),
-                    )
-                    if (!synced && !extendedAccountingMatches(pumpId, start, request.units, request.durationMinutes * 60_000L, serialNumber())) {
-                        bolusController.markUnresolved("AAPS rejected the extended bolus accounting record")
-                        publishUnresolvedBolusWarningIfNeeded()
-                        return pumpEnactResultProvider.get().success(false).enacted(true)
-                            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.EXTENDED_NOT_SAVED)))
-                    }
-                    pumpEnactResultProvider.get().success(true).enacted(true)
-                        .duration(request.durationMinutes)
-                        .absolute(request.units * 60.0 / request.durationMinutes)
-                        .isPercent(false).isTempCancel(false)
-                        .comment(rh.gs(R.string.ypsopump_bolus_started))
-                }
-                is YpsoImmediateBolusController.DeliveryResult.NotSent -> fail(result.reason)
-                is YpsoImmediateBolusController.DeliveryResult.Uncertain ->
-                    pumpEnactResultProvider.get().success(false).enacted(true)
-                        .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(result.reason)))
-                // Only immediate doses can reach this state.
-                is YpsoImmediateBolusController.DeliveryResult.AwaitingHistory ->
-                    uncertainExtendedDelivery(YpsoBolusMessage.MAY_HAVE_BEEN_GIVEN, "extended bolus reached a fast-bolus state")
-            }
-        } finally {
-            bolusController.finishDelivery()
-            // An extended dose whose identity could not be bound is still recoverable from its
-            // terminal history row, so reconcile in the background without delaying this command.
-            scheduleHistoryRecovery("extended bolus delivery")
         }
     }
 
-    /**
-      * The pump may be delivering, so the dose is reported as uncertain and never as not delivered.
-      * [journalDetail] stays untranslated: it is durable diagnostic evidence, not operator text.
-      */
-    private fun uncertainExtendedDelivery(
-        reason: YpsoBolusMessage,
-        journalDetail: String,
-        tempCancel: Boolean = false,
-    ): PumpEnactResult {
-        bolusController.markUnresolved(journalDetail)
-        publishUnresolvedBolusWarningIfNeeded()
-        return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(tempCancel)
-            .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(reason)))
+    private fun bolusResult(result: YpsoBolusDelivery.Result): PumpEnactResult = when (result) {
+        is YpsoBolusDelivery.Result.Failed ->
+            fail(if (result.invalidRequest) R.string.ypsopump_bolus_invalid else R.string.ypsopump_bolus_failed, message(result.reason))
+        is YpsoBolusDelivery.Result.Invalid -> fail(R.string.ypsopump_bolus_invalid, result.detail)
+        is YpsoBolusDelivery.Result.Error ->
+            fail(R.string.ypsopump_bolus_failed, result.detail ?: message(YpsoBolusMessage.COULD_NOT_COMPLETE))
+        is YpsoBolusDelivery.Result.Uncertain -> pumpEnactResultProvider.get().success(false).enacted(true).bolusDelivered(0.0)
+            .isTempCancel(result.cancel).comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(result.reason)))
+        YpsoBolusDelivery.Result.AwaitingHistory -> pumpEnactResultProvider.get().success(false).enacted(true).bolusDelivered(0.0)
+            .comment(message(YpsoBolusMessage.AWAITING_HISTORY_AMOUNT))
+        is YpsoBolusDelivery.Result.Delivered -> pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(result.units)
+            .comment(rh.gs(if (result.proven) R.string.ypsopump_bolus_completed else R.string.ypsopump_bolus_recorded, result.units))
+        is YpsoBolusDelivery.Result.ExtendedStarted -> pumpEnactResultProvider.get().success(true).enacted(true)
+            .duration(result.durationMinutes)
+            .absolute(result.units * 60.0 / result.durationMinutes)
+            .isPercent(false).isTempCancel(false)
+            .comment(rh.gs(R.string.ypsopump_bolus_started))
+        is YpsoBolusDelivery.Result.Cancelled -> pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
+            .comment(rh.gs(R.string.ypsopump_bolus_completed, result.units))
+        YpsoBolusDelivery.Result.NothingToCancel -> pumpEnactResultProvider.get().success(true).enacted(false).isTempCancel(true)
     }
 
-    @Synchronized
-    private fun publishUnresolvedBolusWarningIfNeeded() {
-        if (bolusController.expireAwaitingHistory().isNotEmpty()) {
-            aapsLogger.warn(LTag.PUMP, "YpsoPump history did not confirm a notified bolus in time")
-        }
-        val now = System.currentTimeMillis()
-        // The latest dose, plus a notified dose history contradicted or never confirmed while its
-        // insulin can still matter. Older unresolved doses stay in the journal for accounting only.
-        val message = if (bolusController.currentAttempt()?.hasUnresolvedWarning == true ||
-            bolusController.retainedAttempts().any {
-                it.hasUnresolvedWarning && it.notifiedFastSequence != null &&
-                    now - (it.dispatchedAt ?: 0L) < NOTIFIED_WARNING_WINDOW_MS
-            })
-            rh.gs(R.string.ypsopump_bolus_uncertain_notification) else null
-        if (message == publishedUnresolvedBolusWarning) return
-        publishedUnresolvedBolusWarning = message
+    /** Called only by the bolus module, which serializes it with deciding [show]. */
+    private fun showUnresolvedBolusWarning(show: Boolean) {
+        if (show == publishedUnresolvedBolusWarning) return
+        publishedUnresolvedBolusWarning = show
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN))
-        message ?: return
-        uiInteraction.addNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN, message, Notification.URGENT)
+        if (show) uiInteraction.addNotification(
+            Notification.YPSOPUMP_BOLUS_UNCERTAIN, rh.gs(R.string.ypsopump_bolus_uncertain_notification), Notification.URGENT,
+        )
     }
 
     /** Everything that must happen after a status read lands. Runs on the BLE callback thread. */
@@ -1472,7 +1158,7 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     private fun historyRecoveryMustYield(): Boolean =
-        historyRecoveryYieldRequested || !historyRecoveryEnabled || bolusController.isBusy || tbrController.isBusy ||
+        historyRecoveryYieldRequested || !historyRecoveryEnabled || bolus.isBusy || tbrController.isBusy ||
             commandQueue.size() > 0 || commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue()
 
     private fun beginHistoryRecovery(): Boolean = synchronized(historyRecoveryLock) {
@@ -1520,107 +1206,13 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity or session evidence unavailable")
             return YpsoHistoryIngestionResult.Blocked("pump identity or session evidence unavailable")
         }
-        repairJournalledAccounting(serial)
-        reconcileBolusAttempt(serial, zone, reboot, snapshot)
-        publishUnresolvedBolusWarningIfNeeded()
-        val attempt = bolusController.currentAttempt()
-        val terminalSequence = when (attempt?.shape) {
-            YpsoBolusShape.IMMEDIATE -> attempt.pumpFastSequence
-            YpsoBolusShape.EXTENDED, YpsoBolusShape.COMBINED -> attempt.pumpSlowSequence
-            null -> null
-        }
-        val terminalKinds = when (attempt?.shape) {
-            YpsoBolusShape.IMMEDIATE -> setOf(app.aaps.pump.ypsopump.history.YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED)
-            YpsoBolusShape.EXTENDED -> setOf(app.aaps.pump.ypsopump.history.YpsoHistoryKind.DELAYED_BOLUS_COMPLETED)
-            YpsoBolusShape.COMBINED -> setOf(app.aaps.pump.ypsopump.history.YpsoHistoryKind.COMBINED_BOLUS_COMPLETED)
-            null -> emptySet()
-        }
-        if (attempt?.holdsTerminalRow(
-                System.currentTimeMillis(),
-                YpsoImmediateBolusController.OBSERVATION_WINDOW_MS,
-                YpsoImmediateBolusController.EXTENDED_RECONCILIATION_MARGIN_MS,
-            ) == true && terminalSequence != null && snapshot.rowsNewestFirst.any {
-                it.sequence == terminalSequence && app.aaps.pump.ypsopump.history.YpsoHistoryClassifier.classify(it).kind in terminalKinds
-            }) {
-            return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
-        }
-        val retained = bolusController.retainedAttempts()
-        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event ->
-            val owner = if (attempt?.pumpHistoryId == event.identity.aapsPumpId) attempt
-            else runCatching { journalledImmediateBolus(retained, serial, event.identity.aapsPumpId) }.getOrNull()
-            if (owner != null) {
-                when (owner.treatment) {
-                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL -> app.aaps.core.data.model.BS.Type.NORMAL
-                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.SMB -> app.aaps.core.data.model.BS.Type.SMB
-                    app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.PRIME -> app.aaps.core.data.model.BS.Type.PRIMING
-                }
-            } else app.aaps.core.data.model.BS.Type.NORMAL
-        }
+        val pass = bolus.reconcileHistory(serial, zone, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
+            ?: return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
+        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event -> pass.treatment(event.identity.aapsPumpId) }
         if (result is YpsoHistoryIngestionResult.Blocked) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }
         return result
-    }
-
-    /** Repairs earlier imports using journalled identities, never matching by dose or proximity. */
-    private fun repairJournalledAccounting(serial: String) {
-        if (!::persistenceLayer.isInitialized) return
-        repairNotifiedAccounting(serial)
-        val attempts = YpsoBolusAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"))
-            .loadAll().filter { it.pumpSerial == serial && it.accountingPumpId != null && it.dispatchedAt != null }
-        if (attempts.isEmpty()) return
-        val from = attempts.minOf { it.dispatchedAt!! }.coerceAtLeast(1L) - 60_000L
-        val records = persistenceLayer.getBolusesFromTime(from, true).blockingGet()
-            .filter { it.ids.pumpType == PumpType.YPSOPUMP && it.ids.pumpSerial == serial }
-        for (attempt in attempts) {
-            val id = attempt.accountingPumpId!!
-            check(attempts.count { it.accountingPumpId == id } == 1) { "ambiguous journalled pump bolus identity" }
-            // Notified doses are repaired above, under the rules for an inferred link.
-            if (attempt.shape == YpsoBolusShape.IMMEDIATE && attempt.pumpFastSequence == null) continue
-            if (attempt.shape == YpsoBolusShape.IMMEDIATE && records.singleOrNull { it.ids.pumpId == id }
-                    ?.let { Math.round(it.amount * 100) > attempt.requestedCentiUnits } == true) continue
-            if (attempt.shape == YpsoBolusShape.IMMEDIATE) {
-                val temporaryId = provisionalTemporaryId(attempt)
-                val provisional = records.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
-                val imported = records.singleOrNull { it.ids.pumpId == id } ?: continue
-                if (provisional.id == imported.id) continue
-                // The imported amount is already pump-confirmed. This transaction atomically merges
-                // both records even if their timestamps predate the current driver activation.
-                persistenceLayer.syncPumpBolusWithTempId(
-                    imported.copy(ids = imported.ids.copy(temporaryId = temporaryId)), provisional.type,
-                ).blockingGet()
-                aapsLogger.info(LTag.PUMP, "YpsoPump merged journalled provisional bolus with pump event $id")
-            } else {
-                val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, serial) ?: continue
-                if (attempt.cancelStoppedAt == null && attempt.blockTerminalAt == null) continue
-                val delivered = Math.round(existing.amount * 100).toInt()
-                val window = YpsoExtendedBolusAccounting.terminalWindow(attempt, delivered, System.currentTimeMillis())
-                // A terminal history row may already have supplied a shorter elapsed window.
-                // The observed stop is an upper bound, not permission to extend that delivery again.
-                if (existing.duration <= window.duration) continue
-                pumpSync.correctExtendedBolusWithPumpId(existing.timestamp, existing.amount, window.duration,
-                    existing.isEmulatingTempBasal, id, PumpType.YPSOPUMP, serial)
-            }
-        }
-    }
-
-    /**
-     * A notified dose whose history row was imported before it could be linked (a scan interrupted
-     * between import and link) still has its own record; link the two now, under the same rules.
-     */
-    private fun repairNotifiedAccounting(serial: String) {
-        val open = bolusController.retainedAttempts().filter {
-            it.pumpSerial == serial && it.pumpFastSequence == null && it.notifiedAccountingPumpId != null &&
-                it.outcome in setOf(YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED,
-                    YpsoBolusOutcome.AWAITING_HISTORY, YpsoBolusOutcome.UNRESOLVED)
-        }
-        for (attempt in open) {
-            val id = checkNotNull(attempt.notifiedAccountingPumpId)
-            // The same choice as at import: a row two doses name, or one a proven dose owns, is neither's.
-            if (runCatching { journalledImmediateBolus(serial, id) }.getOrNull()?.requestId != attempt.requestId) continue
-            val imported = persistenceLayer.getBolusByPumpId(id, PumpType.YPSOPUMP, serial) ?: continue
-            bindNotifiedBolus(attempt, serial, id, imported.timestamp, Math.round(imported.amount * 100).toInt(), imported.type)
-        }
     }
 
     /**
@@ -1652,170 +1244,6 @@ class YpsoPumpPlugin @Inject constructor(
                     "fingerprint changed: type=${row.eventType} storedFingerprint=${cursor?.fingerprint} " +
                     "rowFingerprint=${row.fingerprint()}",
             )
-        }
-    }
-
-    private fun reconcileBolusAttempt(serial: String, zone: java.time.ZoneId, reboot: Int, snapshot: YpsoHistorySnapshot) {
-        val attempt = bolusController.currentAttempt() ?: return
-        if (!attempt.awaitsReconciliation) return
-        // A notified dose is linked by its exact sequence when history imports that row.
-        if (attempt.shape == YpsoBolusShape.IMMEDIATE && attempt.pumpFastSequence == null && attempt.notifiedAccountingPumpId != null) return
-        if (attempt.pumpSerial != serial || attempt.sessionGeneration != bleManager.session?.activeRecord()?.generation ||
-            attempt.baseline.pumpReboot != reboot) {
-            bolusController.markUnresolved("pump identity epoch changed before terminal bolus reconciliation")
-            return
-        }
-        val cursor = app.aaps.pump.ypsopump.history.YpsoHistoryCursor(
-            app.aaps.pump.ypsopump.history.YpsoEventIdentity(
-                serial,
-                (attempt.baseline.historyPumpId ushr 32).toInt(),
-                attempt.baseline.historyPumpId and 0xffffffffL,
-            ),
-            app.aaps.pump.ypsopump.history.YpsoHistoryFingerprint(attempt.baseline.historyFingerprintHigh, attempt.baseline.historyFingerprintLow),
-            reboot.toLong(),
-        )
-        val stable = YpsoHistoryReconciler.reconcile(cursor, snapshot) as? YpsoHistoryReconciliation.Stable ?: return
-        if (attempt.shape != YpsoBolusShape.IMMEDIATE) {
-            when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.stateUpdates + stable.newEventsOldestFirst)) {
-                is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
-                    val historyTimestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-                        ?.instant?.toEpochMilli() ?: return
-                    val observedWindow = YpsoExtendedBolusAccounting.terminalWindow(
-                        attempt,
-                        resolution.amountCentiUnits,
-                        System.currentTimeMillis(),
-                    )
-                    val terminal = if (resolution.event.entry.eventType == 3)
-                        observedWindow.copy(duration = YpsoExtendedBolusAccounting.squareHistoryDuration(
-                            resolution.event.entry.value2, observedWindow.duration))
-                    else observedWindow
-                    pumpSync.correctExtendedBolusWithPumpId(
-                        terminal.start,
-                        resolution.amountCentiUnits / 100.0,
-                        terminal.duration,
-                        false,
-                        resolution.event.identity.aapsPumpId,
-                        PumpType.YPSOPUMP,
-                        serial,
-                    )
-                    if (!extendedAccountingMatches(
-                            resolution.event.identity.aapsPumpId,
-                            terminal.start,
-                            resolution.amountCentiUnits / 100.0,
-                            terminal.duration,
-                            serial,
-                        )) {
-                        bolusController.markUnresolved("terminal extended bolus accounting was rejected")
-                        publishUnresolvedBolusWarningIfNeeded()
-                        return
-                    }
-                    bolusController.confirmTerminal(
-                        resolution.amountCentiUnits,
-                        terminal.end.coerceAtLeast(historyTimestamp),
-                        resolution.event.identity.sequence,
-                        resolution.event.identity.aapsPumpId,
-                        cancelled = resolution.amountCentiUnits < attempt.requestedCentiUnits,
-                    )
-                }
-                is YpsoExtendedBolusReconciliation.Unresolved ->
-                    if (resolution.reason == YpsoExtendedBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY) {
-                        recoverRunningExtendedAccounting(attempt, serial)
-                    } else {
-                        bolusController.markUnresolved("extended history reconciliation: ${resolution.reason}")
-                    }
-            }
-            return
-        }
-        val status = readBolusStatusBlocking()?.let {
-            YpsoImmediateBolusStatus(
-                it.fastSequence,
-                it.bolusStatusCode,
-                Math.round(it.totalProgrammedUnits * 100.0).toInt(),
-                Math.round(it.deliveredUnits * 100.0).toInt(),
-            )
-        }
-        when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.stateUpdates + stable.newEventsOldestFirst)) {
-            is YpsoImmediateBolusReconciliation.AttemptCompleted -> {
-                val timestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-                    ?.instant?.toEpochMilli() ?: return
-                bolusController.confirmTerminal(
-                    resolution.amountCentiUnits,
-                    timestamp,
-                    resolution.event.identity.sequence,
-                    resolution.event.identity.aapsPumpId,
-                    cancelled = resolution.amountCentiUnits < attempt.requestedCentiUnits,
-                )
-            }
-            is YpsoImmediateBolusReconciliation.Unresolved -> {
-                // A dose that proved neither its status identity nor a notified sequence is never merged
-                // onto a row by amount or time alone: that row may be another dose. Both records stay,
-                // counting insulin high, and the warning asks the operator to check.
-                if (resolution.reason != YpsoImmediateBolusReconciliation.Reason.NO_COMPATIBLE_HISTORY)
-                    bolusController.markUnresolved("history reconciliation: ${resolution.reason}")
-            }
-            is YpsoImmediateBolusReconciliation.ConfirmedInsulin -> Unit
-        }
-    }
-
-    /** Waits for the authenticated link to come back so pump reads can succeed again. */
-    private fun awaitConnection(timeoutMs: Long): Boolean {
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
-        while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            if (bleManager.isConnected) return true
-            Thread.sleep(250L)
-        }
-        return false
-    }
-
-    private fun readBolusStatusBlocking(timeoutMs: Long = 15_000): BolusCommand? {
-        var status: BolusCommand? = null
-        val latch = java.util.concurrent.CountDownLatch(1)
-        bleManager.readBolusStatus { status = it; latch.countDown() }
-        return if (latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) status else null
-    }
-
-    private fun bolusHistoryPumpId(baselinePumpId: Long, sequence: Long): Long? =
-        app.aaps.pump.ypsopump.history.YpsoBolusPumpIdentity.of(baselinePumpId, sequence)
-
-    private fun extendedAccountingMatches(pumpId: Long, timestamp: Long, amount: Double, duration: Long, serial: String): Boolean =
-        YpsoExtendedBolusAccounting.matches(
-            pumpSync.getExtendedBolusWithPumpId(pumpId, PumpType.YPSOPUMP, serial),
-            pumpId,
-            timestamp,
-            amount,
-            duration,
-            serial,
-        )
-
-    /** Repairs restart/crash gaps after durable slow-block identity proof but before PumpSync creation. */
-    private fun recoverRunningExtendedAccounting(attempt: YpsoBolusAttempt, serial: String) {
-        val start = attempt.dispatchedAt ?: return
-        val duration = attempt.durationMinutes * 60_000L
-        // A dispatch that lost its link before the slow sequence was journalled has no identity to
-        // repair under. Its insulin is not lost: the terminal history row is ingested on its own
-        // evidence below. Throwing here would abort every later ingestion instead.
-        val sequence = attempt.pumpSlowSequence ?: return
-        val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence) ?: return
-        if (extendedAccountingMatches(pumpId, start, attempt.requestedUnits, duration, serial)) return
-        val status = readBolusStatusBlocking() ?: return
-        if (status.extendedSequence != attempt.pumpSlowSequence ||
-            status.extendedStatusCode !in setOf(BolusCommand.STATUS_DELIVERING, BolusCommand.STATUS_MIXED_DELIVERING) ||
-            Math.round(status.extendedTotalUnits * 100.0).toInt() != attempt.requestedCentiUnits ||
-            status.extendedMinutesTotal != attempt.durationMinutes ||
-            Math.round(status.comboImmediateTotalUnits * 100.0).toInt() != attempt.immediateCentiUnits
-        ) return
-        val synced = pumpSync.syncExtendedBolusWithPumpId(
-            start,
-            attempt.requestedUnits,
-            duration,
-            false,
-            pumpId,
-            PumpType.YPSOPUMP,
-            serial,
-        )
-        if (!synced && !extendedAccountingMatches(pumpId, start, attempt.requestedUnits, duration, serial)) {
-            bolusController.markUnresolved("active extended bolus accounting recovery was rejected")
-            publishUnresolvedBolusWarningIfNeeded()
         }
     }
 
@@ -1910,180 +1338,11 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun setExtendedBolus(insulin: Double, durationInMinutes: Int): PumpEnactResult = onLink { setExtendedBolusNow(insulin, durationInMinutes) }
 
-    private fun setExtendedBolusNow(insulin: Double, durationInMinutes: Int): PumpEnactResult {
-        val constrainedMaximum = constraintsChecker.getMaxExtendedBolusAllowed().value()
-        val request = runCatching {
-            YpsoBolusRequestValidator.validateDelivery(
-                insulin,
-                durationInMinutes,
-                immediateUnits = 0.0,
-                treatment = app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment.NORMAL,
-                aapsMaxBolus = constrainedMaximum,
-            )
-        }.getOrElse { return fail(R.string.ypsopump_bolus_invalid, it.message ?: "invalid request") }
-        return deliverExtended(request)
-    }
+    private fun setExtendedBolusNow(insulin: Double, durationInMinutes: Int): PumpEnactResult =
+        bolusResult(bolus.startExtended(insulin, durationInMinutes, constraintsChecker.getMaxExtendedBolusAllowed().value()))
 
-    override fun cancelExtendedBolus(): PumpEnactResult = onLink { cancelExtendedBolusNow() }
+    override fun cancelExtendedBolus(): PumpEnactResult = onLink { bolusResult(bolus.cancelExtended()) }
 
-    private fun cancelExtendedBolusNow(): PumpEnactResult {
-        // Therapy cancellation outranks abandonable accounting. Do not overlap bolus status/cancel I/O
-        // with an in-flight selector transaction; it must first reconcile at a selector-safe boundary.
-        if (!yieldHistoryRecovery()) {
-            return fail(YpsoBolusMessage.PUMP_BUSY)
-        }
-        val attempt = bolusController.currentAttempt()
-        if (attempt == null || attempt.shape == YpsoBolusShape.IMMEDIATE || !attempt.awaitsReconciliation) {
-            if (pumpSync.expectedPumpState().extendedBolus != null) {
-                return fail(YpsoBolusMessage.EXTENDED_NOT_STARTED_BY_AAPS)
-            }
-            return pumpEnactResultProvider.get().success(true).enacted(false).isTempCancel(true)
-        }
-        if (!bolusController.beginDelivery()) return fail(YpsoBolusMessage.ANOTHER_BOLUS_IN_PROGRESS)
-        try {
-            bolusController.requestStop()
-            val deadline = android.os.SystemClock.elapsedRealtime() + 90_000L
-            while (android.os.SystemClock.elapsedRealtime() < deadline) {
-                bolusController.requestStop()
-                val current = bolusController.currentAttempt()
-                    ?: return fail(YpsoBolusMessage.EXTENDED_NOT_MATCHED_TO_PUMP)
-                if (current.confirmedCentiUnits != null) {
-                    return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
-                        .comment(rh.gs(R.string.ypsopump_bolus_completed, current.confirmedUnits ?: 0.0))
-                }
-                current.cancelStoppedAt?.let { stoppedAt ->
-                    return finishStatusConfirmedExtendedCancellation(
-                        current,
-                        requireNotNull(current.cancelObservedCentiUnits),
-                        stoppedAt,
-                    )
-                }
-                // The pump announced that this exact slow sequence stopped. That is terminal proof the
-                // delivery ended; only the delivered amount is still outstanding, so resolve now and let
-                // background history replace the elapsed estimate with the exact figure.
-                current.blockTerminalAt?.let { return finishUnprovenExtendedCancellation(current) }
-                if (!bleManager.isConnected) {
-                    aapsLogger.debug(LTag.PUMP, "YpsoPump reconnecting to confirm extended bolus cancellation")
-                    // Release the stale GATT client first; reconnecting without closing it registers a
-                    // new client per attempt and exhausts the platform's client interfaces.
-                    bleManager.disconnect(preserveStatus = true)
-                    seedAndConnect()
-                    if (!awaitConnection(10_000L)) { Thread.sleep(250L); continue }
-                }
-                val status = readBolusStatusBlocking()
-                val observedAt = System.currentTimeMillis()
-                val observed = status?.let { bolusController.observeCancelledStatus(it, observedAt) }
-                if (observed?.cancelStoppedAt != null) {
-                    return finishStatusConfirmedExtendedCancellation(
-                        observed,
-                        requireNotNull(observed.cancelObservedCentiUnits),
-                        observed.cancelStoppedAt,
-                    )
-                }
-                // History is deliberately not read here. A large scan cannot finish inside this window
-                // and previously consumed it entirely, starving the status read that proves cancellation.
-                // Background recovery reconciles the durable record after the command returns.
-                Thread.sleep(250L)
-            }
-            return finishUnprovenExtendedCancellation(bolusController.currentAttempt())
-        } finally {
-            bolusController.finishDelivery()
-            // Reconcile the authoritative record without holding up the command result.
-            scheduleHistoryRecovery("extended bolus cancellation")
-        }
-    }
-
-    /**
-     * Closes a cancellation that returned without a pump-confirmed delivered amount.
-     *
-     * Shortening the record is only safe once the pump has proved that delivery stopped. A cancel
-     * that was merely dispatched may never have reached the pump, so the insulin may still be
-     * running; reducing the record then would hide insulin from IOB and invite stacking. The
-     * programmed record therefore stands until pump evidence replaces it, which over-states insulin
-     * in the safe direction and leaves background history to correct it.
-     */
-    private fun finishUnprovenExtendedCancellation(attempt: YpsoBolusAttempt?): PumpEnactResult {
-        val uncertain = { reason: YpsoBolusMessage, journalDetail: String ->
-            uncertainExtendedDelivery(reason, journalDetail, tempCancel = true)
-        }
-        val unconfirmed = YpsoBolusMessage.EXTENDED_CANCEL_UNCONFIRMED
-        if (attempt == null) return uncertain(unconfirmed, "no bolus attempt owns this cancellation")
-        // Only the pump's own terminal announcement proves this delivery ended.
-        val announced = attempt.blockTerminalAt ?: return uncertain(
-            YpsoBolusMessage.EXTENDED_STOP_UNCONFIRMED,
-            "cancellation was dispatched but the pump never announced a terminal transition",
-        )
-        val sequence = attempt.pumpSlowSequence ?: return uncertain(
-            unconfirmed, "extended delivery identity was never journalled",
-        )
-        val window = YpsoExtendedBolusAccounting.unprovenCancelWindow(attempt, announced)
-        val centiUnits = YpsoExtendedBolusAccounting.elapsedCentiUnits(attempt, window)
-        val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence)
-            ?: return uncertain(unconfirmed, "extended bolus identity generation is not representable")
-        pumpSync.correctExtendedBolusWithPumpId(
-            window.start,
-            centiUnits / 100.0,
-            window.duration,
-            false,
-            pumpId,
-            PumpType.YPSOPUMP,
-            serialNumber(),
-        )
-        if (!extendedAccountingMatches(pumpId, window.start, centiUnits / 100.0, window.duration, serialNumber())) {
-            return uncertain(
-                YpsoBolusMessage.EXTENDED_CANCEL_NOT_SAVED,
-                "cancelled extended bolus accounting was rejected",
-            )
-        }
-        // The recorded amount is only the elapsed schedule, so the attempt must stay open for
-        // reconciliation: closing it here with confirmTerminal would make the estimate permanent.
-        aapsLogger.info(
-            LTag.PUMP,
-            "YpsoPump extended bolus cancelled; recorded ${centiUnits / 100.0} U over ${window.duration / 60_000} min pending history",
-        )
-        return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
-            .comment(rh.gs(R.string.ypsopump_bolus_completed, centiUnits / 100.0))
-    }
-
-    private fun finishStatusConfirmedExtendedCancellation(
-        attempt: YpsoBolusAttempt,
-        deliveredCentiUnits: Int,
-        observedAt: Long,
-    ): PumpEnactResult {
-        // Terminal cancel evidence is only accepted against a proven slow sequence, so it exists here.
-        val sequence = requireNotNull(attempt.pumpSlowSequence)
-        val pumpId = bolusHistoryPumpId(attempt.baseline.historyPumpId, sequence)
-            ?: return uncertainExtendedDelivery(
-                YpsoBolusMessage.STOPPED_AMOUNT_NOT_SAVED,
-                "extended bolus identity generation is not representable",
-                tempCancel = true,
-            )
-        val terminal = YpsoExtendedBolusAccounting.terminalWindow(attempt, deliveredCentiUnits, observedAt)
-        pumpSync.correctExtendedBolusWithPumpId(
-            terminal.start,
-            deliveredCentiUnits / 100.0,
-            terminal.duration,
-            false,
-            pumpId,
-            PumpType.YPSOPUMP,
-            serialNumber(),
-        )
-        if (!extendedAccountingMatches(pumpId, terminal.start, deliveredCentiUnits / 100.0, terminal.duration, serialNumber())) {
-            bolusController.markUnresolved("post-cancel extended bolus accounting was rejected")
-            publishUnresolvedBolusWarningIfNeeded()
-            return pumpEnactResultProvider.get().success(false).enacted(true).isTempCancel(true)
-                .comment(rh.gs(R.string.ypsopump_bolus_uncertain, message(YpsoBolusMessage.STOPPED_AMOUNT_NOT_SAVED)))
-        }
-        bolusController.confirmTerminal(
-            deliveredCentiUnits,
-            terminal.end,
-            sequence,
-            pumpId,
-            cancelled = deliveredCentiUnits < attempt.requestedCentiUnits,
-        )
-        return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
-            .comment(rh.gs(R.string.ypsopump_bolus_completed, deliveredCentiUnits / 100.0))
-    }
     override fun loadTDDs(): PumpEnactResult = notImplemented()
 
     // ---- identity ----
@@ -2094,20 +1353,15 @@ class YpsoPumpPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         bleManager.onBolusNotification = { notification, connection, receivedAt ->
-            bolusController.observeBolusNotification(notification, connection, receivedAt = receivedAt)
+            bolus.onNotification(notification, connection, receivedAt)
         }
         historyRecoveryEnabled = true
         publishedUnresolvedBolusWarning = null
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_BOLUS_UNCERTAIN))
-        // Process death must not turn the finite 90-second immediate-bolus observation period into a
-        // permanent therapy block. Identity and accounting evidence remain durable and recoverable.
-        bolusController.expireStaleAttempt(
-            YpsoImmediateBolusController.OBSERVATION_WINDOW_MS,
-            YpsoImmediateBolusController.EXTENDED_RECONCILIATION_MARGIN_MS,
-        )
+        bolus.expireStale()
         provisioning.refreshState()
         publishAvailabilityNotification()
-        publishUnresolvedBolusWarningIfNeeded()
+        bolus.refreshWarning()
         setKeyReminderEnabled(true)
         keyExpiryTask?.cancel(false)
         keyExpiryTask = keyExpiryExecutor.scheduleWithFixedDelay({
@@ -2359,8 +1613,6 @@ class YpsoPumpPlugin @Inject constructor(
         internal const val LOWER_BOUND_RECOVERY_REASON = "Ypso lower-bound history recovery"
         internal const val PENDING_KEY_CHECK_REASON = "YpsoPump pending key check"
         private const val HISTORY_WARNING_RETRIES = 3
-        /** A notified dose's warning stays while its insulin can still act (typical insulin duration). */
-        private const val NOTIFIED_WARNING_WINDOW_MS = 6 * 60 * 60_000L
         private const val HISTORY_COMPLETION_GRACE_MS = 2_000L
         private const val HISTORY_RECOVERY_MAX_ROWS = 3000
         private const val HISTORY_RECOVERY_TIMEOUT_MS = 10 * 60 * 1000L
