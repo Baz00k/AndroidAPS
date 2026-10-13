@@ -36,6 +36,7 @@ dependencies {
 
     testImplementation(project(":shared:tests"))
     testImplementation(project(":implementation"))
+    testImplementation(project(":shared:impl"))
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)
@@ -49,6 +50,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.activity.compose)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation("androidx.test.espresso:espresso-contrib:3.7.0")
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
 
 androidComponents.onVariants { variant ->

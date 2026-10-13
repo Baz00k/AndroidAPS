@@ -1,0 +1,73 @@
+package app.aaps.pump.ypsopump
+
+import app.aaps.pump.ypsopump.crypto.KeyTiming
+import java.time.Instant
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+
+class KeyTimingTest {
+    private val created = Instant.parse("2026-09-10T12:00:00Z").toEpochMilli()
+    private val deadline = Instant.parse("2026-10-08T12:00:00Z").toEpochMilli()
+
+    @Test fun `deadline is exactly 28 elapsed days from creation not extraction or import`() {
+        val timing = KeyTiming()
+        val status = timing.status(created, created + 20 * KeyTiming.DAY_MS, deadline - 1)
+        assertEquals(deadline, status.expiresAt)
+        assertEquals(1L, status.remainingMs)
+        assertFalse(status.expiryDue)
+        assertEquals(KeyTiming.Origin.SOURCE, status.origin)
+        assertTrue(timing.status(created, deadline, deadline).expiryDue)
+        assertTrue(timing.status(created, deadline, deadline + 1).expiryDue)
+    }
+
+    @Test fun `old import and exact advance reminder boundary are due immediately`() {
+        val timing = KeyTiming()
+        val reminder = Instant.parse("2026-10-05T12:00:00Z").toEpochMilli()
+        assertFalse(timing.status(created, reminder, reminder - 1).reminderDue)
+        assertTrue(timing.status(created, reminder, reminder).reminderDue)
+        assertTrue(timing.status(created, deadline + 1, deadline + 1).expiryDue)
+    }
+
+    @Test fun `missing and unusable creation dates use explicitly labeled import estimate without overflow`() {
+        for (source in listOf(null, 0L, -1L, Long.MAX_VALUE, deadline)) {
+            val status = KeyTiming().status(source, created, created)
+            assertEquals(deadline, status.expiresAt)
+            assertEquals(KeyTiming.Origin.IMPORT_ESTIMATE, status.origin)
+        }
+        assertNull(KeyTiming().status(null, null, created).expiresAt)
+        assertNull(KeyTiming().status(Long.MAX_VALUE, Long.MAX_VALUE, created).expiresAt)
+    }
+
+    @Test fun `manual reminder is independent of expiry and observed due survives rollback`() {
+        val timing = KeyTiming(deadline + KeyTiming.DAY_MS, created + 1)
+        val observed = timing.observe(created, created, created + 1)
+        assertEquals(KeyTiming.Origin.USER, observed.status(created, created, created).origin)
+        assertEquals(KeyTiming.Origin.USER, observed.status(created, created, created).reminderOrigin)
+        assertTrue(observed.status(created, created, created - KeyTiming.DAY_MS).reminderDue)
+        assertEquals(deadline + KeyTiming.DAY_MS, observed.status(created, created, created).expiresAt)
+    }
+
+    @Test fun `clock rollback cannot increase remaining time or lose due expiry`() {
+        val observed = KeyTiming().observe(created, created, created + KeyTiming.DAY_MS)
+        assertEquals(27 * KeyTiming.DAY_MS, observed.status(created, created, created).remainingMs)
+        val expired = observed.observe(created, created, deadline)
+        assertTrue(expired.status(created, created, created).expiryDue)
+        assertEquals(0L, expired.status(created, created, created).remainingMs)
+    }
+
+    @Test fun `lost startup event is retried after actual RxBus subscriber attaches`() {
+        val bus = app.aaps.shared.impl.rx.bus.RxBusImpl(app.aaps.shared.tests.rx.TestAapsSchedulers(), app.aaps.shared.tests.AAPSLoggerTest())
+        val publisher = KeyExpiryNotification()
+        val received = mutableListOf<app.aaps.core.interfaces.rx.events.EventSetNotification>()
+        fun poll() = publisher.publish(KeyTiming().status(created, created, deadline)) { value ->
+            bus.send(app.aaps.core.interfaces.rx.events.EventSetNotification(103, value?.let {
+                app.aaps.core.interfaces.notifications.Notification(103, "Expired", 0)
+            }))
+        }
+        poll()
+        val subscription = bus.toObservable(app.aaps.core.interfaces.rx.events.EventSetNotification::class.java).subscribe(received::add)
+        poll()
+        assertEquals(1, received.size)
+        subscription.dispose()
+    }
+}

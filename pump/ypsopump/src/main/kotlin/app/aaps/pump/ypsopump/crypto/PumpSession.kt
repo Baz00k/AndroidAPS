@@ -319,8 +319,10 @@ class PumpSession(private val store: Store) {
         val installed = baseline?.copy(
             serial = provisioning.serial,
             keyHex = provisioning.sharedKey.toHex(),
-            createdAt = provisioning.createdAt ?: baseline.createdAt,
-            importedAt = provisioning.importedAt,
+            // Same key is not renewal. Retain the earliest source and first import even if the
+            // replacement file claims a newer generation date or the phone clock moved backwards.
+            createdAt = listOfNotNull(baseline.createdAt, provisioning.createdAt).minOrNull(),
+            importedAt = baseline.importedAt ?: provisioning.importedAt,
             source = provisioning.source,
             verifiedAt = null,
             verifiedSerial = null

@@ -295,10 +295,13 @@ private fun HeroStat(
 
 @Composable
 private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
-    // Each pill is a 2-line tile (dot/ring + label on top, value below) so all of them — up to 4 after a
-    // cannula change (Cannula + Sensor + Reservoir + Battery) — fit on ONE row without squashing.
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        supplies.forEach { s -> SupplyCell(s, Modifier.weight(1f)) }
+    // Optional pump indicators must not squeeze the existing supply values into unreadable tiles.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        supplies.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { s -> SupplyCell(s, Modifier.weight(1f)) }
+            }
+        }
     }
 }
 

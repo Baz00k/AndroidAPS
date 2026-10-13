@@ -90,6 +90,8 @@ interface UiInteraction {
      */
     fun dismissNotification(id: Int)
     fun addNotification(id: Int, text: String, level: Int)
+    /** Atomic replacement/removal; all changes for this publisher must use this ordered route. */
+    fun setNotification(id: Int, text: String?, level: Int)
     fun addNotificationValidFor(id: Int, text: String, level: Int, validMinutes: Int)
     fun addNotificationWithSound(id: Int, text: String, level: Int, @RawRes soundId: Int?)
     fun addNotificationValidTo(id: Int, date: Long, text: String, level: Int, validTo: Long)

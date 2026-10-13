@@ -82,6 +82,8 @@ import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -122,6 +124,16 @@ class YpsoPumpPlugin @Inject constructor(
     @Inject lateinit var persistenceLayer: app.aaps.core.interfaces.db.PersistenceLayer
 
     private var publishedAvailabilityPresentation: PumpSetupPresentation? = null
+    private val keyExpiryNotification = KeyExpiryNotification()
+    private val keyExpiryExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "ypso-key-reminder").apply { isDaemon = true }
+    }
+    private var keyExpiryTask: ScheduledFuture<*>? = null
+    private var keyReminderEnabled = false
+    private var keyReminderEpoch = 0L
+    // Reminder storage/notification work must never hold the plugin's therapy monitor.
+    private val keyReminderLock = Any()
+    private val keyObservationLock = Any()
     /** Shared store can outlive this plugin instance; the first publication must reconcile its ID. */
     private var availabilityNotificationSynchronized = false
     /** Last published mismatch text, or null when no mismatch is currently published. */
@@ -2096,6 +2108,13 @@ class YpsoPumpPlugin @Inject constructor(
         provisioning.refreshState()
         publishAvailabilityNotification()
         publishUnresolvedBolusWarningIfNeeded()
+        setKeyReminderEnabled(true)
+        keyExpiryTask?.cancel(false)
+        keyExpiryTask = keyExpiryExecutor.scheduleWithFixedDelay({
+            runCatching { publishKeyExpiryNotification() }.onFailure {
+                aapsLogger.error(LTag.PUMP, "YpsoPump key reminder failed: ${it.javaClass.simpleName}")
+            }
+        }, 0, 30, TimeUnit.SECONDS)
         publishedUncertainTbr = false
         publishedUnmatchedTbrs = 0
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
@@ -2106,6 +2125,9 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     override fun onStop() {
+        setKeyReminderEnabled(false)
+        keyExpiryTask?.cancel(false)
+        keyExpiryTask = null
         appLifecycle.removeVisibilityListener(visibilityListener)
         foregroundConnectionLease.set(false)
         stopHistoryNotifications()
@@ -2157,6 +2179,7 @@ class YpsoPumpPlugin @Inject constructor(
         if (requiredKey != null) return
         val category = PreferenceCategory(context).apply {
             key = "ypsopump_connection_setup"
+            order = 0
             title = rh.gs(R.string.ypsopump_connection_setup)
         }
         // PreferenceGroup needs the host PreferenceManager before children can receive stable IDs.
@@ -2172,8 +2195,19 @@ class YpsoPumpPlugin @Inject constructor(
                 }
             })
         }
+        val keySettings = KeyReminderPreferences(context, provisioning, ::publishKeyExpiryNotification) {
+            aapsLogger.warn(LTag.PUMP, "YpsoPump reminder settings failed", it)
+        }
+        keySettings.addTo(parent)
+        keySettings.addPreference(
+            app.aaps.core.validators.preferences.AdaptiveSwitchPreference(
+                ctx = context, booleanKey = app.aaps.core.keys.BooleanKey.YpsoShowKeyExpiry,
+                title = R.string.ypsopump_key_show_overview
+            ).apply { order = 2 }
+        )
         val profiles = PreferenceCategory(context).apply {
             key = "ypsopump_basal_configuration"
+            order = 2
             title = rh.gs(R.string.ypsopump_basal_configuration)
         }
         parent.addPreference(profiles)
@@ -2268,6 +2302,40 @@ class YpsoPumpPlugin @Inject constructor(
         )
         publishedAvailabilityPresentation = presentation
         availabilityNotificationSynchronized = true
+    }
+
+    internal fun setKeyReminderEnabled(enabled: Boolean) = synchronized(keyReminderLock) {
+        keyReminderEnabled = enabled
+        keyReminderEpoch++
+        if (!enabled) uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+    }
+
+    override val keyExpiryIndicator: Pump.KeyExpiryIndicator?
+        get() {
+            if (!preferences.get(app.aaps.core.keys.BooleanKey.YpsoShowKeyExpiry)) return null
+            val record = provisioning.installed()?.takeIf { it.keyDatesLoaded } ?: return null
+            val status = record.keyTiming.status(record.createdAt?.toEpochMilli(), record.importedAt?.toEpochMilli(), System.currentTimeMillis())
+            return Pump.KeyExpiryIndicator(status.remainingMs, status.expiryDue, status.reminderDue,
+                status.origin == app.aaps.pump.ypsopump.crypto.KeyTiming.Origin.IMPORT_ESTIMATE)
+        }
+
+    internal fun publishKeyExpiryNotification() = synchronized(keyObservationLock) observation@ {
+        val epoch = synchronized(keyReminderLock) { if (!keyReminderEnabled) return@observation; keyReminderEpoch }
+        // No lifecycle, plugin or therapy lock during potentially slow advisory persistence.
+        val status = provisioning.observeKeyTiming()
+        synchronized(keyReminderLock) {
+            if (!keyReminderEnabled || epoch != keyReminderEpoch) return@observation
+            keyExpiryNotification.publish(status) { value ->
+                if (value == null) uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY, null, Notification.NORMAL)
+                else {
+                    val (deadline, due) = value
+                    uiInteraction.setNotification(Notification.YPSOPUMP_KEY_EXPIRY,
+                        rh.gs(if (due) R.string.ypsopump_key_due_notification else R.string.ypsopump_key_reminder_notification,
+                            deadline?.let(::keyDateLabel) ?: rh.gs(R.string.ypsopump_key_unknown)),
+                        if (due) Notification.URGENT else Notification.NORMAL)
+                }
+            }
+        }
     }
 
     @Synchronized

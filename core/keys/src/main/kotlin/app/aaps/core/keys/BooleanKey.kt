@@ -31,6 +31,7 @@ enum class BooleanKey(
     OverviewUseSuperBolus("key_usersuperbolus", false, defaultedBySM = true, hideParentScreenIfHidden = true),
 
     PumpBtWatchdog("bt_watchdog", false, showInNsClientMode = false, hideParentScreenIfHidden = true),
+    YpsoShowKeyExpiry("ypsopump_show_key_expiry", false, showInNsClientMode = false),
 
     AlertMissedBgReading("enable_missed_bg_readings", false),
     AlertPumpUnreachable("enable_pump_unreachable_alert", true),

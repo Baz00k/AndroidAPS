@@ -629,6 +629,15 @@ class OverviewFragment : DaggerFragment() {
             }
             // Keep the battery pill stable rather than letting it vanish and reappear.
             levels.battery?.let { add(batterySupply(it)) }
+            pump.keyExpiryIndicator?.let { key ->
+                val label = when {
+                    key.remainingMs == null -> rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+                    key.due -> rh.gs(R.string.pump_key_due)
+                    key.estimated -> rh.gs(R.string.pump_key_estimated_remaining, compactDurationLabel(key.remainingMs!!))
+                    else -> compactDurationLabel(key.remainingMs!!)
+                }
+                add(app.aaps.plugins.main.general.overview.compose.keyExpirySupply(key, rh.gs(R.string.pump_key), label))
+            }
         }
 
         val targetEditable = TherapyActionAvailability.tempTarget(target.temporaryTarget != null, profile != null, mode)

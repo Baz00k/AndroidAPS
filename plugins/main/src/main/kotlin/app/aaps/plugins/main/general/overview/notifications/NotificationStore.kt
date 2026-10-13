@@ -88,6 +88,17 @@ class NotificationStore @Inject constructor(
         return false
     }
 
+    /** Replacement and removal are each one operation under the store monitor. */
+    @Synchronized
+    fun set(id: Int, notification: Notification?) {
+        require(notification == null || notification.id == id)
+        val previous = store.singleOrNull { it.id == id }
+        if (previous != null && notification != null && previous.text == notification.text && previous.level == notification.level &&
+            previous.validTo == notification.validTo && previous.soundId == notification.soundId) return
+        remove(id)
+        notification?.let(::add)
+    }
+
     @Synchronized
     private fun removeExpired() {
         var i = 0

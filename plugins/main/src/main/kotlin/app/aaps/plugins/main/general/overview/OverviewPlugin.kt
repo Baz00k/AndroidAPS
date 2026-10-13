@@ -24,6 +24,7 @@ import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventIobCalculationProgress
 import app.aaps.core.interfaces.rx.events.EventNewHistoryData
 import app.aaps.core.interfaces.rx.events.EventNewNotification
+import app.aaps.core.interfaces.rx.events.EventSetNotification
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.interfaces.rx.events.EventUpdateOverviewCalcProgress
 import app.aaps.core.interfaces.ui.UiInteraction
@@ -96,6 +97,13 @@ class OverviewPlugin @Inject constructor(
         overviewData.initRange()
 
         notificationStore.createNotificationChannel()
+        disposable += rxBus
+            .toObservable(EventSetNotification::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ n ->
+                notificationStore.set(n.id, n.notification)
+                overviewBus.send(EventUpdateOverviewNotification("EventSetNotification"))
+            }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventNewNotification::class.java)
             .observeOn(aapsSchedulers.io)

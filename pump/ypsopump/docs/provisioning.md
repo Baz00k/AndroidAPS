@@ -18,8 +18,26 @@ Keep plaintext keys and import files private. AAPS stores the installed key in i
 
 The importer validates schema, timestamps, key and supported pump identity; a serial is never synthesized from a MAC. Manual entry and file import are the only ways to provision a pump. Previously persisted replay floors are retained on same-key imports.
 
+## Key expiry and reminders
+
+AAPS estimates when the installed key will expire and reminds you to replace it. The pump does not report its own expiry, so AAPS assumes the 28-day maximum lifetime reported in [#211](https://github.com/Baz00k/AndroidAPS/issues/211). The date is an estimate. It is not proof that the key still works or has stopped working, and it never renews or verifies the key, changes dosing or clears a pump code 140 rejection. Losing remote access to the pump does not prove that insulin delivery has stopped.
+
+The expiry is the key's source creation time plus 28 days of 24 hours. For a file from ypso-keys that time is `created_at`, which holds the genuine app's `sharedKeyDate`. A key entered by hand has no source date, so AAPS counts from the first import and labels the date as estimated. The key may already be older. If no usable date exists, the expiry shows as unknown and you can set it yourself. The pump status screen shows the expiry too.
+
+Settings are under **YpsoPump Preferences → Pump key**:
+
+- Key reminder is automatic, 3 days before expiry. Choose Custom date… and confirm a date and time to override it. Cancelling the picker leaves the setting unchanged.
+- Key expiry is automatic. You can set a custom date the same way.
+- Show key status on overview adds a Pump key indicator to the overview. It is off by default.
+
+Reminders appear as AAPS notifications. Dates belong to one key on one pump. Importing the same key again keeps them. A replacement key starts with its own dates once it is verified, and a candidate that fails verification does not change the installed key's reminder.
+
+AAPS checks while the YpsoPump plugin is running and after restart; it cannot notify while stopped. Moving the clock back does not hide an observed due date. AAPS cannot reconstruct elapsed time during a stopped process with clock rollback, and a clock set too far forward can show expiry early. Check the phone clock before correcting a date.
+
+Reminder storage is separate from therapy records. A storage error can disable date settings or reminders without affecting pump operation. Resolve the storage problem and reopen preferences; do not clear app data or edit the session journal to repair a reminder.
+
 ## Handoff and session loss
 
 Before switching back to the official app or another controller, let AAPS finish pending operations and quiesce it. Android cannot establish that a different phone has stopped using the same pump. AAPS keeps replay history for old sessions; clearing app data or editing numeric counters is not a session handoff.
 
-If AAPS reports suspected re-key (pump code 140), it stops automatic retries. Obtain a new session through the genuine-app/service workflow, extract it and verify a **different** key on the AAPS phone. Re-importing the old key does not clear the condition. Key age alone does not prove expiry; the pump's precise session lifetime is unknown. Without an external renewal path, AAPS cannot create a replacement session offline.
+If AAPS reports suspected re-key (pump code 140), it stops automatic retries. Obtain a new session through the genuine-app/service workflow, extract it and verify a **different** key on the AAPS phone. Re-importing the old key or editing its dates does not clear the condition. Key age alone does not prove expiry; the pump's precise session lifetime is unknown. Without an external renewal path, AAPS cannot create a replacement session offline.

@@ -153,4 +153,24 @@
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>
     <string name="ypsopump_rekey_new_key_required">Enter the pump’s new key. The old one won’t work.</string>
     <string name="ypsopump_history_incomplete_notification">YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.</string>
+    <string name="ypsopump_key_expiry_source_short">Key expires</string>
+    <string name="ypsopump_key_expiry_estimate_short">Estimated key expiry</string>
+    <string name="ypsopump_key_expiry_user_short">Key expiry</string>
+    <string name="ypsopump_key_overdue_short">Renew key</string>
+    <string name="ypsopump_key_unknown">Expiry date unknown</string>
+    <string name="ypsopump_key_dates_failed">Couldn\'t save the reminder. Please try again.</string>
+    <string name="ypsopump_key_reminder_notification">Renew your YpsoPump key before %1$s in Connection setup.</string>
+    <string name="ypsopump_key_due_notification">Time to renew your YpsoPump key. Open Connection setup. This reminder does not stop insulin delivery.</string>
+    <string name="ypsopump_key_reminders">Pump key</string>
+    <string name="ypsopump_key_expiry_setting">Key expiry</string>
+    <string name="ypsopump_key_expiry_auto">Automatic</string>
+    <string name="ypsopump_key_reminder_setting">Key reminder</string>
+    <string name="ypsopump_key_reminder_default">Automatic · 3 days before expiry</string>
+    <string name="ypsopump_key_custom_date">Custom date…</string>
+    <string name="ypsopump_key_custom_summary">Custom · %1$s</string>
+    <string name="ypsopump_key_estimated_date">Estimated: %1$s</string>
+    <string name="ypsopump_key_connect_first">Set up your pump first</string>
+    <string name="ypsopump_key_load_failed">Couldn\'t load key dates. Reopen settings to try again.</string>
+    <string name="ypsopump_key_show_overview">Show key status on overview</string>
+    <string name="ypsopump_key_saved">Saved</string>
 </resources>
