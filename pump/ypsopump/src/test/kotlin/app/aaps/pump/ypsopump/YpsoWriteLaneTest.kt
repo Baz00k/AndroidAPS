@@ -44,6 +44,7 @@ internal class YpsoWriteLaneTest {
         val frames = mutableListOf<ByteArray>()
         val released = mutableListOf<YpsoLinkLease>()
         var acceptFrames = true
+        var onRecoverInterruptedWrite: () -> Unit = {}
 
         override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean {
             frames += value.copyOf()
@@ -55,6 +56,7 @@ internal class YpsoWriteLaneTest {
         }
 
         override fun recoverInterruptedWrite() {
+            onRecoverInterruptedWrite()
             session?.recoverInterruptedWrite(checkNotNull(token))
         }
     }
@@ -278,6 +280,49 @@ internal class YpsoWriteLaneTest {
     }
 
     @Test
+    fun `a bolus whose unresolved evidence cannot be saved still hands back the link and stays uncertain`() {
+        val pump = Pump(Category.BOLUS)
+        val owner = pump.owner()
+        pump.write(owner)
+        pump.acknowledge(owner)
+        val frames = pump.link.frames.size
+        pump.store.fail = true
+
+        assertThrows<SecurityException> { pump.lane.recordUnresolved(owner, "write", evidence, "status did not show the bolus") }
+
+        assertFalse(pump.holds(owner))
+        // The durable journal still holds the acknowledged, unproven reservation; nothing is redispatched.
+        assertEquals(PumpSession.Phase.ACKED, pump.store.state.records.single().reservation?.phase)
+        assertEquals(frames, pump.link.frames.size)
+        assertTrue(pump.outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
+    }
+
+    @Test
+    fun `a TBR left unresolved tears down its write before retiring it, and hands back the link even when neither can be saved`() {
+        val pump = Pump(Category.TBR)
+        val owner = pump.owner()
+        pump.write(owner)
+        pump.acknowledge(owner)
+        val frames = pump.link.frames.size
+        var idleAtRetire: Boolean? = null
+        var heldAtRetire: Boolean? = null
+        pump.link.onRecoverInterruptedWrite = {
+            idleAtRetire = pump.lane.isIdle()
+            heldAtRetire = pump.holds(owner)
+        }
+        pump.store.fail = true
+
+        assertThrows<SecurityException> { pump.lane.recordUnresolved(owner, "write", evidence, "status did not show the TBR") }
+
+        assertEquals(true, idleAtRetire)
+        assertEquals(true, heldAtRetire)
+        assertFalse(pump.holds(owner))
+        // Nothing could be saved, so the reservation stays uncertain and is never redispatched.
+        assertEquals(PumpSession.Phase.ACKED, pump.store.state.records.single().reservation?.phase)
+        assertEquals(frames, pump.link.frames.size)
+    }
+
+    @Test
     fun `a TBR rejection confirmed by status resolves the write with its counter consumed`() {
         val pump = Pump(Category.TBR)
         val owner = pump.owner()
@@ -492,8 +537,11 @@ internal class YpsoWriteLaneTest {
 
         assertTrue(pump.write(owner))
         val reservation = pump.reservation
+        assertEquals(PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR, reservation.candidate)
         pump.acknowledge(owner)
         assertTrue(pump.outcomes.single() is YpsoWriteOutcome.AcceptedUnverified)
+        // Unlike an ordinary selector, the recovery probe records its transport acknowledgement.
+        assertEquals(PumpSession.Phase.ACKED, pump.reservation.phase)
         assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, pump.session.snapshot()!!.writeBootstrapState)
 
         assertTrue(pump.lane.reconcile(owner, "write", YpsoSemanticEvidence.ACCEPTED, evidence, "exact selector read-back matched"))
@@ -554,6 +602,10 @@ internal class YpsoWriteLaneTest {
         assertEquals(9_036L, pump.session.snapshot()!!.write)
         assertEquals(PumpSession.WriteBootstrapState.RECOVERING_LOWER_BOUND, pump.session.snapshot()!!.writeBootstrapState)
         assertTrue(PumpSession.AvailabilityCause.COUNTER_UNCERTAIN in pump.session.availability().causes)
+        // Losing the connection cannot make it look like an ordinary selector that reconnect may retire.
+        pump.lane.ownerDisconnected(owner.epoch.connection, "connection lost")
+        assertEquals(PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR, pump.reservation.candidate)
+        assertFalse(pump.session.isAbandonableSelector(pump.reservation))
 
         // A restart cannot retire an ambiguous recovery probe: the unresolved reservation blocks.
         val restarted = PumpSession(pump.store)
