@@ -39,7 +39,8 @@ import app.aaps.core.interfaces.notifications.Notification
 
 /*
  * Active notifications on Home: a pill in the hero's top row says how many there are and how severe
- * the worst is, and opens a sheet listing them all. Home's layout does not change with the alerts.
+ * the worst is, and opens a sheet listing them all. Home's layout does not change with the alerts
+ * unless the two pills no longer fit on one line (narrow screens, large text).
  *
  * Opening or closing the sheet never acts on an alert: only an alert's own button runs its action
  * (snooze, set, select...), which then removes it exactly as before.
@@ -51,19 +52,37 @@ internal fun orderedAlerts(alerts: List<HomeUiState.Alert>): List<HomeUiState.Al
 /** Urgent and warning levels name themselves on the pill; lesser ones are only counted. */
 private fun needsAttention(level: Int) = level == Notification.URGENT || level == Notification.NORMAL
 
-/** "Urgent · 3", "Warning · 1", "2 alerts"; null without alerts, when there is no pill. */
+/**
+ * "2 urgent · +3", "1 warning", "2 alerts"; null without alerts, when there is no pill. The most
+ * severe level that needs attention is counted by name, so a second urgent alert changes the pill
+ * even when the total stays the same; "+n" counts the rest, so a new warning behind an urgent one does too.
+ */
 internal fun alertsPillLabel(alerts: List<HomeUiState.Alert>): String? {
-    val top = alerts.minOfOrNull { it.level } ?: return null
-    return if (needsAttention(top)) "${severityLabel(top)} · ${alerts.size}" else "${alerts.size} ${alertsWord(alerts.size)}"
+    if (alerts.isEmpty()) return null
+    val urgent = alerts.count { it.level == Notification.URGENT }
+    val warnings = alerts.count { it.level == Notification.NORMAL }
+    val (named, count) = when {
+        urgent > 0   -> "$urgent urgent" to urgent
+        warnings > 0 -> "$warnings ${plural(warnings, "warning")}" to warnings
+        else         -> return "${alerts.size} ${plural(alerts.size, "alert")}"
+    }
+    val rest = alerts.size - count
+    return if (rest > 0) "$named · +$rest" else named
 }
 
-/** What TalkBack reads for the pill: "3 alerts, 1 urgent", so the count of urgent ones is never left to colour. */
+/** What TalkBack reads for the pill: "5 alerts: 2 urgent, 1 warning". */
 internal fun alertsPillDescription(alerts: List<HomeUiState.Alert>): String {
     val urgent = alerts.count { it.level == Notification.URGENT }
-    return "${alerts.size} ${alertsWord(alerts.size)}" + if (urgent > 0) ", $urgent urgent" else ""
+    val warnings = alerts.count { it.level == Notification.NORMAL }
+    val total = "${alerts.size} ${plural(alerts.size, "alert")}"
+    val severe = listOfNotNull(
+        "$urgent urgent".takeIf { urgent > 0 },
+        "$warnings ${plural(warnings, "warning")}".takeIf { warnings > 0 }
+    )
+    return if (severe.isEmpty()) total else "$total: ${severe.joinToString(", ")}"
 }
 
-private fun alertsWord(n: Int) = if (n == 1) "alert" else "alerts"
+private fun plural(n: Int, word: String) = if (n == 1) word else "${word}s"
 
 /** Severity in words, so it is never carried by colour alone. */
 internal fun severityLabel(level: Int): String = when (level) {
@@ -113,7 +132,7 @@ internal fun AlertsPill(alerts: List<HomeUiState.Alert>, onClick: () -> Unit) {
  * last one is gone the sheet slides away, showing it inert on the way out.
  *
  * Every row is keyed by its alert, so a press that began on one alert's button is cancelled, not
- * delivered to another, when that alert moves, resolves or is replaced.
+ * delivered to another, when that alert resolves and another takes its row.
  */
 @Composable
 internal fun AlertsSheet(alerts: List<HomeUiState.Alert>, onAction: (HomeUiState.Alert) -> Unit, onDismissed: () -> Unit) {

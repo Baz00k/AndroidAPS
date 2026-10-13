@@ -50,7 +50,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.ActionBarButton
@@ -122,9 +121,10 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
     // so the pill sits as far from the top edge as from the left one.
     AapsCard(shape = AapsTheme.shape.hero, contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = AapsSpacing.cardPad, top = AapsSpacing.cardPad - 8.dp, bottom = AapsSpacing.cardPad)) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // row 1 — loop pill (tap → Loop mode chooser), alerts pill (tap → every alert) + time.
+            // row 1 — loop pill (tap → Loop mode chooser) + alerts pill (tap → every alert).
             // Alerts are the reason the loop may not be doing what the hero says, so they sit beside it.
-            // The row only wraps when large text leaves no room for both pills.
+            // The row holds nothing else, so the pills share one line on a 360 dp phone; they wrap onto
+            // a second only with large text.
             FlowRow(itemVerticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusPill(
                     label = buildString {
@@ -137,9 +137,8 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     onClick = actions.onLoop
                 )
                 AlertsPill(state.notifications, onAlertsClick)
-                Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }
-            // row 2 — BG + inline trend (left) · eventual (right)
+            // row 2 — BG + how old it is and its trend (left) · eventual (right)
             Row(verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -159,13 +158,13 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                             }
                         }
                     )
-                    if (state.trendArrow.isNotBlank() || state.delta.isNotBlank())
-                        Text(
-                            "${state.trendArrow} ${state.delta}".trim(),
-                            style = AapsTheme.type.listTitle.copy(fontWeight = FontWeight.ExtraBold),
-                            color = bgColor,
-                            modifier = Modifier.padding(bottom = 10.dp)
-                        )
+                    // The reading's age sits with the reading, above its trend.
+                    val trend = "${state.trendArrow} ${state.delta}".trim()
+                    if (state.timeAgo.isNotBlank() || trend.isNotBlank())
+                        Column(Modifier.padding(bottom = 10.dp)) {
+                            if (state.timeAgo.isNotBlank()) Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary)
+                            if (trend.isNotBlank()) Text(trend, style = AapsTheme.type.listTitle.copy(fontWeight = FontWeight.ExtraBold), color = bgColor)
+                        }
                 }
                 if (state.eventualBg.isNotBlank())
                     Column(horizontalAlignment = Alignment.End) {
