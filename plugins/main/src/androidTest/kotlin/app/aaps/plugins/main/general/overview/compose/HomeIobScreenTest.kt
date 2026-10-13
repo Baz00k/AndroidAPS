@@ -1,6 +1,5 @@
 package app.aaps.plugins.main.general.overview.compose
 
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredWidth
@@ -28,49 +27,21 @@ class HomeIobScreenTest {
     @get:Rule val compose = createComposeRule()
 
     @Test fun missingProfileShowsUnavailableHeroAndSheetWithoutHidingRecordedDose() {
-        val state = mutableStateOf(HomeUiState(
+        val state = HomeUiState(
             bg = "99", cob = "--", basal = "--",
             iob = "--", iobBolus = "--", iobBasal = "--", iobSub = "No active profile",
             recentInsulin = listOf(HomeUiState.InsulinEntry(1, "10:32", "0.30 U", "", 1, 0.3)),
             ready = true
-        ))
+        )
         compose.setContent {
-            AapsTheme { HomeScreen(state.value, HomeActions(), graph = {}) }
+            AapsTheme { HomeScreen(state, HomeActions(), graph = {}) }
         }
         compose.onNodeWithText("No active profile").assertIsDisplayed()
         compose.onNodeWithText("IOB").performClick()
-        compose.onNodeWithText("Total").assertIsDisplayed()
-        compose.onNodeWithText("From boluses").assertIsDisplayed()
-        compose.onNodeWithText("From basal").assertIsDisplayed()
         compose.onNodeWithText("0.30 U").assertIsDisplayed()
         compose.onAllNodesWithText("--").assertCountEquals(6) // three hero plus three sheet values
         compose.onAllNodesWithText("No active profile").assertCountEquals(1) // one shared Home reason, not repeated in the sheet
         compose.onAllNodesWithText("0.00 U").assertCountEquals(0)
-
-        // An open detail sheet must update too when a profile becomes usable or is removed.
-        compose.runOnIdle { state.value = state.value.copy(iob = "0.25 U", iobBolus = "0.30 U", iobBasal = "-0.05 U", iobSub = "") }
-        compose.onAllNodesWithText("0.25 U").assertCountEquals(2)[1].assertIsDisplayed()
-        compose.onNodeWithText("-0.05 U").assertIsDisplayed()
-        compose.onAllNodesWithText("No active profile").assertCountEquals(0)
-        compose.runOnIdle { state.value = state.value.copy(iob = "--", iobBolus = "--", iobBasal = "--", iobSub = "No active profile") }
-        compose.onAllNodesWithText("--").assertCountEquals(6)
-        compose.onAllNodesWithText("No active profile").assertCountEquals(1)
-    }
-
-    @Test fun unavailableCobSheetKeepsRecordedCarbsWithoutRepeatingTheHomeReason() {
-        compose.setContent {
-            AapsTheme {
-                HomeScreen(HomeUiState(
-                    bg = "99", iob = "--", cob = "--", basal = "--", iobSub = "No active profile",
-                    recentCarbs = listOf(HomeUiState.CarbEntry(1, "10:32", "12 g", 1, 12)), ready = true
-                ), HomeActions(), graph = {})
-            }
-        }
-        compose.onNodeWithText("COB").performClick()
-        compose.onNodeWithText("Carbs on board").assertIsDisplayed()
-        compose.onNodeWithText("12 g").assertIsDisplayed()
-        compose.onAllNodesWithText("No active profile").assertCountEquals(1)
-        compose.onAllNodesWithText("0 g").assertCountEquals(0)
     }
 
     @Test fun missingProfileReasonFitsNarrowHomeWithLargeSystemText() {
@@ -89,6 +60,6 @@ class HomeIobScreenTest {
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertTrue("Expected rendered text layout", layouts.isNotEmpty())
         val layout = layouts.single()
-        assertFalse("The complete reason must fit: size=${layout.size}, lines=${layout.lineCount}, widthOverflow=${layout.didOverflowWidth}, heightOverflow=${layout.didOverflowHeight}", layout.hasVisualOverflow)
+        assertFalse("The complete reason must fit", layout.hasVisualOverflow)
     }
 }

@@ -125,7 +125,6 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 class OverviewFragment : DaggerFragment() {
 
@@ -554,18 +553,9 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // Basal is profile-derived, not a confirmed pump delivery rate. Missing is not zero.
-        var basalData: app.aaps.core.data.aps.BasalData? = null
         val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "Overview COB") {
-            basalData = iobCobCalculator.getBasalData(it, dateUtil.now())
-            BasalDisplay.from(basalData, rh)
+            BasalDisplay.from(iobCobCalculator.getBasalData(it, dateUtil.now()), rh)
         }
-        val scheduledBasal = basalData?.basal ?: 0.0
-        val rateNow = basalData?.takeIf { it.isTempBasalRunning }?.tempBasalAbsolute ?: scheduledBasal
-        val basalPercent = if (scheduledBasal > 0) (rateNow / scheduledBasal * 100).roundToInt() else 100
-        val basalDisplay = therapy.basal
-        val basalText = basalDisplay.rate
-        val basalSubText = if (therapy.iob.isAvailable && basalData?.isTempBasalRunning == true && scheduledBasal > 0)
-            "$basalPercent% · ${basalDisplay.scheduled} sched" else ""
 
         // Stats: without a profile, empty calculator totals do not mean zero active insulin.
         val iob = therapy.iob
@@ -682,8 +672,8 @@ class OverviewFragment : DaggerFragment() {
             iobSub = iob.unavailableReason,
             cob = cob.value,
             cobSub = cob.unavailableReason,
-            basal = basalText,
-            basalSub = basalSubText,
+            basal = therapy.basal.rate,
+            basalSub = therapy.basal.detail,
             supplies = supplies,
             recentCarbs = recentCarbs,
             recentInsulin = recentInsulin,

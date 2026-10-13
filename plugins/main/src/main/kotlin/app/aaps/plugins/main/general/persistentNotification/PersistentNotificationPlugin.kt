@@ -190,7 +190,6 @@ class PersistentNotificationPlugin @Inject constructor(
                 ) + ": " + cob.value
             // Displaced from the title so it stays short enough to read when bundled.
             listOfNotNull(tempBasalText, avgDeltaText).forEach { line2 += "  " + it }
-            if (!iob.isAvailable) line2 += " · " + iob.unavailableReason
             if (cob.unavailableReason.isNotBlank()) line2 += " · " + cob.unavailableReason
             val line2aa =
                 rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + ". " + rh.gs(
