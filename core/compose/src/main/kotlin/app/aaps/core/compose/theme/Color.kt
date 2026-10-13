@@ -50,6 +50,16 @@ object AapsLightSemantic {
     val iob = Color(0xFFB5485A)
 }
 
+/** Glucose graph inks. Yellow only reaches 3:1 on white when darkened, hence the deeper light shade. */
+object AapsChartGlucose {
+
+    val lowDark = AapsSemantic.low
+    val lowLight = Color(0xFFE34242)
+    val highDark = Color(0xFFFDD835)
+    val highLight = Color(0xFF958802)
+    val lineLight = Color(0xFF657D8A)
+}
+
 /** Material's baseline schemes: what a built-in appearance renders where dynamic colour is unavailable. */
 internal val BaselineDarkScheme = darkColorScheme()
 internal val BaselineLightScheme = lightColorScheme()
@@ -123,6 +133,9 @@ private fun ColorScheme.tonalColors(dark: Boolean): AapsColors = AapsColors(
     veryLow = if (dark) AapsSemantic.veryLow else AapsLightSemantic.veryLow,
     veryHigh = if (dark) AapsSemantic.veryHigh else AapsLightSemantic.veryHigh,
     iob = if (dark) AapsSemantic.iob else AapsLightSemantic.iob,
+    chartLow = if (dark) AapsChartGlucose.lowDark else AapsChartGlucose.lowLight,
+    chartHigh = if (dark) AapsChartGlucose.highDark else AapsChartGlucose.highLight,
+    chartLine = if (dark) primary else AapsChartGlucose.lineLight,
     accent = primary,
     accentOnLight = primary,
     accentTint = secondaryContainer,

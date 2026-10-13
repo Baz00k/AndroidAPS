@@ -251,6 +251,13 @@ class SkinSpecTest {
     }
 
     @Test
+    fun `graph inks default to the skin's own low, high and accent`() {
+        val colors = SkinSpec.PaletteSpec(low = "#FF4040", high = "#FFE000", accent = "#80C0FF").toColors(AapsSkins.Default.dark)
+        assertThat(listOf(colors.chartLow, colors.chartHigh, colors.chartLine))
+            .containsExactly(Color(0xFFFF4040), Color(0xFFFFE000), Color(0xFF80C0FF)).inOrder()
+    }
+
+    @Test
     fun `a template preserves wallpaper colours instead of inheriting the defaults`() {
         // The starter template is seeded from the live appearance. Whatever it inherited instead
         // would come from the baseline scheme, not from what the author was looking at.

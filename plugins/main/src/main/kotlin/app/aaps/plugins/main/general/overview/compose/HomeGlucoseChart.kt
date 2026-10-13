@@ -104,7 +104,7 @@ fun HomeGlucoseChart(
         if (data.targets.isNotEmpty() || data.predictions.isNotEmpty() || showScheduled)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (data.targets.isNotEmpty())
-                    LegendItem(stringResource(R.string.overview_graph_target), colors.accent, LegendMark.DASH)
+                    LegendItem(stringResource(R.string.overview_graph_target), colors.chartLine, LegendMark.DASH)
                 data.predictions.forEach { series ->
                     LegendItem(stringResource(series.kind.labelResource()), series.kind.color(), LegendMark.DASH)
                 }
@@ -118,6 +118,10 @@ private class ChartStyles(val axis: TextStyle, val day: TextStyle, val value: Te
 
 private const val RAIL_WEIGHT = 0.10f      // treatment rail
 private const val INSULIN_WEIGHT = 0.28f   // delivered insulin
+
+// Kept faint so the light-mode yellow trace keeps 3:1 over the range band plus the trace fill.
+internal const val RANGE_BAND_ALPHA = 0.08f
+internal const val TRACE_FILL_ALPHA = 0.03f
 
 private fun DrawScope.drawChart(
     d: HomeChartData,
@@ -165,7 +169,7 @@ private fun DrawScope.drawChart(
 
     // ---- display threshold band ----
     drawRect(
-        color = colors.inRange.copy(alpha = 0.08f),
+        color = colors.inRange.copy(alpha = RANGE_BAND_ALPHA),
         topLeft = Offset(plotLeft, y(d.highMark)),
         size = Size(plotW, y(d.lowMark) - y(d.highMark))
     )
@@ -206,7 +210,7 @@ private fun DrawScope.drawChart(
                     path.lineTo(x(point.time), y(point.value))
                 }
             }
-            drawPath(path, colors.accent, style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 3.dp.toPx()))))
+            drawPath(path, colors.chartLine, style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 3.dp.toPx()))))
         }
 
         // Raw dots remain visible beneath the loop-bucketed trace.
@@ -220,7 +224,7 @@ private fun DrawScope.drawChart(
         // ---- area under the trace, per contiguous run: a sensor gap stays empty ----
         val pts = d.trace.visibleSlice(vp.start, vp.end) { it.time }
         val areaBrush = Brush.verticalGradient(
-            0f to colors.textOnSurfaceStrong.copy(alpha = 0.14f),
+            0f to colors.chartInRange.copy(alpha = TRACE_FILL_ALPHA),
             1f to Color.Transparent,
             startY = gTop, endY = gBottom
         )
@@ -287,7 +291,7 @@ private fun DrawScope.drawChart(
                     val smb = t.kind == TreatmentKind.SMB
                     val h = (t.amount.toFloat() * 1.1f).coerceIn(4f, 13f).dp.toPx()
                     drawLine(
-                        colors.accent.copy(alpha = if (smb) 0.65f else 1f),
+                        colors.chartLine.copy(alpha = if (smb) 0.65f else 1f),
                         Offset(x(t.time), railY - h / 2), Offset(x(t.time), railY + h / 2),
                         strokeWidth = (if (smb) 1.5f else 2.6f).dp.toPx(),
                         cap = StrokeCap.Round
@@ -308,8 +312,8 @@ private fun DrawScope.drawChart(
                 }
             }
             val fill = Brush.verticalGradient(
-                0f to colors.accent.copy(alpha = 0.38f),
-                1f to colors.accent.copy(alpha = 0.06f),
+                0f to colors.chartLine.copy(alpha = 0.38f),
+                1f to colors.chartLine.copy(alpha = 0.06f),
                 startY = iTop, endY = iBottom
             )
             val scheduledEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))
@@ -323,7 +327,7 @@ private fun DrawScope.drawChart(
                     close()
                 }
                 drawPath(area, fill)
-                drawPath(line, colors.accent, style = Stroke(width = 1.4.dp.toPx()))
+                drawPath(line, colors.chartLine, style = Stroke(width = 1.4.dp.toPx()))
                 if (run.any { it.scheduled > 0.0 })
                     drawPath(stepPath(run) { it.scheduled }, colors.textTertiary, style = Stroke(width = 1.dp.toPx(), pathEffect = scheduledEffect))
             }
@@ -356,7 +360,7 @@ private fun DrawScope.drawChart(
 
     // The trace runs into the endpoint, so the current value gets its own ground rather than being
     // printed over the line.
-    val laid = measurer.measure(fmt(last.value, d.decimals), styles.value.copy(color = stateC))
+    val laid = measurer.measure(fmt(last.value, d.decimals), styles.value.copy(color = colors.textPrimary))
     val chipW = laid.size.width + 8.dp.toPx()
     val chipH = laid.size.height + 3.dp.toPx()
     val chipX = (markX - 10.dp.toPx() - chipW).coerceIn(plotLeft, (plotRight - chipW).coerceAtLeast(plotLeft))
@@ -368,10 +372,10 @@ private fun DrawScope.drawChart(
     drawText(laid, topLeft = Offset(chipX + 4.dp.toPx(), chipY + 1.5.dp.toPx()))
 }
 
-private fun stateColor(v: Double, low: Double, high: Double, colors: AapsColors): Color = when {
-    v < low  -> colors.low
-    v > high -> colors.high
-    else     -> colors.textOnSurfaceStrong
+internal fun stateColor(v: Double, low: Double, high: Double, colors: AapsColors): Color = when {
+    v < low  -> colors.chartLow
+    v > high -> colors.chartHigh
+    else     -> colors.chartInRange
 }
 
 private fun fmt(v: Double, decimals: Int): String =

@@ -11,9 +11,8 @@ import kotlinx.serialization.json.Json
  * The on-disk form of a skin: what lands in `skin.json` inside a `.aapsskin` bundle.
  *
  * Every colour is optional and falls back to the default skin's value for that ground. That is the
- * whole ergonomic argument for this format — a palette has 26 tokens per ground, and demanding 52
- * hex values would make a hand-written skin a chore and, worse, make it easy to get one of them
- * catastrophically wrong. A skin that only cares about its greens says so in ten lines and inherits
+ * whole ergonomic argument for this format — demanding every token on both grounds would make a
+ * hand-written skin a chore and, worse, make it easy to get one of them catastrophically wrong. A skin that only cares about its greens says so in ten lines and inherits
  * the rest.
  *
  * Omitting [light] entirely marks a single-look skin: it renders its dark ground whatever the user's
@@ -90,6 +89,9 @@ data class SkinSpec(
         val veryLow: String? = null,
         val veryHigh: String? = null,
         val iob: String? = null,
+        val chartLow: String? = null,
+        val chartHigh: String? = null,
+        val chartLine: String? = null,
         val accent: String? = null,
         val accentOnLight: String? = null,
         val accentTint: String? = null,
@@ -109,6 +111,7 @@ data class SkinSpec(
                     textTertiary = textTertiary.toSkinHex(), textOnSurfaceStrong = textOnSurfaceStrong.toSkinHex(),
                     inRange = inRange.toSkinHex(), high = high.toSkinHex(), low = low.toSkinHex(), veryLow = veryLow.toSkinHex(),
                     veryHigh = veryHigh.toSkinHex(), iob = iob.toSkinHex(), accent = accent.toSkinHex(),
+                    chartLow = chartLow.toSkinHex(), chartHigh = chartHigh.toSkinHex(), chartLine = chartLine.toSkinHex(),
                     accentOnLight = accentOnLight.toSkinHex(), accentTint = accentTint.toSkinHex(),
                     accentTintStrong = accentTintStrong.toSkinHex(), onAccent = onAccent.toSkinHex()
                 )
@@ -138,6 +141,10 @@ data class SkinSpec(
             veryLow = veryLow.orDefault(base.veryLow),
             veryHigh = veryHigh.orDefault(base.veryHigh),
             iob = iob.orDefault(base.iob),
+            // A skin that names its own low, high or accent keeps them on the graph unless it says otherwise.
+            chartLow = (chartLow ?: low).orDefault(base.chartLow),
+            chartHigh = (chartHigh ?: high).orDefault(base.chartHigh),
+            chartLine = (chartLine ?: accent).orDefault(base.chartLine),
             accent = accent.orDefault(base.accent),
             accentOnLight = accentOnLight.orDefault(base.accentOnLight),
             accentTint = accentTint.orDefault(base.accentTint),
