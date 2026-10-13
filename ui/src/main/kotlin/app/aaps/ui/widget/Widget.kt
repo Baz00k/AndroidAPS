@@ -13,7 +13,6 @@ import android.os.HandlerThread
 import android.view.View
 import android.widget.RemoteViews
 import app.aaps.core.data.model.GlucoseUnit
-import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
@@ -38,8 +37,8 @@ import app.aaps.core.keys.BooleanComposedKey
 import app.aaps.core.keys.IntComposedKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.directionToIcon
-import app.aaps.core.objects.extensions.displayText
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
@@ -135,9 +134,9 @@ class Widget : AppWidgetProvider() {
                 updateBg(views)
                 updateTemporaryBasal(views)
                 updateExtendedBolus(views)
-                updateIobCob(views)
                 updateTemporaryTarget(views)
                 updateProfile(views)
+                updateIobCob(views)
                 updateSensitivity(views)
                 // Instruct the widget manager to update the widget
                 appWidgetManager.updateAppWidget(appWidgetId, views)
@@ -200,15 +199,20 @@ class Widget : AppWidgetProvider() {
         views.setViewVisibility(R.id.extended_layout, (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) != null && !pump.isFakingTempsByExtendedBoluses).toVisibility())
     }
 
-    private fun bolusIob(): IobTotal = iobCobCalculator.calculateIobFromBolus().round()
-    private fun basalIob(): IobTotal = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-    private fun iobText(): String =
-        rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob)
-
     private fun updateIobCob(views: RemoteViews) {
-        views.setTextViewText(R.id.iob, iobText())
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "Widget COB") {
+            BasalDisplay(overviewData.temporaryBasalText())
+        }
+        val iob = therapy.iob
+        views.setTextViewText(R.id.base_basal, therapy.basal.rate)
+        views.setTextViewText(R.id.iob, iob.total)
+        views.setContentDescription(R.id.iob, listOf(iob.total, iob.unavailableReason).filter { it.isNotBlank() }.joinToString(" · "))
         // cob
-        var cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter) ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+        val cob = therapy.cob
+        var cobText = cob.value
+        val reasons = listOf(iob.unavailableReason, cob.unavailableReason).filter { it.isNotBlank() }.distinct()
+        // Reuse the wrapping profile row, not another row that pushes values out of small widgets.
+        if (reasons.isNotEmpty()) views.setTextViewText(R.id.active_profile, reasons.joinToString(" · "))
 
         val constraintsProcessed = loop.lastRun?.constraintsProcessed
         val lastRun = loop.lastRun
@@ -273,7 +277,7 @@ class Widget : AppWidgetProvider() {
                 }
             } ?: rh.gc(app.aaps.core.ui.R.color.widget_ribbonCritical)
 
-        views.setTextViewText(R.id.active_profile, profileFunction.getProfileNameWithRemainingTime())
+        views.setTextViewText(R.id.active_profile, if (profileFunction.getProfile() == null) rh.gs(app.aaps.core.ui.R.string.value_unavailable_short) else profileFunction.getProfileNameWithRemainingTime())
         // this is crashing, use background as text for now
         //views.setInt(R.id.active_profile, "setBackgroundColor", profileBackgroundColor)
         //views.setTextColor(R.id.active_profile, profileTextColor)
@@ -309,7 +313,7 @@ class Widget : AppWidgetProvider() {
             )
         views.setTextViewText(R.id.sensitivity, lastAutosensData?.let {
             rh.gs(app.aaps.core.ui.R.string.autosens_short, it.autosensResult.ratio * 100)
-        } ?: "")
+        } ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short))
 
         // Show variable sensitivity
         val request = loop.lastRun?.request

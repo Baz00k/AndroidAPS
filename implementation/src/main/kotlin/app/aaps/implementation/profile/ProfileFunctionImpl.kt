@@ -19,6 +19,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventEffectiveProfileSwitchChanged
+import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.HardLimits
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
@@ -59,6 +60,7 @@ class ProfileFunctionImpl @Inject constructor(
             .subscribe(
                 {
                     synchronized(cache) { cache.keys.removeIf { key -> key > it.startDate } }
+                    rxBus.send(EventProfileAvailabilityChanged())
                 }, fabricPrivacy::logException
             )
     }

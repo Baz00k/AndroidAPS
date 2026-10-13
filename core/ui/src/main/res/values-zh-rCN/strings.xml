@@ -33,7 +33,6 @@
     <string name="statuslights">状态指示灯</string>
     <string name="do_ns_upload_title">将 数据血糖数据上传到 NS服务器</string>
     <string name="configbuilder_insulin">胰岛素</string>
-    <string name="value_unavailable_short">无可用</string>
     <string name="ue_export_to_csv">导出用户条目到 Excel (csv)</string>
     <string name="confirm">确认</string>
     <string name="pump">胰岛素泵</string>

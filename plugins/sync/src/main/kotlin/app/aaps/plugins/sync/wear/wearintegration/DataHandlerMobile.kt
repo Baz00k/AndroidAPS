@@ -72,8 +72,8 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.convertedToAbsolute
-import app.aaps.core.objects.extensions.generateCOBString
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.core.objects.extensions.valueToUnits
 import app.aaps.core.objects.wizard.BolusWizard
@@ -1456,27 +1456,33 @@ class DataHandlerMobile @Inject constructor(
 
     private fun sendStatus(caller: String) {
         val profile = profileFunction.getProfile()
-        var status = rh.gs(app.aaps.core.ui.R.string.noprofile)
-        var iobSum = ""
-        var iobDetail = ""
-        var cobString = ""
-        var currentBasal = ""
-        var bgiString = ""
+        var status = rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)
+        var iobSum = rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+        var iobDetail = "(${iobSum}|${iobSum})"
+        var cobString = iobSum
+        var currentBasal = iobSum
+        var bgiString = iobSum
         if (config.appInitialized && profile != null) {
-            val bolusIob = iobCobCalculator.calculateIobFromBolus().round()
-            val basalIob = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-            iobSum = decimalFormatter.to2Decimal(bolusIob.iob + basalIob.basaliob)
-            iobDetail = "(${decimalFormatter.to2Decimal(bolusIob.iob)}|${decimalFormatter.to2Decimal(basalIob.basaliob)})"
-            cobString = iobCobCalculator.getCobInfo("WatcherUpdaterService").generateCOBString(decimalFormatter)
-            currentBasal =
-                processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh) ?: rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, profile.getBasal())
+            val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter,
+                "WatcherUpdaterService", compact = true, iobFormat = decimalFormatter::to2Decimal
+            ) { currentProfile ->
+                BasalDisplay(processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh)
+                    ?: rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, currentProfile.getBasal()))
+            }
+            val iob = therapy.iob
+            iobSum = iob.total
+            iobDetail = "(${iob.bolus}|${iob.basal})"
+            val cob = therapy.cob
+            cobString = cob.value
+            currentBasal = therapy.basal.rate
 
             //bgi
-            if (glucoseStatusProvider.glucoseStatusData != null) {
-                val bgi = -(bolusIob.activity + basalIob.activity) * 5 * profileUtil.fromMgdlToUnits(profile.getIsfMgdl("DataHandlerMobile $caller"))
+            if (iob.isAvailable && glucoseStatusProvider.glucoseStatusData != null) {
+                val bgi = -requireNotNull(iob.activity) * 5 * profileUtil.fromMgdlToUnits(profile.getIsfMgdl("DataHandlerMobile $caller"))
                 bgiString = "" + (if (bgi >= 0) "+" else "") + decimalFormatter.to1Decimal(bgi)
             }
-            status = generateStatusString(profile)
+            status = if (iob.isAvailable) generateStatusString(profile) else iob.unavailableReason
+            if (cob.unavailableReason.isNotBlank()) status += " · " + cob.unavailableReason
         }
 
         //batteries

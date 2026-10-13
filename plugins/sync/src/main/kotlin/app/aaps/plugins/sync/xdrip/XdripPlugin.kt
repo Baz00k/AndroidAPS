@@ -47,8 +47,9 @@ import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntentKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.extensions.generateCOBString
-import app.aaps.core.objects.extensions.round
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
+import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
@@ -150,6 +151,9 @@ class XdripPlugin @Inject constructor(
         disposable += rxBus.toObservable(EventAutosensCalculationFinished::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ sendStatusLine() }, fabricPrivacy::logException)
+        disposable += rxBus.toObservable(EventProfileAvailabilityChanged::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ sendStatusLine() }, fabricPrivacy::logException)
         disposable += rxBus.toObservable(EventAppInitialized::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ sendStatusLine() }, fabricPrivacy::logException)
@@ -199,7 +203,7 @@ class XdripPlugin @Inject constructor(
 
     private fun sendStatusLine() {
         if (preferences.get(BooleanKey.XdripSendStatus)) {
-            val status = profileFunction.getProfile()?.let { buildStatusLine(it) } ?: ""
+            val status = buildStatusLine(profileFunction.getProfile())
             context.sendBroadcast(
                 Intent(Intents.ACTION_NEW_EXTERNAL_STATUSLINE).also {
                     it.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
@@ -248,33 +252,41 @@ class XdripPlugin @Inject constructor(
         scheduledEventPost = eventWorker?.schedule(task, 10, TimeUnit.SECONDS)
     }
 
-    private fun buildStatusLine(profile: Profile): String {
+    internal fun buildStatusLine(profile: Profile?): String {
         val status = StringBuilder()
+        if (profile == null) {
+            val unavailable = rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
+            return "IOB $unavailable · COB $unavailable · " + rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)
+        }
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter,
+            "StatusLinePlugin", compact = true, iobFormat = decimalFormatter::to2Decimal
+        ) { BasalDisplay(processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh).orEmpty()) }
         if (!loop.runningMode.isLoopRunning() && config.APS)
             status.append(rh.gs(R.string.disabled_loop)).append("\n")
 
         //Temp basal
-        processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.let {
-            status.append(it.toStringShort(rh)).append(" ")
-        }
+        if (therapy.iob.isAvailable && therapy.basal.rate.isNotBlank()) status.append(therapy.basal.rate).append(" ")
         //IOB
-        val bolusIob = iobCobCalculator.calculateIobFromBolus().round()
-        val basalIob = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-        status.append(decimalFormatter.to2Decimal(bolusIob.iob + basalIob.basaliob)).append(rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname))
-        if (preferences.get(BooleanKey.XdripSendDetailedIob))
+        val iob = therapy.iob
+        status.append(iob.total)
+        if (iob.isAvailable) status.append(rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname))
+        if (iob.isAvailable && preferences.get(BooleanKey.XdripSendDetailedIob))
             status.append("(")
-                .append(decimalFormatter.to2Decimal(bolusIob.iob))
+                .append(iob.bolus)
                 .append("|")
-                .append(decimalFormatter.to2Decimal(basalIob.basaliob))
+                .append(iob.basal)
                 .append(")")
-        if (preferences.get(BooleanKey.XdripSendBgi) && glucoseStatusProvider.glucoseStatusData != null) {
-            val bgi = -(bolusIob.activity + basalIob.activity) * 5 * profileUtil.fromMgdlToUnits(profile.getIsfMgdl("XdripPlugin"))
+        if (iob.isAvailable && preferences.get(BooleanKey.XdripSendBgi) && glucoseStatusProvider.glucoseStatusData != null) {
+            val bgi = -requireNotNull(iob.activity) * 5 * profileUtil.fromMgdlToUnits(profile.getIsfMgdl("XdripPlugin"))
             status.append(" ")
                 .append(if (bgi >= 0) "+" else "")
                 .append(decimalFormatter.to2Decimal(bgi))
         }
         // COB
-        status.append(" ").append(iobCobCalculator.getCobInfo("StatusLinePlugin").generateCOBString(decimalFormatter))
+        val cob = therapy.cob
+        status.append(" ").append(cob.value)
+        if (!iob.isAvailable) status.append(" · ").append(iob.unavailableReason)
+        if (cob.unavailableReason.isNotBlank()) status.append(" · ").append(cob.unavailableReason)
         return status.toString()
     }
 

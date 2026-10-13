@@ -33,7 +33,6 @@
     <string name="statuslights">Индикаторы состояния</string>
     <string name="do_ns_upload_title">Выгружать (передавать данные) ГК в Nightscout</string>
     <string name="configbuilder_insulin">Инсулин</string>
-    <string name="value_unavailable_short">н/д</string>
     <string name="master_password">Главный пароль</string>
     <string name="ue_export_to_csv">Экспорт пользовательских записей в Excel (csv)</string>
     <string name="confirm">Подтверждаю</string>

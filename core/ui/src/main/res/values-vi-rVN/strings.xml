@@ -33,7 +33,6 @@
     <string name="statuslights">Đèn báo trạng thái</string>
     <string name="do_ns_upload_title">Tải dữ liệu đường huyết lên NS</string>
     <string name="configbuilder_insulin">Insulin</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Mật khẩu chính</string>
     <string name="ue_export_to_csv">Xuất dữ liệu sang Excel (csv)</string>
     <string name="confirm">Xác nhận</string>

@@ -33,7 +33,6 @@
     <string name="statuslights">אורות חיווי</string>
     <string name="do_ns_upload_title">שלח נתוני סוכר לנייטסקאוט</string>
     <string name="configbuilder_insulin">אינסולין</string>
-    <string name="value_unavailable_short">לא זמין</string>
     <string name="master_password">סיסמה ראשית</string>
     <string name="ue_export_to_csv">יצוא ערכי משתמש לאקסל (csv)</string>
     <string name="confirm">אישור</string>

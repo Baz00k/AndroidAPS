@@ -33,7 +33,6 @@
     <string name="statuslights">Индикатори</string>
     <string name="do_ns_upload_title">Качвай данните за КЗ в NS</string>
     <string name="configbuilder_insulin">Инсулин (ед.):</string>
-    <string name="value_unavailable_short">---</string>
     <string name="master_password">Главна парола</string>
     <string name="ue_export_to_csv">Експортиране на потребителски данни към Excel (csv)</string>
     <string name="confirm">Потвърди</string>

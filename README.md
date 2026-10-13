@@ -20,6 +20,9 @@ UI and YpsoPump support.
 - Compose UI: Material 3 screens for home, dosing, loop, history, statistics, profile, configuration and
   pump status, plus file-based skins. Dosing still goes through the existing constraint and confirmation
   paths.
+  Unavailable readings use `--`, not numeric zero. Home, the widget and status outputs show IOB
+  as unavailable without an active profile and explain why; Home keeps recorded doses visible.
+  Profile-derived basal is unavailable too. This does not mean no insulin is active or being delivered.
 - Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
 - Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
 

@@ -5,7 +5,7 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DecimalFormatter
 
 fun CobInfo.generateCOBString(decimalFormatter: DecimalFormatter): String {
-    var cobStringResult = "--g"
+    var cobStringResult = "--"
     displayCob?.let { displayCob ->
         cobStringResult = decimalFormatter.to0Decimal(displayCob)
         if (futureCarbs > 0)

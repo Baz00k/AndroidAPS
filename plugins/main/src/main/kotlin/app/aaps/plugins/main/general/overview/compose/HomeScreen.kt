@@ -105,7 +105,7 @@ fun HomeScreen(
             }
             ActionBar(state.actions, state.calculatorEnabled, actions)
         }
-        if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
+        if (showCarbs) CarbsUndoSheet(state, actions.onDeleteCarb, onClose = { showCarbs = false })
         if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
     }
 }
@@ -257,6 +257,10 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
             }
+            val unavailableReasons = listOf(state.iobSub, state.cobSub).filter { it.isNotBlank() }.distinct()
+            unavailableReasons.forEach { reason ->
+                Text(reason, modifier = Modifier.fillMaxWidth(), style = AapsTheme.type.caption, color = colors.textSecondary)
+            }
         }
     }
 }
@@ -371,13 +375,15 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
 
 @Composable
 private fun CarbsUndoSheet(
-    carbs: List<HomeUiState.CarbEntry>,
+    state: HomeUiState,
     onDelete: (HomeUiState.CarbEntry) -> Unit,
     onClose: () -> Unit
 ) {
     val colors = AapsTheme.colors
     HomeSheet(onClose) { close ->
         SheetSurface(title = "Recent carbs", onClose = { close {} }) {
+            DetailRow("Carbs on board", state.cob.ifBlank { "--" })
+            val carbs = state.recentCarbs
             if (carbs.isEmpty()) {
                 Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
             } else {

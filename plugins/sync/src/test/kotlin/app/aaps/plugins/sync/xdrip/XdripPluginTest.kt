@@ -10,6 +10,8 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
+import org.mockito.kotlin.whenever
+import org.mockito.kotlin.verifyNoInteractions
 
 class XdripPluginTest : TestBaseWithProfile() {
 
@@ -42,5 +44,12 @@ class XdripPluginTest : TestBaseWithProfile() {
         val screen = preferenceManager.createPreferenceScreen(context)
         xdripPlugin.addPreferenceScreen(preferenceManager, screen, context, null)
         assertThat(screen.preferenceCount).isGreaterThan(0)
+    }
+
+    @Test fun missingProfileStatusLabelsUnavailableValuesInsteadOfClearingTheStatusLine() {
+        whenever(rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)).thenReturn("--")
+        whenever(rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)).thenReturn("No active profile")
+        assertThat(xdripPlugin.buildStatusLine(null)).isEqualTo("IOB -- · COB -- · No active profile")
+        verifyNoInteractions(iobCobCalculator)
     }
 }

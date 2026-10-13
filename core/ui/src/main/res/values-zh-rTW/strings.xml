@@ -33,7 +33,6 @@
     <string name="statuslights">狀態燈</string>
     <string name="do_ns_upload_title">將血糖資料上傳至 NS 伺服器</string>
     <string name="configbuilder_insulin">胰島素</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">主密碼</string>
     <string name="ue_export_to_csv">匯出使用者輸入到 Excel (csv)</string>
     <string name="confirm">確認</string>

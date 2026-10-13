@@ -8,6 +8,8 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
+import org.mockito.kotlin.verify
+import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 
 class WearPluginTest : TestBaseWithProfile() {
 
@@ -34,5 +36,15 @@ class WearPluginTest : TestBaseWithProfile() {
         val screen = preferenceManager.createPreferenceScreen(context)
         wearPlugin.addPreferenceScreen(preferenceManager, screen, context, null)
         assertThat(screen.preferenceCount).isGreaterThan(0)
+    }
+
+    @Test fun profileAvailabilityRefreshDoesNotNeedCalculationCompletion() {
+        wearPlugin.onStart()
+        try {
+            rxBus.send(EventProfileAvailabilityChanged())
+            verify(dataHandlerMobile).resendData("EventProfileAvailabilityChanged")
+        } finally {
+            wearPlugin.onStop()
+        }
     }
 }

@@ -7,6 +7,9 @@
     <string name="invalid_input">Invalid input data</string>
     <string name="constraint_applied">Constraint applied!</string>
     <string name="tempbasals_iobtotal_label_string">Total IOB:</string>
+    <string name="iob_no_active_profile">No active profile</string>
+    <string name="iob_profile_changed">Profile changed; IOB unavailable</string>
+    <string name="cob_unavailable">COB calculation unavailable</string>
     <string name="tt_label">TT</string>
     <string name="pump_unreachable">Pump unreachable</string>
     <string name="insulin_unit_shortname">U</string>
@@ -33,7 +36,7 @@
     <string name="statuslights">Status lights</string>
     <string name="do_ns_upload_title">Upload BG data to NS</string>
     <string name="configbuilder_insulin">Insulin</string>
-    <string name="value_unavailable_short">n/a</string>
+    <string name="value_unavailable_short" translatable="false">--</string>
     <string name="master_password">Master password</string>
     <string name="ue_export_to_csv">Export User Entries to Excel (csv)</string>
     <string name="confirm">Confirm</string>

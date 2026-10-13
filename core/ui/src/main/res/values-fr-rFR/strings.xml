@@ -33,7 +33,6 @@
     <string name="statuslights">Voyants d\'état</string>
     <string name="do_ns_upload_title">Remonter les Gly vers NS</string>
     <string name="configbuilder_insulin">Insuline</string>
-    <string name="value_unavailable_short">n/d</string>
     <string name="master_password">Mot de passe principal</string>
     <string name="ue_export_to_csv">Exporter vers Excel (csv)</string>
     <string name="confirm">Confirmer</string>

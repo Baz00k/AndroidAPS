@@ -33,7 +33,6 @@
     <string name="statuslights">Indicatori di stato</string>
     <string name="do_ns_upload_title">Carica dati BG su NS</string>
     <string name="configbuilder_insulin">Insulina</string>
-    <string name="value_unavailable_short">n/a</string>
     <string name="master_password">Password Master</string>
     <string name="ue_export_to_csv">Esporta voci utente in Excel (csv)</string>
     <string name="confirm">Conferma</string>

@@ -33,7 +33,6 @@
     <string name="statuslights">Statusanzeige</string>
     <string name="do_ns_upload_title">Speichere BZ-Werte in Nightscout</string>
     <string name="configbuilder_insulin">Insulin</string>
-    <string name="value_unavailable_short">N/A</string>
     <string name="master_password">Master-Passwort</string>
     <string name="ue_export_to_csv">Benutzereinträge nach Excel exportieren (csv)</string>
     <string name="confirm">Bestätigen</string>
