@@ -141,6 +141,24 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
      */
     private val composeRows = mutableStateOf<List<PrefRow>>(emptyList())
 
+    private var observedPreferenceAdapter: androidx.recyclerview.widget.RecyclerView.Adapter<*>? = null
+    private val preferenceObserver = app.aaps.activities.compose.PreferenceRowsObserver {
+        refreshComposeRows()
+    }
+
+    override fun onBindPreferences() {
+        super.onBindPreferences()
+        observedPreferenceAdapter = listView.adapter
+        observedPreferenceAdapter?.registerAdapterDataObserver(preferenceObserver)
+        refreshComposeRows()
+    }
+
+    override fun onUnbindPreferences() {
+        observedPreferenceAdapter?.unregisterAdapterDataObserver(preferenceObserver)
+        observedPreferenceAdapter = null
+        super.onUnbindPreferences()
+    }
+
     private fun refreshComposeRows() {
         composeRows.value = preferenceManager?.preferenceScreen?.let { flattenPreferences(it) } ?: emptyList()
     }

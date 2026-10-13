@@ -169,7 +169,6 @@
     <string name="ypsopump_key_custom_date">Custom date…</string>
     <string name="ypsopump_key_custom_summary">Custom · %1$s</string>
     <string name="ypsopump_key_estimated_date">Estimated: %1$s</string>
-    <string name="ypsopump_key_dates_help">Changing these dates does not renew your key or change insulin delivery.</string>
     <string name="ypsopump_key_connect_first">Set up your pump first</string>
     <string name="ypsopump_key_load_failed">Couldn\'t load key dates. Reopen settings to try again.</string>
     <string name="ypsopump_key_show_overview">Show key status on overview</string>

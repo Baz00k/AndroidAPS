@@ -5,7 +5,6 @@ import android.app.TimePickerDialog
 import android.content.Context
 import android.text.format.DateFormat
 import androidx.preference.ListPreference
-import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceScreen
 import app.aaps.core.ui.toast.ToastUtils
@@ -32,11 +31,14 @@ internal class KeyReminderPreferences(
 ) : PreferenceCategory(context) {
     private var scope: CoroutineScope? = null
     private var installed: YpsoProvisioningService.InstalledSession? = null
+    private var expirySummary: String? = null
+    private var reminderSummary: String? = null
     private val expiry = ListPreference(context).apply {
         key = "ypsopump_key_expiry"
         order = 1
         title = context.getString(R.string.ypsopump_key_expiry_setting)
         isPersistent = false
+        summaryProvider = androidx.preference.Preference.SummaryProvider<ListPreference> { expirySummary }
         entries = arrayOf(context.getString(R.string.ypsopump_key_expiry_auto), context.getString(R.string.ypsopump_key_custom_date))
         entryValues = arrayOf("auto", "custom")
         setOnPreferenceChangeListener { _, choice ->
@@ -49,6 +51,7 @@ internal class KeyReminderPreferences(
         order = 0
         title = context.getString(R.string.ypsopump_key_reminder_setting)
         isPersistent = false
+        summaryProvider = androidx.preference.Preference.SummaryProvider<ListPreference> { reminderSummary }
         entries = arrayOf(context.getString(R.string.ypsopump_key_reminder_default), context.getString(R.string.ypsopump_key_custom_date))
         entryValues = arrayOf("auto", "custom")
         setOnPreferenceChangeListener { _, choice ->
@@ -67,11 +70,6 @@ internal class KeyReminderPreferences(
         parent.addPreference(this)
         addPreference(reminder)
         addPreference(expiry)
-        addPreference(Preference(context).apply {
-            order = 3
-            isSelectable = false
-            summary = context.getString(R.string.ypsopump_key_dates_help)
-        })
         reminder.isEnabled = false
         expiry.isEnabled = false
     }
@@ -97,12 +95,12 @@ internal class KeyReminderPreferences(
                 expiry.isEnabled = reminder.isEnabled
                 reminder.value = if (record?.keyTiming?.reminderOverride == null) "auto" else "custom"
                 expiry.value = if (record?.keyTiming?.expiryOverride == null) "auto" else "custom"
-                reminder.summary = when {
+                reminderSummary = when {
                     record == null -> context.getString(R.string.ypsopump_key_connect_first)
                     record.keyTiming.reminderOverride != null -> context.getString(R.string.ypsopump_key_custom_summary, keyDateLabel(status?.reminderAt))
                     else -> context.getString(R.string.ypsopump_key_reminder_default)
                 }
-                expiry.summary = when {
+                expirySummary = when {
                     status?.expiresAt == null -> context.getString(R.string.ypsopump_key_unknown)
                     status.origin == app.aaps.pump.ypsopump.crypto.KeyTiming.Origin.IMPORT_ESTIMATE ->
                         context.getString(R.string.ypsopump_key_estimated_date, keyDateLabel(status.expiresAt))
@@ -110,15 +108,20 @@ internal class KeyReminderPreferences(
                     else -> keyDateLabel(status.expiresAt)
                 }
             }.onFailure {
-                reminder.summary = context.getString(R.string.ypsopump_key_load_failed)
-                expiry.summary = context.getString(R.string.ypsopump_key_load_failed)
+                reminder.isEnabled = false
+                expiry.isEnabled = false
+                reminderSummary = context.getString(R.string.ypsopump_key_load_failed)
+                expirySummary = context.getString(R.string.ypsopump_key_load_failed)
                 onFailure(it)
             }
+            // Reassign providers to notify the native adapter after updating their backing status.
+            reminder.summaryProvider = androidx.preference.Preference.SummaryProvider<ListPreference> { reminderSummary }
+            expiry.summaryProvider = androidx.preference.Preference.SummaryProvider<ListPreference> { expirySummary }
         }
     }
 
-    private fun save(expiryField: Boolean, value: Long?) {
-        val generation = installed?.generation ?: return
+    private fun save(expiryField: Boolean, value: Long?, generation: String? = installed?.generation) {
+        generation ?: return
         reminder.isEnabled = false
         expiry.isEnabled = false
         scope?.launch {
@@ -145,7 +148,7 @@ internal class KeyReminderPreferences(
         val start = Instant.ofEpochMilli(initial ?: System.currentTimeMillis()).atZone(zone)
         DatePickerDialog(context, { _, year, month, day ->
             TimePickerDialog(context, { _, hour, minute ->
-                save(expiryField, java.time.LocalDateTime.of(year, month + 1, day, hour, minute).atZone(zone).toInstant().toEpochMilli())
+                save(expiryField, java.time.LocalDateTime.of(year, month + 1, day, hour, minute).atZone(zone).toInstant().toEpochMilli(), record.generation)
             }, start.hour, start.minute, DateFormat.is24HourFormat(context)).show()
         }, start.year, start.monthValue - 1, start.dayOfMonth).apply {
             setTitle(context.getString(if (expiryField) R.string.ypsopump_key_expiry_setting else R.string.ypsopump_key_reminder_setting))

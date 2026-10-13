@@ -47,10 +47,16 @@ sealed interface PrefRow {
     /** Display state is snapshotted so a changed value reaches Compose even if AndroidX reuses the [Preference]. */
     data class Leaf(
         val preference: Preference,
-        val summary: String? = (if (preference is ListPreference) preference.entry else preference.summary)?.toString(),
+        val summary: String? = preferenceDisplaySummary(preference),
+        val enabled: Boolean = preference.isEnabled,
         val checked: Boolean? = (preference as? TwoStatePreference)?.isChecked
     ) : PrefRow
 }
+
+/** List rows show the selected choice unless they supply an authoritative status summary. */
+internal fun preferenceDisplaySummary(preference: Preference): String? =
+    (if (preference is ListPreference && preference.summaryProvider == null) preference.entry
+    else preference.summary ?: (preference as? ListPreference)?.entry)?.toString()
 
 /** Flatten a built [PreferenceScreen] into rows, honouring `isVisible` exactly as the legacy list does. */
 fun flattenPreferences(group: PreferenceGroup): List<PrefRow> {
@@ -139,7 +145,7 @@ private fun PreferenceRow(row: PrefRow.Leaf, preferences: Preferences) {
     val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
     val sub = row.summary?.takeIf { it.isNotBlank() }
     // Respect dependency and mode gating before writing.
-    val editable = pref.isEnabled
+    val editable = row.enabled
 
     when (typed) {
         is BooleanPreferenceKey -> {

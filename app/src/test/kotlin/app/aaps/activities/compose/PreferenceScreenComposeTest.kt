@@ -4,6 +4,7 @@ import android.text.TextUtils
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
+import androidx.preference.ListPreference
 import androidx.preference.SwitchPreference
 import app.aaps.core.keys.IntKey
 import app.aaps.core.validators.preferences.AdaptiveListIntPreference
@@ -20,7 +21,58 @@ import java.util.Objects
 
 class PreferenceScreenComposeTest : TestBaseWithProfile() {
 
+    @Test fun `non persistent advisory completion updates summary and enabled snapshots through native adapter`() {
+        val screen = preferenceManager.createPreferenceScreen(context)
+        val reminder = ListPreference(context).apply {
+            key = "advisory"; title = "Key reminder"; isPersistent = false; isVisible = true
+            entries = arrayOf("Automatic", "Custom date…")
+            entryValues = arrayOf("auto", "custom")
+            isEnabled = false
+            summaryProvider = Preference.SummaryProvider<ListPreference> { advisorySummary }
+        }
+        screen.addPreference(reminder)
+        // Android resource stubs default the dependency flag to false when a child is attached.
+        reminder.onDependencyChanged(screen, false)
+        reminder.onParentChanged(screen, false)
+        reminder.value = "auto"
+        var rows = flattenPreferences(screen)
+        val initial = (rows.single() as PrefRow.Leaf)
+        assertThat(initial.enabled).isFalse()
+        val observer = PreferenceRowsObserver { rows = flattenPreferences(screen) }
+        run {
+            advisorySummary = "Estimated: Oct 31, 2026"
+            reminder.isEnabled = true
+            observer.onItemRangeChanged(0, 1, null)
+            val loaded = rows.single() as PrefRow.Leaf
+            assertThat(loaded.enabled).isTrue()
+            assertThat(loaded.summary).isEqualTo("Estimated: Oct 31, 2026")
+            assertThat(loaded).isNotEqualTo(initial)
+            reminder.value = "custom"
+            advisorySummary = "Custom · Oct 28, 2026"
+            reminder.summaryProvider = Preference.SummaryProvider<ListPreference> { advisorySummary }
+            observer.onItemRangeChanged(0, 1)
+            assertThat((rows.single() as PrefRow.Leaf).summary).isEqualTo("Custom · Oct 28, 2026")
+            reminder.isEnabled = false
+            advisorySummary = "Couldn’t load key dates"
+            reminder.summaryProvider = Preference.SummaryProvider<ListPreference> { advisorySummary }
+            observer.onChanged()
+            assertThat((rows.single() as PrefRow.Leaf).summary).isEqualTo("Couldn’t load key dates")
+            assertThat((rows.single() as PrefRow.Leaf).enabled).isFalse()
+        }
+    }
+
+    @Test fun `list entry remains fallback when no explicit summary exists`() {
+        val pref = ListPreference(context).apply {
+            isPersistent = false
+            entries = arrayOf("Automatic"); entryValues = arrayOf("auto"); value = "auto"
+        }
+        assertThat(PrefRow.Leaf(pref).summary).isEqualTo("Automatic")
+        pref.summaryProvider = Preference.SummaryProvider<ListPreference> { "Set up your pump first" }
+        assertThat(PrefRow.Leaf(pref).summary).isEqualTo("Set up your pump first")
+    }
+
     private lateinit var textUtils: MockedStatic<TextUtils>
+    private var advisorySummary: String? = null
 
     // Android stubs return false from TextUtils.equals, so ListPreference could never resolve a selected entry.
     @BeforeEach fun stubTextUtils() {
