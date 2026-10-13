@@ -123,7 +123,8 @@ object SkinValidation {
 
         listOf(
             "inRange" to colors.inRange, "high" to colors.high, "low" to colors.low,
-            "veryLow" to colors.veryLow, "veryHigh" to colors.veryHigh, "accent" to colors.accent
+            "veryLow" to colors.veryLow, "veryHigh" to colors.veryHigh, "accent" to colors.accent,
+            "chartLow" to colors.chartLow, "chartHigh" to colors.chartHigh, "chartLine" to colors.chartLine
         ).forEach { (token, colour) ->
             needContrast(token, colour, "surface", colors.surface, MIN_GRAPHIC_CONTRAST)
         }
@@ -138,6 +139,7 @@ object SkinValidation {
         needDistinct("low", colors.low, "inRange", colors.inRange)
         needDistinct("high", colors.high, "inRange", colors.inRange)
         needDistinct("low", colors.low, "high", colors.high)
+        needDistinct("chartLow", colors.chartLow, "chartHigh", colors.chartHigh)
         needDistinct("veryLow", colors.veryLow, "low", colors.low)
         needDistinct("veryHigh", colors.veryHigh, "high", colors.high)
 

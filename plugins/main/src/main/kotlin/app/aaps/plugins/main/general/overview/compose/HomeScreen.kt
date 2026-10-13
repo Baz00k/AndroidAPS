@@ -157,7 +157,8 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 @Composable
 private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
-    val bgColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
+    val bgColor = if (state.bgStale) colors.textSecondary else colors.textPrimary
+    val stateTextColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
     // The loop pill is drawn 32 dp tall inside a 48 dp touch target; the card gives up that slack above it
     // so the pill sits as far from the top edge as from the left one.
     AapsCard(shape = AapsTheme.shape.hero, contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = AapsSpacing.cardPad, top = AapsSpacing.cardPad - 8.dp, bottom = AapsSpacing.cardPad)) {
@@ -231,7 +232,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 ) {
                     Text(
                         text = buildAnnotatedString {
-                            withStyle(SpanStyle(color = bgColor)) { append(state.stateLine) }
+                            withStyle(SpanStyle(color = stateTextColor)) { append(state.stateLine) }
                             if (state.stateLine.isNotBlank() && targetDescription.isNotBlank()) append(" · ")
                             withStyle(SpanStyle(color = if (activeTarget) colors.accent else colors.textSecondary)) {
                                 append(targetDescription)

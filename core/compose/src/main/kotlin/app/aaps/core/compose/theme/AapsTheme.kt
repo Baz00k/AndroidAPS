@@ -48,13 +48,21 @@ data class AapsColors(
     val veryLow: Color,
     val veryHigh: Color,
     val iob: Color,
+    // glucose graph
+    val chartLow: Color,
+    val chartHigh: Color,
+    val chartLine: Color,
     // accent (interactive)
     val accent: Color,
     val accentOnLight: Color,
     val accentTint: Color,
     val accentTintStrong: Color,
     val onAccent: Color
-)
+) {
+
+    /** In-range glucose trace follows the theme's text ink rather than a semantic colour. */
+    val chartInRange: Color get() = if (surface.isDark()) textOnSurfaceStrong else textSecondary
+}
 
 val LocalAapsColors = staticCompositionLocalOf { AapsSkins.Default.dark }
 val LocalAapsTextStyles = staticCompositionLocalOf { DefaultAapsTextStyles }

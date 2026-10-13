@@ -52,7 +52,8 @@ class SkinContrastTest {
             assertThat(wallpaper.accent).isEqualTo(Color.Red)
             listOf(
                 wallpaper.inRange to reference.inRange, wallpaper.high to reference.high, wallpaper.low to reference.low,
-                wallpaper.veryLow to reference.veryLow, wallpaper.veryHigh to reference.veryHigh, wallpaper.iob to reference.iob
+                wallpaper.veryLow to reference.veryLow, wallpaper.veryHigh to reference.veryHigh, wallpaper.iob to reference.iob,
+                wallpaper.chartLow to reference.chartLow, wallpaper.chartHigh to reference.chartHigh
             ).forEach { (actual, expected) -> assertWithMessage("dark=$dark").that(actual).isEqualTo(expected) }
         }
     }
