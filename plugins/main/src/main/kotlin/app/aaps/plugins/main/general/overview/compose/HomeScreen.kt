@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
@@ -80,6 +82,7 @@ fun HomeScreen(
     val colors = AapsTheme.colors
     var showCarbs by remember { mutableStateOf(false) }
     var showInsulin by remember { mutableStateOf(false) }
+    var showAlerts by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -95,9 +98,7 @@ fun HomeScreen(
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
-                // Alerts are the reason the loop may not be doing what the hero says, so they sit above it.
-                AlertsStack(state.notifications, actions.onDismissAlert)
-                HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
+                HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true }, onAlertsClick = { showAlerts = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
                 additionalGraphs()
@@ -107,11 +108,13 @@ fun HomeScreen(
         }
         if (showCarbs) CarbsUndoSheet(state, actions.onDeleteCarb, onClose = { showCarbs = false })
         if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
+        if (showAlerts) AlertsSheet(state.notifications, actions.onDismissAlert, onDismissed = { showAlerts = false })
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
+private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit, onAlertsClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = if (state.bgStale) colors.textSecondary else colors.textPrimary
     val stateTextColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
@@ -119,8 +122,10 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
     // so the pill sits as far from the top edge as from the left one.
     AapsCard(shape = AapsTheme.shape.hero, contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = AapsSpacing.cardPad, top = AapsSpacing.cardPad - 8.dp, bottom = AapsSpacing.cardPad)) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // row 1 — loop pill (tap → Loop mode chooser) + time
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // row 1 — loop pill (tap → Loop mode chooser), alerts pill (tap → every alert) + time.
+            // Alerts are the reason the loop may not be doing what the hero says, so they sit beside it.
+            // The row only wraps when large text leaves no room for both pills.
+            FlowRow(itemVerticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusPill(
                     label = buildString {
                         append(state.loopStateLabel.ifBlank { "Loop" })
@@ -131,6 +136,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     labelColor = colors.textPrimary,
                     onClick = actions.onLoop
                 )
+                AlertsPill(state.notifications, onAlertsClick)
                 Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }
             // row 2 — BG + inline trend (left) · eventual (right)

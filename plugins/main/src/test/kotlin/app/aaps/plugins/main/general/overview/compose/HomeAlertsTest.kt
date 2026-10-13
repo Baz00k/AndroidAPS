@@ -8,43 +8,30 @@ class HomeAlertsTest {
 
     private fun alert(id: Int, level: Int) = HomeUiState.Alert(id = id, text = "alert $id", time = "12:00", level = level, buttonText = "Snooze")
 
-    @Test fun `no alerts gives no summary`() {
-        assertThat(alertSummary(emptyList())).isNull()
+    @Test fun `no alerts gives no pill`() {
+        assertThat(alertsPillLabel(emptyList())).isNull()
     }
 
-    @Test fun `a single alert is shown alone`() {
-        val summary = alertSummary(listOf(alert(1, Notification.INFO)))!!
-        assertThat(summary.top.id).isEqualTo(1)
-        assertThat(moreAlertsLabel(summary)).isNull()
+    @Test fun `an urgent alert names the pill ahead of setup notices that arrived before it`() {
+        val alerts = listOf(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.LOW), alert(4, Notification.URGENT))
+        assertThat(alertsPillLabel(alerts)).isEqualTo("Urgent · 4")
+        assertThat(alertsPillDescription(alerts)).isEqualTo("4 alerts, 1 urgent")
     }
 
-    @Test fun `an urgent alert is shown ahead of setup notices that arrived before it`() {
-        val summary = alertSummary(
-            listOf(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.LOW), alert(4, Notification.URGENT))
-        )!!
-        assertThat(summary.top.id).isEqualTo(4)
-        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more alerts")
+    @Test fun `a warning names the pill when nothing is urgent`() {
+        val alerts = listOf(alert(1, Notification.LOW), alert(2, Notification.NORMAL))
+        assertThat(alertsPillLabel(alerts)).isEqualTo("Warning · 2")
+        assertThat(alertsPillDescription(alerts)).isEqualTo("2 alerts")
     }
 
-    @Test fun `other urgent alerts are counted by name, not folded into the total`() {
-        val summary = alertSummary(
-            listOf(alert(1, Notification.INFO), alert(2, Notification.URGENT), alert(3, Notification.URGENT), alert(4, Notification.ANNOUNCEMENT))
-        )!!
-        // The first urgent alert to arrive stays on top; a later one does not displace it.
-        assertThat(summary.top.id).isEqualTo(2)
-        assertThat(summary.moreUrgent).isEqualTo(1)
-        assertThat(summary.moreOther).isEqualTo(2)
-        assertThat(moreAlertsLabel(summary)).isEqualTo("3 more alerts · 1 urgent")
+    @Test fun `lesser alerts are only counted`() {
+        assertThat(alertsPillLabel(listOf(alert(1, Notification.INFO)))).isEqualTo("1 alert")
+        assertThat(alertsPillLabel(listOf(alert(1, Notification.LOW), alert(2, Notification.ANNOUNCEMENT)))).isEqualTo("2 alerts")
     }
 
-    @Test fun `a single alert behind the shown one`() {
-        val summary = alertSummary(listOf(alert(1, Notification.NORMAL), alert(2, Notification.INFO)))!!
-        assertThat(moreAlertsLabel(summary)).isEqualTo("1 more alert")
-    }
-
-    @Test fun `only urgent alerts behind the shown one`() {
-        val summary = alertSummary(List(3) { alert(it, Notification.URGENT) })!!
-        assertThat(moreAlertsLabel(summary)).isEqualTo("2 more urgent alerts")
+    @Test fun `every urgent alert is counted for TalkBack`() {
+        val alerts = List(3) { alert(it, Notification.URGENT) } + alert(3, Notification.INFO)
+        assertThat(alertsPillDescription(alerts)).isEqualTo("4 alerts, 3 urgent")
     }
 
     @Test fun `the list is ordered by severity and keeps arrival order within a level`() {

@@ -9,24 +9,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertHasNoClickAction
-import androidx.compose.ui.test.click
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso.pressBack
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.notifications.Notification
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 
@@ -39,10 +39,6 @@ class HomeAlertsScreenTest {
     private val state = mutableStateOf(HomeUiState(bg = "120", ready = true))
 
     private fun alert(id: Int, level: Int, text: String = "Alert text $id") = HomeUiState.Alert(id = id, text = text, time = "12:0$id", level = level, buttonText = "Act $id")
-
-    private val unfold = SemanticsMatcher("unfolds the alert stack") {
-        it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show all alerts"
-    }
 
     private fun show(vararg alerts: HomeUiState.Alert) {
         state.value = state.value.copy(notifications = alerts.toList())
@@ -58,14 +54,36 @@ class HomeAlertsScreenTest {
 
     private fun update(vararg alerts: HomeUiState.Alert) = compose.runOnIdle { state.value = state.value.copy(notifications = alerts.toList()) }
 
-    @Test fun manyAlertsTakeOneCardHeadedByTheMostSevere() {
+    private fun openAlerts(description: String) {
+        compose.onNodeWithContentDescription(description).performClick()
+        compose.onNodeWithText("Alerts").assertIsDisplayed()
+    }
+
+    @Test fun withoutAlertsThereIsNoPill() {
+        show()
+        compose.onAllNodesWithText("alert", substring = true).assertCountEquals(0)
+        compose.onAllNodesWithText("Urgent", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun manyAlertsAreOnePillNamedByTheMostSevere() {
         show(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.URGENT), alert(4, Notification.LOW), alert(5, Notification.URGENT))
 
-        compose.onNodeWithText("Alert text 3").assertExists()
-        compose.onNodeWithText("Urgent · 12:03").assertExists()
-        compose.onNodeWithText("4 more alerts · 1 urgent").assertExists()
-        for (id in listOf(1, 2, 4, 5)) compose.onAllNodesWithText("Alert text $id").assertCountEquals(0)
-        compose.onNodeWithText("120").assertExists()
+        compose.onNodeWithText("Urgent · 5").assertIsDisplayed()
+        compose.onNodeWithContentDescription("5 alerts, 2 urgent").assertIsDisplayed()
+        for (id in 1..5) compose.onAllNodesWithText("Alert text $id").assertCountEquals(0)
+        compose.onNodeWithText("120").assertIsDisplayed()
+    }
+
+    @Test fun alertsArrivingAndResolvingDoNotMoveGlucose() {
+        show()
+        val before = compose.onNodeWithText("120").fetchSemanticsNode().boundsInRoot
+
+        update(alert(1, Notification.URGENT, "Application needs location permission for BT scan and WiFi identification"), alert(2, Notification.NORMAL))
+        compose.onNodeWithText("Urgent · 2").assertIsDisplayed()
+        assertEquals(before, compose.onNodeWithText("120").fetchSemanticsNode().boundsInRoot)
+
+        update()
+        assertEquals(before, compose.onNodeWithText("120").fetchSemanticsNode().boundsInRoot)
     }
 
     @Test fun glucoseAndTheGraphStayOnScreenUnderTheIssuesFiveAlerts() {
@@ -82,117 +100,82 @@ class HomeAlertsScreenTest {
         compose.onNodeWithTag("graph middle").assertIsDisplayed()
     }
 
-    @Test fun unfoldingAndFoldingTheStackDoesNotActOnAnyAlert() {
+    @Test fun theSheetListsEveryAlertMostSevereFirst() {
+        show(alert(1, Notification.LOW), alert(2, Notification.URGENT), alert(3, Notification.NORMAL))
+        openAlerts("3 alerts, 1 urgent")
+
+        val tops = listOf(2, 3, 1).map { compose.onNodeWithText("Alert text $it").fetchSemanticsNode().boundsInRoot.top }
+        assertEquals(tops.sorted(), tops)
+        compose.onNodeWithText("Urgent · 12:02").assertIsDisplayed()
+        compose.onNodeWithText("Warning · 12:03").assertIsDisplayed()
+        compose.onNodeWithText("Notice · 12:01").assertIsDisplayed()
+    }
+
+    @Test fun aSingleLongAlertIsShownInFull() {
+        val long = List(8) { "Long urgent message with more than three lines." }.joinToString(" ")
+        show(alert(1, Notification.URGENT, long))
+        compose.onAllNodesWithText(long).assertCountEquals(0)
+        openAlerts("1 alert, 1 urgent")
+
+        val layout = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText(long).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layout) }
+        assertFalse(layout.single().hasVisualOverflow)
+    }
+
+    @Test fun openingAndClosingTheSheetDoesNotActOnAnyAlert() {
         show(alert(1, Notification.NORMAL), alert(2, Notification.URGENT))
-        compose.onAllNodesWithText("Alert text 1").assertCountEquals(0)
+        openAlerts("2 alerts, 1 urgent")
+        compose.onNodeWithContentDescription("Close").performClick()
+        compose.onAllNodesWithText("Alerts").assertCountEquals(0)
 
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Alert text 1").assertIsDisplayed()
-        compose.onNodeWithText("Warning · 12:01").assertIsDisplayed()
-        compose.onNodeWithText("Show less").performClick()
-        compose.onAllNodesWithText("Alert text 1").assertCountEquals(0)
-
-        assertEquals(emptyList<Int>(), acted)
-        compose.onNodeWithText("Alert text 2").assertExists()
-    }
-
-    @Test fun theExpandedTopCardDoesNotHideTheOtherAlertsWhenTapped() {
-        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL))
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-
-        compose.onNodeWithText("Alert text 1").assertHasNoClickAction().performTouchInput { click() }
-        compose.onNodeWithText("Alert text 2").assertIsDisplayed()
-        compose.onNodeWithText("Show less").assertIsDisplayed()
-        assertEquals(emptyList<Int>(), acted)
-    }
-
-    @Test fun unfoldingDoesNotMoveTheTopAlertsAction() {
-        show(alert(1, Notification.URGENT, List(8) { "Long urgent message with more than three lines." }.joinToString(" ")), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
-        val before = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-        val after = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
-
-        assertEquals(before, after)
-    }
-
-    @Test fun backFoldsTheStackWithoutActingOnAlerts() {
-        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL))
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        openAlerts("2 alerts, 1 urgent")
         pressBack()
+        compose.onAllNodesWithText("Alerts").assertCountEquals(0)
 
-        compose.onAllNodesWithText("Alert text 2").assertCountEquals(0)
-        compose.onNodeWithText("Alert text 1").assertIsDisplayed()
         assertEquals(emptyList<Int>(), acted)
+        compose.onNodeWithText("Urgent · 2").assertIsDisplayed()
     }
 
-    @Test fun theTopActionStaysAnchoredDuringExpansionAndCollapse() {
-        show(alert(1, Notification.URGENT), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
-        val before = compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot
-        compose.mainClock.autoAdvance = false
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-        repeat(18) {
-            compose.mainClock.advanceTimeByFrame()
-            compose.waitForIdle()
-            assertEquals(before, compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot)
-        }
-        compose.onNodeWithText("Show less").performClick()
-        repeat(18) {
-            compose.mainClock.advanceTimeByFrame()
-            compose.waitForIdle()
-            assertEquals(before, compose.onNodeWithText("Act 1").fetchSemanticsNode().boundsInRoot)
-        }
-        compose.mainClock.autoAdvance = true
-        assertEquals(emptyList<Int>(), acted)
-    }
-
-    @Test fun actionsInTheUnfoldedStackFollowTheirAlertWhileItChanges() {
+    @Test fun actionsInTheSheetFollowTheirAlertWhileTheListChanges() {
         show(alert(1, Notification.INFO), alert(2, Notification.NORMAL), alert(3, Notification.LOW))
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
+        openAlerts("3 alerts")
 
-        // An urgent alert arrives and another resolves while the stack is unfolded.
+        // An urgent alert arrives and another resolves while the sheet is open.
         update(alert(1, Notification.INFO), alert(3, Notification.LOW), alert(4, Notification.URGENT))
         compose.onAllNodesWithText("Alert text 2").assertCountEquals(0)
         compose.onNodeWithText("Act 4").assertIsDisplayed()
         compose.onNodeWithText("Act 3").performClick()
         compose.onNodeWithText("Act 1").performClick()
 
+        // The sheet stays open, so several alerts can be handled in one visit.
+        compose.onNodeWithText("Alerts").assertIsDisplayed()
         assertEquals(listOf(3, 1), acted)
     }
 
-    @Test fun aPressOnTheSummaryIsDroppedWhenAnotherAlertTakesItsPlace() {
-        show(alert(1, Notification.NORMAL))
-        compose.onNodeWithText("Act 1").performTouchInput { down(center) }
-
-        // An urgent alert takes the summary while the finger is still down on alert 1's button.
-        update(alert(1, Notification.NORMAL), alert(2, Notification.URGENT))
-        compose.onNodeWithText("Act 2").performTouchInput { up() }
-        assertEquals(emptyList<Int>(), acted)
-
-        compose.onNodeWithText("Act 2").performClick()
-        assertEquals(listOf(2), acted)
-    }
-
-    @Test fun aPressInTheUnfoldedStackIsDroppedWhenItsAlertResolvesAndAnotherTakesItsPlace() {
+    @Test fun aPressInTheSheetIsDroppedWhenItsAlertResolvesAndAnotherTakesItsPlace() {
         show(alert(1, Notification.URGENT), alert(2, Notification.LOW), alert(3, Notification.LOW))
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Act 2").performTouchInput { down(center) } // second card
+        openAlerts("3 alerts, 1 urgent")
+        compose.onNodeWithText("Act 2").performTouchInput { down(center) } // second row
 
-        // Alert 2 resolves while the finger is down on its button, and a new warning takes the second card.
+        // Alert 2 resolves while the finger is down on its button, and a new warning takes the second row.
         update(alert(1, Notification.URGENT), alert(3, Notification.LOW), alert(4, Notification.NORMAL))
         compose.onNodeWithText("Act 4").performTouchInput { up() }
 
         assertEquals(emptyList<Int>(), acted)
     }
 
-    @Test fun theStackFoldsWhenOneAlertIsLeftAndStaysFoldedForTheNext() {
-        show(alert(1, Notification.NORMAL), alert(2, Notification.LOW))
-        compose.onNode(unfold).performSemanticsAction(SemanticsActions.OnClick)
-        compose.onNodeWithText("Show less").assertExists()
+    @Test fun theSheetClosesOnceTheLastAlertIsGoneAndCannotActOnTheWayOut() {
+        show(alert(1, Notification.URGENT))
+        openAlerts("1 alert, 1 urgent")
+        compose.mainClock.autoAdvance = false
+        update()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText("Act 1").assertIsNotEnabled()
+        compose.mainClock.autoAdvance = true
 
-        update(alert(1, Notification.NORMAL))
-        compose.onAllNodesWithText("Show less").assertCountEquals(0)
-        update(alert(1, Notification.NORMAL), alert(3, Notification.LOW))
-        compose.onAllNodesWithText("Alert text 3").assertCountEquals(0)
-        compose.onNodeWithText("1 more alert").assertExists()
+        compose.waitForIdle()
+        compose.onAllNodesWithText("Alerts").assertCountEquals(0)
+        compose.onAllNodesWithText("Urgent", substring = true).assertCountEquals(0)
+        assertEquals(emptyList<Int>(), acted)
     }
 }

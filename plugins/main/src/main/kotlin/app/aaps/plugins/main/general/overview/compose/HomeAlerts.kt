@@ -1,85 +1,69 @@
 package app.aaps.plugins.main.general.overview.compose
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.GhostButton
+import app.aaps.core.compose.components.ModalSheet
+import app.aaps.core.compose.components.SheetSurface
+import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.notifications.Notification
 
 /*
- * Active notifications on Home, as a stack: folded to one card however many there are, so glucose
- * and the graph stay on screen, and unfolded in place to show every alert.
+ * Active notifications on Home: a pill in the hero's top row says how many there are and how severe
+ * the worst is, and opens a sheet listing them all. Home's layout does not change with the alerts.
  *
- * Folding or unfolding never acts on an alert: only an alert's own button runs its action (snooze,
- * set, select...), which then removes it exactly as before.
+ * Opening or closing the sheet never acts on an alert: only an alert's own button runs its action
+ * (snooze, set, select...), which then removes it exactly as before.
  */
-
-/** The bounded summary: the alert shown in full and what else is waiting behind it. */
-internal data class AlertSummary(
-    val top: HomeUiState.Alert,
-    /** Other urgent alerts, which must not be hidden behind a plain count. */
-    val moreUrgent: Int,
-    val moreOther: Int
-) {
-
-    val more get() = moreUrgent + moreOther
-}
 
 /** Most severe first (Notification.URGENT is the lowest level); alerts of one level keep their order. */
 internal fun orderedAlerts(alerts: List<HomeUiState.Alert>): List<HomeUiState.Alert> = alerts.sortedBy { it.level }
 
-internal fun alertSummary(alerts: List<HomeUiState.Alert>): AlertSummary? {
-    val ordered = orderedAlerts(alerts)
-    val top = ordered.firstOrNull() ?: return null
-    val urgent = ordered.drop(1).count { it.level == Notification.URGENT }
-    return AlertSummary(top, moreUrgent = urgent, moreOther = ordered.size - 1 - urgent)
+/** Urgent and warning levels name themselves on the pill; lesser ones are only counted. */
+private fun needsAttention(level: Int) = level == Notification.URGENT || level == Notification.NORMAL
+
+/** "Urgent · 3", "Warning · 1", "2 alerts"; null without alerts, when there is no pill. */
+internal fun alertsPillLabel(alerts: List<HomeUiState.Alert>): String? {
+    val top = alerts.minOfOrNull { it.level } ?: return null
+    return if (needsAttention(top)) "${severityLabel(top)} · ${alerts.size}" else "${alerts.size} ${alertsWord(alerts.size)}"
 }
 
-/** "5 more alerts · 1 urgent", "2 more urgent alerts", "1 more alert"; null when the summary is the only alert. */
-internal fun moreAlertsLabel(summary: AlertSummary): String? = when {
-    summary.more == 0       -> null
-    summary.moreUrgent == 0 -> "${summary.more} more ${alerts(summary.more)}"
-    summary.moreOther == 0  -> "${summary.moreUrgent} more urgent ${alerts(summary.moreUrgent)}"
-    else                    -> "${summary.more} more ${alerts(summary.more)} · ${summary.moreUrgent} urgent"
+/** What TalkBack reads for the pill: "3 alerts, 1 urgent", so the count of urgent ones is never left to colour. */
+internal fun alertsPillDescription(alerts: List<HomeUiState.Alert>): String {
+    val urgent = alerts.count { it.level == Notification.URGENT }
+    return "${alerts.size} ${alertsWord(alerts.size)}" + if (urgent > 0) ", $urgent urgent" else ""
 }
 
-private fun alerts(n: Int) = if (n == 1) "alert" else "alerts"
+private fun alertsWord(n: Int) = if (n == 1) "alert" else "alerts"
 
 /** Severity in words, so it is never carried by colour alone. */
 internal fun severityLabel(level: Int): String = when (level) {
@@ -103,112 +87,76 @@ private fun severityTint(level: Int): Color {
 }
 
 /**
- * The alerts above the hero, as a stack. Folded, it is one card, the most severe alert with its own
- * action, with the edges of the others showing beneath it and a line saying how many wait there.
- * Tapping the folded card unfolds it in place; only "Show less" or Back folds it again,
- * as does the stack shrinking to a single alert.
+ * The alerts pill, beside the loop pill: absent without alerts, tinted by the most severe one when it
+ * is urgent or a warning. Tapping it opens [AlertsSheet].
+ */
+@Composable
+internal fun AlertsPill(alerts: List<HomeUiState.Alert>, onClick: () -> Unit) {
+    val label = alertsPillLabel(alerts) ?: return
+    val top = alerts.minOf { it.level }
+    val tint = severityTint(top)
+    val description = alertsPillDescription(alerts)
+    StatusPill(
+        label = label,
+        modifier = Modifier.semantics { contentDescription = description },
+        dotColor = tint,
+        labelColor = AapsTheme.colors.textPrimary,
+        containerColor = if (needsAttention(top)) tint.copy(alpha = 0.2f) else AapsTheme.colors.controlFill,
+        onClickLabel = "Show alerts",
+        onClick = onClick
+    )
+}
+
+/**
+ * Every active alert, most severe first, each with its full text, time and own action. The list
+ * follows the store while the sheet is open, so several alerts can be handled in one visit; once the
+ * last one is gone the sheet slides away, showing it inert on the way out.
  *
- * Every card is keyed by its alert, so a press that began on one alert's button is cancelled, not
+ * Every row is keyed by its alert, so a press that began on one alert's button is cancelled, not
  * delivered to another, when that alert moves, resolves or is replaced.
  */
 @Composable
-internal fun AlertsStack(alerts: List<HomeUiState.Alert>, onAction: (HomeUiState.Alert) -> Unit) {
-    val summary = alertSummary(alerts) ?: return
-    val more = moreAlertsLabel(summary)
-    var unfolded by rememberSaveable { mutableStateOf(false) }
-    val canUnfold = summary.more > 0
-    // Folds once a single alert is left, so the next one to arrive joins a folded stack.
-    LaunchedEffect(canUnfold) { if (!canUnfold) unfolded = false }
-    BackHandler(enabled = unfolded) { unfolded = false }
+internal fun AlertsSheet(alerts: List<HomeUiState.Alert>, onAction: (HomeUiState.Alert) -> Unit, onDismissed: () -> Unit) {
+    ModalSheet(onDismissed = onDismissed) { close ->
+        var lastShown by remember { mutableStateOf(alerts) }
+        SideEffect { if (alerts.isNotEmpty()) lastShown = alerts }
+        val resolved = alerts.isEmpty()
+        LaunchedEffect(resolved) { if (resolved) close {} }
+        val rows = if (resolved) lastShown else alerts
 
-    // One size animation owns the whole transition; per-row expand/shrink animations would make
-    // their parent chase changing heights. Keep the top card and its action anchored throughout.
-    Column(Modifier.animateContentSize(animationSpec = tween(240, easing = FastOutSlowInEasing))) {
-        orderedAlerts(alerts).forEachIndexed { index, alert ->
-            key(alert.id) {
-                if (index == 0) {
-                    AlertCard(
-                        alert,
-                        maxLines = if (unfolded) Int.MAX_VALUE else 3,
-                        onAction = onAction,
-                        onClick = if (canUnfold && !unfolded) ({ unfolded = true }) else null,
-                        onClickLabel = "Show all alerts",
-                        footer = if (unfolded || more == null) null else ({ MoreLine(more, urgent = summary.moreUrgent > 0) })
-                    )
-                    if (unfolded) {
-                        Row(Modifier.fillMaxWidth().padding(start = AapsSpacing.cardPad), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${alerts.size} alerts", style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.weight(1f))
-                            GhostButton("Show less", { unfolded = false })
-                        }
+        SheetSurface(title = "Alerts", onClose = { close {} }, scrollContent = true) {
+            Column {
+                orderedAlerts(rows).forEachIndexed { index, alert ->
+                    key(alert.id) {
+                        if (index > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(AapsTheme.colors.divider))
+                        AlertRow(alert, enabled = !resolved, onAction = onAction)
                     }
-                } else if (unfolded) {
-                    AlertCard(alert, maxLines = Int.MAX_VALUE, onAction = onAction, modifier = Modifier.padding(top = 8.dp))
                 }
-            }
-        }
-        if (!unfolded && summary.more > 0) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                StackEdge(inset = 12.dp, alpha = 0.75f)
-                if (summary.more > 1) StackEdge(inset = 24.dp, alpha = 0.45f)
             }
         }
     }
 }
 
-/** "5 more alerts · 1 urgent": in the urgent colour when any waiting alert is urgent, as the count must not hide one. */
+/** One alert: severity and time over the full message, the alert's own action beside it. */
 @Composable
-private fun MoreLine(label: String, urgent: Boolean) =
-    Text(label, style = AapsTheme.type.caption, color = if (urgent) AapsTheme.colors.low else AapsTheme.colors.textSecondary)
-
-/** The bottom edge of a card stacked under the folded one. */
-@Composable
-private fun StackEdge(inset: Dp, alpha: Float) =
-    Box(
-        Modifier
-            .padding(horizontal = inset)
-            .fillMaxWidth()
-            .height(7.dp)
-            .clip(RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp))
-            .background(AapsTheme.colors.surface.copy(alpha = alpha))
-    )
-
-/** One alert: severity and time over the message, the alert's own action beside it. */
-@Composable
-private fun AlertCard(
-    alert: HomeUiState.Alert,
-    maxLines: Int,
-    onAction: (HomeUiState.Alert) -> Unit,
-    modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null,
-    onClickLabel: String? = null,
-    footer: (@Composable () -> Unit)? = null
-) {
+private fun AlertRow(alert: HomeUiState.Alert, enabled: Boolean, onAction: (HomeUiState.Alert) -> Unit) {
     val colors = AapsTheme.colors
     val tint = severityTint(alert.level)
-    AapsCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.card)
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick) else Modifier),
-        contentPadding = PaddingValues(start = AapsSpacing.cardPad, end = 4.dp, top = AapsSpacing.cardPadSmall, bottom = AapsSpacing.cardPadSmall)
-    ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                // Severity in words beside its colour, so it is never carried by colour alone.
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(tint))
-                    Text(
-                        buildAnnotatedString {
-                            withStyle(SpanStyle(color = tint)) { append(severityLabel(alert.level)) }
-                            append(" · ${alert.time}")
-                        },
-                        style = AapsTheme.type.label, color = colors.textTertiary
-                    )
-                }
-                Text(alert.text, style = AapsTheme.type.body, color = colors.textPrimary, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
-                footer?.invoke()
+    Row(Modifier.fillMaxWidth().padding(vertical = AapsSpacing.cardPadSmall), verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // Severity in words beside its colour, so it is never carried by colour alone.
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(tint))
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = tint)) { append(severityLabel(alert.level)) }
+                        append(" · ${alert.time}")
+                    },
+                    style = AapsTheme.type.label, color = colors.textTertiary
+                )
             }
-            GhostButton(alert.buttonText, { onAction(alert) })
+            Text(alert.text, style = AapsTheme.type.body, color = colors.textPrimary)
         }
+        GhostButton(alert.buttonText, { onAction(alert) }, enabled = enabled)
     }
 }
