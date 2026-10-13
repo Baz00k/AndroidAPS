@@ -72,8 +72,8 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.convertedToAbsolute
-import app.aaps.core.objects.ui.IobDisplay
-import app.aaps.core.objects.ui.CobDisplay
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.core.objects.extensions.valueToUnits
 import app.aaps.core.objects.wizard.BolusWizard
@@ -1463,13 +1463,18 @@ class DataHandlerMobile @Inject constructor(
         var currentBasal = iobSum
         var bgiString = iobSum
         if (config.appInitialized && profile != null) {
-            val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter::to2Decimal)
+            val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter,
+                "WatcherUpdaterService", compact = true, iobFormat = decimalFormatter::to2Decimal
+            ) { currentProfile ->
+                BasalDisplay(processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh)
+                    ?: rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, currentProfile.getBasal()))
+            }
+            val iob = therapy.iob
             iobSum = iob.total
             iobDetail = "(${iob.bolus}|${iob.basal})"
-            val cob = CobDisplay.from(iobCobCalculator.getCobInfo("WatcherUpdaterService"), rh, decimalFormatter, compact = true)
+            val cob = therapy.cob
             cobString = cob.value
-            currentBasal =
-                processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh) ?: rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, profile.getBasal())
+            currentBasal = therapy.basal.rate
 
             //bgi
             if (iob.isAvailable && glucoseStatusProvider.glucoseStatusData != null) {

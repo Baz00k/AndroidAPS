@@ -31,6 +31,7 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAutosensCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventInitializationChanged
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
+import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.ui.IconsProvider
 import app.aaps.core.interfaces.utils.DateUtil
@@ -39,8 +40,8 @@ import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.ui.IobDisplay
-import app.aaps.core.objects.ui.CobDisplay
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.plugins.main.R
 import io.reactivex.rxjava3.disposables.CompositeDisposable
@@ -118,6 +119,10 @@ class PersistentNotificationPlugin @Inject constructor(
             .toObservable(EventPreferenceChange::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
+        disposable += rxBus
+            .toObservable(EventProfileAvailabilityChanged::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
     }
 
     override fun onStop() {
@@ -126,7 +131,7 @@ class PersistentNotificationPlugin @Inject constructor(
         super.onStop()
     }
 
-    private fun triggerNotificationUpdate() {
+    internal fun triggerNotificationUpdate() {
         updateNotification()
         dummyServiceHelper.startService(context)
     }
@@ -140,7 +145,10 @@ class PersistentNotificationPlugin @Inject constructor(
         var tempBasalText: String? = null
         var avgDeltaText: String? = null
         var unreadConversationBuilder: NotificationCompat.CarExtender.UnreadConversation.Builder? = null
-        val profileValid = profileFunction.isProfileValid("Notification")
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "PersistentNotificationPlugin", compact = true) {
+            BasalDisplay(rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate))
+        }
+        val profileValid = therapy.iob.isAvailable
         if (profileValid) {
             var line1aa: String
             val lastBG = iobCobCalculator.ads.lastBg()
@@ -173,8 +181,8 @@ class PersistentNotificationPlugin @Inject constructor(
                 line1aa += "  " + tempBasalText + "."
             }
             //IOB
-            val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
-            val cob = CobDisplay.from(iobCobCalculator.getCobInfo("PersistentNotificationPlugin"), rh, decimalFormatter, compact = true)
+            val iob = therapy.iob
+            val cob = therapy.cob
             line2 =
                 rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + " " + rh.gs(
                     app.aaps.core.ui.R
@@ -189,8 +197,8 @@ class PersistentNotificationPlugin @Inject constructor(
                     app.aaps.core.ui.R
                         .string.cob
                 ) + ": " + cob.value + "."
-            line3 = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate)
-            var line3aa = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate) + "."
+            line3 = therapy.basal.rate
+            var line3aa = therapy.basal.rate + "."
             line3 += " - " + profileFunction.getProfileName()
             line3aa += " - " + profileFunction.getProfileName() + "."
             /// For Android Auto
@@ -227,7 +235,7 @@ class PersistentNotificationPlugin @Inject constructor(
             unreadConversationBuilder.addMessage(line3aa)
             /// End Android Auto
         } else {
-            line1 = rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)
+            line1 = therapy.iob.unavailableReason
             val unavailable = rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
             line2 = rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + unavailable + " · " +
                 rh.gs(app.aaps.core.ui.R.string.cob) + ": " + unavailable

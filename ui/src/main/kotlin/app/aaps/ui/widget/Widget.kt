@@ -37,8 +37,8 @@ import app.aaps.core.keys.BooleanComposedKey
 import app.aaps.core.keys.IntComposedKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.directionToIcon
-import app.aaps.core.objects.ui.IobDisplay
-import app.aaps.core.objects.ui.CobDisplay
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
@@ -200,14 +200,17 @@ class Widget : AppWidgetProvider() {
     }
 
     private fun updateIobCob(views: RemoteViews) {
-        val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "Widget COB") {
+            BasalDisplay(overviewData.temporaryBasalText())
+        }
+        val iob = therapy.iob
+        views.setTextViewText(R.id.base_basal, therapy.basal.rate)
         views.setTextViewText(R.id.iob, iob.total)
         views.setContentDescription(R.id.iob, listOf(iob.total, iob.unavailableReason).filter { it.isNotBlank() }.joinToString(" · "))
         // cob
-        val hasProfile = profileFunction.getProfile() != null
-        val cob = CobDisplay.from(if (hasProfile) iobCobCalculator.getCobInfo("Widget COB") else null, rh, decimalFormatter)
+        val cob = therapy.cob
         var cobText = cob.value
-        val reasons = listOf(iob.unavailableReason, if (hasProfile) cob.unavailableReason else "").filter { it.isNotBlank() }.distinct()
+        val reasons = listOf(iob.unavailableReason, cob.unavailableReason).filter { it.isNotBlank() }.distinct()
         // Reuse the wrapping profile row, not another row that pushes values out of small widgets.
         if (reasons.isNotEmpty()) views.setTextViewText(R.id.active_profile, reasons.joinToString(" · "))
 

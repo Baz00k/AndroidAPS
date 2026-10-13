@@ -47,8 +47,9 @@ import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntentKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.ui.IobDisplay
-import app.aaps.core.objects.ui.CobDisplay
+import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.BasalDisplay
+import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
@@ -148,6 +149,9 @@ class XdripPlugin @Inject constructor(
                            delayAndScheduleExecution("NEW_DATA")
                        }, fabricPrivacy::logException)
         disposable += rxBus.toObservable(EventAutosensCalculationFinished::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ sendStatusLine() }, fabricPrivacy::logException)
+        disposable += rxBus.toObservable(EventProfileAvailabilityChanged::class.java)
             .observeOn(aapsSchedulers.io)
             .subscribe({ sendStatusLine() }, fabricPrivacy::logException)
         disposable += rxBus.toObservable(EventAppInitialized::class.java)
@@ -254,15 +258,16 @@ class XdripPlugin @Inject constructor(
             val unavailable = rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
             return "IOB $unavailable · COB $unavailable · " + rh.gs(app.aaps.core.ui.R.string.iob_no_active_profile)
         }
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter,
+            "StatusLinePlugin", compact = true, iobFormat = decimalFormatter::to2Decimal
+        ) { BasalDisplay(processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.toStringShort(rh).orEmpty()) }
         if (!loop.runningMode.isLoopRunning() && config.APS)
             status.append(rh.gs(R.string.disabled_loop)).append("\n")
 
         //Temp basal
-        processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())?.let {
-            status.append(it.toStringShort(rh)).append(" ")
-        }
+        if (therapy.iob.isAvailable && therapy.basal.rate.isNotBlank()) status.append(therapy.basal.rate).append(" ")
         //IOB
-        val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter::to2Decimal)
+        val iob = therapy.iob
         status.append(iob.total)
         if (iob.isAvailable) status.append(rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname))
         if (iob.isAvailable && preferences.get(BooleanKey.XdripSendDetailedIob))
@@ -278,7 +283,7 @@ class XdripPlugin @Inject constructor(
                 .append(decimalFormatter.to2Decimal(bgi))
         }
         // COB
-        val cob = CobDisplay.from(iobCobCalculator.getCobInfo("StatusLinePlugin"), rh, decimalFormatter, compact = true)
+        val cob = therapy.cob
         status.append(" ").append(cob.value)
         if (!iob.isAvailable) status.append(" · ").append(iob.unavailableReason)
         if (cob.unavailableReason.isNotBlank()) status.append(" · ").append(cob.unavailableReason)

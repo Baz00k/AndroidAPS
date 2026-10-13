@@ -71,9 +71,8 @@ import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.core.objects.ui.IobDisplay
 import app.aaps.core.objects.ui.BasalDisplay
-import app.aaps.core.objects.ui.CobDisplay
+import app.aaps.core.objects.ui.TherapyDisplay
 import app.aaps.core.ui.UIRunnable
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.extensions.runOnUiThread
@@ -555,18 +554,22 @@ class OverviewFragment : DaggerFragment() {
         }
 
         // Basal is profile-derived, not a confirmed pump delivery rate. Missing is not zero.
-        val basalData = profile?.let { iobCobCalculator.getBasalData(it, dateUtil.now()) }
+        var basalData: app.aaps.core.data.aps.BasalData? = null
+        val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "Overview COB") {
+            basalData = iobCobCalculator.getBasalData(it, dateUtil.now())
+            BasalDisplay.from(basalData, rh)
+        }
         val scheduledBasal = basalData?.basal ?: 0.0
-        val rateNow = if (basalData?.isTempBasalRunning == true) basalData.tempBasalAbsolute else scheduledBasal
+        val rateNow = basalData?.takeIf { it.isTempBasalRunning }?.tempBasalAbsolute ?: scheduledBasal
         val basalPercent = if (scheduledBasal > 0) (rateNow / scheduledBasal * 100).roundToInt() else 100
-        val basalDisplay = BasalDisplay.from(basalData, rh)
+        val basalDisplay = therapy.basal
         val basalText = basalDisplay.rate
-        val basalSubText = if (basalData?.isTempBasalRunning == true && scheduledBasal > 0)
+        val basalSubText = if (therapy.iob.isAvailable && basalData?.isTempBasalRunning == true && scheduledBasal > 0)
             "$basalPercent% · ${basalDisplay.scheduled} sched" else ""
 
         // Stats: without a profile, empty calculator totals do not mean zero active insulin.
-        val iob = IobDisplay.load(profileFunction, iobCobCalculator, rh)
-        val cob = CobDisplay.from(if (profile != null) iobCobCalculator.getCobInfo("Overview COB") else null, rh, decimalFormatter)
+        val iob = therapy.iob
+        val cob = therapy.cob
 
         // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
         // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
@@ -678,7 +681,7 @@ class OverviewFragment : DaggerFragment() {
             iob = iob.total,
             iobSub = iob.unavailableReason,
             cob = cob.value,
-            cobSub = if (profile != null) cob.unavailableReason else "",
+            cobSub = cob.unavailableReason,
             basal = basalText,
             basalSub = basalSubText,
             supplies = supplies,
