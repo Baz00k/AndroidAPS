@@ -1,7 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.resources.ResourceHelper
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 
 internal data class PumpStatusPresentation(

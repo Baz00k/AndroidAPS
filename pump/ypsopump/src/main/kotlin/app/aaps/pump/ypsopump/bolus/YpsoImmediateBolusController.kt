@@ -239,17 +239,16 @@ internal class YpsoImmediateBolusController(
     fun deliver(request: YpsoValidatedBolusRequest): DeliveryResult {
         check(delivering.get()) { "delivery lifecycle was not acquired" }
         run {
-            val session = link.session()
-                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_SET_UP)
+            // One authenticated connection names the session, reboot and key this dose is bound to.
+            val epoch = link.epoch() ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
             // Use the durable cursor maintained by ordinary history synchronization. A bolus must not
             // trigger a potentially 128-row selector scan before dispatch. The same-link fast-block
             // sequence proves command identity; history is scanned afterward for delivery accounting.
             val cursor = historyCursor() ?: return DeliveryResult.NotSent(YpsoBolusMessage.SYNC_IN_PROGRESS)
             if (stopRequested.get()) return DeliveryResult.NotSent(YpsoBolusMessage.BOLUS_CANCELLED_BEFORE_START)
-            val baselineConnection = link.connectionKey()
-                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
+            val baselineConnection = epoch.key
             val baselineStatus = link.status() ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
-            if (link.connectionKey() != baselineConnection) {
+            if (link.epoch()?.key != baselineConnection) {
                 return DeliveryResult.NotSent(YpsoBolusMessage.CONNECTION_DROPPED_NO_INSULIN)
             }
             // The pump itself is the only authority on whether it is busy. An unreachable pump cannot be
@@ -261,9 +260,8 @@ internal class YpsoImmediateBolusController(
                 return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_ALREADY_EXTENDED_BOLUSING)
             }
             val serial = serialNumber()
-            val generation = link.sessionGeneration()
-                ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_NOT_CONNECTED)
-            val reboot = session.reboot ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
+            val generation = epoch.generation
+            val reboot = epoch.reboot ?: return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_UNREADABLE)
             if (cursor.identity.pumpSerial != serial || cursor.pumpReboot != reboot.toLong()) {
                 return DeliveryResult.NotSent(YpsoBolusMessage.PUMP_RESTARTED)
             }
@@ -273,7 +271,7 @@ internal class YpsoImmediateBolusController(
                 requestId = requestId,
                 pumpSerial = serial,
                 sessionGeneration = generation,
-                sessionKeyId = session.keyId,
+                sessionKeyId = epoch.keyId,
                 treatment = request.treatment,
                 requestedCentiUnits = request.centiUnits,
                 payloadHash = payloadHash,
@@ -376,7 +374,7 @@ internal class YpsoImmediateBolusController(
         if (attempt.provenCancelBlock == null) return StopResult.RETRY
         val owner = commandOwner.get()
         val status = link.status(owner) ?: return StopResult.RETRY
-        val connectionKey = owner?.connectionKey ?: link.connectionKey() ?: return StopResult.RETRY
+        val connectionKey = owner?.connectionKey ?: link.epoch()?.key ?: return StopResult.RETRY
         cancelProven(attempt, status, connectionKey)
         return if (journal.current()?.cancelRequestId != null) StopResult.DISPATCHED_OR_PENDING else StopResult.RETRY
     }

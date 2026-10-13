@@ -33,7 +33,7 @@ import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.crypto.PumpSession
@@ -381,6 +381,8 @@ class YpsoPumpPlugin @Inject constructor(
         Thread(runnable, "ypso-history-recovery").apply { isDaemon = true }
     }
     internal var dispatchHistoryRecovery: ((() -> Unit) -> Unit) = { task -> historyRecoveryExecutor.execute(task) }
+    /** Elapsed-time clock for blocking pump reads. */
+    internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     private var transientHistoryFailures = 0
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
@@ -661,7 +663,6 @@ class YpsoPumpPlugin @Inject constructor(
             YpsoBolusMessage.PUMP_BUSY                        -> R.string.ypsopump_bolus_pump_busy
             YpsoBolusMessage.PUMP_UNREADABLE                  -> R.string.ypsopump_bolus_pump_unreadable
             YpsoBolusMessage.PUMP_STOPPED_OR_EMPTY            -> R.string.ypsopump_bolus_pump_stopped_or_empty
-            YpsoBolusMessage.PUMP_NOT_SET_UP                  -> R.string.ypsopump_bolus_pump_not_set_up
             YpsoBolusMessage.PUMP_NOT_CONNECTED               -> R.string.ypsopump_bolus_pump_not_connected
             YpsoBolusMessage.PUMP_ALREADY_BOLUSING            -> R.string.ypsopump_bolus_pump_already_bolusing
             YpsoBolusMessage.PUMP_ALREADY_EXTENDED_BOLUSING   -> R.string.ypsopump_bolus_pump_already_extended
@@ -890,22 +891,16 @@ class YpsoPumpPlugin @Inject constructor(
 
     /** One blocking status read, so a pre-flight check tests the pump's state now, not minutes ago. */
     private fun readStatusBlocking(timeoutMs: Long = 30_000, stopWhen: () -> Boolean = { false }): Boolean {
-        var success = false
-        val l = java.util.concurrent.CountDownLatch(1)
+        val read = YpsoBlockingRead<Boolean>(elapsedRealtime)
         val attempt = bleManager.readStatus {
-            success = it
-            l.countDown()
+            read.complete(it)
             if (it) onStatusRead()
         }
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
-        while (!l.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            if (stopWhen() || android.os.SystemClock.elapsedRealtime() >= deadline) break
-        }
-        if (l.count == 0L) return success
+        if (read.await(timeoutMs) { expired -> stopWhen() || expired }) return read.value == true
         if (!attempt.cancel()) {
             // The BLE callback won the completion race and is publishing the validated sample now.
-            l.await()
-            return success
+            read.awaitCompletion()
+            return read.value == true
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump status read timed out after ${timeoutMs}ms")
         pumpState.invalidateStatus(preserveDisplay = true)
@@ -941,25 +936,16 @@ class YpsoPumpPlugin @Inject constructor(
      * restart the read. TBR cancellation and zero-TBR requests also wait under this policy.
      */
     private fun readProfileBlocking(timeoutMs: Long = PROFILE_READ_TIMEOUT_MS, activeOnly: Boolean = false): Boolean {
-        var success = false
-        val latch = java.util.concurrent.CountDownLatch(1)
-        val onDone: (Boolean) -> Unit = {
-            success = it
-            latch.countDown()
-        }
+        val read = YpsoBlockingRead<Boolean>(elapsedRealtime)
         val attempt = bleManager.readProfileConfiguration(
             activeOnly,
             { commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue() },
-            onDone,
+            read::complete,
         )
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
-        while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
-        }
-        if (latch.count == 0L) return success
+        if (read.await(timeoutMs)) return read.value == true
         if (!attempt.cancel()) {
-            latch.await()
-            return success
+            read.awaitCompletion()
+            return read.value == true
         }
         aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
         bleManager.disconnect()
@@ -973,39 +959,34 @@ class YpsoPumpPlugin @Inject constructor(
         onAttempt: (YpsoBleManager.HistoryReadAttempt) -> Unit = {},
         onTimeout: () -> Unit = {},
     ): YpsoHistorySnapshot? {
-        var snapshot: YpsoHistorySnapshot? = null
-        val latch = java.util.concurrent.CountDownLatch(1)
-        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows) {
-            snapshot = it
-            latch.countDown()
-        }
+        val read = YpsoBlockingRead<YpsoHistorySnapshot?>(elapsedRealtime)
+        val attempt = bleManager.readStableHistory(historyIngestion.currentCursor(), maxRows, read::complete)
         onAttempt(attempt)
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
         var yielded = false
-        while (!latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+        val completed = read.await(timeoutMs) { expired ->
             if (stopWhen() && !yielded) {
                 yielded = true
                 attempt.requestYield()
             }
-            if (android.os.SystemClock.elapsedRealtime() >= deadline) {
+            if (expired) {
                 onTimeout()
                 // A deadline is also a cooperative stop: let an in-flight selector finish its
                 // read-back instead of stranding a write reservation on an otherwise healthy link.
                 attempt.requestYield()
-                break
             }
+            expired
         }
-        if (latch.count == 0L) return snapshot
+        if (completed) return read.value
         if (attempt.shouldYield) {
             // A selector write that has left the phone must complete semantic read-back before the
             // therapy command can own the connection. Hard-cancelling here strands its reservation.
-            if (latch.await(HISTORY_YIELD_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) return snapshot
+            if (read.awaitCompletion(HISTORY_YIELD_GRACE_MS)) return read.value
         }
         if (!attempt.cancel()) {
             // The read already reached a completion path. Wait only briefly for its callback: an
             // unbounded wait here blocks the therapy command forever if that callback never arrives.
-            latch.await(HISTORY_COMPLETION_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-            return snapshot
+            read.awaitCompletion(HISTORY_COMPLETION_GRACE_MS)
+            return read.value
         }
         if (yielded) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history yield did not reach a safe boundary")
@@ -1201,12 +1182,13 @@ class YpsoPumpPlugin @Inject constructor(
         logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
         val zone = pumpState.historyZone
-        val reboot = bleManager.session?.snapshot()?.reboot
-        if (serial.isBlank() || reboot == null || bleManager.session?.activeRecord()?.generation == null) {
+        val epoch = bleManager.epoch()
+        val reboot = epoch?.reboot
+        if (serial.isBlank() || epoch == null || reboot == null) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity or session evidence unavailable")
             return YpsoHistoryIngestionResult.Blocked("pump identity or session evidence unavailable")
         }
-        val pass = bolus.reconcileHistory(serial, zone, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
+        val pass = bolus.reconcileHistory(serial, zone, epoch.generation, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
             ?: return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
         val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event -> pass.treatment(event.identity.aapsPumpId) }
         if (result is YpsoHistoryIngestionResult.Blocked) {

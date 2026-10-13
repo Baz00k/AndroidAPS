@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
@@ -174,12 +175,12 @@ class ProvisioningFailureMessageTest {
         state.connectionsStarting.incrementAndGet()
         assertThat(service.retryAllowed()).isTrue()
         assertThat(rendered(service).message).isEqualTo(R.string.ypsopump_verifying)
-        state.connectionState = YpsoBleManager.ConnectionState.CONNECTING
+        state.testConnectionState = ConnectionState.CONNECTING
         state.connectionsStarting.decrementAndGet()
         assertThat(rendered(service).message).isEqualTo(R.string.ypsopump_verifying)
 
         // The queue deadline closes the link; local teardown records no failure on the candidate.
-        state.connectionState = YpsoBleManager.ConnectionState.DISCONNECTED
+        state.testConnectionState = ConnectionState.DISCONNECTED
 
         assertThat(service.pending()!!.availability.failures).isEqualTo(0)
         assertThat(rendered(service).message).isEqualTo(R.string.ypsopump_verifying_stalled)

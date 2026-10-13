@@ -4,7 +4,7 @@ import app.aaps.pump.ypsopump.crypto.PumpSession
 
 import app.aaps.pump.ypsopump.crypto.PumpSession.AvailabilityCause
 import app.aaps.pump.ypsopump.crypto.PumpSession.AttemptStatus
-import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
@@ -35,9 +35,9 @@ class AvailabilityTextTest {
             availability = PumpSession.Availability(emptySet())
         }
         state.publishStatus(42.5, 75, false, 100, 1234L)
-        state.connectionState = ConnectionState.DISCONNECTED
+        state.testConnectionState = ConnectionState.DISCONNECTED
         elapsed += YpsoPumpState.STATUS_MAX_AGE_MS
-        state.connectionState = ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
 
         val date: DateUtil = mock { on { minOrSecAgo(org.mockito.kotlin.any(), org.mockito.kotlin.any()) } doReturn "5m ago" }
         val status = buildPumpStatusState(state, idleCommandQueue(), date, resources(
@@ -118,7 +118,7 @@ class AvailabilityTextTest {
             )
             claimedSerialNumber = "configured"
             serialNumber = "verified"
-            connectionState = ConnectionState.DISCONNECTED
+            testConnectionState = ConnectionState.DISCONNECTED
         }
         val resources = resources(
             R.string.ypsopump_serial to "Serial",
@@ -145,7 +145,7 @@ class AvailabilityTextTest {
             claimedSerialNumber = "10000001"
             serialNumber = ""
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
-            connectionState = ConnectionState.DISCONNECTED
+            testConnectionState = ConnectionState.DISCONNECTED
         }
         val resources = resources(
             R.string.ypsopump_serial to "Serial",
@@ -165,7 +165,7 @@ class AvailabilityTextTest {
             claimedSerialNumber = "10000001"
             serialNumber = "10000001"
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
-            connectionState = ConnectionState.DISCONNECTED
+            testConnectionState = ConnectionState.DISCONNECTED
         }
         val queue = idleCommandQueue()
         val resources = resources()
@@ -183,7 +183,7 @@ class AvailabilityTextTest {
             claimedSerialNumber = "configured"
             serialNumber = "verified"
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(emptySet())
-            connectionState = ConnectionState.DISCONNECTED
+            testConnectionState = ConnectionState.DISCONNECTED
         }
         val resources = resources(
             R.string.ypsopump_serial to "Serial",
@@ -335,7 +335,7 @@ class AvailabilityTextTest {
             claimedSerialNumber = "configured"
             serialNumber = "verified"
             availability = app.aaps.pump.ypsopump.crypto.PumpSession.Availability(setOf(AvailabilityCause.TRANSPORT))
-            connectionState = ConnectionState.DISCONNECTED
+            testConnectionState = ConnectionState.DISCONNECTED
         }
         val resources = resources(
             R.string.ypsopump_serial to "Serial",

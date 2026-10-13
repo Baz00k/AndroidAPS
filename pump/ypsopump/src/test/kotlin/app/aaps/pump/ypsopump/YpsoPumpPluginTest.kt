@@ -28,6 +28,7 @@ import app.aaps.implementation.pump.PumpEnactResultObject
 import app.aaps.implementation.queue.commands.CommandReadStatus
 import dagger.android.AndroidInjector
 import dagger.android.HasAndroidInjector
+import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -233,7 +234,7 @@ class YpsoPumpPluginTest {
 
     @Test
     fun `overview and pump tab agree while connected before first reading`() {
-        state.connectionState = YpsoBleManager.ConnectionState.CONNECTED
+        state.testConnectionState = ConnectionState.CONNECTED
         state.claimedSerialNumber = "10000001"
         state.serialNumber = "10000001"
         state.availability = PumpSession.Availability(emptySet())
@@ -623,11 +624,10 @@ class YpsoPumpPluginTest {
     private fun prepareHistoryIdentity() {
         state.currentZone = { ZoneId.of("UTC") }
         state.serialNumber = PUMP_SERIAL
-        val session: PumpSession = mock()
-        val record = PumpSession.Record("pump", "key", "generation", 21, 1L, 1L)
-        whenever(manager.session).thenReturn(session)
-        whenever(session.snapshot()).thenReturn(record)
-        whenever(session.activeRecord()).thenReturn(record)
+        val epoch = app.aaps.pump.ypsopump.ble.YpsoConnectionEpoch(
+            mock(), PumpSession.Token("generation", "connection"), "key", null, sequence = 1, reboot = 21,
+        )
+        whenever(manager.epoch()).thenReturn(epoch)
     }
 
     private fun prepareHistoryRecovery(snapshot: YpsoHistorySnapshot?) {

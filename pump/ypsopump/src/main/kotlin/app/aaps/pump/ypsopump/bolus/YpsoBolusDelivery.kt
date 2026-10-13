@@ -188,7 +188,7 @@ internal class YpsoBolusDelivery(
             YpsoBolusLink.Readiness.STATUS_UNAVAILABLE -> return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
         }
         if (link.stoppedOrEmpty()) return Result.Failed(YpsoBolusMessage.PUMP_STOPPED_OR_EMPTY)
-        val reboot = link.session()?.reboot ?: return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
+        val reboot = link.epoch()?.reboot ?: return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
         historyReadiness(serialNumber(), reboot.toLong())?.let { return Result.Failed(it) }
         return when (val result = controller.deliver(request)) {
             is YpsoImmediateBolusController.DeliveryResult.Started -> {
@@ -310,7 +310,7 @@ internal class YpsoBolusDelivery(
                 YpsoBolusLink.Readiness.STATUS_UNAVAILABLE -> return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
             }
             if (link.stoppedOrEmpty()) return Result.Failed(YpsoBolusMessage.PUMP_STOPPED_OR_EMPTY)
-            val reboot = link.session()?.reboot ?: return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
+            val reboot = link.epoch()?.reboot ?: return Result.Failed(YpsoBolusMessage.PUMP_UNREADABLE)
             historyReadiness(serialNumber(), reboot.toLong())?.let { return Result.Failed(it) }
             return when (val result = controller.deliver(request)) {
                 is YpsoImmediateBolusController.DeliveryResult.Started -> {
@@ -491,9 +491,9 @@ internal class YpsoBolusDelivery(
      * resolves the current dose from its terminal row, and holds that row while it is still being
      * matched to its dose.
      */
-    fun reconcileHistory(pumpSerial: String, zone: ZoneId, reboot: Int, snapshot: YpsoHistorySnapshot): HistoryPass {
+    fun reconcileHistory(pumpSerial: String, zone: ZoneId, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot): HistoryPass {
         repairJournalledAccounting(pumpSerial)
-        reconcileAttempt(pumpSerial, zone, reboot, snapshot)
+        reconcileAttempt(pumpSerial, zone, generation, reboot, snapshot)
         refreshWarning()
         val attempt = controller.currentAttempt()
         val terminalSequence = when (attempt?.shape) {
@@ -656,12 +656,12 @@ internal class YpsoBolusDelivery(
         }
     }
 
-    private fun reconcileAttempt(pumpSerial: String, zone: ZoneId, reboot: Int, snapshot: YpsoHistorySnapshot) {
+    private fun reconcileAttempt(pumpSerial: String, zone: ZoneId, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot) {
         val attempt = controller.currentAttempt() ?: return
         if (!attempt.awaitsReconciliation) return
         // A notified dose is linked by its exact sequence when history imports that row.
         if (attempt.shape == YpsoBolusShape.IMMEDIATE && attempt.pumpFastSequence == null && attempt.notifiedAccountingPumpId != null) return
-        if (attempt.pumpSerial != pumpSerial || attempt.sessionGeneration != link.sessionGeneration() ||
+        if (attempt.pumpSerial != pumpSerial || attempt.sessionGeneration != generation ||
             attempt.baseline.pumpReboot != reboot
         ) {
             controller.markUnresolved("pump identity epoch changed before terminal bolus reconciliation")
