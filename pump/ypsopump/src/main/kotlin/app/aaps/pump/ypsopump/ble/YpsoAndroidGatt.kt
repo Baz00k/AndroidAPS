@@ -10,14 +10,12 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
-import android.os.Build
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
 import java.util.UUID
 
 /** [YpsoGattAdapter] over Android's Bluetooth stack. */
 internal class YpsoAndroidGattAdapter(
     private val context: Context,
-    private val sdkInt: Int = Build.VERSION.SDK_INT,
 ) : YpsoGattAdapter {
 
     @SuppressLint("MissingPermission")
@@ -37,7 +35,7 @@ internal class YpsoAndroidGattAdapter(
             override val observedSerial: String? = observed
 
             override fun connect(events: YpsoGattEvents, authorizer: YpsoWriteAuthorizer): YpsoGattConnection? {
-                val connection = YpsoAndroidGattConnection(events, authorizer, sdkInt)
+                val connection = YpsoAndroidGattConnection(events, authorizer)
                 // The API 37 replacement changes callback dispatch. Retain the verified transport
                 // on supported Android versions until that path has been exercised with a test pump.
                 @Suppress("DEPRECATION")
@@ -58,7 +56,6 @@ internal class YpsoAndroidGattAdapter(
 internal class YpsoAndroidGattConnection(
     private val events: YpsoGattEvents,
     private val authorizer: YpsoWriteAuthorizer,
-    private val sdkInt: Int,
 ) : YpsoGattConnection {
     @Volatile private var gatt: BluetoothGatt? = null
 
@@ -91,8 +88,6 @@ internal class YpsoAndroidGattConnection(
         return gatt?.readCharacteristic(target) == true
     }
 
-    @Suppress("DEPRECATION")
-    @SuppressLint("NewApi") // sdkInt is the injectable Build.VERSION.SDK_INT adapter seam.
     @YpsoGuardedWrite
     override fun writeCharacteristic(uuid: UUID, value: ByteArray, purpose: YpsoRemoteWrite): Boolean {
         // Authorize and send one private copy, so the caller cannot change the bytes in between.
@@ -100,29 +95,16 @@ internal class YpsoAndroidGattConnection(
         val g = gatt ?: return false
         val target = characteristic(uuid) ?: return false
         if (!authorizer.allows(this, purpose, target.uuid, null, bytes)) return false
-        return if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(target, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
-        } else {
-            target.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            target.value = bytes
-            g.writeCharacteristic(target)
-        }
+        return g.writeCharacteristic(target, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
     }
 
-    @Suppress("DEPRECATION")
-    @SuppressLint("NewApi") // Same runtime SDK guard as characteristic dispatch.
     @YpsoGuardedWrite
     override fun writeDescriptor(characteristic: UUID, descriptor: UUID, value: ByteArray, purpose: YpsoRemoteWrite): Boolean {
         val bytes = value.copyOf()
         val g = gatt ?: return false
         val target = characteristic(characteristic)?.getDescriptor(descriptor) ?: return false
         if (!authorizer.allows(this, purpose, target.characteristic?.uuid, target.uuid, bytes)) return false
-        return if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(target, bytes) == BluetoothStatusCodes.SUCCESS
-        } else {
-            target.value = bytes
-            g.writeDescriptor(target)
-        }
+        return g.writeDescriptor(target, bytes) == BluetoothStatusCodes.SUCCESS
     }
 
     override fun enableNotification(characteristic: UUID, descriptor: UUID): Boolean {
@@ -163,10 +145,6 @@ internal class YpsoAndroidGattConnection(
 
         override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
             events.onCharacteristicRead(connection, ch.uuid, value.copyOf(), status)
-
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) =
-            events.onCharacteristicRead(connection, ch.uuid, ch.value?.copyOf(), status)
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) =
             events.onDescriptorWrite(connection, descriptor.uuid, status)

@@ -22,6 +22,7 @@ import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -37,7 +38,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.util.UUID
 
-/** The Android side of the GATT port: SDK dispatch, the authorizer gate, service scoping, callback forwarding, bonding. */
+/** The Android side of the GATT port: API 33 writes, the authorizer gate, service scoping, callback forwarding, bonding. */
 @Suppress("DEPRECATION")
 class YpsoAndroidGattTest {
 
@@ -99,96 +100,127 @@ class YpsoAndroidGattTest {
         return Fixture(gatt, characteristic, descriptor)
     }
 
-    private fun connection(gatt: BluetoothGatt, sdk: Int, authorizer: YpsoWriteAuthorizer = RecordingAuthorizer(true), events: YpsoGattEvents = RecordingEvents()) =
-        YpsoAndroidGattConnection(events, authorizer, sdk).also { it.attach(gatt) }
+    private fun connection(gatt: BluetoothGatt, authorizer: YpsoWriteAuthorizer = RecordingAuthorizer(true), events: YpsoGattEvents = RecordingEvents()) =
+        YpsoAndroidGattConnection(events, authorizer).also { it.attach(gatt) }
 
     @Test
-    fun `characteristic write delivers the same destination and bytes through the legacy and API 33 calls`() {
-        for (sdk in listOf(31, 32, 33, 36)) {
-            val fixture = authGatt()
-            val delivered = mutableListOf<Pair<UUID, List<Byte>>>()
-            var legacyValue: ByteArray? = null
-            whenever(fixture.characteristic.setValue(any<ByteArray>())).thenAnswer { legacyValue = it.getArgument<ByteArray>(0).copyOf(); true }
-            whenever(fixture.gatt.writeCharacteristic(fixture.characteristic)).thenAnswer { delivered += auth to legacyValue!!.toList(); true }
-            whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
-                delivered += it.getArgument<BluetoothGattCharacteristic>(0).uuid to it.getArgument<ByteArray>(1).toList()
-                BluetoothStatusCodes.SUCCESS
-            }
-
-            assertTrue(connection(fixture.gatt, sdk).writeCharacteristic(auth, payload, YpsoRemoteWrite.AUTHENTICATION), "API $sdk")
-
-            assertEquals(listOf(auth to payload.toList()), delivered, "API $sdk")
-            if (sdk >= 33) {
-                verify(fixture.gatt).writeCharacteristic(same(fixture.characteristic), any(), eq(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
-                verify(fixture.gatt, never()).writeCharacteristic(any())
-            } else {
-                verify(fixture.characteristic).writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                verify(fixture.gatt, never()).writeCharacteristic(any(), any(), any())
-            }
+    fun `characteristic write delivers the destination and bytes through the API 33 call`() {
+        val fixture = authGatt()
+        val delivered = mutableListOf<Pair<UUID, List<Byte>>>()
+        whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
+            delivered += it.getArgument<BluetoothGattCharacteristic>(0).uuid to it.getArgument<ByteArray>(1).toList()
+            BluetoothStatusCodes.SUCCESS
         }
+
+        assertTrue(connection(fixture.gatt).writeCharacteristic(auth, payload, YpsoRemoteWrite.AUTHENTICATION))
+
+        assertEquals(listOf(auth to payload.toList()), delivered)
+        verify(fixture.gatt).writeCharacteristic(same(fixture.characteristic), any(), eq(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+        verify(fixture.gatt, never()).writeCharacteristic(any())
+        verify(fixture.characteristic, never()).setValue(any<ByteArray>())
     }
 
     @Test
-    fun `platform refusal of a characteristic write is reported as not sent on both paths`() {
-        val legacy = authGatt()
-        whenever(legacy.gatt.writeCharacteristic(any())).thenReturn(false)
-        assertFalse(connection(legacy.gatt, 32).writeCharacteristic(auth, payload, YpsoRemoteWrite.AUTHENTICATION))
-
-        val modern = authGatt()
-        whenever(modern.gatt.writeCharacteristic(any(), any(), any())).thenReturn(BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY)
-        assertFalse(connection(modern.gatt, 33).writeCharacteristic(auth, payload, YpsoRemoteWrite.AUTHENTICATION))
+    fun `platform refusal of a characteristic write is reported as not sent`() {
+        val fixture = authGatt()
+        whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenReturn(BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY)
+        assertFalse(connection(fixture.gatt).writeCharacteristic(auth, payload, YpsoRemoteWrite.AUTHENTICATION))
     }
 
     @Test
     fun `authorizer sees the write and its refusal keeps every byte away from Android`() {
-        for (sdk in listOf(32, 33)) {
-            for (purpose in YpsoRemoteWrite.entries) {
-                val fixture = authGatt()
-                val authorizer = RecordingAuthorizer(false)
-                val connection = connection(fixture.gatt, sdk, authorizer)
+        for (purpose in YpsoRemoteWrite.entries) {
+            val fixture = authGatt()
+            val authorizer = RecordingAuthorizer(false)
+            val connection = connection(fixture.gatt, authorizer)
 
-                assertFalse(connection.writeCharacteristic(auth, payload, purpose), "API $sdk $purpose")
-                assertFalse(connection.writeDescriptor(auth, cccd, byteArrayOf(1, 0), purpose), "API $sdk $purpose")
+            assertFalse(connection.writeCharacteristic(auth, payload, purpose), "$purpose")
+            assertFalse(connection.writeDescriptor(auth, cccd, byteArrayOf(1, 0), purpose), "$purpose")
 
-                assertEquals(
-                    listOf(
-                        AuthorizerCall(connection, purpose, auth, null, payload.toList()),
-                        AuthorizerCall(connection, purpose, auth, cccd, listOf<Byte>(1, 0)),
-                    ),
-                    authorizer.calls,
-                    "API $sdk $purpose",
-                )
-                authorizer.calls.forEach { assertSame(connection, it.connection) }
-                verify(fixture.gatt, never()).writeCharacteristic(any())
-                verify(fixture.gatt, never()).writeCharacteristic(any(), any(), any())
-                verify(fixture.gatt, never()).writeDescriptor(any())
-                verify(fixture.gatt, never()).writeDescriptor(any(), any())
-                verify(fixture.characteristic, never()).setValue(any<ByteArray>())
-                verify(fixture.descriptor, never()).setValue(any())
-            }
+            assertEquals(
+                listOf(
+                    AuthorizerCall(connection, purpose, auth, null, payload.toList()),
+                    AuthorizerCall(connection, purpose, auth, cccd, listOf<Byte>(1, 0)),
+                ),
+                authorizer.calls,
+                "$purpose",
+            )
+            authorizer.calls.forEach { assertSame(connection, it.connection) }
+            verify(fixture.gatt, never()).writeCharacteristic(any())
+            verify(fixture.gatt, never()).writeCharacteristic(any(), any(), any())
+            verify(fixture.gatt, never()).writeDescriptor(any())
+            verify(fixture.gatt, never()).writeDescriptor(any(), any())
+            verify(fixture.characteristic, never()).setValue(any<ByteArray>())
+            verify(fixture.descriptor, never()).setValue(any())
         }
     }
 
     @Test
-    fun `admitted descriptor write reaches Android through the call matching the SDK`() {
+    fun `admitted descriptor write reaches Android through the API 33 call`() {
         val enable = byteArrayOf(1, 0)
+        val fixture = authGatt()
+        val authorizer = RecordingAuthorizer(true)
+        whenever(fixture.gatt.writeDescriptor(any(), any())).thenReturn(BluetoothStatusCodes.SUCCESS)
 
-        val legacy = authGatt()
-        whenever(legacy.descriptor.setValue(any())).thenReturn(true)
-        whenever(legacy.gatt.writeDescriptor(legacy.descriptor)).thenReturn(true)
-        val legacyAuthorizer = RecordingAuthorizer(true)
-        assertTrue(connection(legacy.gatt, 32, legacyAuthorizer).writeDescriptor(auth, cccd, enable, YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR))
-        verify(legacy.descriptor).setValue(enable)
-        verify(legacy.gatt).writeDescriptor(legacy.descriptor)
-        verify(legacy.gatt, never()).writeDescriptor(any(), any())
-        assertEquals(listOf(YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR to cccd), legacyAuthorizer.calls.map { it.purpose to it.descriptor })
+        assertTrue(connection(fixture.gatt, authorizer).writeDescriptor(auth, cccd, enable, YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR))
 
-        val modern = authGatt()
-        whenever(modern.gatt.writeDescriptor(any(), any())).thenReturn(BluetoothStatusCodes.SUCCESS)
-        assertTrue(connection(modern.gatt, 33).writeDescriptor(auth, cccd, enable, YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR))
-        verify(modern.gatt).writeDescriptor(same(modern.descriptor), eq(enable))
-        verify(modern.gatt, never()).writeDescriptor(any())
-        verify(modern.descriptor, never()).setValue(any())
+        verify(fixture.gatt).writeDescriptor(same(fixture.descriptor), eq(enable))
+        verify(fixture.gatt, never()).writeDescriptor(any())
+        verify(fixture.descriptor, never()).setValue(any())
+        assertEquals(listOf(YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR to cccd), authorizer.calls.map { it.purpose to it.descriptor })
+    }
+
+    @Test
+    fun `platform refusal of a descriptor write is reported as not sent`() {
+        val fixture = authGatt()
+        whenever(fixture.gatt.writeDescriptor(any(), any())).thenReturn(BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY)
+        assertFalse(connection(fixture.gatt).writeDescriptor(auth, cccd, byteArrayOf(1, 0), YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR))
+    }
+
+    @Test
+    fun `characteristic dispatch sends the private bytes authorized before caller mutation`() {
+        val fixture = authGatt()
+        val source = byteArrayOf(4, 5, 6)
+        lateinit var authorized: ByteArray
+        val authorizer = YpsoWriteAuthorizer { _, _, _, _, bytes ->
+            assertNotSame(source, bytes)
+            assertEquals(listOf<Byte>(4, 5, 6), bytes.toList())
+            authorized = bytes
+            source.fill(9)
+            true
+        }
+        whenever(fixture.gatt.writeCharacteristic(any(), any(), any())).thenAnswer {
+            val delivered = it.getArgument<ByteArray>(1)
+            assertSame(authorized, delivered)
+            assertEquals(listOf<Byte>(4, 5, 6), delivered.toList())
+            BluetoothStatusCodes.SUCCESS
+        }
+
+        assertTrue(connection(fixture.gatt, authorizer).writeCharacteristic(auth, source, YpsoRemoteWrite.AUTHENTICATION))
+        verify(fixture.gatt).writeCharacteristic(same(fixture.characteristic), same(authorized), eq(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+    }
+
+    @Test
+    fun `descriptor dispatch sends the private bytes authorized before caller mutation`() {
+        val fixture = authGatt()
+        val source = byteArrayOf(1, 0)
+        lateinit var authorized: ByteArray
+        val authorizer = YpsoWriteAuthorizer { _, _, _, _, bytes ->
+            assertNotSame(source, bytes)
+            assertEquals(listOf<Byte>(1, 0), bytes.toList())
+            authorized = bytes
+            source.fill(9)
+            true
+        }
+        whenever(fixture.gatt.writeDescriptor(any(), any())).thenAnswer {
+            val delivered = it.getArgument<ByteArray>(1)
+            assertSame(authorized, delivered)
+            assertEquals(listOf<Byte>(1, 0), delivered.toList())
+            BluetoothStatusCodes.SUCCESS
+        }
+
+        assertTrue(connection(fixture.gatt, authorizer).writeDescriptor(auth, cccd, source, YpsoRemoteWrite.CONTROL_NOTIFICATION_DESCRIPTOR))
+        verify(fixture.gatt).writeDescriptor(same(fixture.descriptor), same(authorized))
     }
 
     @Test
@@ -217,7 +249,7 @@ class YpsoAndroidGattTest {
         whenever(gatt.getService(YpsoGattLayout.SERVICE_CONTROL)).thenReturn(control)
         whenever(gatt.getService(YpsoGattLayout.SERVICE_EXTREAD)).thenReturn(extRead)
         whenever(gatt.services).thenReturn(listOf(other, control, extRead))
-        val connection = connection(gatt, 33)
+        val connection = connection(gatt)
 
         for (uuid in decoy.keys) {
             assertNull(connection.properties(uuid), "$uuid")
@@ -244,7 +276,7 @@ class YpsoAndroidGattTest {
     fun `only connected and disconnected states are forwarded and each names this connection`() {
         val gatt: BluetoothGatt = mock()
         val events = RecordingEvents()
-        val connection = connection(gatt, 33, events = events)
+        val connection = connection(gatt, events = events)
 
         connection.callback.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTING)
         connection.callback.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTED)
@@ -256,34 +288,28 @@ class YpsoAndroidGattTest {
     }
 
     @Test
-    fun `read callbacks forward a copy of the bytes on both overloads`() {
+    fun `API 33 read callback forwards a copy of the bytes and the platform status`() {
         val gatt: BluetoothGatt = mock()
         val characteristic: BluetoothGattCharacteristic = mock()
         whenever(characteristic.uuid).thenReturn(YpsoGattLayout.CHAR_STATUS)
         val events = RecordingEvents()
-        val connection = connection(gatt, 33, events = events)
+        val connection = connection(gatt, events = events)
 
         val platform = byteArrayOf(1, 2, 3)
         connection.callback.onCharacteristicRead(gatt, characteristic, platform, BluetoothGatt.GATT_SUCCESS)
         platform.fill(9)
-        val legacy = byteArrayOf(4, 5)
-        whenever(characteristic.value).thenReturn(legacy)
-        connection.callback.onCharacteristicRead(gatt, characteristic, 5)
-        legacy.fill(9)
-        whenever(characteristic.value).thenReturn(null)
-        connection.callback.onCharacteristicRead(gatt, characteristic, BluetoothGatt.GATT_FAILURE)
+        connection.callback.onCharacteristicRead(gatt, characteristic, byteArrayOf(), BluetoothGatt.GATT_FAILURE)
 
-        assertEquals(3, events.events.size)
-        val (modern, old, missing) = events.events
-        assertSame(connection, modern[1])
-        assertSame(connection, old[1])
-        assertEquals(YpsoGattLayout.CHAR_STATUS, modern[2])
-        assertEquals(listOf<Byte>(1, 2, 3), (modern[3] as ByteArray).toList())
-        assertEquals(0, modern[5])
-        assertEquals(listOf<Byte>(4, 5), (old[3] as ByteArray).toList())
-        assertEquals(5, old[5])
-        assertNull(missing[3])
-        assertEquals(BluetoothGatt.GATT_FAILURE, missing[5])
+        assertEquals(2, events.events.size)
+        val (read, failed) = events.events
+        assertSame(connection, read[1])
+        assertEquals(YpsoGattLayout.CHAR_STATUS, read[2])
+        assertEquals(listOf<Byte>(1, 2, 3), (read[3] as ByteArray).toList())
+        assertEquals(BluetoothGatt.GATT_SUCCESS, read[5])
+        assertSame(connection, failed[1])
+        assertEquals(YpsoGattLayout.CHAR_STATUS, failed[2])
+        assertEquals(emptyList<Byte>(), (failed[3] as ByteArray).toList())
+        assertEquals(BluetoothGatt.GATT_FAILURE, failed[5])
     }
 
     @Test
@@ -291,7 +317,7 @@ class YpsoAndroidGattTest {
         val gatt: BluetoothGatt = mock()
         val fixture = authGatt()
         val events = RecordingEvents()
-        val connection = connection(gatt, 33, events = events)
+        val connection = connection(gatt, events = events)
 
         connection.callback.onServicesDiscovered(gatt, 129)
         connection.callback.onCharacteristicWrite(gatt, fixture.characteristic, 3)
@@ -335,7 +361,7 @@ class YpsoAndroidGattTest {
     fun `missing Bluetooth bond or permission refuses the pump before any connection`() {
         val mac = "EC:2A:F0:00:00:01"
         fun refusal(platform: Platform): Throwable {
-            val thrown = assertThrows(Exception::class.java) { YpsoAndroidGattAdapter(platform.context, 33).bondedPump(mac, "10000001") }
+            val thrown = assertThrows(Exception::class.java) { YpsoAndroidGattAdapter(platform.context).bondedPump(mac, "10000001") }
             verify(platform.device, never()).connectGatt(any(), any(), any(), any())
             return thrown
         }
@@ -360,18 +386,18 @@ class YpsoAndroidGattTest {
     fun `bonded name confirms or contradicts the configured serial and unknown aliases defer`() {
         val mac = "EC:2A:F0:00:00:01"
         val other = platform(name = "mylife YpsoPump 000002")
-        val mismatch = assertThrows(YpsoBondException::class.java) { YpsoAndroidGattAdapter(other.context, 33).bondedPump(mac, "10000001") }
+        val mismatch = assertThrows(YpsoBondException::class.java) { YpsoAndroidGattAdapter(other.context).bondedPump(mac, "10000001") }
         assertTrue(mismatch.identityMismatch)
         verify(other.device, never()).connectGatt(any(), any(), any(), any())
 
         for (name in listOf("mylife YpsoPump 000001", "YpsoPump_10000001")) {
-            assertEquals("10000001", YpsoAndroidGattAdapter(platform(name = name).context, 33).bondedPump(mac, "10000001").observedSerial, name)
+            assertEquals("10000001", YpsoAndroidGattAdapter(platform(name = name).context).bondedPump(mac, "10000001").observedSerial, name)
         }
         for (name in listOf("Kitchen pump", null)) {
-            assertNull(YpsoAndroidGattAdapter(platform(name = name).context, 33).bondedPump(mac, "10000001").observedSerial, "$name")
+            assertNull(YpsoAndroidGattAdapter(platform(name = name).context).bondedPump(mac, "10000001").observedSerial, "$name")
         }
         // Without a configured serial a recognized name confirms nothing.
-        assertNull(YpsoAndroidGattAdapter(platform().context, 33).bondedPump(mac, null).observedSerial)
+        assertNull(YpsoAndroidGattAdapter(platform().context).bondedPump(mac, null).observedSerial)
     }
 
     @Test
@@ -379,14 +405,14 @@ class YpsoAndroidGattTest {
         val mac = "EC:2A:F0:00:00:01"
         val refused = platform()
         whenever(refused.device.connectGatt(any(), any(), any(), any())).thenReturn(null)
-        assertNull(YpsoAndroidGattAdapter(refused.context, 33).bondedPump(mac, "10000001").connect(RecordingEvents(), RecordingAuthorizer(true)))
+        assertNull(YpsoAndroidGattAdapter(refused.context).bondedPump(mac, "10000001").connect(RecordingEvents(), RecordingAuthorizer(true)))
 
         val accepted = platform()
         val gatt: BluetoothGatt = mock()
         whenever(gatt.discoverServices()).thenReturn(true)
         whenever(accepted.device.connectGatt(any(), any(), any(), any())).thenReturn(gatt)
         val events = RecordingEvents()
-        val connection = YpsoAndroidGattAdapter(accepted.context, 33).bondedPump(mac, "10000001").connect(events, RecordingAuthorizer(true))
+        val connection = YpsoAndroidGattAdapter(accepted.context).bondedPump(mac, "10000001").connect(events, RecordingAuthorizer(true))
 
         assertNotNull(connection)
         connection as YpsoAndroidGattConnection
