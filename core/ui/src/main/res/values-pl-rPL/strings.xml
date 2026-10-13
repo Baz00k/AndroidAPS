@@ -50,7 +50,7 @@
     <string name="paused">Wstrzymano</string>
     <string name="tdd_total">TDD Całkowita</string>
     <string name="tdd_old_data">Stare dane</string>
-    <string name="goingtodeliver">Zamierzam podać %1$.2f U</string>
+    <string name="goingtodeliver">Zamierzam podać %1$s U</string>
     <string name="waitingforpump">Czekam na pompę</string>
     <string name="androidaps_start">AAPS uruchomiony</string>
     <string name="formatsignedinsulinunits">%1$+.2f U</string>
@@ -435,9 +435,9 @@
     <string name="value_out_of_hard_limits">Wartość »%1$s« %2$.2f jest poza dopuszczalną granicą</string>
     <string name="basal_value">Wartość bazy</string>
     <!-- Command Queue + readStatus reasons -->
-    <string name="bolus_u_min">BOLUS %1$.2f U</string>
+    <string name="bolus_u_min">BOLUS %1$s U</string>
     <string name="carbs_g">WĘGLOW. %1$d g</string>
-    <string name="extended_bolus_u_min">BOLUS PRZEDŁ. %1$.2f U %2$d min</string>
+    <string name="extended_bolus_u_min">BOLUS PRZEDŁ. %1$s U %2$d min</string>
     <string name="load_events">WCZYTYWANIE ZDARZEŃ</string>
     <string name="clear_alarms">WYCZYŚĆ ALARMY</string>
     <string name="deactivate">DEAKTYWUJ</string>
@@ -446,7 +446,7 @@
     <string name="load_tdds">WCZYTYWANIE DDI</string>
     <string name="set_profile">USTAW PROFIL</string>
     <string name="set_user_settings">WPROWADŹ USTAWIENIA UŻYTKOWNIKA</string>
-    <string name="smb_bolus_u">BOLUS SMB %1$.2f U</string>
+    <string name="smb_bolus_u">BOLUS SMB %1$s U</string>
     <string name="start_pump">START POMPY</string>
     <string name="stop_pump">STOP POMPY</string>
     <string name="temp_basal_absolute">BAZA TYMCZ. %1$.2f U/h %2$d min</string>
@@ -643,6 +643,7 @@
     <!--    DecimalFormatterImpl -->
     <string name="format_insulin_units1">%1$.1f U</string>
     <string name="format_insulin_units">%1$.2f U</string>
+    <string name="format_insulin_units_label">%1$s U</string>
     <string name="percent_rate_duration">Dawka: %1$.2f%% (%2$.2f U/h) Czas: %3$d min</string>
     <string name="rate_percent_duration">Dawka: %1$.2f U/h (%2$.2f%%) Czas: %3$d min</string>
     <string name="percent_rate_duration_formatted"><![CDATA[<b>Dawka</b>: %1$.2f%% (%2$.2f U/h)<br><b>Czas</b>: %3$d min<br>]]></string>

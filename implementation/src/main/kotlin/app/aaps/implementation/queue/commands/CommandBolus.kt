@@ -12,6 +12,7 @@ import app.aaps.core.interfaces.queue.CommandAction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDismissBolusProgressIfRunning
+import app.aaps.core.interfaces.utils.formatBolus
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
 import javax.inject.Provider
@@ -49,12 +50,12 @@ class CommandBolus(
     }
 
     override fun status(): String {
-        return (if (detailedBolusInfo.insulin > 0) rh.gs(app.aaps.core.ui.R.string.bolus_u_min, detailedBolusInfo.insulin) else "") +
+        return (if (detailedBolusInfo.insulin > 0) rh.gs(app.aaps.core.ui.R.string.bolus_u_min, formatBolus(detailedBolusInfo.insulin)) else "") +
             if (detailedBolusInfo.carbs > 0) rh.gs(app.aaps.core.ui.R.string.carbs_g, detailedBolusInfo.carbs.toInt()) else ""
     }
 
     override fun log(): String {
-        return (if (detailedBolusInfo.insulin > 0) "BOLUS " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, detailedBolusInfo.insulin) else "") +
+        return (if (detailedBolusInfo.insulin > 0) "BOLUS " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label, formatBolus(detailedBolusInfo.insulin)) else "") +
             if (detailedBolusInfo.carbs > 0) "CARBS " + rh.gs(app.aaps.core.objects.R.string.format_carbs, detailedBolusInfo.carbs.toInt()) else ""
     }
 

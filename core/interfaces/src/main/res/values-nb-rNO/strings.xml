@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--    Events-->
-    <string name="bolus_delivering">Leverer %1$.2f E</string>
-    <string name="bolus_delivered_so_far">%1$.2f E / %2$.2f E levert</string>
-    <string name="bolus_delivered_successfully">Bolus på %1$.2f E ble levert</string>
+    <string name="bolus_delivering">Leverer %1$s E</string>
+    <string name="bolus_delivered_so_far">%1$s E / %2$s E levert</string>
+    <string name="bolus_delivered_successfully">Bolus på %1$s E ble levert</string>
     <!-- PumpPluginBase -->
     <string name="pump_driver_changed" comment="26 characters max for translation">Pumpedriver er endret.</string>
     <!--    DateUtil-->

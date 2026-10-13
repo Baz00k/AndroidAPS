@@ -30,6 +30,7 @@ import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.interfaces.utils.formatBolus
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.medtrum.MedtrumPlugin
@@ -261,9 +262,9 @@ class MedtrumService : DaggerService(), BLECommCallback {
                 detailedBolusInfoStorage.add(detailedBolusInfo) // Reinsert
             }
             if (detailedBolusInfo?.bolusType == BS.Type.SMB) {
-                rxBus.send(EventPumpStatusChanged(rh.gs(app.aaps.core.ui.R.string.smb_bolus_u, detailedBolusInfo.insulin)))
+                rxBus.send(EventPumpStatusChanged(rh.gs(app.aaps.core.ui.R.string.smb_bolus_u, formatBolus(detailedBolusInfo.insulin))))
             } else {
-                rxBus.send(EventPumpStatusChanged(rh.gs(app.aaps.core.ui.R.string.bolus_u_min, detailedBolusInfo?.insulin ?: 0.0)))
+                rxBus.send(EventPumpStatusChanged(rh.gs(app.aaps.core.ui.R.string.bolus_u_min, formatBolus(detailedBolusInfo?.insulin ?: 0.0))))
             }
             waitForBolusProgress()
         }

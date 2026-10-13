@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--    Events-->
-    <string name="bolus_delivering">Dostarczam %1$.2fU</string>
-    <string name="bolus_delivered_successfully">Bolus %1$.2fU dostarczony prawidłowo</string>
+    <string name="bolus_delivering">Dostarczam %1$sU</string>
+    <string name="bolus_delivered_successfully">Bolus %1$sU dostarczony prawidłowo</string>
     <!-- PumpPluginBase -->
     <string name="pump_driver_changed" comment="26 characters max for translation">Zmieniono ster. pompy.</string>
     <!--    DateUtil-->

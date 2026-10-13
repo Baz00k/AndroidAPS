@@ -58,6 +58,7 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.workflow.CalculationWorkflow
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
+import app.aaps.core.interfaces.utils.formatBolus
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.BooleanNonKey
@@ -868,7 +869,7 @@ class OverviewFragment : DaggerFragment() {
             now = now,
             limit = 10,
             timeString = dateUtil::timeString,
-            unitsString = { rh.gs(app.aaps.core.ui.R.string.format_insulin_units, it) }
+            unitsString = { rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label, formatBolus(it)) }
         )
         // Recent carb entries for the COB-tap undo sheet (last 6h, newest first). Off the UI thread here.
         recentCarbs = persistenceLayer.getCarbsFromTimeNotExpanded(dateUtil.now() - 6 * 60 * 60 * 1000L, false)

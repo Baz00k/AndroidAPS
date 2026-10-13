@@ -221,7 +221,8 @@ class CommandQueueImplementationTest : TestBaseWithProfile() {
         whenever(constraintChecker.applyBasalPercentConstraints(anyOrNull(), anyOrNull())).thenReturn(percentageConstraint)
         whenever(rh.gs(app.aaps.core.ui.R.string.connectiontimedout)).thenReturn("Connection timed out")
         whenever(rh.gs(app.aaps.core.ui.R.string.format_insulin_units)).thenReturn("%1\$.2f U")
-        whenever(rh.gs(app.aaps.core.ui.R.string.goingtodeliver)).thenReturn("Going to deliver %1\$.2f U")
+        whenever(rh.gs(app.aaps.core.ui.R.string.format_insulin_units_label)).thenReturn("%1\$s U")
+        whenever(rh.gs(app.aaps.core.ui.R.string.goingtodeliver)).thenReturn("Going to deliver %1\$s U")
         whenever(workManager.getWorkInfosForUniqueWork(anyOrNull())).thenReturn(infos)
         doAnswer { invocation: InvocationOnMock ->
             Thread {

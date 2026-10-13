@@ -9,6 +9,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
+import app.aaps.core.interfaces.utils.formatBolus
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.core.objects.extensions.putIfThereIsValue
 import app.aaps.implementation.R
@@ -48,7 +49,7 @@ class PumpStatusProviderImpl @Inject constructor(
                 pump.lastBolusTime?.let { lastBolusTimestamp ->
                     lines += rh.gs(
                         R.string.short_status_last_bolus,
-                        decimalFormatter.to2Decimal(lastBolusAmount),
+                        formatBolus(lastBolusAmount),
                         dateUtil.timeString(lastBolusTimestamp)
                     )
                 }

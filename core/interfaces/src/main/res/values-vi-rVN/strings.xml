@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--    Events-->
-    <string name="bolus_delivering">Đang tiêm %1$.2f U</string>
-    <string name="bolus_delivered_so_far">Đã truyền %1$.2fU trên %2$.2fU</string>
-    <string name="bolus_delivered_successfully">Đã tiêm Bolus thành công %1$.2f U</string>
+    <string name="bolus_delivering">Đang tiêm %1$s U</string>
+    <string name="bolus_delivered_so_far">Đã truyền %1$sU trên %2$sU</string>
+    <string name="bolus_delivered_successfully">Đã tiêm Bolus thành công %1$s U</string>
     <!-- PumpPluginBase -->
     <string name="pump_driver_changed" comment="26 characters max for translation">Thay trình điều khiển Bơm.</string>
     <!--    DateUtil-->

@@ -11,7 +11,7 @@
     <string name="configbuilder_insulin">Insulin</string>
     <string name="pump">Pumpa</string>
     <string name="treatments_iob_label_string">IOB:</string>
-    <string name="goingtodeliver">Isporučujem %1$.2f U</string>
+    <string name="goingtodeliver">Isporučujem %1$s U</string>
     <string name="carbs">Uglj. hidrati</string>
     <string name="basal_label">Basal</string>
     <string name="exit">Izađi</string>

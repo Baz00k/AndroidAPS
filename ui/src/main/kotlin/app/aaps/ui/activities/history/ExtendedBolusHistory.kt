@@ -2,6 +2,7 @@ package app.aaps.ui.activities.history
 
 import app.aaps.core.data.model.EB
 import app.aaps.core.data.ue.ValueWithUnit
+import app.aaps.core.interfaces.utils.formatBolus
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -17,7 +18,7 @@ internal fun EB.toHistoryItem(from: Long, now: Long, dayLabel: String, time: Str
     return HistoryItem(
         id, timestamp, dayLabel, time, HistoryKind.EXTENDED,
         "Extended bolus", sub,
-        BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP).toPlainString() + " U",
+        formatBolus(amount) + " U",
         // Same audit values original AAPS logged when removing an extended bolus.
         auditValues = listOf(
             ValueWithUnit.Timestamp(timestamp),
