@@ -27,6 +27,12 @@ data class HourProfile(
 data class StatsUiState(
     val loading: Boolean = true,
     val rangeDays: Int = 7,
+    val failed: Boolean = false,
+    val insulinLoading: Boolean = false,
+    val insulinFailed: Boolean = false,
+    val insulinDays: Int = 0,
+    val tirReadings: Int = 0,
+    val glucoseReadings: Int = 0,
     // Time-in-range 5-band split (percent of readings)
     val veryLow: Double = 0.0,
     val low: Double = 0.0,
@@ -38,7 +44,7 @@ data class StatsUiState(
     val avgGlucose: String = "--",
     val avgGlucoseUnit: String = "",
     val cv: String = "--",
-    val cvGood: Boolean = true,
+    val cvGood: Boolean = false,
     val avgTdd: String = "--",
     val carbsPerDay: String = "--",
     // Hour-of-day profile. A stacked in-range bar per hour came first and was replaced: "all green"
