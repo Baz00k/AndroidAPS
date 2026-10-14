@@ -195,8 +195,7 @@ internal class YpsoPumpLink(
         val macAddress = configured.mac
         val pump = runCatching { adapter.bondedPump(macAddress, configured.serial) }.getOrElse {
             disconnect()
-            val cause = if ((it as? YpsoBondException)?.identityMismatch == true) PumpSession.AvailabilityCause.IDENTITY_MISMATCH
-            else PumpSession.AvailabilityCause.BOND_OR_PERMISSION
+            val cause = connectionFailureCause(it)
             reportConnectionFailure(configured, setOf(cause), operation = "connect", terminal = cause == PumpSession.AvailabilityCause.IDENTITY_MISMATCH)
             aapsLogger.error(LTag.PUMP, "YpsoPump connection unavailable: ${it.message}")
             return
@@ -228,15 +227,14 @@ internal class YpsoPumpLink(
                 publishConnectionState(ConnectionState.DISCONNECTED)
                 return
             }
-            val opened = runCatching { pump.connect(events, authorizer) }
-                .getOrElse {
-                    aapsLogger.error(LTag.PUMP, "YpsoPump connect failed: ${it.message}")
-                    null
-                }
+            val opening = runCatching { pump.connect(events, authorizer) }
+            val opened = opening.getOrNull()
+            opening.exceptionOrNull()?.let { aapsLogger.error(LTag.PUMP, "YpsoPump connect failed: ${it.message}") }
             if (opened == null) {
                 publishConnectionState(ConnectionState.DISCONNECTED)
                 pumpState.invalidateStatus(preserveDisplay = true)
-                reportConnectionFailure(configured, setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "connect-gatt")
+                val cause = opening.exceptionOrNull()?.let(::connectionFailureCause) ?: PumpSession.AvailabilityCause.TRANSPORT
+                reportConnectionFailure(configured, setOf(cause), operation = "connect-gatt")
             } else if (connectionState != ConnectionState.DISCONNECTED) {
                 connection = opened
                 connectionSequence++

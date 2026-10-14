@@ -15,6 +15,9 @@ internal enum class PumpSetupPresentation(@StringRes val message: Int) {
     DETAILS_NEED_CHECKING(R.string.ypsopump_cause_identity_mismatch),
     KEY_MAY_NEED_UPDATING(R.string.ypsopump_cause_rekey),
     BLUETOOTH_NEEDS_ATTENTION(R.string.ypsopump_cause_bond_permission),
+    BLUETOOTH_OFF(R.string.ypsopump_cause_bluetooth_off),
+    PAIRING_REQUIRED(R.string.ypsopump_cause_bond_missing),
+    BLUETOOTH_PERMISSION_REQUIRED(R.string.ypsopump_cause_bluetooth_permission),
     CONNECTION_FAILED(R.string.ypsopump_cause_transport),
     AUTHENTICATION_RETRY_REQUIRED(R.string.ypsopump_cause_authentication),
     STATUS_NEEDS_CHECKING(R.string.ypsopump_cause_encrypted_status),
@@ -31,6 +34,9 @@ internal fun pumpSetupPresentation(
     !hasSavedDetails || PumpSession.AvailabilityCause.UNCONFIGURED in causes -> PumpSetupPresentation.SETUP_REQUIRED
     PumpSession.AvailabilityCause.IDENTITY_MISMATCH in causes -> PumpSetupPresentation.DETAILS_NEED_CHECKING
     PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in causes -> PumpSetupPresentation.KEY_MAY_NEED_UPDATING
+    PumpSession.AvailabilityCause.BLUETOOTH_PERMISSION_MISSING in causes -> PumpSetupPresentation.BLUETOOTH_PERMISSION_REQUIRED
+    PumpSession.AvailabilityCause.BLUETOOTH_OFF in causes -> PumpSetupPresentation.BLUETOOTH_OFF
+    PumpSession.AvailabilityCause.BOND_MISSING in causes -> PumpSetupPresentation.PAIRING_REQUIRED
     PumpSession.AvailabilityCause.BOND_OR_PERMISSION in causes -> PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION
     PumpSession.AvailabilityCause.AUTHENTICATION in causes -> PumpSetupPresentation.AUTHENTICATION_RETRY_REQUIRED
     PumpSession.AvailabilityCause.KEY_REJECTED in causes -> PumpSetupPresentation.KEY_MAY_NEED_UPDATING

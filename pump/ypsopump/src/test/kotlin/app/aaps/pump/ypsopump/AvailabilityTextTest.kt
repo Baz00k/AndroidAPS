@@ -26,6 +26,32 @@ import org.mockito.kotlin.whenever
 class AvailabilityTextTest {
 
     @Test
+    fun `pump tab and setup distinguish pairing Bluetooth off and permission guidance`() {
+        val state = YpsoPumpState().apply {
+            claimedSerialNumber = "10000001"
+            serialNumber = "10000001"
+            testConnectionState = ConnectionState.DISCONNECTED
+        }
+        val resources = resources(
+            R.string.ypsopump_cause_bond_missing to "Pair the pump in Android Bluetooth settings.",
+            R.string.ypsopump_cause_bluetooth_off to "Turn Bluetooth on.",
+            R.string.ypsopump_cause_bluetooth_permission to "Allow Nearby devices.",
+        )
+        for ((cause, message) in listOf(
+            AvailabilityCause.BOND_MISSING to R.string.ypsopump_cause_bond_missing,
+            AvailabilityCause.BLUETOOTH_OFF to R.string.ypsopump_cause_bluetooth_off,
+            AvailabilityCause.BLUETOOTH_PERMISSION_MISSING to R.string.ypsopump_cause_bluetooth_permission,
+        )) {
+            state.availability = PumpSession.Availability(setOf(cause))
+            val status = buildPumpStatusState(state, idleCommandQueue(), mock(), resources)
+            assertThat(status.connectionAction).isEqualTo(resources.gs(message))
+            assertThat(status.connectionHealthy).isFalse()
+            val presentation = pumpSetupPresentation(setOf(cause), hasSavedDetails = true, verified = true)
+            assertThat(provisioningFeedback(VerificationPresentation.CHECKING, presentation).message).isEqualTo(message)
+        }
+    }
+
+    @Test
     fun `reconnect after status expiry displays last readings instead of no readings yet`() {
         var elapsed = 1_000L
         val state = YpsoPumpState().apply {

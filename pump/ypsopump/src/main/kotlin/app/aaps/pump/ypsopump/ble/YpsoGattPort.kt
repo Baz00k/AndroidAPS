@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump.ble
 
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import java.util.UUID
 
 /**
@@ -63,7 +64,14 @@ internal interface YpsoGattAdapter {
     }
 }
 
-internal class YpsoBondException(val identityMismatch: Boolean, message: String) : IllegalStateException(message)
+internal class YpsoBondException(val availabilityCause: PumpSession.AvailabilityCause, message: String) : IllegalStateException(message)
+
+/** Do not infer a Bluetooth or pairing problem from an unrelated platform failure. */
+internal fun connectionFailureCause(error: Throwable): PumpSession.AvailabilityCause = when (error) {
+    is YpsoBondException -> error.availabilityCause
+    is SecurityException -> PumpSession.AvailabilityCause.BLUETOOTH_PERMISSION_MISSING
+    else -> PumpSession.AvailabilityCause.TRANSPORT
+}
 
 /** Pump GATT layout used by the driver. Selector and therapy destinations are in [YpsoWritePolicy]. */
 internal object YpsoGattLayout {

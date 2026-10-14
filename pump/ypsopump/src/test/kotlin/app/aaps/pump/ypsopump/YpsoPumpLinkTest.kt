@@ -199,7 +199,7 @@ class YpsoPumpLinkTest {
 
     @Test
     fun `a bonded pump named for another serial fails its attempt and is never connected`() {
-        fixture.pump.bondFailure = YpsoBondException(true, "Bonded pump name does not match configured serial")
+        fixture.pump.bondFailure = YpsoBondException(PumpSession.AvailabilityCause.IDENTITY_MISMATCH, "Bonded pump name does not match configured serial")
         pumpState.publishStatus(41.0, 80, false, 100, 5000)
 
         fixture.manager.connectConfiguredSession()
@@ -214,20 +214,44 @@ class YpsoPumpLinkTest {
     }
 
     @Test
-    fun `missing bond Bluetooth or permission refuse connection and invalidate measurements`() {
-        for (failure in listOf(YpsoBondException(false, "existing Bluetooth bond required"), SecurityException("permission missing"))) {
-            fixture.pump.bondFailure = failure as? YpsoBondException
-            if (failure is SecurityException) fixture.pump.configure = { throw failure }
-            pumpState.publishStatus(41.0, 80, false, 100, 5000)
+    fun `missing bond Bluetooth off permission and unknown failures stay distinct and invalidate measurements`() {
+        for ((failure, cause) in listOf(
+            YpsoBondException(PumpSession.AvailabilityCause.BOND_MISSING, "existing Bluetooth bond required") to PumpSession.AvailabilityCause.BOND_MISSING,
+            YpsoBondException(PumpSession.AvailabilityCause.BLUETOOTH_OFF, "Bluetooth is off") to PumpSession.AvailabilityCause.BLUETOOTH_OFF,
+            SecurityException("permission missing") to PumpSession.AvailabilityCause.BLUETOOTH_PERMISSION_MISSING,
+            IllegalArgumentException("platform failure") to PumpSession.AvailabilityCause.TRANSPORT,
+        )) {
+            val fixture = YpsoPumpFixture()
+            fixture.pump.bondFailure = failure
+            fixture.pumpState.publishStatus(41.0, 80, false, 100, 5000)
 
             fixture.manager.connectConfiguredSession()
 
-            assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
-            assertNull(pumpState.statusSnapshot)
+            assertEquals(ConnectionState.DISCONNECTED, fixture.pumpState.connectionState)
+            assertNull(fixture.pumpState.statusSnapshot)
+            assertNull(fixture.link.epoch())
+            assertTrue(fixture.pump.connections.isEmpty())
+            verify(fixture.provisioning).recordCandidateOrUnavailable(
+                eq(fixture.generation), isNull(), eq(setOf(cause)),
+                eq("connect"), any(), anyOrNull(), isNull()
+            )
+            verify(fixture.provisioning, never()).failCandidateOrRecord(anyOrNull(), anyOrNull(), any(), any(), any(), anyOrNull(), anyOrNull())
         }
+    }
+
+    @Test
+    fun `permission revoked when opening GATT retains permission guidance`() {
+        fixture.pump.configure = { throw SecurityException("permission revoked after bond check") }
+        pumpState.publishStatus(41.0, 80, false, 100, 5000)
+
+        fixture.manager.connectConfiguredSession()
+
+        assertEquals(ConnectionState.DISCONNECTED, pumpState.connectionState)
+        assertNull(pumpState.statusSnapshot)
+        assertNull(link.epoch())
         verify(provisioning).recordCandidateOrUnavailable(
-            eq(fixture.generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.BOND_OR_PERMISSION)),
-            eq("connect"), any(), anyOrNull(), isNull()
+            eq(fixture.generation), isNull(), eq(setOf(PumpSession.AvailabilityCause.BLUETOOTH_PERMISSION_MISSING)),
+            eq("connect-gatt"), any(), anyOrNull(), isNull()
         )
     }
 

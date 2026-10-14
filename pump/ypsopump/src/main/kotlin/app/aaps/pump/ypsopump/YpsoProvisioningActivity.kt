@@ -145,9 +145,22 @@ internal fun provisioningFeedback(
     // Retryable problems keep the check pending, so say what AAPS is waiting for rather than only "checking",
     // and ask for a new attempt when none will happen on its own.
     VerificationPresentation.CHECKING -> when {
-        pendingCheck == PendingCheck.STALLED -> ProvisioningFeedback(R.string.ypsopump_verifying_stalled, ProvisioningFeedbackTone.ERROR)
+        pendingCheck == PendingCheck.STALLED -> ProvisioningFeedback(
+            when (presentation) {
+                PumpSetupPresentation.BLUETOOTH_OFF -> R.string.ypsopump_verifying_stalled_bluetooth_off
+                PumpSetupPresentation.PAIRING_REQUIRED -> R.string.ypsopump_verifying_stalled_pairing
+                PumpSetupPresentation.BLUETOOTH_PERMISSION_REQUIRED -> R.string.ypsopump_verifying_stalled_permission
+                else -> R.string.ypsopump_verifying_stalled
+            },
+            ProvisioningFeedbackTone.ERROR,
+        )
         pendingCheck == PendingCheck.IN_PROGRESS -> ProvisioningFeedback(R.string.ypsopump_verifying, ProvisioningFeedbackTone.NEUTRAL)
-        presentation == PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.NEUTRAL)
+        presentation in setOf(
+            PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION,
+            PumpSetupPresentation.BLUETOOTH_OFF,
+            PumpSetupPresentation.PAIRING_REQUIRED,
+            PumpSetupPresentation.BLUETOOTH_PERMISSION_REQUIRED,
+        ) -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.NEUTRAL)
         presentation == PumpSetupPresentation.CONNECTION_FAILED ||
             presentation == PumpSetupPresentation.AUTHENTICATION_RETRY_REQUIRED ||
             presentation == PumpSetupPresentation.STATUS_NEEDS_CHECKING -> ProvisioningFeedback(R.string.ypsopump_verifying_retry, ProvisioningFeedbackTone.NEUTRAL)
@@ -156,6 +169,10 @@ internal fun provisioningFeedback(
     VerificationPresentation.FAILED -> when (presentation) {
         PumpSetupPresentation.KEY_MAY_NEED_UPDATING -> ProvisioningFeedback(R.string.ypsopump_verification_key_rejected, ProvisioningFeedbackTone.ERROR)
         PumpSetupPresentation.DETAILS_NEED_CHECKING -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.ERROR)
+        PumpSetupPresentation.BLUETOOTH_NEEDS_ATTENTION,
+        PumpSetupPresentation.BLUETOOTH_OFF,
+        PumpSetupPresentation.PAIRING_REQUIRED,
+        PumpSetupPresentation.BLUETOOTH_PERMISSION_REQUIRED -> ProvisioningFeedback(presentation.message, ProvisioningFeedbackTone.ERROR)
         else -> ProvisioningFeedback(R.string.ypsopump_verification_failed_generic, ProvisioningFeedbackTone.ERROR)
     }
     VerificationPresentation.CANCELLED -> ProvisioningFeedback(R.string.ypsopump_verification_cancelled, ProvisioningFeedbackTone.NEUTRAL)

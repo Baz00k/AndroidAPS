@@ -5,7 +5,6 @@ import android.content.Context
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.pump.ypsopump.ble.ConnectionState
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
-import app.aaps.pump.ypsopump.ble.YpsoBondException
 import app.aaps.pump.ypsopump.ble.YpsoGattAdapter
 import app.aaps.pump.ypsopump.ble.YpsoGattConnection
 import app.aaps.pump.ypsopump.ble.YpsoGattEvents
@@ -32,7 +31,7 @@ import java.util.UUID
  * recorded only when the link's authorizer admits them, as on Android.
  */
 internal class FakeYpsoPump : YpsoGattAdapter {
-    var bondFailure: YpsoBondException? = null
+    var bondFailure: RuntimeException? = null
     var observedSerial: String? = null
     var refuseConnect = false
     var configure: (Connection) -> Unit = {}

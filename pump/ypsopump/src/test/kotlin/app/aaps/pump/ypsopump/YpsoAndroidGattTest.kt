@@ -19,6 +19,7 @@ import app.aaps.pump.ypsopump.ble.YpsoGattLayout
 import app.aaps.pump.ypsopump.ble.YpsoRemoteWrite
 import app.aaps.pump.ypsopump.ble.YpsoWriteAuthorizer
 import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
+import app.aaps.pump.ypsopump.crypto.PumpSession
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -358,7 +359,7 @@ class YpsoAndroidGattTest {
     }
 
     @Test
-    fun `missing Bluetooth bond or permission refuses the pump before any connection`() {
+    fun `Bluetooth off missing bond and unavailable adapter have distinct causes before any connection`() {
         val mac = "EC:2A:F0:00:00:01"
         fun refusal(platform: Platform): Throwable {
             val thrown = assertThrows(Exception::class.java) { YpsoAndroidGattAdapter(platform.context).bondedPump(mac, "10000001") }
@@ -371,13 +372,19 @@ class YpsoAndroidGattTest {
         val off = platform().also { whenever(it.adapter.isEnabled).thenReturn(false) }
         val unbonded = platform().also { whenever(it.device.bondState).thenReturn(BluetoothDevice.BOND_NONE) }
         val bonding = platform().also { whenever(it.device.bondState).thenReturn(BluetoothDevice.BOND_BONDING) }
-        for (platform in listOf(noService, noAdapter, off, unbonded, bonding)) {
+        for ((platform, cause) in listOf(
+            noService to PumpSession.AvailabilityCause.TRANSPORT,
+            noAdapter to PumpSession.AvailabilityCause.TRANSPORT,
+            off to PumpSession.AvailabilityCause.BLUETOOTH_OFF,
+            unbonded to PumpSession.AvailabilityCause.BOND_MISSING,
+            bonding to PumpSession.AvailabilityCause.BOND_MISSING,
+        )) {
             val thrown = refusal(platform)
             assertTrue(thrown is YpsoBondException, "$thrown")
-            assertFalse((thrown as YpsoBondException).identityMismatch)
+            assertEquals(cause, (thrown as YpsoBondException).availabilityCause)
         }
 
-        // The link maps any non-identity failure to BOND_OR_PERMISSION; the adapter lets the platform exception through.
+        // The link classifies the platform permission refusal without bypassing it.
         val denied = platform().also { doThrow(SecurityException("BLUETOOTH_CONNECT")).whenever(it.device).bondState }
         assertTrue(refusal(denied) is SecurityException)
     }
@@ -387,7 +394,7 @@ class YpsoAndroidGattTest {
         val mac = "EC:2A:F0:00:00:01"
         val other = platform(name = "mylife YpsoPump 000002")
         val mismatch = assertThrows(YpsoBondException::class.java) { YpsoAndroidGattAdapter(other.context).bondedPump(mac, "10000001") }
-        assertTrue(mismatch.identityMismatch)
+        assertEquals(PumpSession.AvailabilityCause.IDENTITY_MISMATCH, mismatch.availabilityCause)
         verify(other.device, never()).connectGatt(any(), any(), any(), any())
 
         for (name in listOf("mylife YpsoPump 000001", "YpsoPump_10000001")) {

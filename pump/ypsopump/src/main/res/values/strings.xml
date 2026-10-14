@@ -112,6 +112,9 @@
     <string name="ypsopump_verifying">Checking your pump…</string>
     <string name="ypsopump_verifying_retry">Still checking. AAPS can’t reach the pump yet and will keep trying. Keep it close.</string>
     <string name="ypsopump_verifying_stalled">AAPS won’t retry checking the new key on its own. Keep the pump close, tap Cancel, then enter or import the new key again.</string>
+    <string name="ypsopump_verifying_stalled_bluetooth_off">Turn Bluetooth on. AAPS won’t retry this key check automatically. Tap Cancel, then enter or import the new key again.</string>
+    <string name="ypsopump_verifying_stalled_pairing">Complete the pump’s pairing in Android Bluetooth settings first. AAPS won’t retry this key check automatically. Tap Cancel, then enter or import the new key again.</string>
+    <string name="ypsopump_verifying_stalled_permission">Allow Nearby devices in Android’s AAPS app permissions first. AAPS won’t retry this key check automatically. Tap Cancel, then enter or import the new key again.</string>
     <string name="ypsopump_cancel_verification">Cancel</string>
     <string name="ypsopump_verification_cancelled">Check cancelled.</string>
     <string name="ypsopump_verification_failed_generic">Couldn’t check the pump. Keep it close and try again.</string>
@@ -145,7 +148,10 @@
     <string name="ypsopump_unavailable_notification">YpsoPump: %1$s</string>
     <string name="ypsopump_provisioning_verify_reason">YpsoPump provisioning verification</string>
     <string name="ypsopump_cause_unconfigured">Pump setup isn’t finished.</string>
-    <string name="ypsopump_cause_bond_permission">Turn Bluetooth on.</string>
+    <string name="ypsopump_cause_bond_permission">Check Bluetooth, the pump’s pairing and AAPS Bluetooth permissions in Android settings.</string>
+    <string name="ypsopump_cause_bluetooth_off">Turn Bluetooth on.</string>
+    <string name="ypsopump_cause_bond_missing">The pump’s Bluetooth pairing is missing or incomplete. Pair this phone with the pump in Android Bluetooth settings. This is separate from the AAPS session key.</string>
+    <string name="ypsopump_cause_bluetooth_permission">Allow AAPS to access Nearby devices in Android app permissions, then try again.</string>
     <string name="ypsopump_cause_transport">Can’t reach the pump. Keep it close.</string>
     <string name="ypsopump_cause_authentication">The Bluetooth connection could not be authenticated. Keep the pump nearby and try again.</string>
     <string name="ypsopump_cause_encrypted_status">Can’t read the pump right now.</string>
