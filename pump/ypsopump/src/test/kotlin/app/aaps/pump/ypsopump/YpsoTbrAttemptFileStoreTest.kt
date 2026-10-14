@@ -16,7 +16,7 @@ class YpsoTbrAttemptFileStoreTest {
     @Test
     fun `every field survives a round trip`() {
         val attempt = YpsoTbrAttempt(
-            id = "a", kind = YpsoTbrAttempt.Kind.START, pumpSerial = "10054912", percent = 150, durationMinutes = 30,
+            id = "a", kind = YpsoTbrAttempt.Kind.START, pumpSerial = "10123456", percent = 150, durationMinutes = 30,
             type = "NORMAL", temporaryId = 42L, baselinePumpId = 48_222L, createdAt = 1L, state = YpsoTbrAttempt.State.EFFECTIVE,
             dispatchedAt = 2L, effectiveAt = 3L, effectiveBy = 4L, accounted = true, stoppedAt = 6L, rowPumpId = 48_224L, unmatchedRowPumpId = 48_230L,
             pumpId = 48_224L, detail = "d",
@@ -50,7 +50,7 @@ class YpsoTbrAttemptFileStoreTest {
     @Test
     fun `a version 3 journal is read in place with an unknown row identity`() {
         val attempt = YpsoTbrAttempt(
-            id = "a", kind = YpsoTbrAttempt.Kind.START, pumpSerial = "10054912", percent = 150, durationMinutes = 30,
+            id = "a", kind = YpsoTbrAttempt.Kind.START, pumpSerial = "10123456", percent = 150, durationMinutes = 30,
             type = "NORMAL", temporaryId = 42L, baselinePumpId = 48_222L, createdAt = 1L,
         )
         YpsoTbrAttemptFileStore(file).commitAll(listOf(attempt))

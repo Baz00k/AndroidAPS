@@ -688,12 +688,12 @@ class YpsoPumpPluginTest {
             on { getTemporaryBasalsActiveBetweenTimeAndTime(any(), any()) } doAnswer { stored.toList() }
         }
         plugin.persistenceLayer = persistence
-        state.serialNumber = "10054912"
+        state.serialNumber = "10123456"
         whenever(sync.addTemporaryBasalWithTempId(any(), any(), any(), any(), any(), any(), any(), any())).thenAnswer {
             stored += app.aaps.core.data.model.TB(
                 timestamp = it.getArgument(0), rate = 0.0, duration = it.getArgument(2), isAbsolute = true,
                 type = app.aaps.core.data.model.TB.Type.PUMP_SUSPEND,
-                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = it.getArgument(4)),
+                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10123456", temporaryId = it.getArgument(4)),
             ).apply { id = 1L }
             true
         }
@@ -704,7 +704,7 @@ class YpsoPumpPluginTest {
         records.reconcileWith(app.aaps.pump.ypsopump.tbr.YpsoTbrObservation(false, 100, 0, 65_000L))
 
         verify(sync).addTemporaryBasalWithTempId(
-            eq(5_000L), eq(0.0), any(), eq(true), any(), eq(PumpSync.TemporaryBasalType.PUMP_SUSPEND), any(), eq("10054912"),
+            eq(5_000L), eq(0.0), any(), eq(true), any(), eq(PumpSync.TemporaryBasalType.PUMP_SUSPEND), any(), eq("10123456"),
         )
         assertEquals(1, stored.size)
     }
@@ -719,11 +719,11 @@ class YpsoPumpPluginTest {
             }
         }
         plugin.persistenceLayer = persistence
-        state.serialNumber = "10054912"
+        state.serialNumber = "10123456"
         stored += app.aaps.core.data.model.TB(
             timestamp = 1_000L, rate = 0.0, duration = 30 * 60_000L, isAbsolute = false,
             type = app.aaps.core.data.model.TB.Type.NORMAL,
-            ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = 9L),
+            ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10123456", temporaryId = 9L),
         ).apply { id = 2L }
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
             val index = stored.indexOfFirst { tb -> tb.ids.temporaryId == it.getArgument<Long>(4) }
@@ -734,7 +734,7 @@ class YpsoPumpPluginTest {
             stored += app.aaps.core.data.model.TB(
                 timestamp = it.getArgument(0), rate = 0.0, duration = it.getArgument(2), isAbsolute = true,
                 type = app.aaps.core.data.model.TB.Type.PUMP_SUSPEND,
-                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10054912", temporaryId = it.getArgument(4)),
+                ids = app.aaps.core.data.model.IDs(pumpType = app.aaps.core.data.pump.defs.PumpType.YPSOPUMP, pumpSerial = "10123456", temporaryId = it.getArgument(4)),
             ).apply { id = 3L }
             true
         }
