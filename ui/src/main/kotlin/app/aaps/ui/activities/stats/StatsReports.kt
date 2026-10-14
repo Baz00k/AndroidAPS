@@ -15,11 +15,8 @@ import kotlin.math.sqrt
 internal const val MIN_COVERAGE = 70
 
 private const val SLOT = 300_000L
-private const val VERY_LOW = Constants.STATS_RANGE_VERY_LOW_MMOL * Constants.MMOLL_TO_MGDL
 private const val LOW = Constants.STATS_RANGE_LOW_MMOL * Constants.MMOLL_TO_MGDL
 private const val HIGH = Constants.STATS_RANGE_HIGH_MMOL * Constants.MMOLL_TO_MGDL
-private const val HIGH_NIGHT = Constants.STATS_RANGE_HIGH_NIGHT_MMOL * Constants.MMOLL_TO_MGDL
-private const val VERY_HIGH = Constants.STATS_RANGE_VERY_HIGH_MMOL * Constants.MMOLL_TO_MGDL
 private const val TIGHT_LOW = Constants.STATS_TARGET_LOW_MMOL * Constants.MMOLL_TO_MGDL
 private const val TIGHT_HIGH = Constants.STATS_TARGET_HIGH_MMOL * Constants.MMOLL_TO_MGDL
 
@@ -44,9 +41,9 @@ data class DayGlucose(
 data class CompletedGlucose(
     val readings: Int,
     val coverage: Int,
+    /** Days with at least one reading. */
+    val daysWithData: Int,
     val tight: Double,
-    /** Very low, low, in range, high, very high with the day (06–22 h) or night high limit. */
-    val dexcom: List<Double>,
     /** Below and above the 3.9–10.0 mmol/L consensus range, for the pentagon. */
     val hypo: Double,
     val hyper: Double,
@@ -69,7 +66,6 @@ internal fun summarizeCompletedDays(raw: List<GV>, from: Long, to: Long, low: Do
         days[date] = Day(date)
         date = date.plusDays(1)
     }
-    val bands = IntArray(5)
     var hypo = 0; var hyper = 0; var count = 0
     val buckets = linkedMapOf<Long, DoubleArray>()
     val clock = LocalHour(zone)
@@ -89,13 +85,6 @@ internal fun summarizeCompletedDays(raw: List<GV>, from: Long, to: Long, low: Do
         if (value in TIGHT_LOW..TIGHT_HIGH) day.tight++
         if (value < LOW) hypo++
         if (value > HIGH) hyper++
-        bands[when {
-            value < VERY_LOW -> 0
-            value < LOW -> 1
-            value > VERY_HIGH -> 4
-            value > (if (clock.hour in 6..22) HIGH else HIGH_NIGHT) -> 3
-            else -> 2
-        }]++
         buckets.getOrPut(reading.timestamp / SLOT) { DoubleArray(2) }.let { it[0] += value; it[1]++ }
     }
     val values = buckets.values.map { it[0] / it[1] }
@@ -105,8 +94,8 @@ internal fun summarizeCompletedDays(raw: List<GV>, from: Long, to: Long, low: Do
     return CompletedGlucose(
         readings = count,
         coverage = coverage(values.size, from, to),
+        daysWithData = days.values.count { it.readings > 0 },
         tight = pct(days.values.sumOf { it.tight }, count),
-        dexcom = bands.map { pct(it, count) },
         hypo = pct(hypo, count),
         hyper = pct(hyper, count),
         mean = mean,
@@ -123,10 +112,8 @@ internal fun summarizeCompletedDays(raw: List<GV>, from: Long, to: Long, low: Do
 private fun coverage(slots: Int, from: Long, to: Long): Int =
     if (to <= from) 0 else (slots * 100L / ((to - from) / SLOT).coerceAtLeast(1)).toInt().coerceAtMost(100)
 
-/** Local hour and date of ascending timestamps, without a calendar lookup for every reading. */
+/** Local date of ascending timestamps, without a calendar lookup for every reading. */
 private class LocalHour(private val zone: ZoneId) {
-    var hour = 0
-        private set
     var date: LocalDate = LocalDate.MIN
         private set
     private var start = Long.MAX_VALUE
@@ -135,7 +122,6 @@ private class LocalHour(private val zone: ZoneId) {
     fun at(time: Long) {
         if (time in start until end) return
         val local = Instant.ofEpochMilli(time).atZone(zone).truncatedTo(ChronoUnit.HOURS)
-        hour = local.hour
         date = local.toLocalDate()
         start = local.toInstant().toEpochMilli()
         end = local.plusHours(1).toInstant().toEpochMilli()
@@ -143,9 +129,9 @@ private class LocalHour(private val zone: ZoneId) {
 }
 
 /**
- * Glucose pentagon as in AAPS 4.0, simplified from Vigersky et al. (2018): out of range, CV, below and
+ * Glucose pentagon, simplified from Vigersky et al. (2018) as AAPS 4.0 does: out of range, CV, below and
  * above range as percentages and the mean, each scaled 0.18..1 between a healthy reference and a cap.
- * Unlike 4.0 the ranges are the 3.9–10.0 mmol/L consensus at night too, as in the published pentagon.
+ * Ranges are the 3.9–10.0 mmol/L consensus all day, as in the published pentagon.
  * [ratio] is the pentagon's area over the reference's. It is a comparison, not a validated risk score.
  */
 @Immutable

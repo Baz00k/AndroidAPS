@@ -6,14 +6,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -59,78 +59,32 @@ import kotlin.math.sin
 /** Rows shown before "Show all", so a 90-day range does not bury the sections below it. */
 private const val COLLAPSED_ROWS = 7
 
-/** Time in range by completed day, Dexcom-style variability and the glucose pentagon. */
+/** Time in range for each day, and the glucose pentagon. */
 @Composable
 internal fun CompletedDayReports(state: StatsUiState) {
-    val colors = AapsTheme.colors
     val completed = state.completed ?: return
-    val sparse = completed.coverage < MIN_COVERAGE
-    Text(
-        if (completed.readings == 0) "Reports: no glucose readings in completed days"
-        else "Reports: completed days · ${completed.coverage}% of expected readings" +
-            if (sparse) " — under $MIN_COVERAGE%, read with caution" else "",
-        style = AapsTheme.type.caption, color = if (sparse) colors.high else colors.textSecondary,
-        modifier = Modifier.padding(top = AapsSpacing.sectionGap, bottom = 8.dp)
-    )
     if (completed.readings == 0) return
-    DailyTimeInRange(state, completed)
-    DexcomDetail(state, completed)
+    DailyTimeInRange(completed)
     PentagonCard(state)
 }
 
 @Composable
-private fun DailyTimeInRange(state: StatsUiState, completed: CompletedGlucose) {
-    val colors = AapsTheme.colors
+private fun DailyTimeInRange(completed: CompletedGlucose) {
     var all by rememberSaveable { mutableStateOf(false) }
-    AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+    AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SectionLabel("Time in range by day")
-            Text("In range ${fmt(state.lowMark, state.decimals)}–${fmt(state.highMark, state.decimals)} · tight ${glucoseRange(Constants.STATS_TARGET_LOW_MMOL, Constants.STATS_TARGET_HIGH_MMOL, state)}",
-                 style = AapsTheme.type.caption, color = colors.textSecondary)
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("${completed.tight.roundToInt()}%", style = AapsTheme.type.cardValue, color = colors.textPrimary)
-                Text("in tight range", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 6.dp, bottom = 4.dp))
-            }
             TableRow(listOf("Day", "Low", "In range", "Tight", "High"), header = true)
             val days = if (all) completed.days else completed.days.take(COLLAPSED_ROWS)
             days.forEach { day ->
-                if (day.readings == 0) TableRow(listOf(dayLabel(day.date), "No readings"), note = true)
+                if (day.readings == 0) TableRow(listOf(dayLabel(day.date), "No data"), note = true)
                 else TableRow(listOf(dayLabel(day.date), pct(day.low), pct(day.inRange), pct(day.tight), pct(day.high)),
-                              flag = if (day.coverage < MIN_COVERAGE) "${day.coverage}% of readings" else null)
+                              flag = if (day.coverage < MIN_COVERAGE) "Only ${day.coverage}% of readings" else null)
             }
             if (completed.days.size > COLLAPSED_ROWS)
                 GhostButton(if (all) "Show fewer days" else "Show all ${completed.days.size} days", { all = !all })
         }
     }
-}
-
-@Composable
-private fun DexcomDetail(state: StatsUiState, completed: CompletedGlucose) {
-    val colors = AapsTheme.colors
-    AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            SectionLabel("Variability and estimated A1c")
-            Text("Dexcom ranges · day ${glucoseRange(Constants.STATS_RANGE_LOW_MMOL, Constants.STATS_RANGE_HIGH_MMOL, state)}, " +
-                     "night 23–06 h ${glucoseRange(Constants.STATS_RANGE_LOW_MMOL, Constants.STATS_RANGE_HIGH_NIGHT_MMOL, state)}",
-                 style = AapsTheme.type.caption, color = colors.textSecondary)
-            TableRow(listOf("<${limit(Constants.STATS_RANGE_VERY_LOW_MMOL, state)}", "Low", "In range", "High",
-                            ">${limit(Constants.STATS_RANGE_VERY_HIGH_MMOL, state)}"), header = true, firstWide = false)
-            TableRow(completed.dexcom.map(::pct), firstWide = false)
-            Row(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(colors.controlFill)) {
-                listOf(colors.veryLow, colors.low, colors.inRange, colors.high, colors.veryHigh).forEachIndexed { i, color ->
-                    Segment(completed.dexcom[i], color)
-                }
-            }
-            DetailRow("Mean glucose", state.completedMean)
-            DetailRow("Standard deviation", state.sd)
-            DetailRow("Estimated HbA1c", state.ea1c)
-        }
-    }
-}
-
-@Composable
-private fun RowScope.Segment(pct: Double, color: Color) {
-    if (pct > 0.0) Box(Modifier.weight(pct.toFloat()).height(10.dp).background(color))
 }
 
 @Composable
@@ -141,21 +95,23 @@ private fun PentagonCard(state: StatsUiState) {
     val labelStyle = AapsTheme.type.caption.copy(fontSize = 10.sp, color = colors.textSecondary, textAlign = TextAlign.Center)
     val labels = listOf(
         "Out of range\n${pentagon.outOfRange.roundToInt()}%",
-        "CV\n${pentagon.cv.roundToInt()}%",
-        "Below\n${fmt1(pentagon.hypo)}%",
-        "Above\n${pentagon.hyper.roundToInt()}%",
-        "Mean\n${state.completedMean}"
+        "Variability\n${pentagon.cv.roundToInt()}%",
+        "Low\n${pentagon.hypo.roundToInt()}%",
+        "High\n${pentagon.hyper.roundToInt()}%",
+        "Average\n${fmt(if (state.decimals == 0) pentagon.mean else pentagon.mean / Constants.MMOLL_TO_MGDL, state.decimals)} ${state.avgGlucoseUnit}"
     )
-    AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+    AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SectionLabel("Glucose pentagon")
-            Text("Range ${glucoseRange(Constants.STATS_RANGE_LOW_MMOL, Constants.STATS_RANGE_HIGH_MMOL, state)} · smaller is better",
+            Text("Five measures in one shape. The smaller your shape, the better. The green shape is typical for someone " +
+                     "without diabetes. Low and high use ${glucoseRange(Constants.STATS_RANGE_LOW_MMOL, Constants.STATS_RANGE_HIGH_MMOL, state)}.",
                  style = AapsTheme.type.caption, color = colors.textSecondary)
             val description = "Glucose pentagon: " + labels.joinToString(", ") { it.replace('\n', ' ') } +
-                ". Area ${fmt1(pentagon.ratio)} times the reference."
+                ". Your shape is ${fmt1(pentagon.ratio)} times the size of the green one."
             Canvas(Modifier.fillMaxWidth().aspectRatio(1.3f).semantics { contentDescription = description }) {
-                val centre = Offset(size.width / 2f, size.height / 2f)
-                val radius = minOf(size.width, size.height) / 2f * 0.68f
+                val radius = minOf(size.width, size.height) / 2f * 0.74f
+                // The labels reach 1.2 radii above the centre but only 0.97 below it; centre them as a whole.
+                val centre = Offset(size.width / 2f, size.height / 2f + radius * 0.115f)
                 fun point(axis: Int, r: Double): Offset {
                     val angle = (-90.0 + axis * 72.0) * PI / 180.0
                     return Offset(centre.x + (radius * r * cos(angle)).toFloat(), centre.y + (radius * r * sin(angle)).toFloat())
@@ -172,55 +128,48 @@ private fun PentagonCard(state: StatsUiState) {
                 drawPath(shape(pentagon.radii), colors.accent, style = Stroke(2.5f))
                 labels.forEachIndexed { i, label ->
                     val text = measurer.measure(label, labelStyle)
-                    val at = point(i, 1.2)
-                    drawText(text, topLeft = Offset(at.x - text.size.width / 2f, at.y - text.size.height / 2f))
+                    // Side labels start just outside their corner so a long value never runs into the shape.
+                    // At large font sizes they are kept inside the card instead.
+                    val x = when (i) {
+                        1    -> point(i, 1.08).x
+                        4    -> point(i, 1.08).x - text.size.width
+                        else -> point(i, 1.2).x - text.size.width / 2f
+                    }.coerceIn(0f, (size.width - text.size.width).coerceAtLeast(0f))
+                    drawText(text, topLeft = Offset(x, point(i, 1.2).y - text.size.height / 2f))
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Swatch("Healthy reference", colors.inRange)
-                Swatch("Your data", colors.accent)
-            }
-            DetailRow("Area vs reference", "${fmt1(pentagon.ratio)}×")
-            Text("Simplified from Vigersky 2018 as in AAPS 4.0. A comparison, not a clinical risk score.",
-                 style = AapsTheme.type.caption, color = colors.textTertiary)
+            ChartLegend("Without diabetes" to colors.inRange, "You" to colors.accent)
+            ValueRow("Size of your shape", "${fmt1(pentagon.ratio)}× the green one")
         }
     }
 }
 
-/** Completed days of the range, today so far and their average, with the confirmed cache rebuild. */
+/** Each completed day of the range, today so far and the average, with the confirmed deletion of saved totals. */
 @Composable
 internal fun DailyInsulin(state: StatsUiState, recalculation: Recalculation, onRecalculate: () -> Unit, onRetry: () -> Unit) {
     val colors = AapsTheme.colors
     var all by rememberSaveable { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
-    AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+    AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            SectionLabel("Daily insulin")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Carbs / day", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                Text(if (state.insulinLoading) "…" else state.carbsPerDay, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-            }
+            SectionLabel("Daily insulin and carbs")
             when {
                 state.insulinLoading -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(Modifier.size(20.dp), color = colors.accent)
-                    Text("Loading insulin history…", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    Text("Loading…", style = AapsTheme.type.caption, color = colors.textSecondary)
                 }
                 state.insulinFailed -> {
                     Text("Could not load insulin history", style = AapsTheme.type.body, color = colors.textSecondary)
                     TextButton(onClick = onRetry) { Text("Retry") }
                 }
                 else -> {
-                    Text(if (state.insulinDays == 0) "No complete insulin history for this period"
-                         else "TDD and carbs: ${state.insulinDays} available daily records",
-                         style = AapsTheme.type.caption, color = colors.textSecondary)
-                    Text("Insulin in U, carbs in g", style = AapsTheme.type.caption, color = colors.textTertiary)
-                    TableRow(listOf("Day", "Basal", "Bolus", "Total", "Carbs"), header = true)
+                    TableRow(listOf("Day", "Basal U", "Bolus U", "Total U", "Carbs g"), header = true)
                     state.insulinToday?.let { InsulinRow("Today so far", it, strong = true) }
-                        ?: TableRow(listOf("Today so far", "No record yet"), note = true)
+                        ?: TableRow(listOf("Today so far", "No data yet"), note = true)
                     val rows = if (all) state.insulinRows else state.insulinRows.take(COLLAPSED_ROWS)
                     rows.forEach { day ->
                         if (day.recorded) InsulinRow(dayLabel(day.date), day)
-                        else TableRow(listOf(dayLabel(day.date), "No complete record"), note = true)
+                        else TableRow(listOf(dayLabel(day.date), "No data"), note = true)
                     }
                     if (state.insulinRows.size > COLLAPSED_ROWS)
                         GhostButton(if (all) "Show fewer days" else "Show all ${state.insulinRows.size} days", { all = !all })
@@ -228,23 +177,24 @@ internal fun DailyInsulin(state: StatsUiState, recalculation: Recalculation, onR
                 }
             }
             when (recalculation) {
-                Recalculation.RUNNING -> Text("Recalculating daily totals…", style = AapsTheme.type.caption, color = colors.textSecondary)
-                Recalculation.FAILED -> Text("Could not recalculate daily totals. Try again.", style = AapsTheme.type.caption, color = colors.high)
+                Recalculation.RUNNING -> Text("Deleting saved totals…", style = AapsTheme.type.caption, color = colors.textSecondary)
+                Recalculation.DONE -> Text("Saved totals deleted. The loop will rebuild them from your history.",
+                                           style = AapsTheme.type.caption, color = colors.textSecondary)
+                Recalculation.FAILED -> Text("Could not delete saved totals. Try again.", style = AapsTheme.type.caption, color = colors.high)
                 Recalculation.IDLE -> Unit
             }
-            GhostButton("Recalculate daily totals", { confirm = true },
-                        enabled = !state.insulinLoading && recalculation != Recalculation.RUNNING)
+            GhostButton("Rebuild saved totals", { confirm = true }, enabled = recalculation != Recalculation.RUNNING)
         }
     }
     if (confirm) AlertDialog(
         onDismissRequest = { confirm = false },
         containerColor = colors.surface2,
-        title = { Text("Recalculate daily totals?", color = colors.textPrimary) },
+        title = { Text("Rebuild saved totals?", color = colors.textPrimary) },
         text = {
-            Text("Saved daily insulin totals are deleted and calculated again from the stored boluses, basals and carbs. " +
-                     "Treatment records are not changed. This can take a while.", color = colors.textSecondary)
+            Text("The loop saves a total for each day and uses it in its calculations. This deletes those totals, and the loop " +
+                     "works them out again from your treatment history. Your treatments are not changed.", color = colors.textSecondary)
         },
-        confirmButton = { TextButton(onClick = { confirm = false; onRecalculate() }) { Text("Recalculate", color = colors.accent) } },
+        confirmButton = { TextButton(onClick = { confirm = false; onRecalculate() }) { Text("Rebuild", color = colors.accent) } },
         dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel", color = colors.textSecondary) } }
     )
 }
@@ -257,35 +207,32 @@ private fun InsulinRow(label: String, day: InsulinDay, strong: Boolean = false) 
 @Composable
 internal fun CyclePatternCard(cycle: CycleUiState, onShow: () -> Unit, onOffset: (Int) -> Unit) {
     val colors = AapsTheme.colors
-    AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+    AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SectionLabel("28-day insulin pattern")
-            Text("Total daily insulin of up to six 28-day cycles on top of each other, to show a recurring pattern such as a menstrual cycle.",
+            Text("Compare your daily insulin across 28-day cycles, for example a menstrual cycle.",
                  style = AapsTheme.type.caption, color = colors.textSecondary)
             when {
-                !cycle.requested -> TonalButton("Load pattern", onShow, Modifier.fillMaxWidth())
+                !cycle.requested -> TonalButton("Show pattern", onShow, Modifier.fillMaxWidth())
                 cycle.failed -> {
                     Text("Could not load insulin history", style = AapsTheme.type.body, color = colors.textSecondary)
                     TextButton(onClick = onShow) { Text("Retry") }
                 }
                 cycle.pattern == null && cycle.loading -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(Modifier.size(20.dp), color = colors.accent)
-                    Text("Loading insulin history… ${cycle.loadedDays} of $CYCLE_HISTORY_DAYS days", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    Text("Loading… ${cycle.loadedDays} of $CYCLE_HISTORY_DAYS days", style = AapsTheme.type.caption, color = colors.textSecondary)
                 }
                 else -> {
                     val pattern = cycle.pattern
                     if (pattern == null) Text(
-                        "Not enough data for this day 1: needs two 28-day cycles with at least 21 daily totals each. " +
-                            "${cycle.availableDays} days of totals are available.",
+                        "Not enough data. This needs at least two 28-day cycles with 21 days of insulin data each. " +
+                            "There are ${cycle.availableDays} days of data.",
                         style = AapsTheme.type.body, color = colors.textSecondary)
                     else {
-                        Text("${pattern.cycles.size} cycles · ${cycle.availableDays} days of totals" + if (cycle.loading) " · updating…" else "",
+                        Text("${pattern.cycles.size} cycles" + if (cycle.loading) ", updating…" else "",
                              style = AapsTheme.type.caption, color = colors.textTertiary)
                         CycleChart(pattern)
-                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Swatch("Cycles, newest darkest", colors.accent)
-                            Swatch("Average", colors.textPrimary)
-                        }
+                        ChartLegend("Each cycle, newest darkest" to colors.accent, "Average" to colors.textPrimary)
                     }
                     // Kept without a pattern too, so a shift that leaves too few totals can be undone.
                     cycle.firstDay?.let { firstDay ->
@@ -297,10 +244,9 @@ internal fun CyclePatternCard(cycle: CycleUiState, onShow: () -> Unit, onOffset:
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Day 1: ${dayLabel(firstDay)}", style = AapsTheme.type.listTitle, color = colors.textPrimary)
                                 Text(when (cycle.offset) {
-                                         0 -> "Latest day 1"
-                                         1 -> "1 day earlier"
-                                         CYCLE_DAYS - 1 -> "Earliest day 1"
-                                         else -> "${cycle.offset} days earlier"
+                                         0 -> "Move to match your cycle"
+                                         CYCLE_DAYS - 1 -> "Earliest possible"
+                                         else -> "Moved ${cycle.offset} ${if (cycle.offset == 1) "day" else "days"} earlier"
                                      }, style = AapsTheme.type.caption, color = colors.textTertiary)
                             }
                         }
@@ -381,7 +327,7 @@ private fun TableRow(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+internal fun ValueRow(label: String, value: String) {
     val colors = AapsTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
@@ -389,17 +335,23 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+/** Chart keys; they wrap onto more lines at large font sizes. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Swatch(label: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(width = 12.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(color))
-        Text(label, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary, modifier = Modifier.padding(start = 5.dp))
+internal fun ChartLegend(vararg items: Pair<String, Color>, modifier: Modifier = Modifier) {
+    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items.forEach { (label, color) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(width = 12.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(color))
+                Text(label, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary, modifier = Modifier.padding(start = 5.dp))
+            }
+        }
     }
 }
 
 /** What the chart shows, for TalkBack: the average of each cycle day, and the days no cycle has a total for. */
 internal fun cycleDescription(pattern: CyclePattern): String =
-    "Average total daily insulin by cycle day, ${pattern.cycles.size} cycles: " +
+    "Average daily insulin by cycle day, ${pattern.cycles.size} cycles: " +
         pattern.average.mapIndexed { i, v -> "day ${i + 1} " + (v?.let { "${fmt1(it)} U" } ?: "no data") }.joinToString(", ")
 
 private fun dayLabel(date: LocalDate): String =
@@ -411,6 +363,9 @@ private fun fmt1(value: Double) = String.format(Locale.getDefault(), "%.1f", val
 
 /** A fixed report threshold, given in mmol/L, in the user's units. */
 private fun limit(mmol: Double, state: StatsUiState) = fmt(if (state.decimals == 0) mmol * Constants.MMOLL_TO_MGDL else mmol, state.decimals)
+
+/** The fixed 3.9–7.8 mmol/L tight range, in the user's units. */
+internal fun tightRange(state: StatsUiState) = glucoseRange(Constants.STATS_TARGET_LOW_MMOL, Constants.STATS_TARGET_HIGH_MMOL, state)
 
 private fun glucoseRange(lowMmol: Double, highMmol: Double, state: StatsUiState) =
     "${limit(lowMmol, state)}–${limit(highMmol, state)} ${state.avgGlucoseUnit}"

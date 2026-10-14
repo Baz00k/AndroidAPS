@@ -23,7 +23,7 @@ data class HourProfile(
     val days: Int = 0
 )
 
-/** Presentation state for the redesigned Statistics screen. Percentages are 0..100. */
+/** Presentation state for the Statistics screen. All figures cover the same completed days. Percentages are 0..100. */
 @Immutable
 data class StatsUiState(
     val loading: Boolean = true,
@@ -42,14 +42,14 @@ data class StatsUiState(
     val inRange: Double = 0.0,
     val high: Double = 0.0,
     val veryHigh: Double = 0.0,
-    // Tiles
+    // Tiles. The estimated A1c is the glucose management indicator, in percent and mmol/mol.
     val gmi: String = "--",
+    val gmiMmol: String = "",
     val avgGlucose: String = "--",
     val avgGlucoseUnit: String = "",
     val cv: String = "--",
-    val cvGood: Boolean = false,
+    val sd: String = "",
     val avgTdd: String = "--",
-    val carbsPerDay: String = "--",
     // Hour-of-day profile. A stacked in-range bar per hour came first and was replaced: "all green"
     // cannot tell 4.5 from 9.8, and those are very different hours. A day-of-week view was also tried
     // and dropped — at short ranges each bar is one or two days, so a single bad Tuesday read as
@@ -59,12 +59,8 @@ data class StatsUiState(
     val lowMark: Double = 4.0,
     val highMark: Double = 10.0,
     val decimals: Int = 1,
-    // Completed-day reports. Formatted values are in display units.
     val completed: CompletedGlucose? = null,
     val pentagon: Pentagon? = null,
-    val completedMean: String = "--",
-    val sd: String = "--",
-    val ea1c: String = "--",
     // Newest first; a day without a record is kept, so a gap is visible rather than averaged over.
     val insulinRows: List<InsulinDay> = emptyList(),
     val insulinAverage: InsulinDay? = null,
@@ -99,4 +95,4 @@ data class CycleUiState(
     val pattern: CyclePattern? = null
 )
 
-enum class Recalculation { IDLE, RUNNING, FAILED }
+enum class Recalculation { IDLE, RUNNING, DONE, FAILED }

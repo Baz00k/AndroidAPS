@@ -31,22 +31,24 @@ class StatsReportsTest {
         assertThat(report.days[2].tight).isEqualTo(50.0)
         assertThat(report.days[0].high).isEqualTo(100.0)
         assertThat(report.readings).isEqualTo(3)
+        assertThat(report.daysWithData).isEqualTo(2)
         assertThat(report.tight).isWithin(1e-9).of(100.0 / 3)
         // 3 of the 864 five-minute slots of three days have a reading.
         assertThat(report.coverage).isEqualTo(0)
         assertThat(report.days[2].coverage).isEqualTo(0)
     }
 
-    @Test fun `Dexcom high limit is lower at night`() {
+    @Test fun `out of range for the pentagon uses the consensus range all day`() {
         val report = summarizeCompletedDays(listOf(
-            reading(at("2026-10-12T02:00:00Z"), 160.0), // night: above 8.3 mmol/L
-            reading(at("2026-10-12T12:00:00Z"), 160.0), // day: in range
-            reading(at("2026-10-12T22:59:00Z"), 160.0), // still day
-            reading(at("2026-10-12T23:00:00Z"), 160.0)  // night
-        ), from, to, 70.0, 180.0, zone)
-        assertThat(report.dexcom).containsExactly(0.0, 0.0, 50.0, 50.0, 0.0).inOrder()
-        // The consensus range used by the pentagon has no night limit.
-        assertThat(report.hyper).isEqualTo(0.0)
+            reading(at("2026-10-12T02:00:00Z"), 160.0),
+            reading(at("2026-10-12T12:00:00Z"), 190.0),
+            reading(at("2026-10-12T13:00:00Z"), 65.0),
+            reading(at("2026-10-12T14:00:00Z"), 100.0)
+        ), from, to, 70.0, 140.0, zone)
+        assertThat(report.hypo).isEqualTo(25.0)
+        assertThat(report.hyper).isEqualTo(25.0)
+        // The user's own 70–140 range puts 160 above it; that is the headline's business, not the pentagon's.
+        assertThat(report.days[1].high).isEqualTo(50.0)
     }
 
     @Test fun `mean and SD use one value per five minutes so duplicate broadcasts do not count twice`() {
@@ -70,8 +72,7 @@ class StatsReportsTest {
 
     @Test fun `healthy reference values draw the reference pentagon and no data draws none`() {
         // Mean 90 mg/dL with CV 17 % and nothing out of range is the published healthy reference.
-        val healthy = CompletedGlucose(readings = 10, coverage = 100, tight = 100.0, dexcom = listOf(0.0, 0.0, 100.0, 0.0, 0.0),
-                                       hypo = 0.0, hyper = 0.0, mean = 90.0, sd = 15.3, days = emptyList())
+        val healthy = CompletedGlucose(readings = 10, coverage = 100, daysWithData = 1, tight = 100.0, hypo = 0.0, hyper = 0.0, mean = 90.0, sd = 15.3, days = emptyList())
         assertThat(glucosePentagon(healthy)!!.ratio).isWithin(1e-9).of(1.0)
         val worse = glucosePentagon(healthy.copy(hyper = 40.0, mean = 180.0))!!
         assertThat(worse.outOfRange).isEqualTo(40.0)
@@ -79,12 +80,13 @@ class StatsReportsTest {
         assertThat(glucosePentagon(healthy.copy(readings = 0, mean = 0.0))).isNull()
     }
 
-    @Test fun `estimated A1c follows the ADAG table`() {
-        // ADAG: 154 mg/dL corresponds to 7 % (53 mmol/mol IFCC).
+    @Test fun `estimated A1c is the glucose management indicator in both units`() {
+        // Bergenstal 2018: GMI (%) = 3.31 + 0.02392 × mean mg/dL; 154 mg/dL gives 6.99 %, which is 53 mmol/mol IFCC.
         val original = Locale.getDefault()
         try {
             Locale.setDefault(Locale.US)
-            assertThat(estimatedA1c(154.0)).isEqualTo("7.0% · 53 mmol/mol")
+            assertThat(gmiPercent(154.0)).isEqualTo("7.0%")
+            assertThat(gmiMmolPerMol(154.0)).isEqualTo("53 mmol/mol")
         } finally {
             Locale.setDefault(original)
         }

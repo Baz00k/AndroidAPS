@@ -35,7 +35,7 @@ class StatsControllerTest {
         main.triggerActions()
     }
 
-    @Test fun `a history burst invalidates from its oldest change once and refreshes without blanking the screen`() {
+    @Test fun `a history burst refreshes once without blanking the screen`() {
         controller.start(); run()
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
         history.onNext(3_000)
@@ -43,47 +43,51 @@ class StatsControllerTest {
         history.onNext(1_000)
         io.advanceTimeBy(5, TimeUnit.SECONDS)
         history.onNext(2_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS - 1, TimeUnit.SECONDS)
-        verify(loader, never()).clearCachedTdd(any())
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS - 1, TimeUnit.SECONDS); run()
+        verify(loader, times(1)).load(any())
         io.advanceTimeBy(1, TimeUnit.SECONDS)
         main.triggerActions()
-        io.triggerActions()
-        verify(loader, times(1)).clearCachedTdd(1_000)
-        verify(loader, times(1)).load(any())
-        // The refresh starts only after the cache is invalidated, and the old figures stay until it lands.
-        main.triggerActions()
+        // The old figures stay until the refresh lands.
         assertThat(controller.stats.value.loading).isFalse()
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
         run()
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 2")
     }
 
-    @Test fun `a history change stops running calculations before clearing the cache, then restarts them`() {
-        val order = mutableListOf<String>()
-        whenever(loader.loadCycle()).thenAnswer { Observable.never<CycleLoad>().doOnDispose { order += "cycle stopped" } }
-        whenever(loader.clearCachedTdd(any())).thenAnswer { order += "cache cleared"; Unit }
+    @Test fun `a running cycle load restarts on every change, even one only about today`() {
+        whenever(loader.loadCycle()).thenAnswer { Observable.never<CycleLoad>() }
+        whenever(loader.beforeToday(any())).thenAnswer { (it.arguments[0] as Long) < 5_000 }
         controller.start(); run()
         controller.showCycle(); run()
         history.onNext(1_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS)
-        main.triggerActions()
-        assertThat(controller.cycle.value.loading).isFalse()
-        run()
-        assertThat(order).containsExactly("cycle stopped", "cache cleared").inOrder()
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
         verify(loader, times(2)).loadCycle()
+        // Today only: the history being loaded may already be out of date, so it starts over.
+        history.onNext(9_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        verify(loader, times(3)).loadCycle()
         assertThat(controller.cycle.value.loading).isTrue()
     }
 
-    @Test fun `a cache that cannot be invalidated marks the figures as out of date`() {
-        doAnswer { throw IllegalStateException("database") }.whenever(loader).clearCachedTdd(any())
+    @Test fun `a loaded cycle pattern is only reloaded for changes before today`() {
+        whenever(loader.beforeToday(any())).thenAnswer { (it.arguments[0] as Long) < 5_000 }
         controller.start(); run()
+        controller.showCycle(); run()
+        history.onNext(9_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        verify(loader, times(1)).loadCycle()
         history.onNext(1_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS)
-        run(); run()
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        verify(loader, times(2)).loadCycle()
+    }
+
+    @Test fun `a refresh that fails keeps the figures and says they may be out of date`() {
+        controller.start(); run()
+        whenever(loader.load(any())).thenReturn(Observable.error(IllegalStateException("database")))
+        history.onNext(1_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run(); run()
         assertThat(controller.stats.value.refreshFailed).isTrue()
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
-        controller.select(7); run()
-        assertThat(controller.stats.value.refreshFailed).isFalse()
     }
 
     @Test fun `history changes while paused are ignored`() {
@@ -91,23 +95,21 @@ class StatsControllerTest {
         controller.stop()
         history.onNext(1_000)
         io.advanceTimeBy(1, TimeUnit.MINUTES); run()
-        verify(loader, never()).clearCachedTdd(any())
+        verify(loader, times(1)).load(any())
     }
 
-    @Test fun `recalculation runs once, then reloads totals and the requested cycle pattern`() {
+    @Test fun `deleting saved totals runs once and does not change the figures`() {
         controller.start(); run()
-        controller.showCycle(); run()
         controller.recalculate()
         controller.recalculate()
         assertThat(controller.recalculation.value).isEqualTo(Recalculation.RUNNING)
-        run(); run()
+        run()
         verify(loader, times(1)).recalculateTdd()
-        verify(loader, times(2)).loadCycle()
-        assertThat(controller.recalculation.value).isEqualTo(Recalculation.IDLE)
-        assertThat(controller.stats.value.avgGlucose).isEqualTo("load 2")
+        verify(loader, times(1)).load(any())
+        assertThat(controller.recalculation.value).isEqualTo(Recalculation.DONE)
     }
 
-    @Test fun `failed recalculation is reported and leaves the figures alone`() {
+    @Test fun `failed deletion of saved totals is reported`() {
         doAnswer { throw IllegalStateException("database") }.whenever(loader).recalculateTdd()
         controller.start(); run()
         controller.recalculate(); run()

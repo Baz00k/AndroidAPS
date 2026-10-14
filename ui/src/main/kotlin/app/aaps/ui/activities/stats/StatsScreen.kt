@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import java.util.Locale
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
@@ -38,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.SectionLabel
@@ -80,48 +81,37 @@ fun StatsScreen(state: StatsUiState, actions: StatsActions, cycle: CycleUiState 
             Text("Statistics", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
         }
         SegmentedControl(ranges.map { "${it}d" }, ranges.indexOf(state.rangeDays).coerceAtLeast(0), { onRange(ranges[it]) }, fillWidth = true)
-        Text("Last ${state.rangeDays} days", style = AapsTheme.type.body, color = colors.textSecondary,
-             modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
         if (state.loading || state.failed) {
-            AapsCard(Modifier.fillMaxWidth()) {
+            AapsCard(Modifier.fillMaxWidth().padding(top = 12.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.loading) {
                         CircularProgressIndicator(Modifier.size(24.dp), color = colors.accent)
                         Text("Loading statistics…", color = colors.textSecondary)
                     } else {
                         Text("Could not load statistics", color = colors.textPrimary)
-                        Text("Select another period or try again.", color = colors.textSecondary)
                         TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
                     }
                 }
             }
             return@Column
         }
+        DataCoverage(state)
         if (state.refreshFailed) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Could not update after a history change", color = colors.high)
-                    Text("These figures may be out of date.", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    Text("Could not update. These figures may be out of date.", color = colors.high)
                     TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
                 }
             }
         }
-        if (state.glucoseReadings == 0) {
-            Text("No glucose readings in this period", style = AapsTheme.type.body, color = colors.textSecondary,
-                 modifier = Modifier.padding(bottom = 12.dp))
-        }
 
-        // TIR card
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SectionLabel("Time in range")
-                Text("Completed days · ${fmt(state.lowMark, state.decimals)}–${fmt(state.highMark, state.decimals)} ${state.avgGlucoseUnit}",
-                     style = AapsTheme.type.caption, color = colors.textSecondary)
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(if (state.tirReadings == 0) "--" else "${state.inRange.roundToInt()}%", style = AapsTheme.type.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
                     Text("in range", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
                 }
-                // stacked bar
                 Row(
                     Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(7.dp)).background(colors.controlFill)
                 ) {
@@ -131,32 +121,36 @@ fun StatsScreen(state: StatsUiState, actions: StatsActions, cycle: CycleUiState 
                     Seg(state.high, colors.high)
                     Seg(state.veryHigh, colors.veryHigh)
                 }
-                if (state.tirReadings == 0) Text("No glucose readings in completed days", style = AapsTheme.type.caption, color = colors.textSecondary)
-                else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    BarLabel("Low", state.veryLow + state.low, colors.low, colors.textTertiary)
-                    BarLabel("In range", state.inRange, colors.inRange, colors.textTertiary)
-                    BarLabel("High", state.high + state.veryHigh, colors.high, colors.textTertiary)
+                if (state.tirReadings > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        BarLabel("Low", state.veryLow + state.low, colors.low, colors.textTertiary)
+                        BarLabel("In range", state.inRange, colors.inRange, colors.textTertiary)
+                        BarLabel("High", state.high + state.veryHigh, colors.high, colors.textTertiary)
+                    }
+                    ValueRow("Your range", "${fmt(state.lowMark, state.decimals)}–${fmt(state.highMark, state.decimals)} ${state.avgGlucoseUnit}")
+                    state.completed?.let { ValueRow("In tight range (${tightRange(state)})", "${it.tight.roundToInt()}%") }
                 }
             }
         }
 
-        // 2×2 tiles
-        Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-            StatTile("GMI / eA1c", state.gmi, Modifier.weight(1f))
-            StatTile("AVG GLUCOSE", if (state.avgGlucose == "--") "--" else "${state.avgGlucose} ${state.avgGlucoseUnit}", Modifier.weight(1f))
+        val tile = Modifier.fillMaxHeight()
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(bottom = AapsSpacing.rowGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
+            StatTile("AVERAGE GLUCOSE", if (state.avgGlucose == "--") "--" else noBreak("${state.avgGlucose} ${state.avgGlucoseUnit}"), tile.weight(1f))
+            StatTile("ESTIMATED A1C", state.gmi, tile.weight(1f), state.gmiMmol)
         }
-        Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-            StatTile("CV", state.cv, Modifier.weight(1f), valueColor = if (state.cvGood) colors.inRange else colors.textPrimary)
-            StatTile("AVG TDD", if (state.insulinLoading) "…" else state.avgTdd, Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
+            // 36 % is the consensus limit for stable glucose (Battelino 2019).
+            StatTile("VARIABILITY", state.cv, tile.weight(1f),
+                     if (state.sd.isEmpty()) "" else "Aim for 36% or less\nStandard deviation ${noBreak(state.sd).replace(' ', '\u00A0')}")
+            StatTile("DAILY INSULIN", if (state.insulinLoading) "…" else state.avgTdd, tile.weight(1f), "Average")
         }
-        Text("Glucose summary and profile: rolling ${state.rangeDays}-day window", style = AapsTheme.type.caption,
-             color = colors.textSecondary)
 
         GlucoseProfile(state)
 
         CompletedDayReports(state)
         DailyInsulin(state, recalculation, actions.onRecalculate) { onRange(state.rangeDays) }
         CyclePatternCard(cycle, actions.onShowCycle, actions.onCycleOffset)
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -173,15 +167,37 @@ private fun BarLabel(name: String, pct: Double, dot: Color, textColor: Color) {
     }
 }
 
+/** Keeps units such as mg/dL in one piece; a line may still break between the number and its unit. */
+internal fun noBreak(text: String) = text.replace("/", "/\u2060")
+
 @Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier, valueColor: Color = AapsTheme.colors.textPrimary) {
+private fun StatTile(label: String, value: String, modifier: Modifier = Modifier, caption: String = "") {
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
-            Text(value, style = AapsTheme.type.cardValue, color = valueColor)
+            Text(value, style = AapsTheme.type.cardValue, color = colors.textPrimary)
+            if (caption.isNotEmpty()) Text(caption, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
     }
+}
+
+/**
+ * How much glucose data the figures stand on, said once for the whole screen. Below the consensus share of
+ * readings the figures are still shown, but the line says they may not be reliable.
+ */
+@Composable
+private fun DataCoverage(state: StatsUiState) {
+    val colors = AapsTheme.colors
+    val completed = state.completed
+    val sparse = completed == null || completed.coverage < MIN_COVERAGE
+    val text = when {
+        completed == null || completed.readings == 0 -> "No glucose data on these days"
+        sparse -> "Glucose data on ${completed.daysWithData} of ${state.rangeDays} days, only ${completed.coverage}% of readings. Figures may not be reliable."
+        else -> "Glucose data on ${completed.daysWithData} of ${state.rangeDays} days, ${completed.coverage}% of readings"
+    }
+    Text(text, style = AapsTheme.type.body, color = if (sparse) colors.high else colors.textSecondary,
+         modifier = Modifier.padding(top = 10.dp, bottom = 12.dp))
 }
 
 /**
@@ -198,50 +214,27 @@ private fun GlucoseProfile(state: StatsUiState) {
     val measurer = rememberTextMeasurer()
     val axis = AapsTheme.type.caption.copy(fontSize = 9.sp, color = colors.textTertiary)
 
-    val hours = state.hourly.filter { it.readings > 0 }
-    val maxDays = hours.maxOfOrNull { it.days } ?: 0
-    val depth = when {
-        state.loading   -> "computing…"
-        hours.isEmpty() -> ""
-        maxDays <= 1    -> "1 day — not a pattern yet"
-        else            -> "$maxDays days"
-    }
+    // One day is a day, not a pattern; the coverage line above says how many days there are.
+    val hours = state.hourly.filter { it.readings > 0 }.takeIf { profile -> profile.maxOfOrNull { it.days } ?: 0 > 1 }.orEmpty()
 
-    Column(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
-        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionLabel("A typical day", Modifier.weight(1f))
-            if (depth.isNotEmpty())
-                Text(depth, style = AapsTheme.type.caption, color = if (maxDays <= 1 && !state.loading) colors.high else colors.textTertiary)
-        }
-        AapsCard(Modifier.fillMaxWidth()) {
-            Column {
-                Text(state.avgGlucoseUnit, style = AapsTheme.type.caption, color = colors.textSecondary)
-                Box(Modifier.fillMaxWidth().height(150.dp)) {
-                    if (hours.size < 2) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(if (state.loading) "Computing…" else "Not enough data", style = AapsTheme.type.body, color = colors.textTertiary)
-                        }
-                    } else {
-                        Canvas(Modifier.fillMaxSize()) {
-                            drawProfile(state, hours, colors, measurer, axis)
-                        }
+    AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SectionLabel("A typical day")
+            Text(state.avgGlucoseUnit, style = AapsTheme.type.caption, color = colors.textSecondary)
+            Box(Modifier.fillMaxWidth().height(150.dp)) {
+                if (hours.size < 2) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Not enough data", style = AapsTheme.type.body, color = colors.textTertiary)
+                    }
+                } else {
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawProfile(state, hours, colors, measurer, axis)
                     }
                 }
-                if (hours.size >= 2) Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Legend("Median", colors.textPrimary, colors)
-                    Legend("25–75%", colors.accent.copy(alpha = 0.55f), colors)
-                    Legend("10–90%", colors.accent.copy(alpha = 0.22f), colors)
-                }
             }
+            if (hours.size >= 2) ChartLegend("Median" to colors.textPrimary, "Middle 50%" to colors.accent.copy(alpha = 0.55f),
+                                             "Middle 80%" to colors.accent.copy(alpha = 0.22f), modifier = Modifier.padding(top = 10.dp))
         }
-    }
-}
-
-@Composable
-private fun Legend(label: String, swatch: Color, colors: app.aaps.core.compose.theme.AapsColors) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(width = 12.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(swatch))
-        Text(label, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 5.dp))
     }
 }
 

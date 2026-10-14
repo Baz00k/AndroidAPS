@@ -25,7 +25,12 @@ import kotlin.math.roundToInt
 /** Progress of the cycle history. [totals] is set once, on the last emission. */
 internal class CycleLoad(val loadedDays: Int, val newest: LocalDate, val totals: Map<LocalDate, Double>? = null)
 
-/** Screen loader. Reads are read-only; the only write is the derived TDD cache, never the records it is derived from. */
+/**
+ * Screen loader. Daily insulin is calculated from the stored records for each local calendar day and is
+ * never read from or written to the shared TDD cache, which the loop uses: a cached total can be stale,
+ * and the shared calculator caches fixed 24-hour days, which are wrong across a daylight-saving change.
+ * The only write is the user-confirmed [recalculateTdd].
+ */
 class StatsLoader @Inject constructor(
     private val persistenceLayer: PersistenceLayer,
     private val profileFunction: ProfileFunction,
@@ -43,40 +48,38 @@ class StatsLoader @Inject constructor(
             val now = dateUtil.now()
             val zone = ZoneId.systemDefault()
             val window = StatsWindow(now, days, zone)
-            val raw = persistenceLayer.getBgReadingsDataFromTimeToTime(minOf(window.rollingFrom, window.tirFrom), now, true)
+            val raw = persistenceLayer.getBgReadingsDataFromTimeToTime(window.from, window.to, true)
             if (emitter.isDisposed) return@create
             val lowMgdl = profileUtil.convertToMgdl(low, units)
             val highMgdl = profileUtil.convertToMgdl(high, units)
-            val glucose = summarizeGlucose(raw, window.rollingFrom, now, window.tirFrom, window.tirTo, lowMgdl, highMgdl,
+            val glucose = summarizeGlucose(raw, window.from, window.to - 1, window.from, window.to - 1, lowMgdl, highMgdl,
                                            { profileUtil.fromMgdlToUnits(it, units) }, java.util.TimeZone.getTimeZone(zone))
-            val completed = summarizeCompletedDays(raw, window.tirFrom, window.tirTo, lowMgdl, highMgdl, zone)
+            val completed = summarizeCompletedDays(raw, window.from, window.to, lowMgdl, highMgdl, zone)
             val unit = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
+            val hasGlucose = glucose.average > 0
             val state = StatsUiState(
                 loading = false, rangeDays = days, insulinLoading = true,
                 veryLow = glucose.bands[0], low = glucose.bands[1], inRange = glucose.bands[2], high = glucose.bands[3], veryHigh = glucose.bands[4],
                 tirReadings = glucose.tirReadings, glucoseReadings = glucose.readings,
-                gmi = if (glucose.average > 0) String.format(Locale.getDefault(), "%.1f%%", 3.31 + .02392 * glucose.average) else "--",
-                avgGlucose = if (glucose.average > 0) profileUtil.fromMgdlToStringInUnits(glucose.average, units) else "--",
+                gmi = if (hasGlucose) gmiPercent(glucose.average) else "--",
+                gmiMmol = if (hasGlucose) gmiMmolPerMol(glucose.average) else "",
+                avgGlucose = if (hasGlucose) profileUtil.fromMgdlToStringInUnits(glucose.average, units) else "--",
                 avgGlucoseUnit = unit,
-                cv = if (glucose.readings > 0) String.format(Locale.getDefault(), "%.0f%%", glucose.cv) else "--",
-                cvGood = glucose.readings > 0 && glucose.cv <= 36, hourly = glucose.hourly, lowMark = low, highMark = high,
+                cv = if (hasGlucose) String.format(Locale.getDefault(), "%.0f%%", glucose.cv) else "--",
+                sd = if (hasGlucose) "${profileUtil.fromMgdlToStringInUnits(completed.sd, units)} $unit" else "",
+                hourly = glucose.hourly, lowMark = low, highMark = high,
                 decimals = if (units == GlucoseUnit.MGDL) 0 else 1,
-                completed = completed, pentagon = glucosePentagon(completed),
-                completedMean = if (completed.mean > 0) "${profileUtil.fromMgdlToStringInUnits(completed.mean, units)} $unit" else "--",
-                sd = if (completed.mean > 0) "${profileUtil.fromMgdlToStringInUnits(completed.sd, units)} $unit" else "--",
-                ea1c = if (completed.mean > 0) estimatedA1c(completed.mean) else "--"
+                completed = completed, pentagon = glucosePentagon(completed)
             )
             emitter.onNext(state)
             try {
-                val tdds = dailyTdds(window, days, zone) { emitter.isDisposed } ?: return@create
+                val tdds = dailyTdds(now, days, zone) { emitter.isDisposed } ?: return@create
                 val today = tddCalculator.calculateToday()
                 if (emitter.isDisposed) return@create
                 val average = tddCalculator.averageTDD(tdds)?.data
-                val dose = average?.dose()
                 val date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
                 emitter.onNext(state.copy(insulinLoading = false, insulinDays = tdds.size(),
-                                          avgTdd = dose?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
-                                          carbsPerDay = average?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--",
+                                          avgTdd = average?.dose()?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
                                           insulinRows = insulinRows(tdds, date, days, zone),
                                           insulinAverage = average?.toDay(date),
                                           insulinToday = today?.toDay(date)))
@@ -99,8 +102,7 @@ class StatsLoader @Inject constructor(
             val now = dateUtil.now()
             val zone = ZoneId.systemDefault()
             val newest = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(1)
-            val window = StatsWindow(now, CYCLE_HISTORY_DAYS, zone)
-            val tdds = dailyTdds(window, CYCLE_HISTORY_DAYS, zone, { loaded -> if (loaded % 7 == 0) emitter.onNext(CycleLoad(loaded, newest)) }) { emitter.isDisposed }
+            val tdds = dailyTdds(now, CYCLE_HISTORY_DAYS, zone, { loaded -> if (loaded % 7 == 0) emitter.onNext(CycleLoad(loaded, newest)) }) { emitter.isDisposed }
                 ?: return@create
             val totals = HashMap<LocalDate, Double>()
             for (i in 0 until tdds.size()) totals[Instant.ofEpochMilli(tdds.keyAt(i)).atZone(zone).toLocalDate()] = tdds.valueAt(i).dose()
@@ -110,13 +112,6 @@ class StatsLoader @Inject constructor(
             emitter.tryOnError(error)
         }
     }
-
-    /**
-     * Drops cached totals from the local midnight before [changedFrom], so a refresh after a history change
-     * recalculates them instead of reading the old value. The loop's history handler does the same a few
-     * seconds later; doing it here as well removes the race between the two.
-     */
-    internal fun clearCachedTdd(changedFrom: Long) = persistenceLayer.clearCachedTddData(MidnightTime.calc(changedFrom))
 
     /** Whether a change at [time] can affect a completed day, which the cycle pattern is made of. */
     internal fun beforeToday(time: Long) = time < MidnightTime.calc(dateUtil.now())
@@ -128,31 +123,32 @@ class StatsLoader @Inject constructor(
     }
 
     /**
-     * Completed days, one request each, so a missing old day does not bypass cached later days. Returns
-     * null when cancelled. A day is skipped, and so reported as missing, when its midnights are ambiguous
-     * (see [StatsWindow.safeDay]) or when it is older than the retained treatment history: the calculator
-     * would otherwise rebuild a pruned day from the profile alone, as if no insulin but basal had been given.
+     * The [days] completed local days before today, keyed by the start of each day. Returns null when
+     * cancelled. A day without a total for all of it (no profile at some point) is left out, and so is any
+     * day older than the retained treatment history: from a profile alone it would read as basal only.
      */
-    private fun dailyTdds(window: StatsWindow, days: Int, zone: ZoneId, onDay: (Int) -> Unit = {}, cancelled: () -> Boolean): LongSparseArray<TDD>? {
+    private fun dailyTdds(now: Long, days: Int, zone: ZoneId, onDay: (Int) -> Unit = {}, cancelled: () -> Boolean): LongSparseArray<TDD>? {
         val tdds = LongSparseArray<TDD>()
         val retained = firstRetainedDay(zone)
-        val today = Instant.ofEpochMilli(window.now).atZone(zone).toLocalDate()
-        for (day in 0 until days) {
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        for (back in 1..days) {
             if (cancelled()) return null
-            val date = today.minusDays(day + 1L)
-            if (window.safeDay(day) && (retained == null || !date.isBefore(retained))) {
-                val daily = tddCalculator.calculate(window.tddEnd(day), 1, true)
-                if (daily != null) for (i in 0 until daily.size()) tdds.put(daily.keyAt(i), daily.valueAt(i))
+            val date = today.minusDays(back.toLong())
+            if (retained != null && !date.isBefore(retained)) {
+                // Explicit local midnights: a day can be 23 or 25 hours long.
+                val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
+                val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                tddCalculator.calculateInterval(start, end, allowMissingData = false)?.let { tdds.put(start, it) }
             }
-            onDay(day + 1)
+            onDay(back)
         }
         return if (cancelled()) null else tdds
     }
 
     /**
      * Database cleanup removes every treatment table before one cut-off, so the oldest remaining record marks
-     * it. Its own day may have lost the hours before the cut-off and is excluded too. Null when there are no
-     * treatments at all.
+     * it. Its own day may have lost the hours before the cut-off and is excluded too. With no treatments at
+     * all there is no evidence of any retained history, so null means no past day can be calculated.
      */
     private fun firstRetainedDay(zone: ZoneId): LocalDate? =
         listOfNotNull(persistenceLayer.getOldestBolus()?.timestamp, persistenceLayer.getOldestCarbs()?.timestamp,
@@ -160,7 +156,7 @@ class StatsLoader @Inject constructor(
             .minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().plusDays(1) }
 
     private fun insulinRows(tdds: LongSparseArray<TDD>, today: LocalDate, days: Int, zone: ZoneId): List<InsulinDay> {
-        val recorded = (0 until tdds.size()).map { tdds.valueAt(it).toDay(Instant.ofEpochMilli(tdds.valueAt(it).timestamp).atZone(zone).toLocalDate()) }
+        val recorded = (0 until tdds.size()).map { tdds.valueAt(it).toDay(Instant.ofEpochMilli(tdds.keyAt(it)).atZone(zone).toLocalDate()) }
         val missing = (1..days).map { today.minusDays(it.toLong()) }.filter { date -> recorded.none { it.date == date } }
             .map { InsulinDay(it, recorded = false) }
         return (recorded + missing).sortedByDescending { it.date }
@@ -172,8 +168,10 @@ class StatsLoader @Inject constructor(
 /** A stored total may be zero when only basal and bolus were recorded; see [TDD.totalAmount]. */
 internal fun TDD.dose() = if (totalAmount > 0) totalAmount else basalAmount + bolusAmount
 
-/** ADAG estimate from mean glucose in mg/dL, as Dexcom reports it: percent and IFCC mmol/mol. */
-internal fun estimatedA1c(meanMgdl: Double): String {
-    val percent = (meanMgdl + 46.7) / 28.7
-    return String.format(Locale.getDefault(), "%.1f%% · %d mmol/mol", percent, ((percent - 2.15) * 10.929).roundToInt())
-}
+/** Glucose management indicator (Bergenstal 2018) from mean glucose in mg/dL. */
+private fun gmi(meanMgdl: Double) = 3.31 + 0.02392 * meanMgdl
+
+internal fun gmiPercent(meanMgdl: Double): String = String.format(Locale.getDefault(), "%.1f%%", gmi(meanMgdl))
+
+/** The same estimate in the IFCC unit many labs report A1c in. */
+internal fun gmiMmolPerMol(meanMgdl: Double): String = "${((gmi(meanMgdl) - 2.15) * 10.929).roundToInt()} mmol/mol"

@@ -8,16 +8,13 @@ import io.reactivex.rxjava3.disposables.SerialDisposable
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
-/**
- * A sync writes history in many chunks; refresh once it settles rather than once per chunk.
- * Longer than the loop's own 5-second history batching, so the two rarely recalculate the same days at once.
- */
+/** A sync writes history in many chunks; refresh once it settles rather than once per chunk. */
 internal const val HISTORY_SETTLE_SECONDS = 10L
 
 /**
  * Owned by the UI thread while the screen is resumed: the selected range, the on-demand cycle pattern,
  * the confirmed cache recalculation and refreshes after history changes. [history] emits the oldest
- * timestamp of each change.
+ * timestamp of each change. Figures are calculated from the stored records, so a refresh only re-reads.
  */
 internal class StatsController(
     private val loader: StatsLoader,
@@ -34,7 +31,6 @@ internal class StatsController(
 
     private val reloader = StatsReloader(loader::load, io, main, { stats.value = it }, onError)
     private val changes = SerialDisposable()
-    private val invalidation = SerialDisposable()
     private val recalculationRequest = SerialDisposable()
     private val cycleRequest = SerialDisposable()
     private var cycleGeneration = 0L
@@ -54,7 +50,6 @@ internal class StatsController(
 
     fun stop() {
         changes.set(null)
-        invalidation.set(null)
         recalculationRequest.set(null)
         if (recalculation.value == Recalculation.RUNNING) recalculation.value = Recalculation.IDLE
         reloader.stop()
@@ -76,46 +71,25 @@ internal class StatsController(
                                        pattern = totals?.let { cyclePattern(it, newest, shift) })
     }
 
-    /** Deletes only the derived daily totals, then rebuilds what is on screen from the stored records. */
+    /**
+     * Deletes the cached daily totals the loop keeps, which it rebuilds from the stored records when it next
+     * needs them. The figures on this screen never come from that cache, so they stay as they are.
+     */
     fun recalculate() {
         if (recalculation.value == Recalculation.RUNNING) return
         recalculation.value = Recalculation.RUNNING
-        val reloadCycle = cancelWork()
         recalculationRequest.set(Completable.fromAction(loader::recalculateTdd).subscribeOn(io).observeOn(main).subscribe({
-            recalculation.value = Recalculation.IDLE
-            reloader.reload(stats.value.rangeDays)
-            if (reloadCycle) loadCycle()
+            recalculation.value = Recalculation.DONE
         }, { error ->
             recalculation.value = Recalculation.FAILED
-            reloader.markStale()
-            if (reloadCycle) loadCycle()
             onError(error)
         }))
     }
 
+    /** A load in progress is restarted rather than left to finish with history from before the change. */
     private fun historyChanged(from: Long) {
-        val interrupted = cycle.value.loading
-        val reloadCycle = cancelWork() && (interrupted || loader.beforeToday(from))
-        invalidation.set(Completable.fromAction { loader.clearCachedTdd(from) }.subscribeOn(io).observeOn(main).subscribe({
-            reloader.refresh(stats.value.rangeDays)
-            if (reloadCycle) loadCycle()
-        }, { error ->
-            reloader.markStale()
-            if (reloadCycle) loadCycle()
-            onError(error)
-        }))
-    }
-
-    /**
-     * Stops this screen's TDD calculations before the cache is cleared, so none of them can go on to cache a
-     * total read before the change. Returns whether the cycle pattern was requested and must load again.
-     */
-    private fun cancelWork(): Boolean {
-        reloader.stop()
-        cycleGeneration++
-        cycleRequest.set(null)
-        if (cycle.value.loading) cycle.value = cycle.value.copy(loading = false)
-        return cycle.value.requested
+        reloader.refresh(stats.value.rangeDays)
+        if (cycle.value.requested && (cycle.value.loading || loader.beforeToday(from))) loadCycle()
     }
 
     /** The previous pattern stays visible while a newer history loads. */

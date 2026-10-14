@@ -46,7 +46,7 @@ class StatsCycleTest {
         try {
             Locale.setDefault(Locale.US)
             val description = cycleDescription(cyclePattern(history(56, missing = setOf(3, 31)), newest, 0)!!)
-            assertThat(description).startsWith("Average total daily insulin by cycle day, 2 cycles: day 1 37.0 U, ")
+            assertThat(description).startsWith("Average daily insulin by cycle day, 2 cycles: day 1 37.0 U, ")
             assertThat(description).contains("day 25 no data")
             assertThat(description).endsWith("day 28 10.0 U")
         } finally {

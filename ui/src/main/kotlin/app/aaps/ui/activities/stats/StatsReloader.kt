@@ -35,14 +35,6 @@ internal class StatsReloader(
         start(id, Observable.defer { load(days) }.filter { !it.insulinLoading }, quiet = true)
     }
 
-    /** The history changed but could not be re-read; whatever is shown predates the change. */
-    fun markStale() {
-        generation++
-        request.set(null)
-        state = if (state.loading) state.copy(loading = false, failed = true) else state.copy(insulinLoading = false, refreshFailed = true)
-        onState(state)
-    }
-
     private fun start(id: Long, source: Observable<StatsUiState>, quiet: Boolean) {
         request.set(source.subscribeOn(io).observeOn(main, true).subscribe({ result ->
             if (id == generation) {
