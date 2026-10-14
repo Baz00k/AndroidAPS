@@ -19,7 +19,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Locale
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 /** Progress of the cycle history. [totals] is set once, on the last emission. */
 internal class CycleLoad(val loadedDays: Int, val newest: LocalDate, val totals: Map<LocalDate, Double>? = null)
@@ -61,11 +60,9 @@ class StatsLoader @Inject constructor(
                 veryLow = glucose.bands[0], low = glucose.bands[1], inRange = glucose.bands[2], high = glucose.bands[3], veryHigh = glucose.bands[4],
                 tirReadings = glucose.tirReadings, glucoseReadings = glucose.readings,
                 gmi = if (hasGlucose) gmiPercent(glucose.average) else "--",
-                gmiMmol = if (hasGlucose) gmiMmolPerMol(glucose.average) else "",
                 avgGlucose = if (hasGlucose) profileUtil.fromMgdlToStringInUnits(glucose.average, units) else "--",
                 avgGlucoseUnit = unit,
                 cv = if (hasGlucose) String.format(Locale.getDefault(), "%.0f%%", glucose.cv) else "--",
-                sd = if (hasGlucose) "${profileUtil.fromMgdlToStringInUnits(completed.sd, units)} $unit" else "",
                 hourly = glucose.hourly, lowMark = low, highMark = high,
                 decimals = if (units == GlucoseUnit.MGDL) 0 else 1,
                 completed = completed, pentagon = glucosePentagon(completed)
@@ -181,6 +178,3 @@ internal fun TDD.dose() = if (totalAmount > 0) totalAmount else basalAmount + bo
 private fun gmi(meanMgdl: Double) = 3.31 + 0.02392 * meanMgdl
 
 internal fun gmiPercent(meanMgdl: Double): String = String.format(Locale.getDefault(), "%.1f%%", gmi(meanMgdl))
-
-/** The same estimate in the IFCC unit many labs report A1c in. */
-internal fun gmiMmolPerMol(meanMgdl: Double): String = "${((gmi(meanMgdl) - 2.15) * 10.929).roundToInt()} mmol/mol"

@@ -42,13 +42,11 @@ data class StatsUiState(
     val inRange: Double = 0.0,
     val high: Double = 0.0,
     val veryHigh: Double = 0.0,
-    // Tiles. The estimated A1c is the glucose management indicator, in percent and mmol/mol.
+    // Tiles. The estimated A1c is the glucose management indicator.
     val gmi: String = "--",
-    val gmiMmol: String = "",
     val avgGlucose: String = "--",
     val avgGlucoseUnit: String = "",
     val cv: String = "--",
-    val sd: String = "",
     val avgTdd: String = "--",
     // Hour-of-day profile. A stacked in-range bar per hour came first and was replaced: "all green"
     // cannot tell 4.5 from 9.8, and those are very different hours. A day-of-week view was also tried

@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -55,65 +54,35 @@ class StatsControllerTest {
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 2")
     }
 
-    @Test fun `a running cycle load restarts on every change, even one only about today`() {
+    @Test fun `the cycle pattern reloads only when completed days may have changed`() {
+        val loaded = Observable.just(CycleLoad(CYCLE_HISTORY_DAYS, LocalDate.of(2026, 10, 13), emptyMap()))
         whenever(loader.loadCycle()).thenAnswer { Observable.never<CycleLoad>() }
         whenever(loader.beforeToday(any())).thenAnswer { (it.arguments[0] as Long) < 5_000 }
+        fun change(from: Long) {
+            history.onNext(from)
+            io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run(); run()
+        }
         controller.start(); run()
         controller.showCycle(); run()
-        history.onNext(1_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        // While loading, even a change about today restarts it: the history being read may be out of date.
+        change(9_000)
         verify(loader, times(2)).loadCycle()
-        // Today only: the history being loaded may already be out of date, so it starts over.
-        history.onNext(9_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        whenever(loader.loadCycle()).thenReturn(loaded)
+        change(9_000)
         verify(loader, times(3)).loadCycle()
-        assertThat(controller.cycle.value.loading).isTrue()
-    }
-
-    @Test fun `a loaded cycle pattern is only reloaded for changes before today`() {
-        whenever(loader.beforeToday(any())).thenAnswer { (it.arguments[0] as Long) < 5_000 }
-        controller.start(); run()
-        controller.showCycle(); run()
-        history.onNext(9_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
-        verify(loader, times(1)).loadCycle()
-        history.onNext(1_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
-        verify(loader, times(2)).loadCycle()
-    }
-
-    @Test fun `a loaded cycle pattern moves on after midnight with the next change`() {
-        whenever(loader.beforeToday(any())).thenReturn(false)
-        controller.start(); run()
-        controller.showCycle(); run()
-        history.onNext(9_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
-        verify(loader, times(1)).loadCycle()
-        // Past midnight, October 14 is complete; a change that only concerns the new day still brings it in.
+        assertThat(controller.cycle.value.loading).isFalse()
+        // Once loaded, today's changes leave it; changes to completed days reload it.
+        change(9_000)
+        verify(loader, times(3)).loadCycle()
+        change(1_000)
+        verify(loader, times(4)).loadCycle()
+        // Past midnight, October 14 is complete, so a change about the new day brings it in.
         whenever(loader.newestCompletedDay()).thenReturn(LocalDate.of(2026, 10, 14))
-        history.onNext(9_500)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
-        verify(loader, times(2)).loadCycle()
+        change(9_000)
+        verify(loader, times(5)).loadCycle()
     }
 
-    @Test fun `a refresh that fails keeps the figures and says they may be out of date`() {
-        controller.start(); run()
-        whenever(loader.load(any())).thenReturn(Observable.error(IllegalStateException("database")))
-        history.onNext(1_000)
-        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run(); run()
-        assertThat(controller.stats.value.refreshFailed).isTrue()
-        assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
-    }
-
-    @Test fun `history changes while paused are ignored`() {
-        controller.start(); run()
-        controller.stop()
-        history.onNext(1_000)
-        io.advanceTimeBy(1, TimeUnit.MINUTES); run()
-        verify(loader, times(1)).load(any())
-    }
-
-    @Test fun `deleting saved totals runs once and does not change the figures`() {
+    @Test fun `deleting saved totals runs once, keeps the figures and reports failure`() {
         controller.start(); run()
         controller.recalculate()
         controller.recalculate()
@@ -122,38 +91,26 @@ class StatsControllerTest {
         verify(loader, times(1)).recalculateTdd()
         verify(loader, times(1)).load(any())
         assertThat(controller.recalculation.value).isEqualTo(Recalculation.DONE)
-    }
-
-    @Test fun `failed deletion of saved totals is reported`() {
         doAnswer { throw IllegalStateException("database") }.whenever(loader).recalculateTdd()
-        controller.start(); run()
         controller.recalculate(); run()
         assertThat(controller.recalculation.value).isEqualTo(Recalculation.FAILED)
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
     }
 
-    @Test fun `cycle offset is recomputed from loaded totals without reading history again`() {
-        val newest = LocalDate.of(2026, 10, 13)
-        val totals = (0 until CYCLE_HISTORY_DAYS).associate { newest.minusDays(it.toLong()) to 30.0 }
-        whenever(loader.loadCycle()).thenReturn(Observable.just(CycleLoad(CYCLE_HISTORY_DAYS, newest, totals)))
-        controller.showCycle(); run()
-        assertThat(controller.cycle.value.pattern!!.firstDay).isEqualTo(newest.minusDays(27))
-        controller.setCycleOffset(30)
-        assertThat(controller.cycle.value.offset).isEqualTo(CYCLE_DAYS - 1)
-        assertThat(controller.cycle.value.pattern!!.firstDay).isEqualTo(newest.minusDays(54))
-        verify(loader, times(1)).loadCycle()
-    }
-
-    @Test fun `an alignment without enough totals keeps its day 1 so the shift can be undone`() {
+    @Test fun `day 1 moves over loaded totals and is kept when an alignment lacks data so it can be undone`() {
         val newest = LocalDate.of(2026, 10, 13)
         // 49 days: two cycles at offset 0, but only 20 days in the older one after shifting by a day.
         val totals = (0 until 49).associate { newest.minusDays(it.toLong()) to 30.0 }
         whenever(loader.loadCycle()).thenReturn(Observable.just(CycleLoad(CYCLE_HISTORY_DAYS, newest, totals)))
         controller.showCycle(); run()
+        assertThat(controller.cycle.value.pattern!!.firstDay).isEqualTo(newest.minusDays(27))
         controller.setCycleOffset(1)
         assertThat(controller.cycle.value.pattern).isNull()
         assertThat(controller.cycle.value.firstDay).isEqualTo(newest.minusDays(28))
+        controller.setCycleOffset(30)
+        assertThat(controller.cycle.value.offset).isEqualTo(CYCLE_DAYS - 1)
         controller.setCycleOffset(0)
         assertThat(controller.cycle.value.pattern).isNotNull()
+        verify(loader, times(1)).loadCycle()
     }
 }

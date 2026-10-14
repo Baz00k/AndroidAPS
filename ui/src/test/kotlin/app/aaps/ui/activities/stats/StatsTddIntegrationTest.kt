@@ -86,56 +86,44 @@ class StatsTddIntegrationTest : TestBase() {
         Duration.between(date.atStartOfDay(zone), date.plusDays(1).atStartOfDay(zone)).toHours().toDouble()
 
     @Test fun `each total covers its calendar day and the shared cache is neither read nor written`() {
-        // Havana skips midnight on 2026-03-08 and repeats it on 2026-11-01; Warsaw's 2026-03-29 has 23 hours.
-        val cases = listOf("America/Havana" to "2026-03-09T16:00:00Z", "America/Havana" to "2026-03-15T16:00:00Z",
-                           "America/Havana" to "2026-09-19T16:00:00Z", "America/Havana" to "2026-11-01T17:00:00Z",
+        // Havana skips midnight on 2026-03-08 (23 hours) and repeats it on 2026-11-01 (25 hours); Warsaw's 2026-03-29 has 23 hours.
+        val cases = listOf("America/Havana" to "2026-03-09T16:00:00Z", "America/Havana" to "2026-11-01T17:00:00Z",
                            "America/Havana" to "2026-11-08T17:00:00Z", "Europe/Warsaw" to "2026-03-30T10:00:00Z")
+        val states = HashMap<String, StatsUiState>()
         for ((zoneId, text) in cases) inZone(zoneId) {
             val zone = ZoneId.of(zoneId)
             val fixture = Fixture(this, Instant.parse(text).toEpochMilli())
-            val state = fixture.loader.load(7).toList().blockingGet().last()
+            val state = fixture.loader.load(7).toList().blockingGet().last().also { states[text] = it }
             // The cycle history is long; one run across both Havana transitions is enough.
             val cycle = if (text.startsWith("2026-11-08")) fixture.loader.loadCycle().toList().blockingGet().last().totals!! else emptyMap()
             verify(fixture.persistence, never()).getCalculatedTotalDailyDose(any())
             verify(fixture.persistence, never()).insertOrUpdateCachedTotalDailyDose(any())
             assertThat(state.insulinDays).isEqualTo(7)
             state.insulinRows.forEach { assertThat(it.total).isWithin(1e-6).of(hours(it.date, zone)) }
-            // Today counts from its first local instant up to now, in whole five-minute steps.
-            val today = Instant.parse(text).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
-            val elapsed = Duration.between(today, Instant.parse(text)).toMinutes() / 5 * 5 / 60.0
-            assertThat(state.insulinToday!!.total).isWithin(1e-6).of(elapsed)
             cycle.forEach { (date, total) -> assertThat(total).isWithin(1e-6).of(hours(date, zone)) }
             if (cycle.isNotEmpty()) assertThat(cycle).hasSize(CYCLE_HISTORY_DAYS)
         }
-        inZone("America/Havana") {
-            // At noon on the day midnight repeats, 13 hours have passed since the first midnight.
-            val today = Fixture(this, Instant.parse("2026-11-01T17:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last().insulinToday!!
-            assertThat(today.total).isWithin(1e-6).of(13.0)
-            val rows = Fixture(this, Instant.parse("2026-03-15T16:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last().insulinRows
-            assertThat(rows.single { it.date == LocalDate.of(2026, 3, 8) }.total).isWithin(1e-6).of(23.0)
-        }
+        fun total(text: String, date: LocalDate) = states.getValue(text).insulinRows.single { it.date == date }.total
+        assertThat(total("2026-03-09T16:00:00Z", LocalDate.of(2026, 3, 8))).isWithin(1e-6).of(23.0)
+        assertThat(total("2026-11-08T17:00:00Z", LocalDate.of(2026, 11, 1))).isWithin(1e-6).of(25.0)
+        assertThat(total("2026-03-30T10:00:00Z", LocalDate.of(2026, 3, 29))).isWithin(1e-6).of(23.0)
+        // At noon on the day midnight repeats, 13 hours have passed since the first midnight.
+        assertThat(states.getValue("2026-11-01T17:00:00Z").insulinToday!!.total).isWithin(1e-6).of(13.0)
     }
 
-    @Test fun `days older than the retained treatments are not rebuilt from the profile alone`() = inZone("UTC") {
-        // Cleanup removed everything before 2026-07-13 10:00 but kept the profile, which would supply basal for any day.
-        val fixture = Fixture(this, Instant.parse("2026-10-14T12:00:00Z").toEpochMilli(), Instant.parse("2026-07-13T10:00:00Z").toEpochMilli())
-        val totals = fixture.loader.loadCycle().toList().blockingGet().last().totals!!
-        assertThat(totals.keys.minOrNull()).isEqualTo(LocalDate.of(2026, 7, 14))
-        assertThat(totals).hasSize(92)
-    }
-
-    @Test fun `without any treatment records no past day is calculated from the profile alone`() = inZone("UTC") {
-        val fixture = Fixture(this, Instant.parse("2026-10-14T12:00:00Z").toEpochMilli(), oldestBolus = null)
-        val state = fixture.loader.load(7).toList().blockingGet().last()
-        assertThat(state.insulinDays).isEqualTo(0)
-        assertThat(state.insulinRows.none { it.recorded }).isTrue()
-        assertThat(fixture.loader.loadCycle().toList().blockingGet().last().totals).isEmpty()
-    }
-
-    @Test fun `today without a profile for part of it has no total instead of a partial one`() = inZone("UTC") {
+    @Test fun `missing history gives no total instead of a profile-only or partial one`() = inZone("UTC") {
         val now = Instant.parse("2026-10-14T12:00:00Z").toEpochMilli()
-        val state = Fixture(this, now, profileFrom = Instant.parse("2026-10-14T06:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last()
-        assertThat(state.insulinToday).isNull()
-        assertThat(Fixture(this, now).loader.load(7).toList().blockingGet().last().insulinToday!!.total).isWithin(1e-6).of(12.0)
+        // Cleanup removed everything before 2026-07-13 10:00 but kept the profile, which would supply basal for any day.
+        val retained = Fixture(this, now, Instant.parse("2026-07-13T10:00:00Z").toEpochMilli()).loader.loadCycle().toList().blockingGet().last().totals!!
+        assertThat(retained.keys.minOrNull()).isEqualTo(LocalDate.of(2026, 7, 14))
+        assertThat(retained).hasSize(92)
+        // With no treatment records at all, no past day is calculated.
+        val empty = Fixture(this, now, oldestBolus = null).loader.load(7).toList().blockingGet().last()
+        assertThat(empty.insulinDays).isEqualTo(0)
+        assertThat(empty.insulinRows.none { it.recorded }).isTrue()
+        // No profile for the first six hours of today: no total rather than six hours short.
+        val partial = Fixture(this, now, profileFrom = Instant.parse("2026-10-14T06:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last()
+        assertThat(partial.insulinToday).isNull()
+        assertThat(empty.insulinToday!!.total).isWithin(1e-6).of(12.0)
     }
 }

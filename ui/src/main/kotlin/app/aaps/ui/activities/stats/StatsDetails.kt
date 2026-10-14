@@ -103,7 +103,7 @@ private fun PentagonCard(state: StatsUiState) {
     AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap)) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SectionLabel("Glucose pentagon")
-            Text("Five measures in one shape. The smaller your shape, the better. The green shape is typical for someone " +
+            Text("The smaller your shape, the better. The green shape is typical for someone " +
                      "without diabetes. Low and high use ${glucoseRange(Constants.STATS_RANGE_LOW_MMOL, Constants.STATS_RANGE_HIGH_MMOL, state)}.",
                  style = AapsTheme.type.caption, color = colors.textSecondary)
             val description = "Glucose pentagon: " + labels.joinToString(", ") { it.replace('\n', ' ') } +
@@ -368,4 +368,4 @@ private fun limit(mmol: Double, state: StatsUiState) = fmt(if (state.decimals ==
 internal fun tightRange(state: StatsUiState) = glucoseRange(Constants.STATS_TARGET_LOW_MMOL, Constants.STATS_TARGET_HIGH_MMOL, state)
 
 private fun glucoseRange(lowMmol: Double, highMmol: Double, state: StatsUiState) =
-    "${limit(lowMmol, state)}–${limit(highMmol, state)} ${state.avgGlucoseUnit}"
+    noBreak("${limit(lowMmol, state)}–${limit(highMmol, state)} ${state.avgGlucoseUnit}")

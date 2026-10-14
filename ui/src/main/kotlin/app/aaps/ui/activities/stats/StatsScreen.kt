@@ -136,13 +136,11 @@ fun StatsScreen(state: StatsUiState, actions: StatsActions, cycle: CycleUiState 
         val tile = Modifier.fillMaxHeight()
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(bottom = AapsSpacing.rowGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
             StatTile("AVERAGE GLUCOSE", if (state.avgGlucose == "--") "--" else noBreak("${state.avgGlucose} ${state.avgGlucoseUnit}"), tile.weight(1f))
-            StatTile("ESTIMATED A1C", state.gmi, tile.weight(1f), state.gmiMmol)
+            StatTile("ESTIMATED A1C", state.gmi, tile.weight(1f))
         }
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-            // 36 % is the consensus limit for stable glucose (Battelino 2019).
-            StatTile("VARIABILITY", state.cv, tile.weight(1f),
-                     if (state.sd.isEmpty()) "" else "Aim for 36% or less\nStandard deviation ${noBreak(state.sd).replace(' ', '\u00A0')}")
-            StatTile("DAILY INSULIN", if (state.insulinLoading) "…" else state.avgTdd, tile.weight(1f), "Average")
+            StatTile("VARIABILITY", state.cv, tile.weight(1f))
+            StatTile("DAILY INSULIN", if (state.insulinLoading) "…" else state.avgTdd, tile.weight(1f))
         }
 
         GlucoseProfile(state)
@@ -171,13 +169,12 @@ private fun BarLabel(name: String, pct: Double, dot: Color, textColor: Color) {
 internal fun noBreak(text: String) = text.replace("/", "/\u2060")
 
 @Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier, caption: String = "") {
+private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
             Text(value, style = AapsTheme.type.cardValue, color = colors.textPrimary)
-            if (caption.isNotEmpty()) Text(caption, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
     }
 }
