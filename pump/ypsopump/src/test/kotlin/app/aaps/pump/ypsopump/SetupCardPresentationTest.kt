@@ -155,7 +155,9 @@ class SetupCardPresentationTest {
         checking: Boolean = false,
         scan: YpsoPumpScanner.Scan? = null,
         busy: Int? = null,
-    ) = setupCard(busy, feedback, checking, configured, pairing, scan)
+        savedMac: String? = mac.takeIf { configured },
+        target: String? = mac.takeIf { pairing != PairingPresentation.DETAILS_REQUIRED },
+    ) = setupCard(busy, feedback, checking, savedMac, target, pairing, scan)
 
     @Test
     fun `a new setup gives one instruction, to find the pump`() {
@@ -204,6 +206,23 @@ class SetupCardPresentationTest {
     fun `once paired the card shows the setup status alone`() {
         assertThat(card(PairingPresentation.PAIRED)).isEqualTo(SetupCard(R.string.ypsopump_setup_add_key, ProvisioningFeedbackTone.NEUTRAL))
         assertThat(card(PairingPresentation.PAIRED, configured = true)).isEqualTo(SetupCard(ready.message, ready.tone))
+    }
+
+    @Test
+    fun `a saved pump is not reported as set up for another selected pump`() {
+        // Pump A is saved and verified; the selected pump B is paired but has no session.
+        val view = card(PairingPresentation.PAIRED, configured = true, savedMac = otherMac)
+        assertThat(view).isEqualTo(SetupCard(R.string.ypsopump_setup_add_key, ProvisioningFeedbackTone.NEUTRAL))
+        assertThat(card(PairingPresentation.PAIRED, configured = true, savedMac = mac.lowercase())).isEqualTo(SetupCard(ready.message, ready.tone))
+    }
+
+    @Test
+    fun `a check started during a search stays visible and cancellable`() {
+        val view = card(
+            PairingPresentation.PAIRED, configured = true, feedback = checkingFeedback, checking = true,
+            scan = YpsoPumpScanner.Scan(1, YpsoPumpScanner.Phase.SCANNING, listOf(found)),
+        )
+        assertThat(view).isEqualTo(SetupCard(checkingFeedback.message, checkingFeedback.tone, progress = true, actions = listOf(SetupAction.CANCEL_CHECK)))
     }
 
     @Test

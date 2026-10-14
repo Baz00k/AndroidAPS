@@ -74,24 +74,26 @@ internal data class SetupCard(
 /**
  * Chooses the card. Work under way speaks first; a phone that is not paired cannot reach the pump, so pairing
  * comes before the setup status; and a search is only shown while no supported serial has been entered.
+ * [feedback] describes the saved session at [savedMac]; it describes the selected pump at [target] only when
+ * the two addresses agree, so another saved pump is never reported as this one being set up.
  */
 internal fun setupCard(
     @StringRes busyMessage: Int?,
     feedback: ProvisioningFeedback,
     checking: Boolean,
-    configured: Boolean,
+    savedMac: String?,
+    target: String?,
     pairing: PairingPresentation,
     scan: YpsoPumpScanner.Scan?,
 ): SetupCard {
     if (busyMessage != null) return SetupCard(busyMessage, ProvisioningFeedbackTone.NEUTRAL, progress = true)
     val cancel = listOfNotNull(SetupAction.CANCEL_CHECK.takeIf { checking })
     if (pairing == PairingPresentation.WAITING) return SetupCard(pairing.message, pairing.tone, progress = true, actions = cancel)
-    if (scan?.phase == YpsoPumpScanner.Phase.SCANNING)
-        return SetupCard(R.string.ypsopump_scan_running, ProvisioningFeedbackTone.NEUTRAL, progress = true, showFoundPumps = true)
     val pair = listOfNotNull(SetupAction.PAIR_PUMP.takeIf { pairing.canPair })
     if (checking) return SetupCard(feedback.message, feedback.tone, progress = true, actions = cancel + pair)
+    if (scan?.phase == YpsoPumpScanner.Phase.SCANNING)
+        return SetupCard(R.string.ypsopump_scan_running, ProvisioningFeedbackTone.NEUTRAL, progress = true, showFoundPumps = true)
     if (pairing == PairingPresentation.DETAILS_REQUIRED) {
-        if (configured) return SetupCard(feedback.message, feedback.tone)
         val found = scan?.pumps.orEmpty().isNotEmpty()
         val message = when (scan?.phase) {
             YpsoPumpScanner.Phase.FINISHED -> if (found) R.string.ypsopump_scan_choose else R.string.ypsopump_scan_none
@@ -107,6 +109,7 @@ internal fun setupCard(
     }
     // An entered serial already names the pump, so pairing it is the one thing to do.
     if (pairing != PairingPresentation.PAIRED) return SetupCard(pairing.message, pairing.tone, actions = pair)
+    val configured = savedMac != null && target != null && savedMac.equals(target, ignoreCase = true)
     if (!configured) return SetupCard(R.string.ypsopump_setup_add_key, ProvisioningFeedbackTone.NEUTRAL)
     return SetupCard(feedback.message, feedback.tone)
 }

@@ -38,6 +38,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -332,9 +333,13 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     private fun pair(target: String) = withPermissions(target, arrayOf(Manifest.permission.BLUETOOTH_CONNECT)) { startPairing(target) }
 
     // Android withholds scan results without location access; pairing the found pump needs connect access.
+    // Android ignores a request for precise location that does not also ask for approximate location.
     private fun findPump() = withPermissions(
         FIND_PUMP_ACTION,
-        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.ACCESS_FINE_LOCATION),
+        arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION,
+        ),
     ) { scanner.start() }
 
     private fun startPairing(target: String) {
@@ -402,7 +407,9 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         var verificationState by remember { mutableStateOf(service.verificationState()) }
         var checkCanProceed by remember { mutableStateOf(service.verificationCanProceed()) }
         var installing by remember { mutableStateOf(false) }
-        var serial by remember { mutableStateOf(installed?.serial.orEmpty()) }
+        // The serial is not secret, so it survives recreation along with the pairing attempt it names.
+        var serial by rememberSaveable { mutableStateOf((pending ?: installed)?.serial.orEmpty()) }
+        var syncedSerial by rememberSaveable { mutableStateOf((pending ?: installed)?.serial) }
         var key by remember { mutableStateOf("") }
         var showKey by remember { mutableStateOf(false) }
         var serialError by remember { mutableStateOf<String?>(null) }
@@ -447,10 +454,14 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 if (updated?.attemptId != attemptId || verificationPresentation(updated) != VerificationPresentation.CHECKING) return@LaunchedEffect
             }
         }
-        LaunchedEffect(installed?.serial) {
-            installed?.let { if (it.serial != serial) serial = it.serial }
-        }
         val displayedSession = pending ?: installed
+        // The field follows a newly saved or checked session, so pairing targets the pump being checked.
+        LaunchedEffect(displayedSession?.serial) {
+            val current = displayedSession?.serial
+            if (current == syncedSerial) return@LaunchedEffect
+            syncedSerial = current
+            current?.let { serial = it }
+        }
         val causes = displayedSession?.availability?.causes.orEmpty()
         val feedback = provisioningFeedback(
             verification = verification,
@@ -491,14 +502,14 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         }
         val pairingView = pairingPresentation(pairTarget, bond, pairingAttempt)
         val scan by scanner.scan.collectAsState()
-        val card = setupCard(busyMessage, feedback, checking, configured = displayedSession != null, pairingView, scan)
+        val card = setupCard(busyMessage, feedback, checking, displayedSession?.mac, pairTarget, pairingView, scan)
         // The details being paired stay fixed until this attempt ends; bonding started elsewhere locks nothing.
         val locked = busy || pairingAttempt?.phase == YpsoPumpPairing.Phase.WAITING
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            SetupStatusCard(card, scan?.pumps.orEmpty(), failure,
+            SetupStatusCard(card, scan?.pumps.orEmpty(), failure, choosable = !locked,
                 onAction = { action ->
                     when (action) {
                         SetupAction.FIND_PUMP -> findPump()
@@ -510,6 +521,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     }
                 },
                 onChoose = { pump ->
+                    if (locked) return@SetupStatusCard
                     serial = pump.serial
                     serialError = null
                     pair(pump.mac)
@@ -546,6 +558,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             )
             PrimaryButton(getString(R.string.ypsopump_save_verify), onClick = {
                 setupFailure = null
+                scanner.stop()
                 installing = true
                 lifecycleScope.launch {
                     val result = runCatching {
@@ -600,6 +613,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                             val operationDocument = detachDocumentForInstallation(document)
                             selectedDocument = null
                             setupFailure = null
+                            scanner.stop()
                             installing = true
                             lifecycleScope.launch {
                                 val result = runCatching {
@@ -626,6 +640,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         card: SetupCard,
         found: List<YpsoFoundPump>,
         @StringRes failure: Int?,
+        choosable: Boolean,
         onAction: (SetupAction) -> Unit,
         onChoose: (YpsoFoundPump) -> Unit,
     ) {
@@ -641,7 +656,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 )
                 if (card.progress) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 if (card.showFoundPumps) found.forEach { pump ->
-                    SecondaryButton(getString(R.string.ypsopump_found_pump, pump.serial), onClick = { onChoose(pump) }, Modifier.fillMaxWidth())
+                    SecondaryButton(getString(R.string.ypsopump_found_pump, pump.serial), onClick = { onChoose(pump) }, Modifier.fillMaxWidth(), enabled = choosable)
                 }
                 card.actions.forEach { action ->
                     when (action) {
