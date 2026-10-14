@@ -5,7 +5,7 @@ import java.util.Calendar
 import java.util.TimeZone
 import kotlin.math.sqrt
 
-/** Glucose-only summary. TIR uses raw readings from completed days; the profile uses 5-minute buckets in the rolling window. */
+/** Glucose-only summary. TIR counts raw readings in [tirFrom, tirTo]; the average, CV and profile use 5-minute buckets in [rollingFrom, now]. */
 internal data class StatsGlucose(
     val average: Double,
     val cv: Double,

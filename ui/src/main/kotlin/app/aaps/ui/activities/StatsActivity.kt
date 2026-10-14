@@ -1,49 +1,60 @@
 package app.aaps.ui.activities
 
 import android.os.Bundle
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.rx.AapsSchedulers
+import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.EventNewHistoryData
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
+import app.aaps.ui.activities.stats.StatsActions
+import app.aaps.ui.activities.stats.StatsController
 import app.aaps.ui.activities.stats.StatsLoader
-import app.aaps.ui.activities.stats.StatsReloader
 import app.aaps.ui.activities.stats.StatsScreen
-import app.aaps.ui.activities.stats.StatsUiState
 import javax.inject.Inject
 
 class StatsActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var loader: StatsLoader
+    @Inject lateinit var rxBus: RxBus
     @Inject lateinit var aapsSchedulers: AapsSchedulers
     @Inject lateinit var fabricPrivacy: FabricPrivacy
 
-    private val statsState = mutableStateOf(StatsUiState())
-    private lateinit var reloader: StatsReloader
+    private lateinit var controller: StatsController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
-        statsState.value = StatsUiState(rangeDays = savedInstanceState?.getInt("rangeDays", 7) ?: 7)
-        reloader = StatsReloader(loader::load, aapsSchedulers.io, aapsSchedulers.main,
-                                 { statsState.value = it }, fabricPrivacy::logException)
+        controller = StatsController(
+            loader, rxBus.toObservable(EventNewHistoryData::class.java).map { it.oldDataTimestamp },
+            aapsSchedulers.io, aapsSchedulers.main, fabricPrivacy::logException,
+            rangeDays = savedInstanceState?.getInt("rangeDays", 7) ?: 7,
+            cycleOffset = savedInstanceState?.getInt("cycleOffset", 0) ?: 0
+        )
+        val actions = StatsActions(
+            onRange = controller::select, onBack = { finish() }, onRecalculate = controller::recalculate,
+            onShowCycle = controller::showCycle, onCycleOffset = controller::setCycleOffset
+        )
         setContentView(ComposeView(this).apply {
-            setContent { AapsTheme { StatsScreen(statsState.value, onRange = reloader::reload, onBack = { finish() }) } }
+            setContent {
+                AapsTheme { StatsScreen(controller.stats.value, actions, controller.cycle.value, controller.recalculation.value) }
+            }
         })
     }
 
     override fun onResume() {
         super.onResume()
-        reloader.reload(statsState.value.rangeDays)
+        controller.start()
     }
 
     override fun onPause() {
-        reloader.stop()
+        controller.stop()
         super.onPause()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putInt("rangeDays", statsState.value.rangeDays)
+        outState.putInt("rangeDays", controller.stats.value.rangeDays)
+        outState.putInt("cycleOffset", controller.cycle.value.offset)
         super.onSaveInstanceState(outState)
     }
 }

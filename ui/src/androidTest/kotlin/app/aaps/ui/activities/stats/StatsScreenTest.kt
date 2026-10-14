@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import app.aaps.core.compose.theme.AapsTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -17,14 +18,28 @@ class StatsScreenTest {
     @get:Rule val compose = createComposeRule()
 
     @Test fun availableHistoryRangeSelectionAndRetry() {
-        var state by mutableStateOf(StatsUiState(loading = false, rangeDays = 7, insulinDays = 8))
-        compose.setContent { AapsTheme { StatsScreen(state, { state = StatsUiState(rangeDays = it) }, {}) } }
-        compose.onNodeWithText("TDD and carbs: 8 available daily records").performScrollTo().assertIsDisplayed()
+        val sparse = CompletedGlucose(readings = 900, coverage = 50, daysWithData = 4, tight = 50.0, hypo = 2.0, hyper = 10.0,
+                                      mean = 140.0, sd = 40.0, days = emptyList())
+        var state by mutableStateOf(StatsUiState(loading = false, rangeDays = 7, completed = sparse))
+        compose.setContent { AapsTheme { StatsScreen(state, StatsActions({ state = StatsUiState(rangeDays = it) }, {})) } }
+        compose.onNodeWithText("Glucose data on 4 of 7 days, only 50% of readings. Figures may not be reliable.").assertIsDisplayed()
         compose.onNodeWithText("90d").performScrollTo().performClick()
-        compose.onNodeWithText("Last 90 days").assertIsDisplayed()
         compose.onNodeWithText("Loading statistics…").assertIsDisplayed()
         compose.runOnIdle { state = state.copy(loading = false, failed = true) }
         compose.onNodeWithText("Retry").performClick()
         compose.onNodeWithText("Loading statistics…").assertIsDisplayed()
+    }
+
+    @Test fun recalculationNeedsConfirmation() {
+        var recalculations = 0
+        compose.setContent {
+            AapsTheme { StatsScreen(StatsUiState(loading = false, insulinDays = 1), StatsActions({}, {}, onRecalculate = { recalculations++ })) }
+        }
+        compose.onNodeWithText("Rebuild saved totals").performScrollTo().performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.runOnIdle { assertEquals(0, recalculations) }
+        compose.onNodeWithText("Rebuild saved totals").performScrollTo().performClick()
+        compose.onNodeWithText("Rebuild").performClick()
+        compose.runOnIdle { assertEquals(1, recalculations) }
     }
 }

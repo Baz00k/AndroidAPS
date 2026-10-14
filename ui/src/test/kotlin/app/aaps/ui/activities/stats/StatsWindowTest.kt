@@ -1,28 +1,23 @@
 package app.aaps.ui.activities.stats
 
-import app.aaps.core.data.model.GV
-import app.aaps.core.data.model.SourceSensor
-import app.aaps.core.data.model.TrendArrow
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 import java.time.Instant
-import java.util.TimeZone
+import java.time.ZoneId
 
 class StatsWindowTest {
-    @Test fun `repeated midnight retains established TIR inclusion`() {
-        val original = TimeZone.getDefault()
-        try {
-            TimeZone.setDefault(TimeZone.getTimeZone("America/Havana"))
-            val disputed = GV(timestamp = Instant.parse("2026-11-01T04:30:00Z").toEpochMilli(), value = 100.0,
-                               raw = null, noise = null, trendArrow = TrendArrow.NONE, sourceSensor = SourceSensor.UNKNOWN)
-            val endWindow = StatsWindow(Instant.parse("2026-11-01T17:00:00Z").toEpochMilli(), 7)
-            val startWindow = StatsWindow(Instant.parse("2026-11-08T17:00:00Z").toEpochMilli(), 7)
-            fun count(window: StatsWindow) = summarizeGlucose(listOf(disputed), window.rollingFrom, window.now,
-                                                               window.tirFrom, window.tirTo, 70.0, 180.0, { it }).tirReadings
-            assertThat(count(endWindow)).isEqualTo(1)
-            assertThat(count(startWindow)).isEqualTo(0)
-        } finally {
-            TimeZone.setDefault(original)
-        }
+    private val havana = ZoneId.of("America/Havana")
+
+    @Test fun `days start at their first local instant across repeated and skipped midnights`() {
+        // Havana repeats midnight on 2026-11-01: 04:30 UTC is 00:30 local on the first pass, so it is November 1.
+        val reading = Instant.parse("2026-11-01T04:30:00Z").toEpochMilli()
+        val endingThatDay = StatsWindow(Instant.parse("2026-11-01T17:00:00Z").toEpochMilli(), 7, havana)
+        val startingThatDay = StatsWindow(Instant.parse("2026-11-08T17:00:00Z").toEpochMilli(), 7, havana)
+        assertThat(reading).isAtLeast(endingThatDay.to)
+        assertThat(reading).isIn(com.google.common.collect.Range.closedOpen(startingThatDay.from, startingThatDay.to))
+        // Havana skips midnight on 2026-03-08; the day starts at 01:00 local, 05:00 UTC.
+        val skipped = StatsWindow(Instant.parse("2026-03-09T16:00:00Z").toEpochMilli(), 1, havana)
+        assertThat(skipped.from).isEqualTo(Instant.parse("2026-03-08T05:00:00Z").toEpochMilli())
+        assertThat(skipped.to).isEqualTo(Instant.parse("2026-03-09T04:00:00Z").toEpochMilli())
     }
 }
