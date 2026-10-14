@@ -21,7 +21,22 @@ internal class StatsReloader(
         request.set(null)
         state = StatsUiState(rangeDays = days)
         onState(state)
-        request.set(Observable.defer { load(days) }.subscribeOn(io).observeOn(main, true).subscribe({ result ->
+        start(id, Observable.defer { load(days) })
+    }
+
+    /**
+     * Re-reads after a history change without blanking the screen: the previous figures stay until
+     * the complete result replaces them, and a failure keeps them rather than showing an empty screen.
+     */
+    fun refresh(days: Int) {
+        if (state.loading || state.failed || state.rangeDays != days) return reload(days)
+        val id = ++generation
+        request.set(null)
+        start(id, Observable.defer { load(days) }.filter { !it.insulinLoading })
+    }
+
+    private fun start(id: Long, source: Observable<StatsUiState>) {
+        request.set(source.subscribeOn(io).observeOn(main, true).subscribe({ result ->
             if (id == generation) {
                 state = result
                 onState(result)

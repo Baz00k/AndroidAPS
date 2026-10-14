@@ -25,6 +25,22 @@ class StatsReloaderTest {
         assertThat(states.last().loading).isFalse()
     }
 
+    @Test fun `refresh keeps the shown figures through partial results and failures`() {
+        loader.reload(7); io.triggerActions()
+        sources.getValue(7).onNext(StatsUiState(loading = false, avgGlucose = "OLD", avgTdd = "30.0 U")); main.triggerActions()
+        sources.remove(7)
+        loader.refresh(7); io.triggerActions()
+        sources.getValue(7).onNext(StatsUiState(loading = false, avgGlucose = "NEW", insulinLoading = true)); main.triggerActions()
+        assertThat(states.last().avgTdd).isEqualTo("30.0 U")
+        sources.getValue(7).onNext(StatsUiState(loading = false, avgGlucose = "NEW", avgTdd = "31.0 U")); main.triggerActions()
+        assertThat(states.last().avgTdd).isEqualTo("31.0 U")
+        sources.remove(7)
+        loader.refresh(7); io.triggerActions()
+        sources.getValue(7).onError(IllegalStateException("database")); main.triggerActions()
+        assertThat(states.last().failed).isFalse()
+        assertThat(states.last().avgGlucose).isEqualTo("NEW")
+    }
+
     @Test fun `failure ends loading retry works and a queued partial result survives insulin failure`() {
         loader.reload(30); io.triggerActions()
         sources.getValue(30).onError(IllegalStateException("database")); main.triggerActions()

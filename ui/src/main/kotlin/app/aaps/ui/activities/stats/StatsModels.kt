@@ -1,6 +1,7 @@
 package app.aaps.ui.activities.stats
 
 import androidx.compose.runtime.Immutable
+import java.time.LocalDate
 
 /**
  * One hour of the day, summarised across every day in the range.
@@ -55,5 +56,40 @@ data class StatsUiState(
     // Needed by the profile chart for its target band and y-axis.
     val lowMark: Double = 4.0,
     val highMark: Double = 10.0,
-    val decimals: Int = 1
+    val decimals: Int = 1,
+    // Completed-day reports. Formatted values are in display units.
+    val completed: CompletedGlucose? = null,
+    val pentagon: Pentagon? = null,
+    val completedMean: String = "--",
+    val sd: String = "--",
+    val ea1c: String = "--",
+    // Newest first; a day without a record is kept, so a gap is visible rather than averaged over.
+    val insulinRows: List<InsulinDay> = emptyList(),
+    val insulinAverage: InsulinDay? = null,
+    val insulinToday: InsulinDay? = null
 )
+
+/** One day's insulin in units and carbs in grams. [recorded] is false for a completed day without a total. */
+@Immutable
+data class InsulinDay(
+    val date: LocalDate,
+    val basal: Double = 0.0,
+    val bolus: Double = 0.0,
+    val total: Double = 0.0,
+    val carbs: Double = 0.0,
+    val recorded: Boolean = true
+)
+
+/** The on-demand 28-day insulin pattern. [availableDays] counts days with a total in the loaded history. */
+@Immutable
+data class CycleUiState(
+    val requested: Boolean = false,
+    val loading: Boolean = false,
+    val loadedDays: Int = 0,
+    val failed: Boolean = false,
+    val offset: Int = 0,
+    val availableDays: Int = 0,
+    val pattern: CyclePattern? = null
+)
+
+enum class Recalculation { IDLE, RUNNING, FAILED }

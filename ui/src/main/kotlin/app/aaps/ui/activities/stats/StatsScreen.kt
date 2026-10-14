@@ -33,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,12 +48,25 @@ import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import kotlin.math.roundToInt
 
+/** Screen callbacks. [onRecalculate] is called only after the user confirms it. */
+@Immutable
+class StatsActions(
+    val onRange: (Int) -> Unit,
+    val onBack: () -> Unit,
+    val onRecalculate: () -> Unit = {},
+    val onShowCycle: () -> Unit = {},
+    val onCycleOffset: (Int) -> Unit = {}
+)
+
 /**
- * Read-only statistics with independently loading glucose and insulin summaries.
+ * Statistics with independently loading glucose and insulin summaries. The only write it can start is
+ * the confirmed rebuild of cached daily insulin totals.
  */
 @Composable
-fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit) {
+fun StatsScreen(state: StatsUiState, actions: StatsActions, cycle: CycleUiState = CycleUiState(), recalculation: Recalculation = Recalculation.IDLE) {
     val colors = AapsTheme.colors
+    val onRange = actions.onRange
+    val onBack = actions.onBack
     val ranges = listOf(7, 30, 90)
     Column(
         Modifier
@@ -131,27 +145,9 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
 
         GlucoseProfile(state)
 
-        // extra
-        AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap, bottom = 24.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Carbs / day", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                    Text(if (state.insulinLoading) "…" else state.carbsPerDay, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                }
-                when {
-                    state.insulinLoading -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(Modifier.size(20.dp), color = colors.accent)
-                        Text("Loading insulin history…", style = AapsTheme.type.caption, color = colors.textSecondary)
-                    }
-                    state.insulinFailed -> {
-                        Text("Could not load insulin history", style = AapsTheme.type.body, color = colors.textSecondary)
-                        TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
-                    }
-                    state.insulinDays == 0 -> Text("No complete insulin history for this period", style = AapsTheme.type.caption, color = colors.textSecondary)
-                    else -> Text("TDD and carbs: ${state.insulinDays} available daily records", style = AapsTheme.type.caption, color = colors.textSecondary)
-                }
-            }
-        }
+        CompletedDayReports(state)
+        DailyInsulin(state, recalculation, actions.onRecalculate) { onRange(state.rangeDays) }
+        CyclePatternCard(cycle, actions.onShowCycle, actions.onCycleOffset)
     }
 }
 
@@ -296,6 +292,6 @@ private fun DrawScope.drawProfile(
     }
 }
 
-private fun fmt(v: Double, decimals: Int): String =
+internal fun fmt(v: Double, decimals: Int): String =
     if (decimals <= 0) String.format(Locale.getDefault(), "%.0f", v)
     else String.format(Locale.getDefault(), "%.1f", v)

@@ -64,7 +64,7 @@ class StatsTddIntegrationTest : TestBase() {
                 val preferences = mock<Preferences>()
                 whenever(preferences.get(UnitDoubleKey.OverviewLowMark)).thenReturn(70.0)
                 whenever(preferences.get(UnitDoubleKey.OverviewHighMark)).thenReturn(180.0)
-                val state = StatsLoader(persistence, profileFunction, util, preferences, date, calculator).load(7).toList().blockingGet().last()
+                val state = StatsLoader(persistence, profileFunction, util, preferences, date, calculator, mock()).load(7).toList().blockingGet().last()
                 assertThat(lookups).containsExactlyElementsIn(expectedLookups).inOrder()
                 assertThat(writes).containsExactlyElementsIn(expectedWrites).inOrder()
                 assertThat(writes.all { it < now }).isTrue()
@@ -103,8 +103,9 @@ class StatsTddIntegrationTest : TestBase() {
             val preferences = mock<Preferences>()
             whenever(preferences.get(UnitDoubleKey.OverviewLowMark)).thenReturn(70.0)
             whenever(preferences.get(UnitDoubleKey.OverviewHighMark)).thenReturn(180.0)
-            val state = StatsLoader(persistence, profiles, util, preferences, date, calculator).load(7).toList().blockingGet().last()
-            assertThat(calls).containsExactly(oldest)
+            val state = StatsLoader(persistence, profiles, util, preferences, date, calculator, mock()).load(7).toList().blockingGet().last()
+            // Profile lookups from today onward are the partial "today so far" total, not a recomputed cached day.
+            assertThat(calls.filter { it < Instant.parse("2026-10-14T00:00:00Z").toEpochMilli() }).containsExactly(oldest)
             assertThat(state.insulinDays).isEqualTo(6)
             assertThat(state.avgTdd).isEqualTo("30.0 U")
         } finally {
