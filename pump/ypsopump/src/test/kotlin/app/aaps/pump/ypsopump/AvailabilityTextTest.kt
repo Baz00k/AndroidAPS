@@ -33,7 +33,7 @@ class AvailabilityTextTest {
             testConnectionState = ConnectionState.DISCONNECTED
         }
         val resources = resources(
-            R.string.ypsopump_cause_bond_missing to "Pair the pump in Android Bluetooth settings.",
+            R.string.ypsopump_cause_bond_missing to "Pair the pump again.",
             R.string.ypsopump_cause_bluetooth_off to "Turn Bluetooth on.",
             R.string.ypsopump_cause_bluetooth_permission to "Allow Nearby devices.",
         )

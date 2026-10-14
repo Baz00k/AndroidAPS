@@ -40,6 +40,9 @@ class YpsoProvisioningService internal constructor(
     internal var quiesceConnection: () -> Unit = {}
     internal var availabilityChanged: (PumpSession.Availability) -> Unit = {}
     private var verificationAttemptRequested = false
+    // An ordinary bypass of transport backoff. Unlike the explicit check of a new key, a suspected re-key
+    // recorded before it is used cancels it.
+    private var connectionAttemptRequested = false
     private val mutationEpoch = AtomicLong()
     private val provisioningLock = Any()
     internal var elapsedRealtime: () -> Long = SystemClock::elapsedRealtime
@@ -192,6 +195,7 @@ class YpsoProvisioningService internal constructor(
                 synchronized(this) {
                     owner.cancelCandidate(PumpSession.AttemptStatus.CANCELLED)
                     verificationAttemptRequested = false
+                    connectionAttemptRequested = false
                     pumpState.invalidateStatus()
                     refreshState()
                     publishAvailability()
@@ -621,7 +625,14 @@ class YpsoProvisioningService internal constructor(
             return true
         }
         val availability = pumpState.availability
-        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in availability.causes) return false
+        if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in availability.causes) {
+            connectionAttemptRequested = false
+            return false
+        }
+        if (connectionAttemptRequested) {
+            connectionAttemptRequested = false
+            return true
+        }
         // Retry timestamps are meaningful only after an actual configured-session failure.
         if (availability.failures == 0) return true
         return availability.retryAt?.let { now >= it } ?: true
@@ -640,11 +651,14 @@ class YpsoProvisioningService internal constructor(
             pumpState.connectionState != ConnectionState.DISCONNECTED ||
             PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED !in pumpState.availability.causes
 
-    /** Each queued-therapy connection cycle may bypass transport backoff; hard rekey remains blocking. */
+    /**
+     * Each queued-therapy connection cycle, and each new Bluetooth bond, may bypass transport backoff
+     * once; hard rekey remains blocking.
+     */
     @Synchronized
-    fun requestTherapyConnectionAttempt(): Boolean {
+    fun requestConnectionAttempt(): Boolean {
         if (PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED in pumpState.availability.causes) return false
-        verificationAttemptRequested = true
+        connectionAttemptRequested = true
         return true
     }
 
@@ -683,6 +697,7 @@ class YpsoProvisioningService internal constructor(
                 quiesceConnection()
                 synchronized(this) {
                     verificationAttemptRequested = false
+                    connectionAttemptRequested = false
                     owner.install(provisioning).also {
                         pumpState.invalidateStatus()
                         pumpState.claimedSerialNumber = serial
