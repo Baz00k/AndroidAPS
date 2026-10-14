@@ -495,6 +495,9 @@ internal class YpsoBolusDelivery(
         repairJournalledAccounting(pumpSerial)
         reconcileAttempt(pumpSerial, zone, generation, reboot, snapshot)
         refreshWarning()
+        // A failure before the atomic replace keeps every dose, one after it the pruned journal; ingestion goes on.
+        runCatching { forgetSettled(pumpSerial) }
+            .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump bolus journal was not pruned: ${it.message}") }
         val attempt = controller.currentAttempt()
         val terminalSequence = when (attempt?.shape) {
             YpsoBolusShape.IMMEDIATE -> attempt.pumpFastSequence
@@ -624,16 +627,55 @@ internal class YpsoBolusDelivery(
                 aapsLogger.info(LTag.PUMP, "YpsoPump merged journalled provisional bolus with pump event $id")
             } else {
                 val existing = records.extended(id, pumpSerial) ?: continue
-                if (attempt.cancelStoppedAt == null && attempt.blockTerminalAt == null) continue
-                val delivered = Math.round(existing.amount * 100).toInt()
-                val window = YpsoExtendedBolusAccounting.terminalWindow(attempt, delivered, now())
-                // A terminal history row may already have supplied a shorter elapsed window.
-                // The observed stop is an upper bound, not permission to extend that delivery again.
-                if (existing.duration <= window.duration) continue
-                records.correctExtended(existing.timestamp, existing.amount, window.duration, existing.isEmulatingTempBasal, id, pumpSerial)
+                val duration = extendedOverrun(attempt, existing) ?: continue
+                records.correctExtended(existing.timestamp, existing.amount, duration, existing.isEmulatingTempBasal, id, pumpSerial)
             }
         }
     }
+
+    /** The duration an extended record must be cut to because the pump stopped earlier, or null. */
+    private fun extendedOverrun(attempt: YpsoBolusAttempt, existing: EB): Long? {
+        if (attempt.cancelStoppedAt == null && attempt.blockTerminalAt == null) return null
+        val delivered = Math.round(existing.amount * 100).toInt()
+        val window = YpsoExtendedBolusAccounting.terminalWindow(attempt, delivered, now())
+        // A terminal history row may already have supplied a shorter elapsed window.
+        // The observed stop is an upper bound, not permission to extend that delivery again.
+        return window.duration.takeIf { existing.duration > it }
+    }
+
+    /**
+     * Forgets journalled doses that can no longer affect accounting, so the journal stays bounded. A
+     * dose that never left the phone or was proven rejected carries none. A confirmed dose is settled
+     * once ingestion has moved past its history row, so no scan offers that row again, and a record
+     * carries the row with nothing left to repair. The journal itself keeps every dose still being
+     * resolved and the evidence recovery needs.
+     */
+    private fun forgetSettled(pumpSerial: String) {
+        val candidates = journal.forgettable()
+        if (candidates.isEmpty()) return
+        val ingestedThrough = historyCursor()?.identity?.takeIf { it.pumpSerial == pumpSerial }?.aapsPumpId ?: -1L
+        val settled = candidates.filter { attempt ->
+            val id = attempt.pumpHistoryId
+            when {
+                attempt.outcome in NO_INSULIN -> true
+                attempt.outcome !in CONFIRMED || attempt.pumpSerial != pumpSerial || id == null || ingestedThrough <= id -> false
+                attempt.shape == YpsoBolusShape.IMMEDIATE -> records.bolus(id, pumpSerial)?.let { provisionalSettled(attempt, it) } == true
+                else -> records.extended(id, pumpSerial)?.let { extendedOverrun(attempt, it) == null } == true
+            }
+        }
+        val forgotten = journal.forget(settled)
+        if (forgotten > 0) aapsLogger.info(LTag.PUMP, "YpsoPump bolus journal forgot $forgotten settled doses")
+    }
+
+    /**
+     * Whether the record carrying a dose's row proves its provisional record needs the journal no more:
+     * the row's record took over the provisional identity (a merge keeps a removal of either), or the
+     * row is larger than the request and so is never merged. Absence of a provisional record is not
+     * proof: removed records can be invisible to lookups, so such a dose stays journalled.
+     */
+    private fun provisionalSettled(attempt: YpsoBolusAttempt, imported: BS): Boolean =
+        imported.ids.temporaryId == provisionalTemporaryId(attempt) ||
+            attempt.pumpFastSequence != null && Math.round(imported.amount * 100) > attempt.requestedCentiUnits
 
     /**
      * A notified dose whose history row was imported before it could be linked (a scan interrupted
@@ -775,6 +817,8 @@ internal class YpsoBolusDelivery(
         private const val RECONNECT_MS = 10_000L
         /** A notified dose's warning stays while its insulin can still act (typical insulin duration). */
         private const val NOTIFIED_WARNING_WINDOW_MS = 6 * 60 * 60_000L
+        private val CONFIRMED = setOf(YpsoBolusOutcome.COMPLETED, YpsoBolusOutcome.CANCELLED_PARTIAL)
+        private val NO_INSULIN = setOf(YpsoBolusOutcome.NOT_SENT, YpsoBolusOutcome.PROVEN_REJECTED)
     }
 }
 

@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttempt
+import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptFileStore
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptJournal
 import app.aaps.pump.ypsopump.bolus.YpsoBolusAttemptStore
 import app.aaps.pump.ypsopump.bolus.YpsoBolusBaseline
@@ -13,8 +14,12 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 
 class YpsoBolusAttemptJournalTest {
+    @TempDir lateinit var directory: File
+
     private class MemoryStore : YpsoBolusAttemptStore {
         var value: YpsoBolusAttempt? = null
         var failNextCommit = false
@@ -410,6 +415,89 @@ class YpsoBolusAttemptJournalTest {
         backwards.beforeDispatch("request-1", 4810, 2_000)
         assertThrows(IllegalArgumentException::class.java) { backwards.observeFastDelivering("request-1", 43, 100) }
     }
+
+    // ---- forgetting settled attempts ----
+
+    @Test
+    fun `forgetting keeps every attempt still being resolved, the current one and the counter floor`() {
+        val store = YpsoBolusAttemptFileStore(File(directory, "attempts.json"))
+        val journal = YpsoBolusAttemptJournal(store)
+        // The oldest attempt allocated the highest write counter; later ones were never dispatched.
+        val floor = settled("floor", counter = 9_034)
+            .copy(cancelRequestId = "cancel", cancelCounter = 9_035, cancelBlock = YpsoBolusBlock.FAST)
+        val open = listOf(
+            YpsoBolusOutcome.POSSIBLY_APPLIED, YpsoBolusOutcome.ACCEPTED_UNVERIFIED, YpsoBolusOutcome.DELIVERING,
+            YpsoBolusOutcome.CANCEL_PENDING, YpsoBolusOutcome.UNRESOLVED,
+        ).mapIndexed { i, outcome ->
+            settled("open-$i", counter = 100L + i, sequence = 150L + i)
+                .copy(outcome = outcome, confirmedCentiUnits = null, deliveryTimestamp = null, pumpHistoryId = null)
+        }
+        val awaiting = attempt("awaiting").copy(
+            outcome = YpsoBolusOutcome.AWAITING_HISTORY, dispatchCounter = 200, dispatchedAt = 2_000,
+            notifiedFastSequence = 170, notifiedDispatchCounter = 200, notifiedTerminalAt = 2_100, historyDeadline = 9_000,
+        )
+        val forgettable = (1..20).map { settled("settled-$it", counter = 300L + it, sequence = 180L + it) } +
+            attempt("not-sent").copy(createdAt = 1_600) +
+            attempt("rejected").copy(outcome = YpsoBolusOutcome.PROVEN_REJECTED, dispatchCounter = 400, dispatchedAt = 2_000)
+        val current = attempt("current").copy(createdAt = 1_700)
+        (listOf(floor) + open + awaiting + forgettable + current).forEach(store::commit)
+
+        // The caller judges everything settled; the journal itself refuses what it must keep.
+        assertEquals(forgettable.size, journal.forget(journal.all()))
+
+        assertEquals(listOf(floor) + open + awaiting + current, journal.all())
+        assertEquals(listOf(floor) + open + awaiting + current, YpsoBolusAttemptFileStore(File(directory, "attempts.json")).loadAll())
+        assertEquals(floor, store.recoveryEvidence()?.attempt)
+        assertEquals(current, journal.current())
+        assertTrue(journal.forgettable().isEmpty())
+    }
+
+    @Test
+    fun `an attempt naming a history row another attempt also names is never forgotten`() {
+        val store = YpsoBolusAttemptFileStore(File(directory, "attempts.json"))
+        val journal = YpsoBolusAttemptJournal(store)
+        val proven = settled("proven", counter = 10, sequence = 146)
+        // A later dose whose notified sequence is the same row: forgetting the proven owner would hand it over.
+        val notified = attempt("notified").copy(
+            outcome = YpsoBolusOutcome.AWAITING_HISTORY, dispatchCounter = 11, dispatchedAt = 3_000,
+            notifiedFastSequence = 146, notifiedDispatchCounter = 11, notifiedTerminalAt = 3_100, historyDeadline = 9_000,
+        )
+        val unrelated = settled("unrelated", counter = 12, sequence = 147)
+        listOf(proven, notified, unrelated, settled("current", counter = 13, sequence = 148)).forEach(store::commit)
+
+        assertEquals(listOf(unrelated), journal.forgettable())
+        assertEquals(1, journal.forget(listOf(proven, unrelated)))
+        assertTrue(journal.all().any { it.requestId == "proven" })
+    }
+
+    @Test
+    fun `equal history numbers of different pumps are different rows`() {
+        val store = YpsoBolusAttemptFileStore(File(directory, "attempts.json"))
+        val journal = YpsoBolusAttemptJournal(store)
+        val first = settled("first-pump", counter = 10, sequence = 146)
+        val second = settled("second-pump", counter = 11, sequence = 146).copy(pumpSerial = "20000002")
+        listOf(first, second, settled("current", counter = 12, sequence = 147)).forEach(store::commit)
+
+        assertEquals(listOf(first, second), journal.forgettable())
+    }
+
+    @Test
+    fun `an attempt that changed after it was judged settled is kept`() {
+        val store = YpsoBolusAttemptFileStore(File(directory, "attempts.json"))
+        val journal = YpsoBolusAttemptJournal(store)
+        val judged = settled("judged", counter = 10, sequence = 146)
+        listOf(judged, settled("current", counter = 11, sequence = 147)).forEach(store::commit)
+        store.commit(judged.copy(detail = "changed meanwhile"))
+
+        assertEquals(0, journal.forget(listOf(judged)))
+        assertEquals(2, journal.all().size)
+    }
+
+    /** A dose history confirmed: delivered in full under its proven fast sequence, which is also its row. */
+    private fun settled(requestId: String, counter: Long, sequence: Long = 146) = attempt(requestId).copy(
+        outcome = YpsoBolusOutcome.COMPLETED, dispatchCounter = counter, dispatchedAt = 2_000, pumpFastSequence = sequence,
+        pumpHistoryId = sequence, confirmedCentiUnits = 100, deliveryTimestamp = 2_500,
+    )
 
     private fun attempt(
         requestId: String = "request-1",

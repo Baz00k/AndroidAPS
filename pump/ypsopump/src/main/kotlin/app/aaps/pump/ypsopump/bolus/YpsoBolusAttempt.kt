@@ -248,12 +248,26 @@ data class YpsoBolusAttempt(
     val hasUnresolvedWarning: Boolean get() = outcome == YpsoBolusOutcome.UNRESOLVED
 }
 
+/** The attempt proving the highest dispatch or cancel counter: journal-loss recovery takes its write floor from it. */
+internal fun List<YpsoBolusAttempt>.counterFloor(): YpsoBolusAttempt? = maxWithOrNull(
+    compareBy<YpsoBolusAttempt> { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }.thenBy { it.createdAt },
+)
+
 interface YpsoBolusAttemptStore {
     fun load(): YpsoBolusAttempt?
     /** Must durably commit before returning; failure throws. Replaces the attempt with the same request id. */
     fun commit(attempt: YpsoBolusAttempt)
     /** Every retained attempt, oldest first; the last is [load]. */
     fun loadAll(): List<YpsoBolusAttempt> = listOfNotNull(load())
+
+    /**
+     * Durably replaces the retained attempts with [attempts], a subset of [loadAll] in its order, in one
+     * atomic step that leaves either set in place; failure throws. A store holding only [load] never has
+     * any to drop.
+     */
+    fun retain(attempts: List<YpsoBolusAttempt>) {
+        check(attempts == loadAll()) { "this bolus attempt store keeps only the current attempt" }
+    }
 }
 
 /**
@@ -579,6 +593,42 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
                     detail = "pump history did not confirm the notified bolus before its deadline",
                 ).also(store::commit)
             }
+
+    /**
+     * Attempts the journal may forget once the caller proves their accounting settled. Never the current
+     * attempt, one still awaiting reconciliation, the one proving the highest write counter, or one whose
+     * history identity another attempt also names: forgetting it could hand that row to the other.
+     */
+    @Synchronized
+    fun forgettable(): List<YpsoBolusAttempt> = forgettable(store.loadAll())
+
+    /**
+     * Forgets the [settled] attempts in one atomic replace and returns how many went. An attempt that
+     * changed since the caller judged it, or is no longer forgettable, is kept.
+     */
+    @Synchronized
+    fun forget(settled: Collection<YpsoBolusAttempt>): Int {
+        val attempts = store.loadAll()
+        val judged = settled.toHashSet()
+        val forgotten = forgettable(attempts).filterTo(HashSet()) { it in judged }
+        if (forgotten.isEmpty()) return 0
+        val kept = attempts.filterNot { it in forgotten }
+        check(kept.counterFloor() == attempts.counterFloor()) { "forgetting would lower the bolus write counter floor" }
+        store.retain(kept)
+        return forgotten.size
+    }
+
+    private fun forgettable(attempts: List<YpsoBolusAttempt>): List<YpsoBolusAttempt> {
+        val floor = attempts.counterFloor()
+        val claims = attempts.flatMap { it.historyIdentities }.groupingBy { it }.eachCount()
+        return attempts.dropLast(1).filter { attempt ->
+            !attempt.awaitsReconciliation && attempt != floor && attempt.historyIdentities.all { claims[it] == 1 }
+        }
+    }
+
+    /** History rows of its pump this attempt can claim, as the delivery module matches them at import and repair. */
+    private val YpsoBolusAttempt.historyIdentities: Set<Pair<String, Long>>
+        get() = setOfNotNull(accountingPumpId, notifiedAccountingPumpId).mapTo(HashSet()) { pumpSerial to it }
 
     @Synchronized
     private fun updateRetained(requestId: String, transform: (YpsoBolusAttempt) -> YpsoBolusAttempt): YpsoBolusAttempt {

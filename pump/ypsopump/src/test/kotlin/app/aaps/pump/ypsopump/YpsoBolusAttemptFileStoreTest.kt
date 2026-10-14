@@ -9,6 +9,9 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusShape
 import app.aaps.pump.ypsopump.bolus.YpsoBolusTreatment
 import java.nio.file.Files
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotSame
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
@@ -90,6 +93,37 @@ class YpsoBolusAttemptFileStoreTest {
         assertEquals(2, store.loadAll().size)
         assertEquals(YpsoBolusOutcome.COMPLETED, store.loadAll().first().outcome)
         assertEquals(YpsoBolusOutcome.PROVEN_REJECTED, store.load()?.outcome)
+    }
+
+    @Test
+    fun `retaining a subset replaces the journal atomically and survives restart`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val store = YpsoBolusAttemptFileStore(file)
+        val attempts = (1..3).map { attempt().copy(requestId = "request-$it", createdAt = 1_500L + it) }
+        attempts.forEach(store::commit)
+
+        store.retain(listOf(attempts[0], attempts[2]))
+
+        assertEquals(listOf(attempts[0], attempts[2]), YpsoBolusAttemptFileStore(file).loadAll())
+        assertFalse(directory.resolve("attempt.json.next").exists())
+        assertThrows(IllegalArgumentException::class.java) { store.retain(emptyList()) }
+    }
+
+    @Test
+    fun `repeated reads decode the journal once until it changes`() {
+        val directory = Files.createTempDirectory("ypso-bolus-store").toFile()
+        val file = directory.resolve("attempt.json")
+        val store = YpsoBolusAttemptFileStore(file)
+        store.commit(attempt())
+
+        val first = store.loadAll()
+        assertSame(first, store.loadAll())
+
+        YpsoBolusAttemptFileStore(file).commit(attempt().copy(requestId = "request-2", createdAt = 3_000))
+        val changed = store.loadAll()
+        assertNotSame(first, changed)
+        assertEquals(listOf("request-1", "request-2"), changed.map { it.requestId })
     }
 
     private fun attempt() = YpsoBolusAttempt(
