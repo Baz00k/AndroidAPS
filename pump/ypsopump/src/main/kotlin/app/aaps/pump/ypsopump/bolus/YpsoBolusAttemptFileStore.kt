@@ -2,22 +2,34 @@ package app.aaps.pump.ypsopump.bolus
 
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Atomic no-backup storage adapter. The caller must place [file] under Android's noBackupFilesDir. */
+/**
+ * Atomic no-backup storage adapter. The caller must place [file] under Android's noBackupFilesDir.
+ * Decoded attempts are reused until the file changes, so frequent lookups do not parse it again.
+ */
 class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore {
     internal data class RecoveryEvidence(val attempts: List<YpsoBolusAttempt>, val bytes: ByteArray) {
         constructor(attempt: YpsoBolusAttempt, bytes: ByteArray) : this(listOf(attempt), bytes)
 
         val attempt: YpsoBolusAttempt
-            get() = attempts.maxWithOrNull(
-                compareBy<YpsoBolusAttempt> { maxOf(it.dispatchCounter ?: -1L, it.cancelCounter ?: -1L) }
-                    .thenBy { it.createdAt },
-            ) ?: error("bolus recovery evidence is empty")
+            get() = attempts.counterFloor() ?: error("bolus recovery evidence is empty")
     }
 
+    /** Identity of one written version of the file: every commit renames a new file into place. */
+    private data class FileVersion(val key: Any?, val modified: FileTime, val size: Long)
+
+    private class Decoded(val version: FileVersion, val attempts: List<YpsoBolusAttempt>)
+
+    private var decoded: Decoded? = null
+
     /** Decode and hash callers' evidence from one immutable read, avoiding a file-change race. */
+    @Synchronized
     internal fun recoveryEvidence(): RecoveryEvidence? {
         if (!file.isFile) return null
         val bytes = file.readBytes()
@@ -29,22 +41,33 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         }
     }
 
-    override fun load(): YpsoBolusAttempt? {
-        if (!file.exists()) return null
-        return loadAll().lastOrNull()
-    }
+    override fun load(): YpsoBolusAttempt? = loadAll().lastOrNull()
 
+    @Synchronized
     override fun loadAll(): List<YpsoBolusAttempt> {
-        if (!file.exists()) return emptyList()
-        return decodeAll(JSONObject(file.readText()))
+        val version = version() ?: return emptyList<YpsoBolusAttempt>().also { decoded = null }
+        decoded?.takeIf { it.version == version }?.let { return it.attempts }
+        return decodeAll(JSONObject(file.readText())).also { decoded = Decoded(version, it) }
     }
 
+    @Synchronized
     override fun commit(attempt: YpsoBolusAttempt) {
-        file.parentFile?.mkdirs()
-        val temporary = File(file.parentFile, "${file.name}.next")
         val prior = loadAll()
         val matching = prior.indexOfFirst { it.requestId == attempt.requestId }
-        val attempts = if (matching >= 0) prior.toMutableList().also { it[matching] = attempt } else prior + attempt
+        write(if (matching >= 0) prior.toMutableList().also { it[matching] = attempt } else prior + attempt)
+    }
+
+    @Synchronized
+    override fun retain(attempts: List<YpsoBolusAttempt>) {
+        require(attempts.isNotEmpty()) { "bolus journal cannot be emptied" }
+        write(attempts)
+    }
+
+    private fun write(attempts: List<YpsoBolusAttempt>) {
+        // Whatever happens below, the next read decodes the file as it is.
+        decoded = null
+        file.parentFile?.mkdirs()
+        val temporary = File(file.parentFile, "${file.name}.next")
         val bytes = JSONObject()
             .put("version", 8)
             .put("attempts", JSONArray().also { array -> attempts.forEach { array.put(encode(it)) } })
@@ -56,6 +79,14 @@ class YpsoBolusAttemptFileStore(private val file: File) : YpsoBolusAttemptStore 
         }
         check(temporary.renameTo(file)) { "cannot atomically replace bolus journal" }
         fsyncParentDirectory()
+        decoded = version()?.let { Decoded(it, attempts.toList()) }
+    }
+
+    private fun version(): FileVersion? = try {
+        Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+            .let { FileVersion(it.fileKey(), it.lastModifiedTime(), it.size()) }
+    } catch (_: NoSuchFileException) {
+        null
     }
 
     /** Make the replaced directory entry itself durable, not just the temporary file contents. */

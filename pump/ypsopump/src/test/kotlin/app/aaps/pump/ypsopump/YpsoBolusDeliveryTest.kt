@@ -5,6 +5,7 @@ import app.aaps.core.data.model.EB
 import app.aaps.core.data.model.IDs
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.db.PersistenceLayer.TempIdBinding
+import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.pump.ypsopump.ble.YpsoWriteFailure
 import app.aaps.pump.ypsopump.ble.YpsoWriteOutcome
 import app.aaps.pump.ypsopump.ble.YpsoWritePolicy
@@ -26,7 +27,11 @@ import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.history.YpsoEventIdentity
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
+import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoHistoryState
+import app.aaps.pump.ypsopump.history.YpsoHistoryStateStore
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -34,6 +39,9 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.mockito.kotlin.any
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -174,6 +182,8 @@ class YpsoBolusDeliveryTest {
         val boluses = mutableListOf<BS>()
         val extendeds = mutableMapOf<Long, EB>()
         var extendedRunning = false
+        /** False when the database leaves a provisional record and its imported row apart. */
+        var merges = true
 
         override fun addProvisional(timestamp: Long, units: Double, temporaryId: Long, type: BS.Type, pumpSerial: String): Boolean {
             if (boluses.any { it.ids.temporaryId == temporaryId }) return false
@@ -185,6 +195,7 @@ class YpsoBolusDeliveryTest {
         }
 
         override fun syncWithTemporaryId(bolus: BS, type: BS.Type) {
+            if (!merges) return
             val provisional = boluses.singleOrNull { it.ids.temporaryId == bolus.ids.temporaryId }
             boluses.removeAll { it.ids.pumpId == bolus.ids.pumpId && it !== provisional }
             if (provisional == null) boluses += bolus.copy(type = type)
@@ -223,6 +234,16 @@ class YpsoBolusDeliveryTest {
 
         override fun extendedRunning() = extendedRunning
 
+        /** What PumpSync does with an imported history row: one record per pump ID, updated in place. */
+        fun replay(timestamp: Long, units: Double, type: BS.Type, pumpId: Long) {
+            val existing = boluses.indexOfFirst { it.ids.pumpId == pumpId }
+            if (existing >= 0) boluses[existing] = boluses[existing].copy(timestamp = timestamp, amount = units, type = type)
+            else boluses += BS(
+                timestamp = timestamp, amount = units, type = type, id = boluses.size + 1L,
+                ids = IDs(pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = SERIAL),
+            )
+        }
+
         private fun extendedRecord(start: Long, units: Double, duration: Long, pumpId: Long, pumpSerial: String) = EB(
             timestamp = start, amount = units, duration = duration,
             ids = IDs(pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = pumpSerial),
@@ -234,7 +255,34 @@ class YpsoBolusDeliveryTest {
     private val warnings = mutableListOf<Boolean>()
     private val journalFile get() = File(directory, "ypsopump-bolus-attempt.json")
     private val anchor = YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 48_000L, 0)
-    private val cursor get() = YpsoHistoryCursor(YpsoEventIdentity(SERIAL, 0, 48_000L), anchor.fingerprint(), REBOOT.toLong())
+
+    /** Durable state of the history ingestion; its cursor is the newest row ingestion has taken. */
+    private val historyState = object : YpsoHistoryStateStore {
+        var value = YpsoHistoryState(cursorAt(anchor))
+        override fun load() = value
+        override fun commit(value: YpsoHistoryState) { this.value = value }
+    }
+    private val cursor get() = historyState.value.cursor
+
+    /** Pump IDs of history rows PumpSync was asked to save, in order. */
+    private val replays = mutableListOf<Long>()
+    private val pumpSync: PumpSync = mock<PumpSync>().also { sync ->
+        whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())).thenAnswer {
+            val pumpId = it.getArgument<Long>(3)
+            replays += pumpId
+            records.replay(it.getArgument(0), it.getArgument(1), it.getArgument<BS.Type?>(2) ?: BS.Type.NORMAL, pumpId)
+            PumpSync.BolusSyncResult.INSERTED
+        }
+    }
+
+    /** History ingestion wired to this module as the plugin wires it. */
+    private val ingestion by lazy {
+        YpsoHistoryIngestion(
+            historyState, pumpSync,
+            hasRecordedBolus = { serial, pumpId -> delivery.ownsHistoryBolus(serial, pumpId) },
+            resolveProvisional = { serial, pumpId, timestamp, amount, type -> delivery.bindProvisional(serial, pumpId, timestamp, amount, type) },
+        )
+    }
 
     private val delivery: YpsoBolusDelivery by lazy {
         YpsoBolusDelivery(
@@ -641,6 +689,106 @@ class YpsoBolusDeliveryTest {
         assertTrue(pump.writes.isEmpty())
     }
 
+    // ---- journal size ----
+
+    @Test
+    fun `the journal stays bounded over many settled doses and records each row once`() {
+        val rows = mutableListOf<YpsoHistoryEntry>()
+        repeat(DOSES) { i ->
+            assertTrue(deliver(0.5, BS.Type.SMB) is Result.Delivered)
+            rows.add(0, YpsoHistoryEntry(800_000_100L + i * 300L, 2, 50, 0, 0, 48_001L + i, 0))
+            historyPass(rows)
+        }
+        // Later scans of the same history, once the last row is behind the cursor too.
+        repeat(2) { historyPass(rows) }
+
+        val current = attempts.single()
+        assertEquals(48_000L + DOSES, current.pumpHistoryId)
+        assertEquals(pump.counter, delivery.recoveryEvidence()?.attempt?.dispatchCounter)
+        // Every row was saved once, onto its dose's provisional record, and stays an SMB.
+        assertEquals((48_001L..48_000L + DOSES).toList(), replays)
+        assertEquals((48_001L..48_000L + DOSES).toList(), records.boluses.map { it.ids.pumpId })
+        assertTrue(records.boluses.all { it.amount == 0.5 && it.type == BS.Type.SMB && it.ids.temporaryId != null })
+        assertTrue(delivery.ownsHistoryBolus(SERIAL, 48_001L))
+    }
+
+    @Test
+    fun `doses whose accounting is not settled stay journalled until it is`() {
+        seed(notifiedAttempt("awaiting", 48_316L))
+        seed(notifiedAttempt("unresolved", 48_317L).copy(outcome = YpsoBolusOutcome.UNRESOLVED, historyDeadline = null, pumpFastSequence = 48_317L))
+        // Confirmed, but no record carries its row.
+        seed(confirmedAttempt("never-imported", 48_318L))
+        // Confirmed and imported, but its provisional record is still a second record of the dose.
+        seed(confirmedAttempt("unmerged", 48_319L))
+        records.addProvisional(1_200L, 0.4, temporaryId("unmerged"), BS.Type.SMB, SERIAL)
+        records.replay(1_500L, 0.4, BS.Type.SMB, 48_319L)
+        seed(confirmedAttempt("settled", 48_320L))
+        imported("settled", 48_320L)
+        // The operator removed the imported row while it was still apart from its provisional record.
+        seed(confirmedAttempt("removed-import", 48_321L))
+        records.addProvisional(1_200L, 0.4, temporaryId("removed-import"), BS.Type.SMB, SERIAL)
+        records.replay(1_500L, 0.4, BS.Type.SMB, 48_321L)
+        records.boluses[records.boluses.lastIndex] = records.boluses.last().copy(isValid = false)
+        // No provisional record was ever found: absence is no proof one was not written.
+        seed(confirmedAttempt("no-provisional", 48_322L))
+        records.replay(1_500L, 0.4, BS.Type.SMB, 48_322L)
+        // Settled, but of another pump whose history ingestion has not moved past it.
+        seed(confirmedAttempt("other-pump", 48_323L).copy(pumpSerial = "20000002"))
+        records.boluses += BS(
+            timestamp = 1_500L, amount = 0.4, type = BS.Type.SMB, id = records.boluses.size + 1L,
+            ids = IDs(temporaryId = temporaryId("other-pump"), pumpId = 48_323L, pumpType = PumpType.YPSOPUMP, pumpSerial = "20000002"),
+        )
+        // Its row is the cursor itself, which a scan can still offer again.
+        seed(confirmedAttempt("at-cursor", 48_400L))
+        imported("at-cursor", 48_400L)
+        seed(confirmedAttempt("current", 48_401L, counter = 9))
+        imported("current", 48_401L)
+        historyState.value = YpsoHistoryState(cursorAt(YpsoHistoryEntry(800_000_100L, 2, 40, 0, 0, 48_400L, 0)))
+        records.merges = false
+        val kept = listOf("awaiting", "unresolved", "never-imported", "removed-import", "no-provisional", "other-pump", "at-cursor", "current")
+
+        reconcile(emptyList())
+
+        assertEquals(listOf("awaiting", "unresolved", "never-imported", "unmerged") + kept.drop(3), attempts.map { it.requestId })
+
+        records.merges = true
+        reconcile(emptyList())
+
+        // Once repair merges them, a dose is settled; for a proven identity the merge keeps the operator's removal.
+        assertEquals(kept - "removed-import", attempts.map { it.requestId })
+        assertFalse(records.boluses.single { it.ids.pumpId == 48_321L }.isValid)
+        assertEquals(temporaryId("unmerged"), records.boluses.single { it.ids.pumpId == 48_319L }.ids.temporaryId)
+        assertEquals(1, records.boluses.count { it.ids.temporaryId == temporaryId("unmerged") })
+    }
+
+    /** One history pass as the plugin runs it: the module reconciles the scan, then ingestion takes its new rows. */
+    private fun historyPass(rowsNewestFirst: List<YpsoHistoryEntry>) {
+        val (snapshot, pass) = reconcile(rowsNewestFirst)
+        val result = ingestion.ingest(SERIAL, ZoneId.of("UTC"), REBOOT.toLong(), snapshot) { pass.treatment(it.identity.aapsPumpId) }
+        assertTrue(result is YpsoHistoryIngestionResult.Applied, result.toString())
+    }
+
+    private fun reconcile(rowsNewestFirst: List<YpsoHistoryEntry>): Pair<YpsoHistorySnapshot, YpsoBolusDelivery.HistoryPass.Proceed> {
+        val scan = (rowsNewestFirst + anchor).mapIndexed { index, row -> row.copy(index = index) }
+        val snapshot = YpsoHistorySnapshot(scan.size, scan.size, 21, 21, scan.first(), scan.first(), scan, true)
+        return snapshot to delivery.reconcileHistory(SERIAL, ZoneId.of("UTC"), "generation", REBOOT, snapshot) as YpsoBolusDelivery.HistoryPass.Proceed
+    }
+
+    private fun cursorAt(row: YpsoHistoryEntry) = YpsoHistoryCursor(YpsoEventIdentity(SERIAL, 0, row.sequence), row.fingerprint(), REBOOT.toLong())
+
+    /** The single record of a journalled dose whose provisional record took over its imported row. */
+    private fun imported(requestId: String, pumpId: Long) {
+        records.boluses += BS(
+            timestamp = 1_500L, amount = 0.4, type = BS.Type.SMB, id = records.boluses.size + 1L,
+            ids = IDs(temporaryId = temporaryId(requestId), pumpId = pumpId, pumpType = PumpType.YPSOPUMP, pumpSerial = SERIAL),
+        )
+    }
+
+    private fun confirmedAttempt(requestId: String, sequence: Long, counter: Long = 1) = notifiedAttempt(requestId, sequence).copy(
+        outcome = YpsoBolusOutcome.COMPLETED, historyDeadline = null, dispatchCounter = counter, notifiedDispatchCounter = counter,
+        pumpFastSequence = sequence, pumpHistoryId = sequence, confirmedCentiUnits = 40, deliveryTimestamp = 1_500L,
+    )
+
     private fun seed(attempt: YpsoBolusAttempt) = YpsoBolusAttemptFileStore(journalFile).commit(attempt)
 
     /** The provisional record identity the module derives from a journalled attempt. */
@@ -671,6 +819,7 @@ class YpsoBolusDeliveryTest {
         const val SERIAL = "10000001"
         const val CONNECTION = "connection"
         const val REBOOT = 21
+        const val DOSES = 40
         val KEY_ID = "cd".repeat(32)
     }
 }
