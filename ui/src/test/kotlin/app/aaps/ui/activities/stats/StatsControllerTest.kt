@@ -28,6 +28,7 @@ class StatsControllerTest {
         whenever(loader.load(any())).thenAnswer { Observable.just(StatsUiState(loading = false, rangeDays = 7, avgGlucose = "load ${++loads}")) }
         whenever(loader.loadCycle()).thenAnswer { Observable.just(CycleLoad(CYCLE_HISTORY_DAYS, LocalDate.of(2026, 10, 13), emptyMap())) }
         whenever(loader.beforeToday(any())).thenReturn(true)
+        whenever(loader.newestCompletedDay()).thenReturn(LocalDate.of(2026, 10, 13))
     }
 
     private fun run() {
@@ -77,6 +78,20 @@ class StatsControllerTest {
         io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
         verify(loader, times(1)).loadCycle()
         history.onNext(1_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        verify(loader, times(2)).loadCycle()
+    }
+
+    @Test fun `a loaded cycle pattern moves on after midnight with the next change`() {
+        whenever(loader.beforeToday(any())).thenReturn(false)
+        controller.start(); run()
+        controller.showCycle(); run()
+        history.onNext(9_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
+        verify(loader, times(1)).loadCycle()
+        // Past midnight, October 14 is complete; a change that only concerns the new day still brings it in.
+        whenever(loader.newestCompletedDay()).thenReturn(LocalDate.of(2026, 10, 14))
+        history.onNext(9_500)
         io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS); run()
         verify(loader, times(2)).loadCycle()
     }

@@ -38,14 +38,15 @@ class StatsTddIntegrationTest : TestBase() {
      * The real calculator over mocked records: 1 U/h basal from a profile that exists at any time, so a
      * day's total is its length in hours. Every cache lookup would answer a stale 99 U.
      */
-    private class Fixture(test: TestBase, val now: Long, oldestBolus: Long? = now - 365L * 86_400_000L) {
+    private class Fixture(test: TestBase, val now: Long, oldestBolus: Long? = now - 365L * 86_400_000L, profileFrom: Long = Long.MIN_VALUE) {
         val persistence = mock<PersistenceLayer>()
         val loader: StatsLoader
 
         init {
             val profileFunction = mock<ProfileFunction>()
             whenever(profileFunction.getUnits()).thenReturn(GlucoseUnit.MGDL)
-            whenever(profileFunction.getProfile(any())).thenReturn(mock<Profile>())
+            val profile = mock<Profile>()
+            whenever(profileFunction.getProfile(any())).thenAnswer { if (it.arguments[0] as Long >= profileFrom) profile else null }
             val iob = mock<IobCobCalculator>()
             whenever(iob.getBasalData(any(), any())).thenAnswer { BasalData().apply { tempBasalAbsolute = 1.0 } }
             val active = mock<ActivePlugin>()
@@ -99,10 +100,17 @@ class StatsTddIntegrationTest : TestBase() {
             verify(fixture.persistence, never()).insertOrUpdateCachedTotalDailyDose(any())
             assertThat(state.insulinDays).isEqualTo(7)
             state.insulinRows.forEach { assertThat(it.total).isWithin(1e-6).of(hours(it.date, zone)) }
+            // Today counts from its first local instant up to now, in whole five-minute steps.
+            val today = Instant.parse(text).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+            val elapsed = Duration.between(today, Instant.parse(text)).toMinutes() / 5 * 5 / 60.0
+            assertThat(state.insulinToday!!.total).isWithin(1e-6).of(elapsed)
             cycle.forEach { (date, total) -> assertThat(total).isWithin(1e-6).of(hours(date, zone)) }
             if (cycle.isNotEmpty()) assertThat(cycle).hasSize(CYCLE_HISTORY_DAYS)
         }
         inZone("America/Havana") {
+            // At noon on the day midnight repeats, 13 hours have passed since the first midnight.
+            val today = Fixture(this, Instant.parse("2026-11-01T17:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last().insulinToday!!
+            assertThat(today.total).isWithin(1e-6).of(13.0)
             val rows = Fixture(this, Instant.parse("2026-03-15T16:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last().insulinRows
             assertThat(rows.single { it.date == LocalDate.of(2026, 3, 8) }.total).isWithin(1e-6).of(23.0)
         }
@@ -122,5 +130,12 @@ class StatsTddIntegrationTest : TestBase() {
         assertThat(state.insulinDays).isEqualTo(0)
         assertThat(state.insulinRows.none { it.recorded }).isTrue()
         assertThat(fixture.loader.loadCycle().toList().blockingGet().last().totals).isEmpty()
+    }
+
+    @Test fun `today without a profile for part of it has no total instead of a partial one`() = inZone("UTC") {
+        val now = Instant.parse("2026-10-14T12:00:00Z").toEpochMilli()
+        val state = Fixture(this, now, profileFrom = Instant.parse("2026-10-14T06:00:00Z").toEpochMilli()).loader.load(7).toList().blockingGet().last()
+        assertThat(state.insulinToday).isNull()
+        assertThat(Fixture(this, now).loader.load(7).toList().blockingGet().last().insulinToday!!.total).isWithin(1e-6).of(12.0)
     }
 }

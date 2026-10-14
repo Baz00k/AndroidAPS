@@ -11,7 +11,6 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.stats.TddCalculator
 import app.aaps.core.interfaces.utils.DateUtil
-import app.aaps.core.interfaces.utils.MidnightTime
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import io.reactivex.rxjava3.core.Observable
@@ -74,10 +73,12 @@ class StatsLoader @Inject constructor(
             emitter.onNext(state)
             try {
                 val tdds = dailyTdds(now, days, zone) { emitter.isDisposed } ?: return@create
-                val today = tddCalculator.calculateToday()
+                val date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+                // From today's first local instant, like the completed days. A part of today without a profile
+                // gives no total rather than a partial one that looks complete.
+                val today = tddCalculator.calculateInterval(date.atStartOfDay(zone).toInstant().toEpochMilli(), now, allowMissingData = false)
                 if (emitter.isDisposed) return@create
                 val average = tddCalculator.averageTDD(tdds)?.data
-                val date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
                 emitter.onNext(state.copy(insulinLoading = false, insulinDays = tdds.size(),
                                           avgTdd = average?.dose()?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
                                           insulinRows = insulinRows(tdds, date, days, zone),
@@ -101,7 +102,7 @@ class StatsLoader @Inject constructor(
         try {
             val now = dateUtil.now()
             val zone = ZoneId.systemDefault()
-            val newest = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(1)
+            val newest = newestCompletedDay(now, zone)
             val tdds = dailyTdds(now, CYCLE_HISTORY_DAYS, zone, { loaded -> if (loaded % 7 == 0) emitter.onNext(CycleLoad(loaded, newest)) }) { emitter.isDisposed }
                 ?: return@create
             val totals = HashMap<LocalDate, Double>()
@@ -114,7 +115,15 @@ class StatsLoader @Inject constructor(
     }
 
     /** Whether a change at [time] can affect a completed day, which the cycle pattern is made of. */
-    internal fun beforeToday(time: Long) = time < MidnightTime.calc(dateUtil.now())
+    internal fun beforeToday(time: Long): Boolean {
+        val zone = ZoneId.systemDefault()
+        return time < newestCompletedDay(dateUtil.now(), zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    }
+
+    /** Yesterday, the last day the cycle pattern can include. It moves on at midnight. */
+    internal fun newestCompletedDay(): LocalDate = newestCompletedDay(dateUtil.now(), ZoneId.systemDefault())
+
+    private fun newestCompletedDay(now: Long, zone: ZoneId) = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(1)
 
     /** Confirmed by the user. Only rows of the derived cache are deleted; boluses, basals and carbs are untouched. */
     internal fun recalculateTdd() {

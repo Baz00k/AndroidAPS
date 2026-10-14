@@ -86,10 +86,13 @@ internal class StatsController(
         }))
     }
 
-    /** A load in progress is restarted rather than left to finish with history from before the change. */
+    /**
+     * A load in progress is restarted rather than left to finish with history from before the change. A loaded
+     * pattern is reloaded for changes to completed days, and after midnight, when yesterday becomes complete.
+     */
     private fun historyChanged(from: Long) {
         reloader.refresh(stats.value.rangeDays)
-        if (cycle.value.requested && (cycle.value.loading || loader.beforeToday(from))) loadCycle()
+        if (cycle.value.requested && (cycle.value.loading || loader.beforeToday(from) || newest != loader.newestCompletedDay())) loadCycle()
     }
 
     /** The previous pattern stays visible while a newer history loads. */
