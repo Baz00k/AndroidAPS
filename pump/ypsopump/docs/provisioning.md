@@ -2,8 +2,7 @@
 
 ## What you need
 
-- The pump's printed eight-digit serial beginning with `10`, and this phone paired with the pump over Bluetooth. Connection setup can pair it; see [Bluetooth pairing](#bluetooth-pairing).
-- The pump's matching `EC:2A:F0:xx:xx:xx` Bluetooth address.
+- The pump's printed eight-digit serial beginning with `10`, and this phone paired with the pump over Bluetooth. Connection setup can find and pair the pump; see [Bluetooth pairing](#bluetooth-pairing). The pump's `EC:2A:F0:xx:xx:xx` Bluetooth address follows from its serial, so setup shows it instead of asking for it.
 - An existing nonzero 32-byte session key, either as 64 hexadecimal characters or in a canonical schema-v1 `.session.json` from [ypso-keys](https://github.com/Baz00k/ypso-keys). Key extraction uses a separate source device and the genuine app; the AAPS phone does not need root, ADB or preference editing. Follow the extractor's [supported combinations](https://github.com/Baz00k/ypso-keys/blob/df5badb6433c4127a41f7da589888acf5dd0309c/docs/compatibility.md).
 
 Keep plaintext keys and import files private. AAPS stores the installed key in its protected no-backup journal; it does not delete the selected source file.
@@ -12,7 +11,7 @@ Keep plaintext keys and import files private. AAPS stores the installed key in i
 
 1. Quiesce the other pump controller and finish any in-flight operation. Only one phone should control the pump/session at a time.
 2. Pair the AAPS phone with the pump; see [Bluetooth pairing](#bluetooth-pairing).
-3. Open **YpsoPump Preferences → Pump connection setup**. Enter the printed serial, matching address and key, or choose **Import file from ypso-keys**. The import review shows the claimed serial and address, never the key.
+3. Open **YpsoPump Preferences → Pump connection setup**. Enter the key, or choose **Import file from ypso-keys**. The import review shows the claimed serial and address, never the key.
 4. Start verification. The driver checks the serial independently against the bonded pump name or GATT serial and requires an accepted encrypted status from that pump. Successful file parsing, BLE authentication or decryption alone does not install a verified session. Saving makes the new key the one the next connection uses and asks for a status read. A status read that is already waiting, for example from opening AAPS, performs the check instead of a second one. A read that started with the old key cannot verify the new one. If AAPS gives up connecting before the check runs, the next time it connects to the pump for any command it queues the check again. After the pump has rejected a key (code 140), the new key gets only one attempt; to retry, cancel and enter or import the new key again.
 5. Check the reported result and pump status. Failure or cancellation leaves the previous installed session intact. Keep the other controller quiescent while using AAPS.
 
@@ -23,10 +22,10 @@ The importer validates schema, timestamps, key and supported pump identity; a se
 The phone's Bluetooth pairing with the pump is separate from the session key. AAPS connects only to a paired pump and never pairs on its own.
 
 1. Put the pump in Bluetooth pairing mode as its user manual describes and keep it close to the phone.
-2. Open **YpsoPump Preferences → Pump connection setup**. Enter the serial and matching address, or keep the saved ones, and tap **Pair pump**.
+2. Open **YpsoPump Preferences → Pump connection setup** and tap **Find pump**. Setup lists only pumps whose advertised name and Bluetooth address give the same serial; it never takes a serial from an address alone. Tap the pump whose serial matches the one printed on it. For a saved pump, or if you typed the serial, tap **Pair pump** instead.
 3. Accept Android's pairing request. If Android asks for a code, use the one the pump shows.
 
-Android accepting the request does not pair the phone; setup shows the pump as paired only once Android reports the bond. Android does not tell AAPS whether pairing was cancelled or rejected, so both show the same message. AAPS stops waiting after one minute.
+Android accepting the request does not pair the phone; setup shows the pump as paired only once Android reports the bond. Android does not tell AAPS whether pairing was cancelled or rejected, so both show the same message. AAPS stops waiting after one minute. Searching needs the Nearby devices and Location permissions and Location turned on, because Android withholds Bluetooth search results otherwise; a search stops after 30 seconds or when you leave setup.
 
 Pairing changes no key, counter, therapy setting or delivery record and never resends a pump command. When the paired pump has saved details, AAPS then reads the pump status with the usual checks: Bluetooth authentication, pump identity and a fresh encrypted status, or the check of a new key. Only that check shows the pump as ready. A new pairing does not retry after a suspected re-key.
 

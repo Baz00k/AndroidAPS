@@ -225,18 +225,21 @@ object PumpIdentity {
         return normalized
     }
 
-    fun validatePair(serial: String, mac: String) {
-        val normalizedSerial = normalizeSerial(serial)
-        val normalizedMac = normalizeMac(mac)
-        val suffix = normalizedSerial.toLong() - 10_000_000L
+    /** The Bluetooth address of the pump with [serial]; supported pumps derive it from the serial. */
+    fun macForSerial(serial: String): String {
+        val suffix = normalizeSerial(serial).toLong() - 10_000_000L
         require(suffix in 0..0xFFFFFF) { "Pump serial is outside the supported identity range" }
-        val expected = "EC:2A:F0:%02X:%02X:%02X".format(
+        return "EC:2A:F0:%02X:%02X:%02X".format(
             Locale.ROOT,
             (suffix shr 16) and 0xff,
             (suffix shr 8) and 0xff,
             suffix and 0xff
         )
-        require(normalizedMac == expected) { "Pump serial and BLE MAC identify different pumps" }
+    }
+
+    fun validatePair(serial: String, mac: String) {
+        val expected = macForSerial(serial)
+        require(normalizeMac(mac) == expected) { "Pump serial and BLE MAC identify different pumps" }
     }
 
     fun deviceNameMatches(serial: String, deviceName: String?): Boolean {

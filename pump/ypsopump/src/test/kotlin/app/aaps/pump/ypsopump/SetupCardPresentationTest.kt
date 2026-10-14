@@ -2,7 +2,9 @@ package app.aaps.pump.ypsopump
 
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.pump.ypsopump.ble.YpsoBondState
+import app.aaps.pump.ypsopump.ble.YpsoFoundPump
 import app.aaps.pump.ypsopump.ble.YpsoPumpPairing
+import app.aaps.pump.ypsopump.ble.YpsoPumpScanner
 import app.aaps.pump.ypsopump.ble.YpsoPumpPairing.Phase
 import app.aaps.pump.ypsopump.crypto.PumpSession
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -15,7 +17,7 @@ import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 
-class PumpPairingPresentationTest {
+class SetupCardPresentationTest {
 
     private val serial = "10000001"
     private val mac = "EC:2A:F0:00:00:01"
@@ -25,11 +27,14 @@ class PumpPairingPresentationTest {
     private fun attempt(phase: Phase, target: String = mac) = YpsoPumpPairing.Attempt(1, target, phase)
 
     @Test
-    fun `only a supported pump address matching its serial can be paired`() {
-        assertThat(pairingTarget(serial, "ec:2a:f0:00:00:01 ")).isEqualTo(mac)
-        assertThat(pairingTarget(serial, otherMac)).isNull()
-        assertThat(pairingTarget("", mac)).isNull()
-        assertThat(pairingTarget(serial, "EC:2A:F0:00:00")).isNull()
+    fun `the address to pair follows from a supported serial`() {
+        assertThat(pairingTarget(serial)).isEqualTo(mac)
+        // The last six digits are the address's last three bytes: 12345 is 0x003039, 999999 is 0x0F423F.
+        assertThat(pairingTarget(" 10012345 ")).isEqualTo("EC:2A:F0:00:30:39")
+        assertThat(pairingTarget("10999999")).isEqualTo("EC:2A:F0:0F:42:3F")
+        assertThat(pairingTarget("")).isNull()
+        assertThat(pairingTarget("20000001")).isNull()
+        assertThat(pairingTarget("1000001")).isNull()
         assertThat(pairingPresentation(null, YpsoBondState.NOT_BONDED, null)).isEqualTo(PairingPresentation.DETAILS_REQUIRED)
         assertThat(PairingPresentation.DETAILS_REQUIRED.canPair).isFalse()
     }
@@ -137,5 +142,82 @@ class PumpPairingPresentationTest {
 
         verify(queue, never()).ensureStatusReadQueued(any())
         assertThat(service.retryAllowed(Long.MAX_VALUE)).isFalse()
+    }
+    private val ready = ProvisioningFeedback(R.string.ypsopump_setup_complete, ProvisioningFeedbackTone.SUCCESS)
+    private val checkingFeedback = ProvisioningFeedback(R.string.ypsopump_cause_bond_missing, ProvisioningFeedbackTone.NEUTRAL)
+    private val unconfigured = ProvisioningFeedback(R.string.ypsopump_cause_unconfigured, ProvisioningFeedbackTone.NEUTRAL)
+    private val found = YpsoFoundPump(serial, mac)
+
+    private fun card(
+        pairing: PairingPresentation,
+        configured: Boolean = false,
+        feedback: ProvisioningFeedback = if (configured) ready else unconfigured,
+        checking: Boolean = false,
+        scan: YpsoPumpScanner.Scan? = null,
+        busy: Int? = null,
+    ) = setupCard(busy, feedback, checking, configured, pairing, scan)
+
+    @Test
+    fun `a new setup gives one instruction, to find the pump`() {
+        val view = card(PairingPresentation.DETAILS_REQUIRED)
+        assertThat(view).isEqualTo(SetupCard(R.string.ypsopump_setup_start, ProvisioningFeedbackTone.NEUTRAL, actions = listOf(SetupAction.FIND_PUMP)))
+    }
+
+    @Test
+    fun `a search lists the pumps it finds and then asks for a choice`() {
+        val running = card(PairingPresentation.DETAILS_REQUIRED, scan = YpsoPumpScanner.Scan(1, YpsoPumpScanner.Phase.SCANNING, listOf(found)))
+        assertThat(running).isEqualTo(SetupCard(R.string.ypsopump_scan_running, ProvisioningFeedbackTone.NEUTRAL, progress = true, showFoundPumps = true))
+
+        val finished = card(PairingPresentation.DETAILS_REQUIRED, scan = YpsoPumpScanner.Scan(1, YpsoPumpScanner.Phase.FINISHED, listOf(found)))
+        assertThat(finished.message).isEqualTo(R.string.ypsopump_scan_choose)
+        assertThat(finished.showFoundPumps).isTrue()
+        assertThat(finished.actions).containsExactly(SetupAction.FIND_PUMP)
+    }
+
+    @Test
+    fun `a search that found nothing or could not run says why and can be repeated`() {
+        val expected = mapOf(
+            YpsoPumpScanner.Phase.FINISHED to R.string.ypsopump_scan_none,
+            YpsoPumpScanner.Phase.FAILED to R.string.ypsopump_scan_failed,
+            YpsoPumpScanner.Phase.BLUETOOTH_OFF to R.string.ypsopump_scan_bluetooth_off,
+            YpsoPumpScanner.Phase.PERMISSION_REQUIRED to R.string.ypsopump_scan_permission,
+            YpsoPumpScanner.Phase.LOCATION_OFF to R.string.ypsopump_scan_location_off,
+        )
+        expected.forEach { (phase, message) ->
+            val view = card(PairingPresentation.DETAILS_REQUIRED, scan = YpsoPumpScanner.Scan(1, phase))
+            assertThat(view).isEqualTo(SetupCard(message, ProvisioningFeedbackTone.ERROR, actions = listOf(SetupAction.FIND_PUMP)))
+        }
+    }
+
+    @Test
+    fun `pairing comes before the setup status and is the only instruction`() {
+        assertThat(card(PairingPresentation.NOT_PAIRED)).isEqualTo(
+            SetupCard(R.string.ypsopump_pairing_not_paired, ProvisioningFeedbackTone.NEUTRAL, actions = listOf(SetupAction.PAIR_PUMP))
+        )
+        assertThat(card(PairingPresentation.TIMED_OUT, configured = true)).isEqualTo(
+            SetupCard(R.string.ypsopump_pairing_timed_out, ProvisioningFeedbackTone.ERROR, actions = listOf(SetupAction.PAIR_PUMP))
+        )
+        assertThat(card(PairingPresentation.WAITING)).isEqualTo(SetupCard(R.string.ypsopump_pairing_waiting, ProvisioningFeedbackTone.NEUTRAL, progress = true))
+    }
+
+    @Test
+    fun `once paired the card shows the setup status alone`() {
+        assertThat(card(PairingPresentation.PAIRED)).isEqualTo(SetupCard(R.string.ypsopump_setup_add_key, ProvisioningFeedbackTone.NEUTRAL))
+        assertThat(card(PairingPresentation.PAIRED, configured = true)).isEqualTo(SetupCard(ready.message, ready.tone))
+    }
+
+    @Test
+    fun `a running check keeps cancel and still offers pairing`() {
+        assertThat(card(PairingPresentation.NOT_PAIRED, configured = true, feedback = checkingFeedback, checking = true)).isEqualTo(
+            SetupCard(checkingFeedback.message, checkingFeedback.tone, progress = true, actions = listOf(SetupAction.CANCEL_CHECK, SetupAction.PAIR_PUMP))
+        )
+        assertThat(card(PairingPresentation.WAITING, configured = true, feedback = checkingFeedback, checking = true).actions)
+            .containsExactly(SetupAction.CANCEL_CHECK)
+    }
+
+    @Test
+    fun `saving or importing hides every action`() {
+        assertThat(card(PairingPresentation.NOT_PAIRED, busy = R.string.ypsopump_saving))
+            .isEqualTo(SetupCard(R.string.ypsopump_saving, ProvisioningFeedbackTone.NEUTRAL, progress = true))
     }
 }
