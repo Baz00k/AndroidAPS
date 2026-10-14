@@ -409,7 +409,7 @@ class YpsoNotifiedBolusTest {
     private fun fast(status: Int, sequence: Long) = YpsoBolusNotification(status, sequence, YpsoBolusNotification.STATUS_IDLE, 0)
 
     private companion object {
-        const val SERIAL = "10054912"
+        const val SERIAL = "10123456"
         const val CONNECTION = "gatt:generation"
         const val STATUS_DELIVERING = YpsoBolusNotification.STATUS_DELIVERING
         const val STATUS_COMPLETED = YpsoBolusNotification.STATUS_COMPLETED

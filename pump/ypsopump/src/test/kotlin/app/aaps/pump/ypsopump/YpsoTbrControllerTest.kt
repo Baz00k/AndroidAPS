@@ -95,7 +95,7 @@ class YpsoTbrControllerTest {
     private val records = Records()
 
     private fun controller(pump: YpsoTbrLink, baseline: Long? = 7L) =
-        YpsoTbrController(pump, journal, records, { "10054912" }, { baseline }, { clock })
+        YpsoTbrController(pump, journal, records, { "10123456" }, { baseline }, { clock })
 
     private val starts get() = store.attempts.filter { it.kind == YpsoTbrAttempt.Kind.START }
     private val stops get() = store.attempts.filter { it.kind == YpsoTbrAttempt.Kind.STOP }
@@ -388,7 +388,7 @@ class YpsoTbrControllerTest {
             override fun loadAll(): List<YpsoTbrAttempt> = error("unsupported TBR journal version")
             override fun commitAll(attempts: List<YpsoTbrAttempt>) = error("unsupported TBR journal version")
         }
-        val controller = YpsoTbrController(pump, YpsoTbrJournal(broken), records, { "10054912" }, { 7L }, { clock })
+        val controller = YpsoTbrController(pump, YpsoTbrJournal(broken), records, { "10123456" }, { 7L }, { clock })
 
         assertEquals(Result.Failed(Reason.INTERNAL_ERROR, true), controller.start(YpsoTbrRequest(150, 30), "NORMAL"))
         assertEquals(Result.Failed(Reason.INTERNAL_ERROR, true), controller.cancel())

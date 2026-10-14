@@ -27,7 +27,7 @@ import org.mockito.kotlin.whenever
 
 class YpsoTbrHistoryAccountingTest {
     private val zone = ZoneId.of("UTC")
-    private val serial = "10054912"
+    private val serial = "10123456"
     private val sync: PumpSync = mock()
     private val store = object : YpsoTbrAttemptStore {
         var attempts = emptyList<YpsoTbrAttempt>()
