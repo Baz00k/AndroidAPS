@@ -68,7 +68,7 @@ class StatsLoader @Inject constructor(
             )
             emitter.onNext(state)
             try {
-                val tdds = dailyTdds(window, days, now) { emitter.isDisposed } ?: return@create
+                val tdds = dailyTdds(window, days, zone) { emitter.isDisposed } ?: return@create
                 val today = tddCalculator.calculateToday()
                 if (emitter.isDisposed) return@create
                 val average = tddCalculator.averageTDD(tdds)?.data
@@ -100,7 +100,7 @@ class StatsLoader @Inject constructor(
             val zone = ZoneId.systemDefault()
             val newest = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(1)
             val window = StatsWindow(now, CYCLE_HISTORY_DAYS, zone)
-            val tdds = dailyTdds(window, CYCLE_HISTORY_DAYS, now, { loaded -> if (loaded % 7 == 0) emitter.onNext(CycleLoad(loaded, newest)) }) { emitter.isDisposed }
+            val tdds = dailyTdds(window, CYCLE_HISTORY_DAYS, zone, { loaded -> if (loaded % 7 == 0) emitter.onNext(CycleLoad(loaded, newest)) }) { emitter.isDisposed }
                 ?: return@create
             val totals = HashMap<LocalDate, Double>()
             for (i in 0 until tdds.size()) totals[Instant.ofEpochMilli(tdds.keyAt(i)).atZone(zone).toLocalDate()] = tdds.valueAt(i).dose()
@@ -127,21 +127,37 @@ class StatsLoader @Inject constructor(
         persistenceLayer.clearCachedTddData(0)
     }
 
-    /** Returns null when cancelled. */
-    private fun dailyTdds(window: StatsWindow, days: Int, now: Long, onDay: (Int) -> Unit = {}, cancelled: () -> Boolean): LongSparseArray<TDD>? {
+    /**
+     * Completed days, one request each, so a missing old day does not bypass cached later days. Returns
+     * null when cancelled. A day is skipped, and so reported as missing, when its midnights are ambiguous
+     * (see [StatsWindow.safeDay]) or when it is older than the retained treatment history: the calculator
+     * would otherwise rebuild a pruned day from the profile alone, as if no insulin but basal had been given.
+     */
+    private fun dailyTdds(window: StatsWindow, days: Int, zone: ZoneId, onDay: (Int) -> Unit = {}, cancelled: () -> Boolean): LongSparseArray<TDD>? {
         val tdds = LongSparseArray<TDD>()
-        // A missing old day must not bypass cached later days. Check cancellation between days.
-        // Preserve the original request at exceptional midnights (see StatsWindow).
-        val requests = if (window.canSplitTdd) days else 1
-        for (day in 0 until requests) {
+        val retained = firstRetainedDay(zone)
+        val today = Instant.ofEpochMilli(window.now).atZone(zone).toLocalDate()
+        for (day in 0 until days) {
             if (cancelled()) return null
-            val daily = if (window.canSplitTdd) tddCalculator.calculate(window.tddEnd(day), 1, true)
-            else tddCalculator.calculate(now, days.toLong(), true)
-            if (daily != null) for (i in 0 until daily.size()) tdds.put(daily.keyAt(i), daily.valueAt(i))
-            onDay(if (window.canSplitTdd) day + 1 else days)
+            val date = today.minusDays(day + 1L)
+            if (window.safeDay(day) && (retained == null || !date.isBefore(retained))) {
+                val daily = tddCalculator.calculate(window.tddEnd(day), 1, true)
+                if (daily != null) for (i in 0 until daily.size()) tdds.put(daily.keyAt(i), daily.valueAt(i))
+            }
+            onDay(day + 1)
         }
         return if (cancelled()) null else tdds
     }
+
+    /**
+     * Database cleanup removes every treatment table before one cut-off, so the oldest remaining record marks
+     * it. Its own day may have lost the hours before the cut-off and is excluded too. Null when there are no
+     * treatments at all.
+     */
+    private fun firstRetainedDay(zone: ZoneId): LocalDate? =
+        listOfNotNull(persistenceLayer.getOldestBolus()?.timestamp, persistenceLayer.getOldestCarbs()?.timestamp,
+                      persistenceLayer.getOldestTemporaryBasalRecord()?.timestamp, persistenceLayer.getOldestExtendedBolusRecord()?.timestamp)
+            .minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().plusDays(1) }
 
     private fun insulinRows(tdds: LongSparseArray<TDD>, today: LocalDate, days: Int, zone: ZoneId): List<InsulinDay> {
         val recorded = (0 until tdds.size()).map { tdds.valueAt(it).toDay(Instant.ofEpochMilli(tdds.valueAt(it).timestamp).atZone(zone).toLocalDate()) }

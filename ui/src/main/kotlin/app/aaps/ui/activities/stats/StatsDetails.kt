@@ -272,31 +272,37 @@ internal fun CyclePatternCard(cycle: CycleUiState, onShow: () -> Unit, onOffset:
                     CircularProgressIndicator(Modifier.size(20.dp), color = colors.accent)
                     Text("Loading insulin history… ${cycle.loadedDays} of $CYCLE_HISTORY_DAYS days", style = AapsTheme.type.caption, color = colors.textSecondary)
                 }
-                cycle.pattern == null -> Text(
-                    "Not enough data: needs two 28-day cycles with at least 21 daily totals each. ${cycle.availableDays} days of totals are available.",
-                    style = AapsTheme.type.body, color = colors.textSecondary)
                 else -> {
                     val pattern = cycle.pattern
-                    Text("${pattern.cycles.size} cycles · ${cycle.availableDays} days of totals" + if (cycle.loading) " · updating…" else "",
-                         style = AapsTheme.type.caption, color = colors.textTertiary)
-                    CycleChart(pattern)
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Swatch("Cycles, newest darkest", colors.accent)
-                        Swatch("Average", colors.textPrimary)
+                    if (pattern == null) Text(
+                        "Not enough data for this day 1: needs two 28-day cycles with at least 21 daily totals each. " +
+                            "${cycle.availableDays} days of totals are available.",
+                        style = AapsTheme.type.body, color = colors.textSecondary)
+                    else {
+                        Text("${pattern.cycles.size} cycles · ${cycle.availableDays} days of totals" + if (cycle.loading) " · updating…" else "",
+                             style = AapsTheme.type.caption, color = colors.textTertiary)
+                        CycleChart(pattern)
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Swatch("Cycles, newest darkest", colors.accent)
+                            Swatch("Average", colors.textPrimary)
+                        }
                     }
-                    StepperRow(
-                        decreaseLabel = "Day 1 one day earlier", onDecrease = { onOffset(cycle.offset + 1) },
-                        increaseLabel = "Day 1 one day later", onIncrease = { onOffset(cycle.offset - 1) },
-                        decreaseEnabled = cycle.offset < CYCLE_DAYS - 1, increaseEnabled = cycle.offset > 0
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Day 1: ${dayLabel(pattern.firstDay)}", style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                            Text(when (cycle.offset) {
-                                     0 -> "Latest day 1"
-                                     1 -> "1 day earlier"
-                                     CYCLE_DAYS - 1 -> "Earliest day 1"
-                                     else -> "${cycle.offset} days earlier"
-                                 }, style = AapsTheme.type.caption, color = colors.textTertiary)
+                    // Kept without a pattern too, so a shift that leaves too few totals can be undone.
+                    cycle.firstDay?.let { firstDay ->
+                        StepperRow(
+                            decreaseLabel = "Day 1 one day earlier", onDecrease = { onOffset(cycle.offset + 1) },
+                            increaseLabel = "Day 1 one day later", onIncrease = { onOffset(cycle.offset - 1) },
+                            decreaseEnabled = cycle.offset < CYCLE_DAYS - 1, increaseEnabled = cycle.offset > 0
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Day 1: ${dayLabel(firstDay)}", style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                                Text(when (cycle.offset) {
+                                         0 -> "Latest day 1"
+                                         1 -> "1 day earlier"
+                                         CYCLE_DAYS - 1 -> "Earliest day 1"
+                                         else -> "${cycle.offset} days earlier"
+                                     }, style = AapsTheme.type.caption, color = colors.textTertiary)
+                            }
                         }
                     }
                 }
@@ -313,8 +319,9 @@ private fun CycleChart(pattern: CyclePattern) {
     val values = pattern.cycles.flatten().filterNotNull()
     val top = (values.maxOrNull() ?: 1.0) * 1.1
     val bottom = (values.minOrNull() ?: 0.0) * 0.9
+    val description = cycleDescription(pattern)
     Text("U/day", style = AapsTheme.type.caption, color = colors.textSecondary)
-    Canvas(Modifier.fillMaxWidth().height(170.dp)) {
+    Canvas(Modifier.fillMaxWidth().height(170.dp).semantics { contentDescription = description }) {
         val left = 30.dp.toPx()
         val h = size.height - 14.dp.toPx()
         val w = size.width - left - 6.dp.toPx()
@@ -389,6 +396,11 @@ private fun Swatch(label: String, color: Color) {
         Text(label, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary, modifier = Modifier.padding(start = 5.dp))
     }
 }
+
+/** What the chart shows, for TalkBack: the average of each cycle day, and the days no cycle has a total for. */
+internal fun cycleDescription(pattern: CyclePattern): String =
+    "Average total daily insulin by cycle day, ${pattern.cycles.size} cycles: " +
+        pattern.average.mapIndexed { i, v -> "day ${i + 1} " + (v?.let { "${fmt1(it)} U" } ?: "no data") }.joinToString(", ")
 
 private fun dayLabel(date: LocalDate): String =
     date.format(DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEdMMM")))

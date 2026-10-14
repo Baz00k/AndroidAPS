@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -12,6 +13,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import java.time.LocalDate
 
 /** Presentation only; no therapy database, settings or pump is connected. */
 class StatsScreenTest {
@@ -40,5 +42,18 @@ class StatsScreenTest {
         compose.onNodeWithText("Recalculate daily totals").performScrollTo().performClick()
         compose.onNodeWithText("Recalculate").performClick()
         compose.runOnIdle { assertEquals(1, recalculations) }
+    }
+
+    @Test fun cycleShiftCanBeUndoneWhenAnAlignmentLacksData() {
+        var offset = 1
+        compose.setContent {
+            AapsTheme {
+                StatsScreen(StatsUiState(loading = false), StatsActions({}, {}, onCycleOffset = { offset = it }),
+                            CycleUiState(requested = true, offset = 1, availableDays = 49, firstDay = LocalDate.of(2026, 9, 15)))
+            }
+        }
+        compose.onNodeWithText("Not enough data for this day 1", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Day 1 one day later").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(0, offset) }
     }
 }

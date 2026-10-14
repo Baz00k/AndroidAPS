@@ -97,6 +97,15 @@ fun StatsScreen(state: StatsUiState, actions: StatsActions, cycle: CycleUiState 
             }
             return@Column
         }
+        if (state.refreshFailed) {
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Could not update after a history change", color = colors.high)
+                    Text("These figures may be out of date.", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
+                }
+            }
+        }
         if (state.glucoseReadings == 0) {
             Text("No glucose readings in this period", style = AapsTheme.type.body, color = colors.textSecondary,
                  modifier = Modifier.padding(bottom = 12.dp))

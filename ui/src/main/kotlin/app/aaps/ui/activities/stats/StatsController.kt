@@ -72,28 +72,50 @@ internal class StatsController(
 
     fun setCycleOffset(offset: Int) {
         val shift = offset.coerceIn(0, CYCLE_DAYS - 1)
-        cycle.value = cycle.value.copy(offset = shift, pattern = totals?.let { cyclePattern(it, newest, shift) })
+        cycle.value = cycle.value.copy(offset = shift, firstDay = totals?.let { cycleStart(newest, shift) },
+                                       pattern = totals?.let { cyclePattern(it, newest, shift) })
     }
 
     /** Deletes only the derived daily totals, then rebuilds what is on screen from the stored records. */
     fun recalculate() {
         if (recalculation.value == Recalculation.RUNNING) return
         recalculation.value = Recalculation.RUNNING
+        val reloadCycle = cancelWork()
         recalculationRequest.set(Completable.fromAction(loader::recalculateTdd).subscribeOn(io).observeOn(main).subscribe({
             recalculation.value = Recalculation.IDLE
             reloader.reload(stats.value.rangeDays)
-            if (cycle.value.requested) loadCycle()
+            if (reloadCycle) loadCycle()
         }, { error ->
             recalculation.value = Recalculation.FAILED
+            reloader.markStale()
+            if (reloadCycle) loadCycle()
             onError(error)
         }))
     }
 
     private fun historyChanged(from: Long) {
+        val interrupted = cycle.value.loading
+        val reloadCycle = cancelWork() && (interrupted || loader.beforeToday(from))
         invalidation.set(Completable.fromAction { loader.clearCachedTdd(from) }.subscribeOn(io).observeOn(main).subscribe({
             reloader.refresh(stats.value.rangeDays)
-            if (cycle.value.requested && loader.beforeToday(from)) loadCycle()
-        }, onError))
+            if (reloadCycle) loadCycle()
+        }, { error ->
+            reloader.markStale()
+            if (reloadCycle) loadCycle()
+            onError(error)
+        }))
+    }
+
+    /**
+     * Stops this screen's TDD calculations before the cache is cleared, so none of them can go on to cache a
+     * total read before the change. Returns whether the cycle pattern was requested and must load again.
+     */
+    private fun cancelWork(): Boolean {
+        reloader.stop()
+        cycleGeneration++
+        cycleRequest.set(null)
+        if (cycle.value.loading) cycle.value = cycle.value.copy(loading = false)
+        return cycle.value.requested
     }
 
     /** The previous pattern stays visible while a newer history loads. */
@@ -110,6 +132,7 @@ internal class StatsController(
             totals = loaded
             newest = load.newest
             cycle.value = cycle.value.copy(loading = false, loadedDays = load.loadedDays, availableDays = loaded.size,
+                                           firstDay = cycleStart(load.newest, cycle.value.offset),
                                            pattern = cyclePattern(loaded, load.newest, cycle.value.offset))
         }, { error ->
             if (id == cycleGeneration) {

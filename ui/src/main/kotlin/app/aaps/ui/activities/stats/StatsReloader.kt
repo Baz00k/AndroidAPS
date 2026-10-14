@@ -21,21 +21,29 @@ internal class StatsReloader(
         request.set(null)
         state = StatsUiState(rangeDays = days)
         onState(state)
-        start(id, Observable.defer { load(days) })
+        start(id, Observable.defer { load(days) }, quiet = false)
     }
 
     /**
      * Re-reads after a history change without blanking the screen: the previous figures stay until
-     * the complete result replaces them, and a failure keeps them rather than showing an empty screen.
+     * the complete result replaces them. A failure keeps them, marked as out of date.
      */
     fun refresh(days: Int) {
         if (state.loading || state.failed || state.rangeDays != days) return reload(days)
         val id = ++generation
         request.set(null)
-        start(id, Observable.defer { load(days) }.filter { !it.insulinLoading })
+        start(id, Observable.defer { load(days) }.filter { !it.insulinLoading }, quiet = true)
     }
 
-    private fun start(id: Long, source: Observable<StatsUiState>) {
+    /** The history changed but could not be re-read; whatever is shown predates the change. */
+    fun markStale() {
+        generation++
+        request.set(null)
+        state = if (state.loading) state.copy(loading = false, failed = true) else state.copy(insulinLoading = false, refreshFailed = true)
+        onState(state)
+    }
+
+    private fun start(id: Long, source: Observable<StatsUiState>, quiet: Boolean) {
         request.set(source.subscribeOn(io).observeOn(main, true).subscribe({ result ->
             if (id == generation) {
                 state = result
@@ -43,7 +51,7 @@ internal class StatsReloader(
             }
         }, { error ->
             if (id == generation) {
-                state = state.copy(loading = false, insulinLoading = false, failed = state.loading)
+                state = state.copy(loading = false, insulinLoading = false, failed = state.loading, refreshFailed = quiet || state.refreshFailed)
                 onState(state)
                 onError(error)
             }

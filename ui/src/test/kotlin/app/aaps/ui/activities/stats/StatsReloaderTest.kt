@@ -25,7 +25,7 @@ class StatsReloaderTest {
         assertThat(states.last().loading).isFalse()
     }
 
-    @Test fun `refresh keeps the shown figures through partial results and failures`() {
+    @Test fun `refresh keeps the shown figures through partial results and marks them out of date on failure`() {
         loader.reload(7); io.triggerActions()
         sources.getValue(7).onNext(StatsUiState(loading = false, avgGlucose = "OLD", avgTdd = "30.0 U")); main.triggerActions()
         sources.remove(7)
@@ -38,6 +38,7 @@ class StatsReloaderTest {
         loader.refresh(7); io.triggerActions()
         sources.getValue(7).onError(IllegalStateException("database")); main.triggerActions()
         assertThat(states.last().failed).isFalse()
+        assertThat(states.last().refreshFailed).isTrue()
         assertThat(states.last().avgGlucose).isEqualTo("NEW")
     }
 

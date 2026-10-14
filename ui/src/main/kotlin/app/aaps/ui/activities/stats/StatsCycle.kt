@@ -19,7 +19,7 @@ data class CyclePattern(val firstDay: LocalDate, val cycles: List<List<Double?>>
 
 /** [newest] is the last completed day; [offset] moves the end of the newest cycle that many days earlier. */
 internal fun cyclePattern(totals: Map<LocalDate, Double>, newest: LocalDate, offset: Int): CyclePattern? {
-    val end = newest.minusDays(offset.coerceIn(0, CYCLE_DAYS - 1).toLong())
+    val end = cycleStart(newest, offset).plusDays(CYCLE_DAYS - 1L)
     val cycles = (0 until CYCLES)
         .map { cycle -> (0 until CYCLE_DAYS).map { day -> totals[end.minusDays((cycle * CYCLE_DAYS + CYCLE_DAYS - 1 - day).toLong())] } }
         .filter { cycle -> cycle.count { it != null } >= MIN_CYCLE_DAYS }
@@ -27,3 +27,7 @@ internal fun cyclePattern(totals: Map<LocalDate, Double>, newest: LocalDate, off
     val average = (0 until CYCLE_DAYS).map { day -> cycles.mapNotNull { it[day] }.takeIf { it.isNotEmpty() }?.average() }
     return CyclePattern(end.minusDays(CYCLE_DAYS - 1L), cycles, average)
 }
+
+/** Day 1 of the newest cycle. */
+internal fun cycleStart(newest: LocalDate, offset: Int): LocalDate =
+    newest.minusDays(offset.coerceIn(0, CYCLE_DAYS - 1) + CYCLE_DAYS - 1L)

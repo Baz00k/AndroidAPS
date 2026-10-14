@@ -58,6 +58,34 @@ class StatsControllerTest {
         assertThat(controller.stats.value.avgGlucose).isEqualTo("load 2")
     }
 
+    @Test fun `a history change stops running calculations before clearing the cache, then restarts them`() {
+        val order = mutableListOf<String>()
+        whenever(loader.loadCycle()).thenAnswer { Observable.never<CycleLoad>().doOnDispose { order += "cycle stopped" } }
+        whenever(loader.clearCachedTdd(any())).thenAnswer { order += "cache cleared"; Unit }
+        controller.start(); run()
+        controller.showCycle(); run()
+        history.onNext(1_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS)
+        main.triggerActions()
+        assertThat(controller.cycle.value.loading).isFalse()
+        run()
+        assertThat(order).containsExactly("cycle stopped", "cache cleared").inOrder()
+        verify(loader, times(2)).loadCycle()
+        assertThat(controller.cycle.value.loading).isTrue()
+    }
+
+    @Test fun `a cache that cannot be invalidated marks the figures as out of date`() {
+        doAnswer { throw IllegalStateException("database") }.whenever(loader).clearCachedTdd(any())
+        controller.start(); run()
+        history.onNext(1_000)
+        io.advanceTimeBy(HISTORY_SETTLE_SECONDS, TimeUnit.SECONDS)
+        run(); run()
+        assertThat(controller.stats.value.refreshFailed).isTrue()
+        assertThat(controller.stats.value.avgGlucose).isEqualTo("load 1")
+        controller.select(7); run()
+        assertThat(controller.stats.value.refreshFailed).isFalse()
+    }
+
     @Test fun `history changes while paused are ignored`() {
         controller.start(); run()
         controller.stop()
@@ -97,5 +125,18 @@ class StatsControllerTest {
         assertThat(controller.cycle.value.offset).isEqualTo(CYCLE_DAYS - 1)
         assertThat(controller.cycle.value.pattern!!.firstDay).isEqualTo(newest.minusDays(54))
         verify(loader, times(1)).loadCycle()
+    }
+
+    @Test fun `an alignment without enough totals keeps its day 1 so the shift can be undone`() {
+        val newest = LocalDate.of(2026, 10, 13)
+        // 49 days: two cycles at offset 0, but only 20 days in the older one after shifting by a day.
+        val totals = (0 until 49).associate { newest.minusDays(it.toLong()) to 30.0 }
+        whenever(loader.loadCycle()).thenReturn(Observable.just(CycleLoad(CYCLE_HISTORY_DAYS, newest, totals)))
+        controller.showCycle(); run()
+        controller.setCycleOffset(1)
+        assertThat(controller.cycle.value.pattern).isNull()
+        assertThat(controller.cycle.value.firstDay).isEqualTo(newest.minusDays(28))
+        controller.setCycleOffset(0)
+        assertThat(controller.cycle.value.pattern).isNotNull()
     }
 }

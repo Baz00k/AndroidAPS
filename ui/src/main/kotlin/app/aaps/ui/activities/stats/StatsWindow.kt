@@ -11,10 +11,15 @@ internal class StatsWindow(val now: Long, val days: Int, val zone: ZoneId = Zone
     val tirTo = MidnightTime.calc(now)
     private val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
 
-    // The shared calculator derives its own end from its start. If midnight is skipped or
-    // repeated, splitting that request can change cache keys and even include an unfinished day.
-    val canSplitTdd = (0..days).all { day ->
-        zone.rules.getValidOffsets(today.minusDays(day.toLong()).atStartOfDay()).size == 1
+    /**
+     * Whether the one-day TDD request ending at [tddEnd] of [day] covers exactly that completed day.
+     *
+     * The shared calculator derives its end from its start. If either midnight is skipped or repeated,
+     * the interval shifts and can reach into today, whose partial total it would then cache for the
+     * loop's own TDD to read later. Such a day is reported as missing instead of being requested.
+     */
+    fun safeDay(day: Int): Boolean = (day..day + 1).all { back ->
+        zone.rules.getValidOffsets(today.minusDays(back.toLong()).atStartOfDay()).size == 1
     }
 
     fun tddEnd(day: Int): Long = today.minusDays(day.toLong()).atStartOfDay(zone).toInstant().toEpochMilli()

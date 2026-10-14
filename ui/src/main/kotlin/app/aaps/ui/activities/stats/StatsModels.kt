@@ -29,6 +29,8 @@ data class StatsUiState(
     val loading: Boolean = true,
     val rangeDays: Int = 7,
     val failed: Boolean = false,
+    /** A refresh after a history change failed; the figures shown predate that change. */
+    val refreshFailed: Boolean = false,
     val insulinLoading: Boolean = false,
     val insulinFailed: Boolean = false,
     val insulinDays: Int = 0,
@@ -80,7 +82,11 @@ data class InsulinDay(
     val recorded: Boolean = true
 )
 
-/** The on-demand 28-day insulin pattern. [availableDays] counts days with a total in the loaded history. */
+/**
+ * The on-demand 28-day insulin pattern. [availableDays] counts days with a total in the loaded history;
+ * [firstDay] is day 1 of the newest cycle for the chosen offset, set once history is loaded, even when
+ * that alignment has too few totals for a [pattern].
+ */
 @Immutable
 data class CycleUiState(
     val requested: Boolean = false,
@@ -89,6 +95,7 @@ data class CycleUiState(
     val failed: Boolean = false,
     val offset: Int = 0,
     val availableDays: Int = 0,
+    val firstDay: LocalDate? = null,
     val pattern: CyclePattern? = null
 )
 

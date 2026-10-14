@@ -3,6 +3,7 @@ package app.aaps.ui.activities.stats
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
+import java.util.Locale
 
 class StatsCycleTest {
     private val newest = LocalDate.of(2026, 10, 13)
@@ -38,5 +39,18 @@ class StatsCycleTest {
         assertThat(pattern.cycles).hasSize(6)
         assertThat(pattern.cycles[0][27]).isEqualTo(15.0)
         assertThat(cyclePattern(history(CYCLE_HISTORY_DAYS), newest, 99)!!.firstDay).isEqualTo(newest.minusDays(54))
+    }
+
+    @Test fun `screen readers get every cycle day of the chart, including days without data`() {
+        val original = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.US)
+            val description = cycleDescription(cyclePattern(history(56, missing = setOf(3, 31)), newest, 0)!!)
+            assertThat(description).startsWith("Average total daily insulin by cycle day, 2 cycles: day 1 37.0 U, ")
+            assertThat(description).contains("day 25 no data")
+            assertThat(description).endsWith("day 28 10.0 U")
+        } finally {
+            Locale.setDefault(original)
+        }
     }
 }
