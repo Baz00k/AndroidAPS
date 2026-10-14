@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
+import app.aaps.pump.ypsopump.crypto.PumpSession.AvailabilityCause
 import java.util.UUID
 
 /** [YpsoGattAdapter] over Android's Bluetooth stack. */
@@ -21,13 +22,14 @@ internal class YpsoAndroidGattAdapter(
     @SuppressLint("MissingPermission")
     override fun bondedPump(mac: String, configuredSerial: String?): YpsoGattAdapter.BondedPump {
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-        if (adapter == null || !adapter.isEnabled) throw YpsoBondException(false, "Bluetooth unavailable")
+        if (adapter == null) throw YpsoBondException(AvailabilityCause.TRANSPORT, "Bluetooth adapter unavailable")
+        if (!adapter.isEnabled) throw YpsoBondException(AvailabilityCause.BLUETOOTH_OFF, "Bluetooth is off")
         val device = adapter.getRemoteDevice(mac)
-        if (device.bondState != BluetoothDevice.BOND_BONDED) throw YpsoBondException(false, "existing Bluetooth bond required")
+        if (device.bondState != BluetoothDevice.BOND_BONDED) throw YpsoBondException(AvailabilityCause.BOND_MISSING, "existing Bluetooth bond required")
         var observed: String? = null
         if (configuredSerial != null && PumpIdentity.isSupportedDeviceName(device.name)) {
             if (!PumpIdentity.deviceNameMatches(configuredSerial, device.name)) {
-                throw YpsoBondException(true, "Bonded pump name does not match configured serial")
+                throw YpsoBondException(AvailabilityCause.IDENTITY_MISMATCH, "Bonded pump name does not match configured serial")
             }
             observed = configuredSerial
         }

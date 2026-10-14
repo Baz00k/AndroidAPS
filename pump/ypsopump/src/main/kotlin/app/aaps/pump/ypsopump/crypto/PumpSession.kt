@@ -24,7 +24,11 @@ class PumpSession(private val store: Store) {
     enum class WriteBootstrapState { UNKNOWN_MID_EPOCH, OBSERVED_NEW_EPOCH, RECOVERING_LOWER_BOUND, ESTABLISHED }
     enum class AvailabilityCause {
         UNCONFIGURED,
+        // Retained so an existing journal remains readable; new failures use the specific causes below.
         BOND_OR_PERMISSION,
+        BLUETOOTH_OFF,
+        BOND_MISSING,
+        BLUETOOTH_PERMISSION_MISSING,
         TRANSPORT,
         AUTHENTICATION,
         ENCRYPTED_STATUS_UNAVAILABLE,

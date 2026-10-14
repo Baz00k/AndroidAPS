@@ -204,6 +204,28 @@ class ProvisioningFailureMessageTest {
         markVerified(serial, 1_500)
     }
 
+    @Test
+    fun `stalled replacement identifies Bluetooth prerequisite without hiding the rejected key`() {
+        for ((cause, message) in listOf(
+            PumpSession.AvailabilityCause.BOND_MISSING to R.string.ypsopump_verifying_stalled_pairing,
+            PumpSession.AvailabilityCause.BLUETOOTH_OFF to R.string.ypsopump_verifying_stalled_bluetooth_off,
+            PumpSession.AvailabilityCause.BLUETOOTH_PERMISSION_MISSING to R.string.ypsopump_verifying_stalled_permission,
+        )) {
+            val service = verifiedService()
+            service.recordUnavailable(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), code = 140)
+            saveReplacement(service)
+            assertThat(service.retryAllowed()).isTrue()
+            val candidate = service.connectionSession()!!
+            service.recordCandidateOrUnavailable(candidate.generation, candidate.attemptId, setOf(cause), "connect")
+
+            assertThat(service.verificationCanProceed()).isFalse()
+            assertThat(service.retryAllowed()).isFalse()
+            assertThat(rendered(service).message).isEqualTo(message)
+            assertThat(pumpSetupPresentation(service.pending()!!.availability.causes, hasSavedDetails = true, verified = true))
+                .isEqualTo(PumpSetupPresentation.KEY_MAY_NEED_UPDATING)
+        }
+    }
+
     private fun saveReplacement(service: YpsoProvisioningService) {
         service.installManualAndStartVerification(YpsoProvisioningService.ManualDraft(serial, mac, rotatedKey.hex()), now) {}
     }
