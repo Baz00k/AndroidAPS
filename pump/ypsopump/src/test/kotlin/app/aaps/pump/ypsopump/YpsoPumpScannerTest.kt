@@ -53,6 +53,16 @@ class YpsoPumpScannerTest {
     }
 
     @Test
+    fun `the name a pump shows in Android's Bluetooth settings is recognised`() {
+        scanner.start()
+        // 123456 is 0x01E240.
+        advertise("YpsoPump_10123456", "EC:2A:F0:01:E2:40")
+        advertise("YpsoPump_10123456", "EC:2A:F0:01:E2:41")
+
+        assertThat(scanner.scan.value!!.pumps).containsExactly(YpsoFoundPump("10123456", "EC:2A:F0:01:E2:40"))
+    }
+
+    @Test
     fun `a search ends after its duration and keeps what it found`() {
         scanner.start()
         advertise("mylife YpsoPump 000001", "EC:2A:F0:00:00:01")

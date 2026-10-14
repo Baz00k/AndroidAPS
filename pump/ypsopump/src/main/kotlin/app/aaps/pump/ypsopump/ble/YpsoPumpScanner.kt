@@ -10,19 +10,17 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
-import android.os.ParcelUuid
 import app.aaps.pump.ypsopump.provisioning.PumpIdentity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /** A pump found nearby: its advertised name gave [serial], and its address is the one that serial implies. */
 internal data class YpsoFoundPump(val serial: String, val mac: String)
 
-/** Android's Bluetooth LE scanner, limited to the service YpsoPumps advertise. */
+/** Android's Bluetooth LE scanner. */
 internal interface YpsoScanPort {
     sealed interface Start {
         class Started(val scan: AutoCloseable) : Start
@@ -143,18 +141,16 @@ internal class YpsoAndroidScanPort(private val context: Context) : YpsoScanPort 
                 onResult(name, result.device.address)
             }
         }
-        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(ADVERTISED_SERVICE)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         return try {
-            scanner.startScan(listOf(filter), settings, callback)
+            // Pumps differ in what they advertise (`YpsoPump_10…` on a real pump, `mylife YpsoPump …` in published
+            // research), so Android filters nothing: the search runs only while setup is open, and every result is
+            // checked by name and address.
+            scanner.startScan(emptyList<ScanFilter>(), settings, callback)
             YpsoScanPort.Start.Started { runCatching { scanner.stopScan(callback) } }
         } catch (_: SecurityException) {
             YpsoScanPort.Start.PermissionRequired
         }
     }
 
-    companion object {
-        /** The service UUID YpsoPumps advertise; the genuine app scans for it. */
-        val ADVERTISED_SERVICE: UUID = UUID.fromString("669a0c20-0008-969e-e211-ffffffffffff")
-    }
 }
