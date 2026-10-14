@@ -1,171 +1,49 @@
 package app.aaps.ui.activities
 
 import android.os.Bundle
-import androidx.collection.LongSparseArray
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.data.model.GlucoseUnit
-import app.aaps.core.interfaces.db.PersistenceLayer
-import app.aaps.core.interfaces.profile.ProfileFunction
-import app.aaps.core.interfaces.profile.ProfileUtil
-import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
-import app.aaps.core.interfaces.stats.TIR
-import app.aaps.core.interfaces.stats.TddCalculator
-import app.aaps.core.interfaces.stats.TirCalculator
-import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
-import app.aaps.core.keys.UnitDoubleKey
-import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
-import app.aaps.ui.R
+import app.aaps.ui.activities.stats.StatsLoader
+import app.aaps.ui.activities.stats.StatsReloader
 import app.aaps.ui.activities.stats.StatsScreen
-import app.aaps.ui.activities.stats.HourProfile
 import app.aaps.ui.activities.stats.StatsUiState
-import io.reactivex.rxjava3.core.Single
-import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.kotlin.plusAssign
-import java.util.Calendar
-import java.util.Locale
 import javax.inject.Inject
-import kotlin.math.sqrt
 
-/**
- * Redesigned Statistics screen. UI is Compose ([StatsScreen]); TIR is computed from [TirCalculator],
- * TDD from [TddCalculator], and average/CV/GMI derived from the raw readings — all off the main thread.
- */
 class StatsActivity : TranslatedDaggerAppCompatActivity() {
-
-    @Inject lateinit var tddCalculator: TddCalculator
-    @Inject lateinit var tirCalculator: TirCalculator
+    @Inject lateinit var loader: StatsLoader
     @Inject lateinit var aapsSchedulers: AapsSchedulers
     @Inject lateinit var fabricPrivacy: FabricPrivacy
-    @Inject lateinit var rh: ResourceHelper
-    @Inject lateinit var persistenceLayer: PersistenceLayer
-    @Inject lateinit var profileFunction: ProfileFunction
-    @Inject lateinit var profileUtil: ProfileUtil
-    @Inject lateinit var preferences: Preferences
-    @Inject lateinit var dateUtil: DateUtil
 
-    private val disposable = CompositeDisposable()
     private val statsState = mutableStateOf(StatsUiState())
+    private lateinit var reloader: StatsReloader
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
+        statsState.value = StatsUiState(rangeDays = savedInstanceState?.getInt("rangeDays", 7) ?: 7)
+        reloader = StatsReloader(loader::load, aapsSchedulers.io, aapsSchedulers.main,
+                                 { statsState.value = it }, fabricPrivacy::logException)
         setContentView(ComposeView(this).apply {
-            setContent { AapsTheme { StatsScreen(statsState.value, onRange = ::compute, onBack = { finish() }) } }
+            setContent { AapsTheme { StatsScreen(statsState.value, onRange = reloader::reload, onBack = { finish() }) } }
         })
-        compute(7)
     }
 
-    private fun compute(days: Int) {
-        statsState.value = statsState.value.copy(loading = true, rangeDays = days)
-        disposable += Single.fromCallable { buildStats(days) }
-            .subscribeOn(aapsSchedulers.io)
-            .observeOn(aapsSchedulers.main)
-            .subscribe({ statsState.value = it }, fabricPrivacy::logException)
-    }
-
-    private fun agg(arr: LongSparseArray<TIR>?): IntArray {
-        val out = intArrayOf(0, 0, 0, 0) // below, inRange, above, count
-        if (arr == null) return out
-        for (i in 0 until arr.size()) {
-            val t = arr.valueAt(i); out[0] += t.below; out[1] += t.inRange; out[2] += t.above; out[3] += t.count
-        }
-        return out
-    }
-
-    /**
-     * Hour-of-day profile: for each hour, the spread of every reading recorded in that hour across the
-     * whole range.
-     *
-     * Percentiles, not mean/SD — see [HourProfile]. [HourProfile.days] counts distinct calendar days,
-     * which is the honest measure of how much is behind each hour; a reading count would report ~288
-     * for a single day and make one day look like a trend.
-     */
-    private fun hourlyProfile(readings: List<Pair<Long, Double>>, units: GlucoseUnit): List<HourProfile> {
-        val perHour = Array(24) { mutableListOf<Double>() }
-        val days = Array(24) { mutableSetOf<Int>() }
-        val cal = Calendar.getInstance()
-        readings.forEach { (ts, mgdl) ->
-            cal.timeInMillis = ts
-            val h = cal.get(Calendar.HOUR_OF_DAY)
-            perHour[h].add(profileUtil.fromMgdlToUnits(mgdl))
-            days[h].add(cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR))
-        }
-        return (0 until 24).map { h ->
-            val v = perHour[h].sorted()
-            if (v.isEmpty()) HourProfile(hour = h)
-            else HourProfile(
-                hour = h,
-                p10 = pct(v, 0.10), p25 = pct(v, 0.25), median = pct(v, 0.50),
-                p75 = pct(v, 0.75), p90 = pct(v, 0.90),
-                readings = v.size, days = days[h].size
-            )
-        }
-    }
-
-    /** Linear-interpolated percentile of an already-sorted list. */
-    private fun pct(sorted: List<Double>, q: Double): Double {
-        if (sorted.isEmpty()) return 0.0
-        if (sorted.size == 1) return sorted[0]
-        val pos = q * (sorted.size - 1)
-        val lo = pos.toInt()
-        val hi = (lo + 1).coerceAtMost(sorted.size - 1)
-        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
-    }
-
-    private fun buildStats(days: Int): StatsUiState {
-        val units = profileFunction.getUnits()
-        val now = dateUtil.now()
-        val from = now - days * 86_400_000L
-        val raw = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).filter { it.value > 0 }
-        // Dedupe per 5-minute bucket. xDrip double-broadcasts, so the table holds ~1.85x the real
-        // reading count — harmless for an overall percentage, but NOT for a by-hour view: if the
-        // duplication rate varies across the day (phone awake vs asleep) it would tilt exactly the
-        // pattern this screen exists to show.
-        val readings = raw.groupBy { it.timestamp / 300_000L }.values.map { g -> g.first().timestamp to g.map { it.value }.average() }
-        val values = readings.map { it.second }
-        val avgMgdl = if (values.isNotEmpty()) values.average() else 0.0
-        val sd = if (values.size > 1) sqrt(values.sumOf { (it - avgMgdl) * (it - avgMgdl) } / values.size) else 0.0
-        val cv = if (avgMgdl > 0) sd / avgMgdl * 100 else 0.0
-        val gmi = if (avgMgdl > 0) 3.31 + 0.02392 * avgMgdl else 0.0
-
-        val lowMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
-        val highMark = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
-        val hourly = hourlyProfile(readings, units)
-        val main = agg(tirCalculator.calculate(days.toLong(), lowMark, highMark))
-        val ext = agg(tirCalculator.calculate(days.toLong(), 54.0, 250.0)) // 3.0 / 13.9 mmol clinical extremes
-        val count = main[3].coerceAtLeast(1)
-        fun pct(x: Int) = x.toDouble() / count * 100.0
-        val vLow = ext[0]; val vHigh = ext[2]
-        val low = (main[0] - vLow).coerceAtLeast(0); val high = (main[2] - vHigh).coerceAtLeast(0)
-
-        val avgTdd = tddCalculator.averageTDD(tddCalculator.calculate(days.toLong(), true))?.data
-        val tddU = avgTdd?.let { if (it.totalAmount > 0) it.totalAmount else it.basalAmount + it.bolusAmount }
-
-        return StatsUiState(
-            loading = false,
-            rangeDays = days,
-            veryLow = pct(vLow), low = pct(low), inRange = pct(main[1]), high = pct(high), veryHigh = pct(vHigh),
-            gmi = if (gmi > 0) String.format(Locale.getDefault(), "%.1f%%", gmi) else "--",
-            avgGlucose = if (avgMgdl > 0) profileUtil.fromMgdlToStringInUnits(avgMgdl) else "--",
-            avgGlucoseUnit = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL",
-            cv = if (cv > 0) String.format(Locale.getDefault(), "%.0f%%", cv) else "--",
-            cvGood = cv in 0.1..36.0,
-            avgTdd = tddU?.let { String.format(Locale.getDefault(), "%.1f U", it) } ?: "--",
-            carbsPerDay = avgTdd?.carbs?.takeIf { it > 0 }?.let { String.format(Locale.getDefault(), "%.0f g", it) } ?: "--",
-            hourly = hourly,
-            lowMark = preferences.get(UnitDoubleKey.OverviewLowMark),
-            highMark = preferences.get(UnitDoubleKey.OverviewHighMark),
-            decimals = if (units == GlucoseUnit.MGDL) 0 else 1
-        )
+    override fun onResume() {
+        super.onResume()
+        reloader.reload(statsState.value.rangeDays)
     }
 
     override fun onPause() {
+        reloader.stop()
         super.onPause()
-        disposable.clear()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("rangeDays", statsState.value.rangeDays)
+        super.onSaveInstanceState(outState)
     }
 }

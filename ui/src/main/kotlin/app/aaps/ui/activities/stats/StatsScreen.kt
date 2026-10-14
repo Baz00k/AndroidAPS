@@ -1,7 +1,6 @@
 package app.aaps.ui.activities.stats
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,8 +16,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +28,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -48,8 +48,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import kotlin.math.roundToInt
 
 /**
- * Redesigned Statistics screen (handoff Section 4): range selector, a TIR card (big in-range % + a
- * 5-band stacked bar), and 2×2 stat tiles. Read-only; [onRange] recomputes for the chosen window.
+ * Read-only statistics with independently loading glucose and insulin summaries.
  */
 @Composable
 fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit) {
@@ -63,19 +62,40 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
             .padding(horizontal = AapsSpacing.screenH)
     ) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onBack).padding(8.dp)
-            ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary) }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary) }
             Text("Statistics", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
-            SegmentedControl(ranges.map { "${it}d" }, ranges.indexOf(state.rangeDays).coerceAtLeast(0), { onRange(ranges[it]) })
+        }
+        SegmentedControl(ranges.map { "${it}d" }, ranges.indexOf(state.rangeDays).coerceAtLeast(0), { onRange(ranges[it]) }, fillWidth = true)
+        Text("Last ${state.rangeDays} days", style = AapsTheme.type.body, color = colors.textSecondary,
+             modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
+        if (state.loading || state.failed) {
+            AapsCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (state.loading) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = colors.accent)
+                        Text("Loading statistics…", color = colors.textSecondary)
+                    } else {
+                        Text("Could not load statistics", color = colors.textPrimary)
+                        Text("Select another period or try again.", color = colors.textSecondary)
+                        TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
+                    }
+                }
+            }
+            return@Column
+        }
+        if (state.glucoseReadings == 0) {
+            Text("No glucose readings in this period", style = AapsTheme.type.body, color = colors.textSecondary,
+                 modifier = Modifier.padding(bottom = 12.dp))
         }
 
         // TIR card
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SectionLabel("Time in range")
+                Text("Completed days · ${fmt(state.lowMark, state.decimals)}–${fmt(state.highMark, state.decimals)} ${state.avgGlucoseUnit}",
+                     style = AapsTheme.type.caption, color = colors.textSecondary)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsTheme.type.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
+                    Text(if (state.tirReadings == 0) "--" else "${state.inRange.roundToInt()}%", style = AapsTheme.type.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
                     Text("in range", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
                 }
                 // stacked bar
@@ -88,7 +108,8 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
                     Seg(state.high, colors.high)
                     Seg(state.veryHigh, colors.veryHigh)
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (state.tirReadings == 0) Text("No glucose readings in completed days", style = AapsTheme.type.caption, color = colors.textSecondary)
+                else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     BarLabel("Low", state.veryLow + state.low, colors.low, colors.textTertiary)
                     BarLabel("In range", state.inRange, colors.inRange, colors.textTertiary)
                     BarLabel("High", state.high + state.veryHigh, colors.high, colors.textTertiary)
@@ -103,16 +124,32 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
         }
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
             StatTile("CV", state.cv, Modifier.weight(1f), valueColor = if (state.cvGood) colors.inRange else colors.textPrimary)
-            StatTile("AVG TDD", state.avgTdd, Modifier.weight(1f))
+            StatTile("AVG TDD", if (state.insulinLoading) "…" else state.avgTdd, Modifier.weight(1f))
         }
+        Text("Glucose summary and profile: rolling ${state.rangeDays}-day window", style = AapsTheme.type.caption,
+             color = colors.textSecondary)
 
         GlucoseProfile(state)
 
         // extra
         AapsCard(Modifier.fillMaxWidth().padding(top = AapsSpacing.sectionGap, bottom = 24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Carbs / day", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                Text(state.carbsPerDay, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Carbs / day", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                    Text(if (state.insulinLoading) "…" else state.carbsPerDay, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                }
+                when {
+                    state.insulinLoading -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(Modifier.size(20.dp), color = colors.accent)
+                        Text("Loading insulin history…", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    }
+                    state.insulinFailed -> {
+                        Text("Could not load insulin history", style = AapsTheme.type.body, color = colors.textSecondary)
+                        TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
+                    }
+                    state.insulinDays == 0 -> Text("No complete insulin history for this period", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    else -> Text("TDD and carbs: ${state.insulinDays} of ${state.rangeDays} completed days", style = AapsTheme.type.caption, color = colors.textSecondary)
+                }
             }
         }
     }
@@ -137,7 +174,7 @@ private fun StatTile(label: String, value: String, modifier: Modifier = Modifier
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
-            Text(value, style = AapsTheme.type.cardValue, color = valueColor, maxLines = 1)
+            Text(value, style = AapsTheme.type.cardValue, color = valueColor)
         }
     }
 }
@@ -173,6 +210,7 @@ private fun GlucoseProfile(state: StatsUiState) {
         }
         AapsCard(Modifier.fillMaxWidth()) {
             Column {
+                Text(state.avgGlucoseUnit, style = AapsTheme.type.caption, color = colors.textSecondary)
                 Box(Modifier.fillMaxWidth().height(150.dp)) {
                     if (hours.size < 2) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -184,7 +222,7 @@ private fun GlucoseProfile(state: StatsUiState) {
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (hours.size >= 2) Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Legend("Median", colors.textPrimary, colors)
                     Legend("25–75%", colors.accent.copy(alpha = 0.55f), colors)
                     Legend("10–90%", colors.accent.copy(alpha = 0.22f), colors)
@@ -209,7 +247,7 @@ private fun DrawScope.drawProfile(
     measurer: TextMeasurer,
     axis: TextStyle
 ) {
-    val left = 26.dp.toPx()
+    val left = (if (state.decimals == 0) 34 else 30).dp.toPx()
     val bottom = 14.dp.toPx()
     val w = size.width - left - 6.dp.toPx()
     val h = size.height - bottom

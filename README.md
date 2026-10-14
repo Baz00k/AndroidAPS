@@ -23,6 +23,8 @@ UI and YpsoPump support.
   Unavailable readings use `--`, not numeric zero. Home, the widget and status outputs show IOB
   as unavailable without an active profile and explain why; Home keeps recorded doses visible.
   Profile-derived basal is unavailable too. This does not mean no insulin is active or being delivered.
+  Statistics loads glucose before insulin history; TIR and TDD use completed days, while the glucose
+  summary and hourly profile use a rolling window. Missing history and load failures are shown explicitly.
 - Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
 - Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
 
