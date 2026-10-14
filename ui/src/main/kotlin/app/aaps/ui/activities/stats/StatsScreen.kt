@@ -148,7 +148,7 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
                         TextButton(onClick = { onRange(state.rangeDays) }) { Text("Retry") }
                     }
                     state.insulinDays == 0 -> Text("No complete insulin history for this period", style = AapsTheme.type.caption, color = colors.textSecondary)
-                    else -> Text("TDD and carbs: ${state.insulinDays} of ${state.rangeDays} completed days", style = AapsTheme.type.caption, color = colors.textSecondary)
+                    else -> Text("TDD and carbs: ${state.insulinDays} available daily records", style = AapsTheme.type.caption, color = colors.textSecondary)
                 }
             }
         }

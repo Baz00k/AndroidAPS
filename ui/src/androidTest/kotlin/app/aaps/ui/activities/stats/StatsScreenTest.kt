@@ -54,4 +54,10 @@ class StatsScreenTest {
         compose.onNodeWithText("Retry").performScrollTo().performClick()
         compose.runOnIdle { check(retried) }
     }
+
+    @Test fun exceptionalMidnightHistoryDoesNotClaimMoreCompletedDaysThanSelected() {
+        compose.setContent { AapsTheme { StatsScreen(StatsUiState(loading = false, rangeDays = 7, insulinDays = 8), {}, {}) } }
+        compose.onNodeWithText("TDD and carbs: 8 available daily records").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("TDD and carbs: 8 of 7 completed days").assertDoesNotExist()
+    }
 }

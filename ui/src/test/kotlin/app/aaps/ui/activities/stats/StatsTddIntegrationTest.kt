@@ -32,7 +32,7 @@ class StatsTddIntegrationTest : TestBase() {
         val original = TimeZone.getDefault()
         try {
             TimeZone.setDefault(TimeZone.getTimeZone("America/Havana"))
-            for (text in listOf("2026-03-09T16:00:00Z", "2026-11-01T17:00:00Z", "2026-11-08T17:00:00Z")) {
+            for (text in listOf("2026-03-09T16:00:00Z", "2026-03-15T16:00:00Z", "2026-11-01T17:00:00Z", "2026-11-08T17:00:00Z")) {
                 val now = Instant.parse(text).toEpochMilli()
                 val persistence = mock<PersistenceLayer>()
                 val profileFunction = mock<ProfileFunction>()
@@ -69,6 +69,7 @@ class StatsTddIntegrationTest : TestBase() {
                 assertThat(writes).containsExactlyElementsIn(expectedWrites).inOrder()
                 assertThat(writes.all { it < now }).isTrue()
                 assertThat(state.insulinDays).isEqualTo(expected.size())
+                if (text == "2026-03-15T16:00:00Z") assertThat(state.insulinDays).isEqualTo(8)
                 assertThat(state.avgTdd).isEqualTo("24.0 U")
             }
         } finally {
