@@ -485,7 +485,7 @@ class YpsoPumpPlugin @Inject constructor(
         if (reason == "Connection needed" &&
             (commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue())
         ) {
-            provisioning.requestTherapyConnectionAttempt()
+            provisioning.requestConnectionAttempt()
         }
         // Only a status read checks a pending key. If the queue dropped the read requested on save, the
         // queue connecting for any other command (a KeepAlive profile sync, say) must also check it.

@@ -660,21 +660,36 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `queued therapy may repeatedly bypass transport backoff but never bypasses rekey`() {
+    fun `queued therapy and new bonds may repeatedly bypass transport backoff but never bypass rekey`() {
         val (service) = service()
         install(service)
         service.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "poll", now = 1_000)
         assertFalse(service.retryAllowed(1_000))
 
-        assertTrue(service.requestTherapyConnectionAttempt())
+        assertTrue(service.requestConnectionAttempt())
         assertTrue(service.retryAllowed(1_000))
         assertFalse(service.retryAllowed(1_000))
-        assertTrue(service.requestTherapyConnectionAttempt())
+        assertTrue(service.requestConnectionAttempt())
         assertTrue(service.retryAllowed(1_000))
 
         service.recordUnavailable(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), operation = "auth", now = 2_000)
-        assertFalse(service.requestTherapyConnectionAttempt())
+        assertFalse(service.requestConnectionAttempt())
         assertFalse(service.retryAllowed(Long.MAX_VALUE))
+    }
+
+    @Test
+    fun `an unused backoff bypass does not survive a later suspected rekey`() {
+        val (service) = service()
+        install(service)
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.TRANSPORT), operation = "poll", now = 1_000)
+        assertTrue(service.requestConnectionAttempt())
+
+        // A connection already under way when the bypass was granted is rejected with code 140.
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED), code = 140, operation = "auth", now = 2_000)
+
+        assertFalse(service.retryAllowed(2_000))
+        assertFalse(service.retryAllowed(Long.MAX_VALUE))
+        assertFalse(service.verificationCanProceed())
     }
 
     @Test

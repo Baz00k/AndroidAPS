@@ -1,5 +1,7 @@
 package app.aaps.pump.ypsopump
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -32,11 +34,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -55,6 +60,8 @@ import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SecondaryButton
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
+import app.aaps.pump.ypsopump.ble.YpsoBondState
+import app.aaps.pump.ypsopump.ble.YpsoPumpPairing
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.provisioning.SessionDocumentException
 import app.aaps.pump.ypsopump.provisioning.YpsoSessionDocument
@@ -219,9 +226,11 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var plugin: YpsoPumpPlugin
     @Inject lateinit var aapsLogger: AAPSLogger
+    @Inject lateinit var pairing: YpsoPumpPairing
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        permissionPairTarget = savedInstanceState?.getString(STATE_PERMISSION_PAIR_TARGET)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (handleShellOwnershipAction()) return
         title = getString(R.string.ypsopump_connection_setup)
@@ -298,6 +307,26 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
     // The last save or import failure, shown beside the current state rather than in place of it.
     private var setupFailure by mutableStateOf<Int?>(null)
     private var importingDocument by mutableStateOf(false)
+    private var permissionPairTarget: String? = null
+    // A refusal still starts the attempt, which then reports the missing permission.
+    private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        permissionPairTarget?.let(::startPairing)
+        permissionPairTarget = null
+    }
+
+    private fun pair(target: String) {
+        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) return startPairing(target)
+        permissionPairTarget = target
+        bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
+    }
+
+    private fun startPairing(target: String) {
+        // The follow-up can outlive this screen, so it holds only app-scoped objects.
+        val service = provisioning
+        val queue = commandQueue
+        val reason = getString(R.string.ypsopump_pairing_check_reason)
+        pairing.start(target) { requestCheckAfterPairing(service, queue, target, reason) }
+    }
 
     private fun openDocument(uri: Uri?) {
         if (uri == null) return
@@ -329,6 +358,11 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 importingDocument = false
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        permissionPairTarget?.let { outState.putString(STATE_PERMISSION_PAIR_TARGET, it) }
     }
 
     override fun onDestroy() {
@@ -424,6 +458,23 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
             verificationState = service.verificationState()
             checkCanProceed = service.verificationCanProceed()
         }
+        val pairingAttempt by pairing.attempt.collectAsState()
+        var bond by remember { mutableStateOf<YpsoBondState?>(null) }
+        val pairTarget = pairingTarget(serial, mac)
+        // Android reports no change of an existing bond to this screen, and a check after pairing changes
+        // the setup status, so both are read again while the screen is visible.
+        LaunchedEffect(pairTarget, pairingAttempt) {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    bond = pairTarget?.let { withContext(Dispatchers.IO) { pairing.bondState(it) } }
+                    refresh()
+                    delay(1_000)
+                }
+            }
+        }
+        val pairingView = pairingPresentation(pairTarget, bond, pairingAttempt)
+        // The details being paired stay fixed until this attempt ends; bonding started elsewhere locks nothing.
+        val locked = busy || pairingAttempt?.phase == YpsoPumpPairing.Phase.WAITING
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -453,11 +504,12 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     failure?.let { SetupFailure(getString(it)) }
                 }
             }
+            PairingCard(pairingView, enabled = busyMessage == null) { pairTarget?.let(::pair) }
             OutlinedTextField(
                 serial, { serial = it; serialError = null }, label = { Text(getString(R.string.ypsopump_real_serial)) },
                 modifier = Modifier.fillMaxWidth().focusRequester(serialFocus), singleLine = true, isError = serialError != null,
                 supportingText = serialError?.let { value -> { Text(value) } },
-                enabled = !busy,
+                enabled = !locked,
                 colors = fieldColors,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { macFocus.requestFocus() })
@@ -466,7 +518,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 mac, { mac = it; macError = null }, label = { Text(getString(R.string.ypsopump_ble_mac)) },
                 modifier = Modifier.fillMaxWidth().focusRequester(macFocus), singleLine = true, isError = macError != null,
                 supportingText = macError?.let { value -> { Text(value) } },
-                enabled = !busy,
+                enabled = !locked,
                 colors = fieldColors,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { keyFocus.requestFocus() })
@@ -483,11 +535,11 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                 isError = keyError != null,
                 supportingText = keyError?.let { value -> { Text(value) } },
                 trailingIcon = {
-                    TextButton(onClick = { showKey = !showKey }, enabled = !busy) {
+                    TextButton(onClick = { showKey = !showKey }, enabled = !locked) {
                         Text(getString(if (showKey) R.string.ypsopump_hide_key else R.string.ypsopump_show_key))
                     }
                 },
-                enabled = !busy,
+                enabled = !locked,
                 colors = fieldColors
             )
             PrimaryButton(getString(R.string.ypsopump_save_verify), onClick = {
@@ -519,7 +571,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                         }
                     }
                 }
-            }, Modifier.fillMaxWidth(), enabled = !busy)
+            }, Modifier.fillMaxWidth(), enabled = !locked)
             SecondaryButton(
                 getString(R.string.ypsopump_import_session_file),
                 onClick = {
@@ -527,7 +579,7 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                     picker.launch(arrayOf("application/json", "text/json", "text/plain"))
                 },
                 Modifier.fillMaxWidth(),
-                enabled = !busy,
+                enabled = !locked,
             )
             if (selected == null) Text(
                 getString(R.string.ypsopump_private_transfer_warning),
@@ -559,9 +611,28 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
                                     setupFailure = saveFailureMessage(it)
                                 }
                             }
-                        }, Modifier.fillMaxWidth(), enabled = !busy)
+                        }, Modifier.fillMaxWidth(), enabled = !locked)
                     }
                 }
+            }
+        }
+    }
+
+    /** The phone's Bluetooth pairing with the pump, which is separate from the pump key. */
+    @Composable
+    private fun PairingCard(view: PairingPresentation, enabled: Boolean, onPair: () -> Unit) {
+        AapsCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val message = getString(view.message)
+                if (view.tone == ProvisioningFeedbackTone.ERROR) SetupFailure(message)
+                else Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AapsTheme.colors.textPrimary,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                )
+                if (view == PairingPresentation.WAITING) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (view.canPair) SecondaryButton(getString(R.string.ypsopump_pair_pump), onClick = onPair, Modifier.fillMaxWidth(), enabled = enabled)
             }
         }
     }
@@ -587,5 +658,6 @@ class YpsoProvisioningActivity : TranslatedDaggerAppCompatActivity() {
         const val EXTRA_SESSION_DOCUMENT_SHA256 = "session_document_sha256"
         const val EXTRA_BOLUS_EVIDENCE_SHA256 = "bolus_evidence_sha256"
         const val OWNERSHIP_LOG_TAG = "YpsoOwnershipImport"
+        private const val STATE_PERMISSION_PAIR_TARGET = "permission_pair_target"
     }
 }
