@@ -21,6 +21,15 @@ class GlucoseDisplayTest {
         assertNull(expired.deltaMgdl)
         assertEquals(time, expired.timeStamp)
         assertEquals("151", expired.sgvString)
-        assertEquals("", received.forGlucoseDisplay(time - 1).slopeArrow)
+    }
+
+    @Test fun `watch clock behind the phone keeps a current trend`() {
+        val received = payload().forGlucoseDisplay(time - 30_000)
+        assertEquals("→", received.slopeArrow)
+        assertEquals(-15.0, received.deltaMgdl)
+    }
+
+    @Test fun `missing reading never shows a trend`() {
+        assertEquals("", payload().copy(timeStamp = 0L).forGlucoseDisplay(time).slopeArrow)
     }
 }

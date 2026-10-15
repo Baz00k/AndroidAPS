@@ -1570,21 +1570,23 @@ class DataHandlerMobile @Inject constructor(
             SensorGlucoseSnapshot.load(persistenceLayer, now - T.hours(3).msecs(), now).glucose
         } catch (e: Exception) {
             fabricPrivacy.logException(e)
-            SensorGlucose()
+            return
         }
-        rxBus.send(EventMobileToWear(sensorGlucoseToWear(glucose, now)))
+        // Without a reading, leave the watch's last one to age and go stale by its own timestamp.
+        // A zero-timestamp payload would make the watch request a full resend every minute.
+        val reading = glucose.reading ?: return
+        rxBus.send(EventMobileToWear(sensorGlucoseToWear(glucose, reading, now)))
     }
 
-    private fun sensorGlucoseToWear(glucose: SensorGlucose, now: Long): EventData.SingleBg {
+    private fun sensorGlucoseToWear(glucose: SensorGlucose, reading: GV, now: Long): EventData.SingleBg {
         val units = profileFunction.getUnits()
         val low = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val high = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
-        val reading = glucose.reading
         val delta = glucose.deltaMgdl.takeIf { glucose.isFresh(now) }
         return EventData.SingleBg(
             dataset = 0,
-            timeStamp = reading?.timestamp ?: 0L,
-            sgvString = reading?.let { profileUtil.fromMgdlToStringInUnits(it.value, units) } ?: "---",
+            timeStamp = reading.timestamp,
+            sgvString = profileUtil.fromMgdlToStringInUnits(reading.value, units),
             glucoseUnits = units.asText,
             slopeArrow = glucose.trendSymbol(now),
             delta = delta?.let { profileUtil.fromMgdlToSignedStringInUnits(it, units) } ?: "--",
@@ -1592,8 +1594,8 @@ class DataHandlerMobile @Inject constructor(
             // APS averages are not sensor deltas and may refer to an older loop bucket.
             avgDelta = "--",
             avgDeltaDetailed = "--",
-            sgvLevel = if (reading == null) 0L else if (reading.value > high) 1L else if (reading.value < low) -1L else 0L,
-            sgv = reading?.value ?: 0.0,
+            sgvLevel = if (reading.value > high) 1L else if (reading.value < low) -1L else 0L,
+            sgv = reading.value,
             high = high,
             low = low,
             color = 0,

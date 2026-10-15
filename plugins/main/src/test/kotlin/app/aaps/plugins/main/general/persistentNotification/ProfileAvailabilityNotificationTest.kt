@@ -21,19 +21,22 @@ class ProfileAvailabilityNotificationTest : TestBaseWithProfile() {
             fabricPrivacy, activePlugin, iobCobCalculator, processedTbrEbData, rxBus, context, mock(), mock(),
             mock(), config, decimalFormatter, preferences, mock(), dateUtil))
         doNothing().whenever(plugin).triggerNotificationUpdate()
+        doNothing().whenever(plugin).updateNotification()
         plugin.onStart()
         try {
             rxBus.send(EventNewBG(1_700_000_000_000L))
             timer.triggerActions()
             verify(plugin).triggerNotificationUpdate()
             timer.advanceTimeBy(10, TimeUnit.MINUTES)
-            verify(plugin, org.mockito.kotlin.times(11)).triggerNotificationUpdate()
+            // The age refresh redraws the notification without restarting the foreground service.
+            verify(plugin, org.mockito.kotlin.times(10)).updateNotification()
+            verify(plugin).triggerNotificationUpdate()
         } finally {
             plugin.onStop()
         }
         org.mockito.kotlin.clearInvocations(plugin)
         timer.advanceTimeBy(10, TimeUnit.MINUTES)
-        verify(plugin, org.mockito.kotlin.never()).triggerNotificationUpdate()
+        verify(plugin, org.mockito.kotlin.never()).updateNotification()
     }
 
     @Test fun profileAvailabilityRefreshDoesNotNeedAutosensCompletion() {

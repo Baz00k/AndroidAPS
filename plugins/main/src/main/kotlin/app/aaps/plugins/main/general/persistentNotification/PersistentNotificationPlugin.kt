@@ -102,8 +102,9 @@ class PersistentNotificationPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         notificationHolder.createNotificationChannel()
+        // Ages the reading and its stale styling; the foreground service is already running.
         disposable += Observable.interval(1, 1, TimeUnit.MINUTES, aapsSchedulers.io)
-            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
+            .subscribe({ updateNotification() }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventNewBG::class.java)
             .observeOn(aapsSchedulers.io)
@@ -136,12 +137,12 @@ class PersistentNotificationPlugin @Inject constructor(
         super.onStop()
     }
 
-    @Synchronized internal fun triggerNotificationUpdate() {
+    internal fun triggerNotificationUpdate() {
         updateNotification()
         dummyServiceHelper.startService(context)
     }
 
-    private fun updateNotification() {
+    @Synchronized internal fun updateNotification() {
         if (!config.appInitialized) return
         val now = dateUtil.now()
         val snapshot = try {
@@ -325,7 +326,12 @@ class PersistentNotificationPlugin @Inject constructor(
 
         val to = now
         val from = to - CHART_WINDOW
-        val readings = snapshot.readings.map { ChartReading(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
+        val readings = snapshot.readings
+            // xDrip broadcasts each reading more than once, so the table holds near-duplicates.
+            // One point per 5-minute bucket keeps the trace from doubling back on itself.
+            .associateBy { it.timestamp / T.mins(5).msecs() }
+            .values
+            .map { ChartReading(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
         chart.render(BgNotificationChart.COLLAPSED_W, BgNotificationChart.COLLAPSED_H, readings, from, to, lowMark, highMark, withMarks = false)
             ?.let { collapsed.setImageViewBitmap(R.id.notification_chart, it) }
         chart.render(BgNotificationChart.EXPANDED_W, BgNotificationChart.EXPANDED_H, readings, from, to, lowMark, highMark, withMarks = true)
