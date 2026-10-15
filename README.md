@@ -23,8 +23,6 @@ UI and YpsoPump support.
   Unavailable readings use `--`, not numeric zero. Home, the widget and status outputs show IOB
   as unavailable without an active profile and explain why; Home keeps recorded doses visible.
   Profile-derived basal is unavailable too. This does not mean no insulin is active or being delivered.
-  Home, the ongoing notification and the connected watch share sensor glucose, trend and five-minute
-  delta, without waiting for a loop run. Stale readings hide trend/delta; watch average deltas are unavailable.
   Statistics loads glucose before insulin history; TIR uses completed days, the glucose summary and
   hourly profile use a rolling window, and TDD reports available daily history. Missing history and load failures are shown explicitly.
 - Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
