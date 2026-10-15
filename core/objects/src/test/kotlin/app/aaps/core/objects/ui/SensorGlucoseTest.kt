@@ -100,4 +100,10 @@ class SensorGlucoseTest {
         assertEquals("→", glucose.trendSymbol(now))
         assertEquals("", glucose.trendSymbol(now + 9 * minute))
     }
+
+    @Test fun `every direction has its own symbol because the watch identifies the arrow by it`() {
+        val symbols = TrendArrow.entries.filter { it != TrendArrow.NONE }
+            .map { SensorGlucose.from(listOf(reading(0, 151.0, it)), now).trendSymbol(now) }
+        assertEquals(symbols.size, symbols.toSet().size)
+    }
 }

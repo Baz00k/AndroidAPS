@@ -738,7 +738,7 @@ class CustomWatchface : BaseWatchFace() {
 
     private enum class TrendArrowMap(val symbol: String, @DrawableRes val icon: Int, val customDrawable: ResFileMap?, val dynValue: Double) {
         NONE("??", R.drawable.ic_invalid, ResFileMap.ARROW_NONE, 0.0),
-        TRIPLE_UP("X", R.drawable.ic_doubleup, ResFileMap.ARROW_DOUBLE_UP, 7.0),
+        TRIPLE_UP("\u290a", R.drawable.ic_doubleup, ResFileMap.ARROW_DOUBLE_UP, 7.0),
         DOUBLE_UP("\u21c8", R.drawable.ic_doubleup, ResFileMap.ARROW_DOUBLE_UP, 7.0),
         SINGLE_UP("\u2191", R.drawable.ic_singleup, ResFileMap.ARROW_SINGLE_UP, 6.0),
         FORTY_FIVE_UP("\u2197", R.drawable.ic_fortyfiveup, ResFileMap.ARROW_FORTY_FIVE_UP, 5.0),
@@ -746,7 +746,7 @@ class CustomWatchface : BaseWatchFace() {
         FORTY_FIVE_DOWN("\u2198", R.drawable.ic_fortyfivedown, ResFileMap.ARROW_FORTY_FIVE_DOWN, 3.0),
         SINGLE_DOWN("\u2193", R.drawable.ic_singledown, ResFileMap.ARROW_SINGLE_DOWN, 2.0),
         DOUBLE_DOWN("\u21ca", R.drawable.ic_doubledown, ResFileMap.ARROW_DOUBLE_DOWN, 1.0),
-        TRIPLE_DOWN("X", R.drawable.ic_doubledown, ResFileMap.ARROW_DOUBLE_DOWN, 1.0);
+        TRIPLE_DOWN("\u290b", R.drawable.ic_doubledown, ResFileMap.ARROW_DOUBLE_DOWN, 1.0);
 
         companion object {
 
