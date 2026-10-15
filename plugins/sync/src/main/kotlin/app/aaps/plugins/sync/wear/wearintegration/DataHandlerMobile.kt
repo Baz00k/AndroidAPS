@@ -71,7 +71,6 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.convertedToAbsolute
 import app.aaps.core.objects.ui.TherapyDisplay
-import app.aaps.core.objects.ui.SensorGlucose
 import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
@@ -1575,15 +1574,11 @@ class DataHandlerMobile @Inject constructor(
         // Without a reading, leave the watch's last one to age and go stale by its own timestamp.
         // A zero-timestamp payload would make the watch request a full resend every minute.
         val reading = glucose.reading ?: return
-        rxBus.send(EventMobileToWear(sensorGlucoseToWear(glucose, reading, now)))
-    }
-
-    private fun sensorGlucoseToWear(glucose: SensorGlucose, reading: GV, now: Long): EventData.SingleBg {
         val units = profileFunction.getUnits()
         val low = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val high = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
         val delta = glucose.deltaMgdl.takeIf { glucose.isFresh(now) }
-        return EventData.SingleBg(
+        rxBus.send(EventMobileToWear(EventData.SingleBg(
             dataset = 0,
             timeStamp = reading.timestamp,
             sgvString = profileUtil.fromMgdlToStringInUnits(reading.value, units),
@@ -1601,11 +1596,10 @@ class DataHandlerMobile @Inject constructor(
             color = 0,
             deltaMgdl = delta,
             avgDeltaMgdl = null
-        )
+        )))
     }
 
-    // Graph points are loop-derived history, not headline readings. Do not attach today's delta
-    // and trend to every historical point or let a full resend replace the sensor headline.
+    // The watch draws graph points from value and time only; current trend and delta belong to the headline.
     private fun graphReadingToWear(glucoseValue: InMemoryGlucoseValue): EventData.SingleBg {
         val units = profileFunction.getUnits()
         val lowLine = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)

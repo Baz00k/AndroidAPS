@@ -73,11 +73,13 @@ abstract class BaseWatchFace : WatchFace() {
      * Each entry contains current BG, trend arrow, delta, and range info.
      */
     protected val singleBg
-        get() = arrayOf(
-            complicationData.bgData.forGlucoseDisplay(System.currentTimeMillis()),
-            complicationData.bgData1.forGlucoseDisplay(System.currentTimeMillis()),
-            complicationData.bgData2.forGlucoseDisplay(System.currentTimeMillis())
-        )
+        get() = System.currentTimeMillis().let { now ->
+            arrayOf(
+                complicationData.bgData.forGlucoseDisplay(now),
+                complicationData.bgData1.forGlucoseDisplay(now),
+                complicationData.bgData2.forGlucoseDisplay(now)
+            )
+        }
 
     /**
      * Status data for all three datasets (primary + 2 followers).

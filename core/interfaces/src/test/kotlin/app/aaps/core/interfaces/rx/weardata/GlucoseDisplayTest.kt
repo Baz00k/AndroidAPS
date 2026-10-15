@@ -6,30 +6,19 @@ import org.junit.jupiter.api.Test
 
 class GlucoseDisplayTest {
     private val time = 1_700_000_000_000L
-    private fun payload() = EventData.SingleBg(
-        dataset = 0, timeStamp = time, sgvString = "151", glucoseUnits = "mg/dl", slopeArrow = "→",
-        delta = "-15", deltaDetailed = "-15.0", avgDelta = "--", avgDeltaDetailed = "--",
-        sgvLevel = 0, sgv = 151.0, high = 180.0, low = 70.0, color = 0, deltaMgdl = -15.0
-    )
 
-    @Test fun `disconnected watch loses trend at freshness boundary without receiving another payload`() {
-        val received = payload()
+    @Test fun `watch hides trend and delta once the reading is nine minutes old`() {
+        val received = EventData.SingleBg(
+            dataset = 0, timeStamp = time, sgvString = "151", glucoseUnits = "mg/dl", slopeArrow = "→",
+            delta = "-15", deltaDetailed = "-15.0", sgv = 151.0, high = 180.0, low = 70.0, deltaMgdl = -15.0
+        )
+        // A watch clock slightly behind the phone's still shows the current trend.
+        assertEquals("→", received.forGlucoseDisplay(time - 30_000).slopeArrow)
         assertEquals("→", received.forGlucoseDisplay(time + 539_999).slopeArrow)
         val expired = received.forGlucoseDisplay(time + 540_000)
         assertEquals("", expired.slopeArrow)
         assertEquals("--", expired.delta)
         assertNull(expired.deltaMgdl)
-        assertEquals(time, expired.timeStamp)
         assertEquals("151", expired.sgvString)
-    }
-
-    @Test fun `watch clock behind the phone keeps a current trend`() {
-        val received = payload().forGlucoseDisplay(time - 30_000)
-        assertEquals("→", received.slopeArrow)
-        assertEquals(-15.0, received.deltaMgdl)
-    }
-
-    @Test fun `missing reading never shows a trend`() {
-        assertEquals("", payload().copy(timeStamp = 0L).forGlucoseDisplay(time).slopeArrow)
     }
 }

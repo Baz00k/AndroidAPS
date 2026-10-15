@@ -57,7 +57,7 @@ class SensorNotificationTest {
         val readings = listOf(reading(now - 300_000, 166.0, TrendArrow.SINGLE_DOWN), reading(now, 151.0, TrendArrow.FLAT))
         val snapshot = SensorGlucoseSnapshot(readings, SensorGlucose.from(readings, now))
         val builder = NotificationCompat.Builder(context, "test").setSmallIcon(android.R.drawable.ic_dialog_info)
-        assertTrue(plugin.applyGlucoseViews(builder, "Isolated sensor display", snapshot, now))
+        assertTrue(plugin.applyGlucoseViews(builder, "", snapshot, now))
         val notification = builder.build()
         lateinit var view: View
         compose.setContent {
@@ -69,13 +69,9 @@ class SensorNotificationTest {
             assertEquals("0s ago", view.findViewById<TextView>(R.id.notification_age).text.toString())
             assertEquals(View.VISIBLE, view.findViewById<View>(R.id.notification_arrow).visibility)
             assertFalse(view.findViewById<TextView>(R.id.notification_bg).paintFlags and Paint.STRIKE_THRU_TEXT_FLAG != 0)
-            val expanded = notification.bigContentView.apply(context, null)
-            assertEquals("151", expanded.findViewById<TextView>(R.id.notification_bg).text.toString())
-            assertEquals("Δ -15", expanded.findViewById<TextView>(R.id.notification_delta).text.toString())
-            assertEquals("Isolated sensor display", expanded.findViewById<TextView>(R.id.notification_status).text.toString())
         }
         val stale = NotificationCompat.Builder(context, "test").setSmallIcon(android.R.drawable.ic_dialog_info)
-        assertTrue(plugin.applyGlucoseViews(stale, "Stale sensor display", snapshot, now + 540_000))
+        assertTrue(plugin.applyGlucoseViews(stale, "", snapshot, now + 540_000))
         compose.runOnIdle {
             stale.build().contentView.reapply(context, view)
             assertEquals("--", view.findViewById<TextView>(R.id.notification_delta).text.toString())

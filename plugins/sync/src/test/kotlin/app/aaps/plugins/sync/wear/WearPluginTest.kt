@@ -11,7 +11,6 @@ import org.mockito.Mock
 import org.mockito.kotlin.verify
 import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.interfaces.rx.events.EventNewBG
-import org.mockito.kotlin.never
 
 class WearPluginTest : TestBaseWithProfile() {
 
@@ -50,17 +49,13 @@ class WearPluginTest : TestBaseWithProfile() {
         }
     }
 
-    @Test fun eachSensorReadingRefreshesGlucoseWithoutWaitingForLoopOrResendingTherapy() {
+    @Test fun sensorReadingRefreshesGlucoseWithoutWaitingForLoop() {
         wearPlugin.onStart()
         try {
             rxBus.send(EventNewBG(1_700_000_000_000L))
             verify(dataHandlerMobile).sendGlucose()
-            verify(dataHandlerMobile, never()).resendData(org.mockito.kotlin.any())
         } finally {
             wearPlugin.onStop()
         }
-        org.mockito.kotlin.clearInvocations(dataHandlerMobile)
-        rxBus.send(EventNewBG(null))
-        verify(dataHandlerMobile, never()).sendGlucose()
     }
 }

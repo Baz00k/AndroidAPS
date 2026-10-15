@@ -6,5 +6,5 @@ package app.aaps.core.interfaces.rx.weardata
  * slightly behind the phone's must not hide a current trend.
  */
 fun EventData.SingleBg.forGlucoseDisplay(now: Long): EventData.SingleBg =
-    if (timeStamp > 0L && now - timeStamp < 9 * 60_000L) this
+    if (now - timeStamp < 9 * 60_000L) this
     else copy(slopeArrow = "", delta = "--", deltaDetailed = "--", avgDelta = "--", avgDeltaDetailed = "--", deltaMgdl = null, avgDeltaMgdl = null)

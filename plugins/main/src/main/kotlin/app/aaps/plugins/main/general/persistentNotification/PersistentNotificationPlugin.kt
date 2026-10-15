@@ -39,14 +39,14 @@ import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.ui.TherapyDisplay
-import app.aaps.core.objects.ui.SensorGlucoseSnapshot
-import app.aaps.core.objects.ui.SensorGlucose
 import app.aaps.core.objects.ui.BasalDisplay
+import app.aaps.core.objects.ui.SensorGlucose
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.plugins.main.R
+import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import io.reactivex.rxjava3.core.Observable
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -176,12 +176,12 @@ class PersistentNotificationPlugin @Inject constructor(
                     line1 += "  " + glucose.trendSymbol(now) +
                         "  Δ" + (glucose.deltaMgdl?.let { profileUtil.fromMgdlToSignedStringInUnits(it) }
                             ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short))
-                    line1aa = line1
+                    line1aa += "  " + glucose.trendSymbol(now)
                 } else {
                     line1 += " " +
                         rh.gs(R.string.old_data) +
                         " "
-                    line1aa = "$line1."
+                    line1aa += "$line1."
                 }
             } else {
                 line1aa = rh.gs(app.aaps.core.ui.R.string.missed_bg_readings)
@@ -324,17 +324,16 @@ class PersistentNotificationPlugin @Inject constructor(
         }
         expanded.setTextViewText(R.id.notification_status, statusText)
 
-        val to = now
-        val from = to - CHART_WINDOW
+        val from = now - CHART_WINDOW
         val readings = snapshot.readings
             // xDrip broadcasts each reading more than once, so the table holds near-duplicates.
             // One point per 5-minute bucket keeps the trace from doubling back on itself.
             .associateBy { it.timestamp / T.mins(5).msecs() }
             .values
             .map { ChartReading(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
-        chart.render(BgNotificationChart.COLLAPSED_W, BgNotificationChart.COLLAPSED_H, readings, from, to, lowMark, highMark, withMarks = false)
+        chart.render(BgNotificationChart.COLLAPSED_W, BgNotificationChart.COLLAPSED_H, readings, from, now, lowMark, highMark, withMarks = false)
             ?.let { collapsed.setImageViewBitmap(R.id.notification_chart, it) }
-        chart.render(BgNotificationChart.EXPANDED_W, BgNotificationChart.EXPANDED_H, readings, from, to, lowMark, highMark, withMarks = true)
+        chart.render(BgNotificationChart.EXPANDED_W, BgNotificationChart.EXPANDED_H, readings, from, now, lowMark, highMark, withMarks = true)
             ?.let { expanded.setImageViewBitmap(R.id.notification_chart, it) }
 
         builder.setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -366,8 +365,8 @@ private fun TrendArrow.notificationIcon(): Int? = when (this) {
     TrendArrow.FLAT            -> R.drawable.notification_arrow_flat
     TrendArrow.FORTY_FIVE_UP   -> R.drawable.notification_arrow_fortyfiveup
     TrendArrow.SINGLE_UP       -> R.drawable.notification_arrow_singleup
-    TrendArrow.TRIPLE_UP       -> R.drawable.notification_arrow_invalid
     TrendArrow.DOUBLE_UP       -> R.drawable.notification_arrow_doubleup
+    TrendArrow.TRIPLE_UP       -> R.drawable.notification_arrow_invalid
     // No trend to show is better than a question mark taking the arrow's slot.
     TrendArrow.NONE            -> null
 }

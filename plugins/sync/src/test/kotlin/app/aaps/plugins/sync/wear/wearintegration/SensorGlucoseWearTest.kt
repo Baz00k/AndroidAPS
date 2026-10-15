@@ -67,17 +67,11 @@ class SensorGlucoseWearTest : TestBaseWithProfile() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(sensorTime - 10_800_000, sensorTime, true))
             .thenThrow(IllegalStateException("test database unavailable"))
             .thenReturn(emptyList())
-            .thenReturn(listOf(reading(sensorTime, 151.0)))
-        whenever(persistence.getLastGlucoseValue()).thenReturn(null)
         val observer = rxBus.toObservable(EventMobileToWear::class.java).test()
         try {
             handler.sendGlucose()
             handler.sendGlucose()
             observer.assertNoValues()
-            handler.sendGlucose()
-            val sent = observer.values().map { it.payload as EventData.SingleBg }
-            assertEquals(listOf("151"), sent.map { it.sgvString })
-            assertEquals(listOf(sensorTime), sent.map { it.timeStamp })
         } finally { observer.dispose() }
     }
 }

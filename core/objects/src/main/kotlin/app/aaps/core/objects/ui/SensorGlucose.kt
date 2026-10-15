@@ -18,13 +18,13 @@ data class SensorGlucose(
     companion object {
         /** Prefer the later-inserted database record when sensor sources share a timestamp. */
         fun sensorReadings(readings: List<GV>, now: Long): List<GV> = readings
+            // Match the existing glucose-history query's lower bound; this is not a dosing limit.
             .filter { it.isValid && it.value.isFinite() && it.value >= 39 && it.timestamp in 0..now }
             .sortedWith(compareByDescending<GV> { it.timestamp }.thenByDescending { it.id })
             .distinctBy { it.timestamp }
             .reversed()
 
         fun from(readings: List<GV>, now: Long): SensorGlucose {
-            // Match the existing glucose-history query's lower bound; this is not a dosing limit.
             val samples = sensorReadings(readings, now).asReversed()
             val latest = samples.firstOrNull() ?: return SensorGlucose()
             // Keep delta in mg/dL per five minutes regardless of the sensor's reporting interval.

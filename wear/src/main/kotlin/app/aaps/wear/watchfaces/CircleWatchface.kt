@@ -60,11 +60,13 @@ class CircleWatchface : WatchFace() {
     private var complicationData: app.aaps.wear.data.ComplicationData = app.aaps.wear.data.ComplicationData()
 
     private val singleBg
-        get() = arrayOf(
-            complicationData.bgData.forGlucoseDisplay(System.currentTimeMillis()),
-            complicationData.bgData1.forGlucoseDisplay(System.currentTimeMillis()),
-            complicationData.bgData2.forGlucoseDisplay(System.currentTimeMillis())
-        )
+        get() = System.currentTimeMillis().let { now ->
+            arrayOf(
+                complicationData.bgData.forGlucoseDisplay(now),
+                complicationData.bgData1.forGlucoseDisplay(now),
+                complicationData.bgData2.forGlucoseDisplay(now)
+            )
+        }
     private val status
         get() = arrayOf(
             complicationData.statusData,

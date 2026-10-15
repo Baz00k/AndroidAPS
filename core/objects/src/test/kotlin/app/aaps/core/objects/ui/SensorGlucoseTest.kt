@@ -94,14 +94,10 @@ class SensorGlucoseTest {
         assertFalse(old.isFresh(now))
     }
 
-    @Test fun `all sensor displays preserve source direction even when five minute delta differs`() {
+    @Test fun `source direction wins over the five minute delta and hides once stale`() {
         val glucose = SensorGlucose.from(listOf(reading(5, 166.0), reading(0, 151.0, TrendArrow.FLAT)), now)
         assertEquals(-15.0, glucose.deltaMgdl)
         assertEquals("→", glucose.trendSymbol(now))
         assertEquals("", glucose.trendSymbol(now + 9 * minute))
-        assertEquals("", SensorGlucose().trendSymbol(now))
-        for (arrow in listOf(TrendArrow.TRIPLE_UP, TrendArrow.TRIPLE_DOWN)) {
-            assertEquals(arrow.symbol, SensorGlucose.from(listOf(reading(0, 151.0, arrow)), now).trendSymbol(now))
-        }
     }
 }

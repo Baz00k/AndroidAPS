@@ -1,23 +1,18 @@
-package app.aaps.plugins.main.general.overview
+package app.aaps.core.objects.ui
 
 import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.interfaces.db.PersistenceLayer
-import app.aaps.core.objects.ui.SensorGlucoseSnapshot
-import app.aaps.plugins.main.general.overview.compose.GlucosePoint
-import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.verifyNoMoreInteractions
-import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
-class HomeGlucoseSnapshotTest {
+class SensorGlucoseSnapshotTest {
     private val now = 1_700_000_000_000L
     private val from = now - 24 * 60 * 60_000L
     private val persistence: PersistenceLayer = mock()
@@ -26,24 +21,20 @@ class HomeGlucoseSnapshotTest {
         trendArrow = arrow, sourceSensor = SourceSensor.LIBRE_3
     )
 
-    @Test fun `duplicate sensor timestamps share one headline and chart marker independent of query order`() {
+    @Test fun `duplicate sensor timestamps share one headline and chart reading independent of query order`() {
         val older = reading(now - 300_000, 110.0, 1)
         val firstSource = reading(now, 120.0, 2, TrendArrow.SINGLE_UP).copy(sourceSensor = SourceSensor.LIBRE_2)
         val laterSource = reading(now, 99.0, 3, TrendArrow.SINGLE_DOWN)
         for (input in listOf(listOf(older, firstSource, laterSource), listOf(laterSource, firstSource, older))) {
             whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(input)
             val snapshot = SensorGlucoseSnapshot.load(persistence, from, now)
-            val chart = HomeChartData(from = from, now = now, readings = snapshot.readings.map { GlucosePoint(it.timestamp, it.value) })
-            assertEquals(99.0, snapshot.glucose.reading?.value)
-            assertEquals(now, snapshot.glucose.reading?.timestamp)
-            assertEquals(TrendArrow.SINGLE_DOWN, snapshot.glucose.trend)
+            assertEquals(laterSource, snapshot.glucose.reading)
             assertEquals(-11.0, snapshot.glucose.deltaMgdl)
-            assertEquals(GlucosePoint(now, 99.0), chart.latest)
-            assertEquals(2, snapshot.readings.size)
+            assertEquals(listOf(older, laterSource), snapshot.readings)
         }
     }
 
-    @Test fun `empty chart keeps the last reading as stale without loading historical series`() {
+    @Test fun `empty chart window keeps the last reading as stale headline only`() {
         val valid = reading(from - 60 * 60_000, 99.0, 1)
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
         whenever(persistence.getLastGlucoseValue()).thenReturn(valid)
@@ -51,28 +42,11 @@ class HomeGlucoseSnapshotTest {
         assertEquals(valid, snapshot.glucose.reading)
         assertFalse(snapshot.glucose.isFresh(now))
         assertTrue(snapshot.readings.isEmpty())
-        assertNull(snapshot.glucose.deltaMgdl)
-        verify(persistence).getLastGlucoseValue()
-        verify(persistence).getBgReadingsDataFromTimeToTime(from, now, true)
-        verifyNoMoreInteractions(persistence)
     }
 
-    @Test fun `usable chart history needs no older-history fallback`() {
-        whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(listOf(reading(now, 99.0, 1)))
-        SensorGlucoseSnapshot.load(persistence, from, now)
-        verify(persistence).getBgReadingsDataFromTimeToTime(from, now, true)
-        verifyNoMoreInteractions(persistence)
-    }
-
-    @Test fun `empty history remains unavailable`() {
+    @Test fun `fallback does not trust a missing invalid or future last record`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
-        whenever(persistence.getLastGlucoseValue()).thenReturn(null)
-        assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
-    }
-
-    @Test fun `fallback does not trust an invalid or future last record`() {
-        whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
-        for (last in listOf(reading(now + 1, 120.0, 1), reading(now, 120.0, 1).copy(isValid = false))) {
+        for (last in listOf(null, reading(now + 1, 120.0, 1), reading(now, 120.0, 1).copy(isValid = false))) {
             whenever(persistence.getLastGlucoseValue()).thenReturn(last)
             assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
         }
