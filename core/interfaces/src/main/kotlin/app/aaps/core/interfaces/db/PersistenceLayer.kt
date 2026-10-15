@@ -414,6 +414,9 @@ interface PersistenceLayer {
     // GV
     fun getLastGlucoseValue(): GV?
 
+    /** Latest valid, finite sensor value >= 39 mg/dL at or before [notAfter], ties by insertion ID. Display only. */
+    fun getLastUsableGlucoseValueForDisplay(notAfter: Long): GV?
+
     /**
      *  Get highest id in database
      *  @return id

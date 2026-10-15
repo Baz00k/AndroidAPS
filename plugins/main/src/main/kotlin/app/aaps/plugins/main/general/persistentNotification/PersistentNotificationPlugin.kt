@@ -15,11 +15,9 @@ import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.db.ProcessedTbrEbData
-import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.notifications.NotificationHolder
-import app.aaps.core.interfaces.overview.LastBgData
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
@@ -30,22 +28,26 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAutosensCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventInitializationChanged
+import app.aaps.core.interfaces.rx.events.EventNewBG
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.ui.IconsProvider
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
-import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
+import app.aaps.core.objects.ui.SensorGlucose
 import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.plugins.main.R
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import io.reactivex.rxjava3.core.Observable
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,13 +68,10 @@ class PersistentNotificationPlugin @Inject constructor(
     private val notificationHolder: NotificationHolder,
     private val dummyServiceHelper: DummyServiceHelper,
     private val iconsProvider: IconsProvider,
-    private val glucoseStatusProvider: GlucoseStatusProvider,
     private val config: Config,
     private val decimalFormatter: DecimalFormatter,
     private val preferences: Preferences,
     private val persistenceLayer: PersistenceLayer,
-    private val lastBgData: LastBgData,
-    private val trendCalculator: TrendCalculator,
     private val dateUtil: DateUtil
 ) : PluginBase(
     PluginDescription()
@@ -103,6 +102,12 @@ class PersistentNotificationPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         notificationHolder.createNotificationChannel()
+        disposable += Observable.interval(1, 1, TimeUnit.MINUTES, aapsSchedulers.io)
+            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
+        disposable += rxBus
+            .toObservable(EventNewBG::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventRefreshOverview::class.java)
             .observeOn(aapsSchedulers.io)
@@ -131,19 +136,26 @@ class PersistentNotificationPlugin @Inject constructor(
         super.onStop()
     }
 
-    internal fun triggerNotificationUpdate() {
+    @Synchronized internal fun triggerNotificationUpdate() {
         updateNotification()
         dummyServiceHelper.startService(context)
     }
 
     private fun updateNotification() {
         if (!config.appInitialized) return
+        val now = dateUtil.now()
+        val snapshot = try {
+            SensorGlucoseSnapshot.load(persistenceLayer, now - CHART_WINDOW, now)
+        } catch (e: Exception) {
+            fabricPrivacy.logException(e)
+            SensorGlucoseSnapshot(emptyList(), SensorGlucose())
+        }
+        val glucose = snapshot.glucose
         val pump = activePlugins.activePump
         var line1: String?
         var line2: String? = null
         var line3: String? = null
         var tempBasalText: String? = null
-        var avgDeltaText: String? = null
         var unreadConversationBuilder: NotificationCompat.CarExtender.UnreadConversation.Builder? = null
         val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "PersistentNotificationPlugin", compact = true) {
             BasalDisplay(rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate))
@@ -151,25 +163,24 @@ class PersistentNotificationPlugin @Inject constructor(
         val profileValid = therapy.iob.isAvailable
         if (profileValid) {
             var line1aa: String
-            val lastBG = iobCobCalculator.ads.lastBg()
-            val glucoseStatus = glucoseStatusProvider.glucoseStatusData
+            val lastBG = glucose.reading
             if (lastBG != null) {
-                line1aa = profileUtil.fromMgdlToStringInUnits(lastBG.recalculated)
+                line1aa = profileUtil.fromMgdlToStringInUnits(lastBG.value)
                 line1 = line1aa
-                if (glucoseStatus != null) {
+                if (glucose.isFresh(now)) {
                     // Android bundles this notification with AAPS's alarms, and a bundled child is
                     // rendered as ONE ellipsized line built from title + text - the custom views
                     // below are not drawn in that state. So the title carries only what has to
                     // survive truncation: value, trend, delta. The rest moved to line2.
-                    line1 += "  " + lastBG.trendArrow.symbol +
-                        "  Δ" + profileUtil.fromMgdlToSignedStringInUnits(glucoseStatus.delta)
-                    line1aa += "  " + lastBG.trendArrow.symbol
-                    avgDeltaText = "avgΔ" + profileUtil.fromMgdlToSignedStringInUnits(glucoseStatus.shortAvgDelta)
+                    line1 += "  " + glucose.trendSymbol(now) +
+                        "  Δ" + (glucose.deltaMgdl?.let { profileUtil.fromMgdlToSignedStringInUnits(it) }
+                            ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short))
+                    line1aa = line1
                 } else {
                     line1 += " " +
                         rh.gs(R.string.old_data) +
                         " "
-                    line1aa += "$line1."
+                    line1aa = "$line1."
                 }
             } else {
                 line1aa = rh.gs(app.aaps.core.ui.R.string.missed_bg_readings)
@@ -189,7 +200,7 @@ class PersistentNotificationPlugin @Inject constructor(
                         .string.cob
                 ) + ": " + cob.value
             // Displaced from the title so it stays short enough to read when bundled.
-            listOfNotNull(tempBasalText, avgDeltaText).forEach { line2 += "  " + it }
+            tempBasalText?.let { line2 += "  " + it }
             if (cob.unavailableReason.isNotBlank()) line2 += " · " + cob.unavailableReason
             val line2aa =
                 rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + ". " + rh.gs(
@@ -250,7 +261,7 @@ class PersistentNotificationPlugin @Inject constructor(
         if (line3 != null) builder.setSubText(line3)
         // The text above is still the notification's content: Android Auto, wearables and TalkBack
         // read it, and SystemUI falls back to it if it declines to inflate the custom views.
-        val decorated = profileValid && applyGlucoseViews(builder, listOfNotNull(line2, line3).joinToString("  \u00b7  "))
+        val decorated = profileValid && applyGlucoseViews(builder, listOfNotNull(line2, line3).joinToString("  \u00b7  "), snapshot, now)
         // The app icon is redundant beside the chart, and its bitmap competes for the same 1 MB
         // Binder budget the custom views spend.
         if (!decorated) builder.setLargeIcon(rh.decodeResource(iconsProvider.getIcon()))
@@ -273,34 +284,35 @@ class PersistentNotificationPlugin @Inject constructor(
      * Attaches the lock-screen readout: the glucose value at a size that survives being glanced at,
      * a trend arrow, and the last 3 h of glucose as a chart.
      *
-     * This exists because the plain-text notification put BG, delta, average delta and the temp
+     * This exists because the plain-text notification put BG, delta and the temp
      * basal into one contentTitle, which the lock screen then ellipsized mid-string. Those numbers
-     * are not lost - they moved to the expanded view's status row, where there is room for them.
+     * remain available in the title and expanded view's status row.
      *
      * @return true if the custom views were attached, false if there is nothing to draw.
      */
-    private fun applyGlucoseViews(builder: NotificationCompat.Builder, statusText: String): Boolean {
-        val lastBg = lastBgData.lastBg() ?: return false
+    internal fun applyGlucoseViews(builder: NotificationCompat.Builder, statusText: String, snapshot: SensorGlucoseSnapshot, now: Long): Boolean {
+        val glucose = snapshot.glucose
+        val lastBg = glucose.reading ?: return false
         val lowMark = preferences.get(UnitDoubleKey.OverviewLowMark)
         val highMark = preferences.get(UnitDoubleKey.OverviewHighMark)
         // One authority for the colour: the number and the trace are tinted by the same call, so
         // they cannot disagree about whether the reading is in range.
-        val color = chart.colorFor(profileUtil.fromMgdlToUnits(lastBg.recalculated), lowMark, highMark)
-        val arrow = trendCalculator.getTrendArrow(iobCobCalculator.ads)?.notificationIcon()
-        val delta = glucoseStatusProvider.glucoseStatusData
-            ?.let { "\u0394 " + profileUtil.fromMgdlToSignedStringInUnits(it.delta) }
+        val color = chart.colorFor(profileUtil.fromMgdlToUnits(lastBg.value), lowMark, highMark)
+        val arrow = glucose.trend.takeIf { glucose.isFresh(now) }?.notificationIcon()
+        val delta = glucose.deltaMgdl.takeIf { glucose.isFresh(now) }
+            ?.let { "\u0394 " + profileUtil.fromMgdlToSignedStringInUnits(it) }
             ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short)
 
         val collapsed = RemoteViews(context.packageName, R.layout.notification_bg_collapsed)
         val expanded = RemoteViews(context.packageName, R.layout.notification_bg_expanded)
 
         for (views in listOf(collapsed, expanded)) {
-            views.setTextViewText(R.id.notification_bg, profileUtil.fromMgdlToStringInUnits(lastBg.recalculated))
+            views.setTextViewText(R.id.notification_bg, profileUtil.fromMgdlToStringInUnits(lastBg.value))
             views.setTextColor(R.id.notification_bg, color)
             // Struck through once the reading is stale, as the widget and Overview both do.
             views.setInt(
                 R.id.notification_bg, "setPaintFlags",
-                if (lastBgData.isActualBg()) Paint.ANTI_ALIAS_FLAG
+                if (glucose.isFresh(now)) Paint.ANTI_ALIAS_FLAG
                 else Paint.STRIKE_THRU_TEXT_FLAG or Paint.ANTI_ALIAS_FLAG
             )
             arrow?.let { views.setImageViewResource(R.id.notification_arrow, it) }
@@ -311,9 +323,9 @@ class PersistentNotificationPlugin @Inject constructor(
         }
         expanded.setTextViewText(R.id.notification_status, statusText)
 
-        val to = dateUtil.now()
+        val to = now
         val from = to - CHART_WINDOW
-        val readings = recentReadings(from, to)
+        val readings = snapshot.readings.map { ChartReading(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
         chart.render(BgNotificationChart.COLLAPSED_W, BgNotificationChart.COLLAPSED_H, readings, from, to, lowMark, highMark, withMarks = false)
             ?.let { collapsed.setImageViewBitmap(R.id.notification_chart, it) }
         chart.render(BgNotificationChart.EXPANDED_W, BgNotificationChart.EXPANDED_H, readings, from, to, lowMark, highMark, withMarks = true)
@@ -324,21 +336,6 @@ class PersistentNotificationPlugin @Inject constructor(
         builder.setCustomBigContentView(expanded)
         return true
     }
-
-    /**
-     * The last 3 h of CGM in display units.
-     *
-     * Read from the database rather than from OverviewData, whose series are only refreshed while
-     * the Overview is on screen - which is exactly when the notification does not matter.
-     */
-    private fun recentReadings(from: Long, to: Long): List<ChartReading> =
-        persistenceLayer.getBgReadingsDataFromTimeToTime(from, to, true)
-            .filter { it.isValid }
-            // xDrip broadcasts each reading more than once, so the table holds near-duplicates.
-            // One point per 5-minute bucket keeps the trace from doubling back on itself.
-            .associateBy { it.timestamp / T.mins(5).msecs() }
-            .values
-            .map { ChartReading(it.timestamp, profileUtil.fromMgdlToUnits(it.value)) }
 
     companion object {
 
@@ -356,15 +353,15 @@ class PersistentNotificationPlugin @Inject constructor(
  * pixels away. These are the same paths with a solid fill, so the tint takes.
  */
 private fun TrendArrow.notificationIcon(): Int? = when (this) {
-    TrendArrow.TRIPLE_DOWN     -> R.drawable.notification_arrow_invalid
+    TrendArrow.TRIPLE_DOWN,
     TrendArrow.DOUBLE_DOWN     -> R.drawable.notification_arrow_doubledown
     TrendArrow.SINGLE_DOWN     -> R.drawable.notification_arrow_singledown
     TrendArrow.FORTY_FIVE_DOWN -> R.drawable.notification_arrow_fortyfivedown
     TrendArrow.FLAT            -> R.drawable.notification_arrow_flat
     TrendArrow.FORTY_FIVE_UP   -> R.drawable.notification_arrow_fortyfiveup
     TrendArrow.SINGLE_UP       -> R.drawable.notification_arrow_singleup
+    TrendArrow.TRIPLE_UP,
     TrendArrow.DOUBLE_UP       -> R.drawable.notification_arrow_doubleup
-    TrendArrow.TRIPLE_UP       -> R.drawable.notification_arrow_invalid
     // No trend to show is better than a question mark taking the arrow's slot.
     TrendArrow.NONE            -> null
 }

@@ -23,6 +23,7 @@ import app.aaps.core.interfaces.rx.events.EventWearToMobile
 import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.rx.weardata.EventData.ActionResendData
 import app.aaps.core.interfaces.rx.weardata.EventData.SingleBg
+import app.aaps.core.interfaces.rx.weardata.forGlucoseDisplay
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.wear.R
 import app.aaps.wear.interaction.menus.MainMenuActivity
@@ -60,9 +61,9 @@ class CircleWatchface : WatchFace() {
 
     private val singleBg
         get() = arrayOf(
-            complicationData.bgData,
-            complicationData.bgData1,
-            complicationData.bgData2
+            complicationData.bgData.forGlucoseDisplay(System.currentTimeMillis()),
+            complicationData.bgData1.forGlucoseDisplay(System.currentTimeMillis()),
+            complicationData.bgData2.forGlucoseDisplay(System.currentTimeMillis())
         )
     private val status
         get() = arrayOf(

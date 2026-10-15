@@ -21,6 +21,7 @@ import app.aaps.core.interfaces.rx.events.EventAutosensCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventDismissBolusProgressIfRunning
 import app.aaps.core.interfaces.rx.events.EventLoopUpdateGui
 import app.aaps.core.interfaces.rx.events.EventMobileToWear
+import app.aaps.core.interfaces.rx.events.EventNewBG
 import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
@@ -41,6 +42,8 @@ import app.aaps.plugins.sync.wear.wearintegration.DataLayerListenerServiceMobile
 import app.aaps.shared.impl.extensions.safeQueryBroadcastReceivers
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import io.reactivex.rxjava3.core.Observable
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -76,6 +79,12 @@ class WearPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         dataLayerListenerServiceMobileHelper.startService(context)
+        disposable += Observable.interval(1, 1, TimeUnit.MINUTES, aapsSchedulers.io)
+            .subscribe({ dataHandlerMobile.sendGlucose() }, fabricPrivacy::logException)
+        disposable += rxBus
+            .toObservable(EventNewBG::class.java)
+            .observeOn(aapsSchedulers.io)
+            .subscribe({ dataHandlerMobile.sendGlucose() }, fabricPrivacy::logException)
         disposable += rxBus
             .toObservable(EventDismissBolusProgressIfRunning::class.java)
             .observeOn(aapsSchedulers.io)

@@ -22,6 +22,7 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventWearToMobile
 import app.aaps.core.interfaces.rx.weardata.EventData.ActionResendData
+import app.aaps.core.interfaces.rx.weardata.forGlucoseDisplay
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.ui.extensions.toVisibility
@@ -73,9 +74,9 @@ abstract class BaseWatchFace : WatchFace() {
      */
     protected val singleBg
         get() = arrayOf(
-            complicationData.bgData,
-            complicationData.bgData1,
-            complicationData.bgData2
+            complicationData.bgData.forGlucoseDisplay(System.currentTimeMillis()),
+            complicationData.bgData1.forGlucoseDisplay(System.currentTimeMillis()),
+            complicationData.bgData2.forGlucoseDisplay(System.currentTimeMillis())
         )
 
     /**

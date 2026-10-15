@@ -1,5 +1,7 @@
 package app.aaps.wear.complications
 
+import app.aaps.core.interfaces.rx.weardata.forGlucoseDisplay
+
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Intent
@@ -126,7 +128,10 @@ abstract class ModernBaseComplicationProviderService : ComplicationDataSourceSer
         scope.launch {
             // Read from DataStore (fast, type-safe) - includes all 3 datasets
             val data = try {
-                complicationDataRepository.complicationData.first()
+                complicationDataRepository.complicationData.first().let { stored ->
+                    val now = System.currentTimeMillis()
+                    stored.copy(bgData = stored.bgData.forGlucoseDisplay(now), bgData1 = stored.bgData1.forGlucoseDisplay(now), bgData2 = stored.bgData2.forGlucoseDisplay(now))
+                }
             } catch (e: Exception) {
                 aapsLogger.error(LTag.WEAR, "Error reading from DataStore", e)
                 // Fallback to defaults

@@ -4,6 +4,7 @@ import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
 import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -31,7 +32,7 @@ class HomeGlucoseSnapshotTest {
         val laterSource = reading(now, 99.0, 3, TrendArrow.SINGLE_DOWN)
         for (input in listOf(listOf(older, firstSource, laterSource), listOf(laterSource, firstSource, older))) {
             whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(input)
-            val snapshot = HomeGlucoseSnapshot.load(persistence, from, now)
+            val snapshot = SensorGlucoseSnapshot.load(persistence, from, now)
             val chart = HomeChartData(from = from, now = now, readings = snapshot.readings.map { GlucosePoint(it.timestamp, it.value) })
             assertEquals(99.0, snapshot.glucose.reading?.value)
             assertEquals(now, snapshot.glucose.reading?.timestamp)
@@ -48,24 +49,27 @@ class HomeGlucoseSnapshotTest {
         val future = reading(now + 60_000, 120.0, 3)
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(listOf(error, future))
         whenever(persistence.getLastGlucoseValue()).thenReturn(future)
-        whenever(persistence.getBgReadingsDataFromTimeToTime(0, from - 1, false)).thenReturn(listOf(valid))
-        val snapshot = HomeGlucoseSnapshot.load(persistence, from, now)
+        whenever(persistence.getLastUsableGlucoseValueForDisplay(from - 1)).thenReturn(valid)
+        val snapshot = SensorGlucoseSnapshot.load(persistence, from, now)
         assertEquals(valid, snapshot.glucose.reading)
         assertFalse(snapshot.glucose.isFresh(now))
         assertTrue(snapshot.readings.isEmpty())
         assertNull(snapshot.glucose.deltaMgdl)
+        verify(persistence).getLastUsableGlucoseValueForDisplay(from - 1)
+        verify(persistence).getBgReadingsDataFromTimeToTime(from, now, true)
+        verifyNoMoreInteractions(persistence)
     }
 
     @Test fun `usable chart history needs no older-history fallback`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(listOf(reading(now, 99.0, 1)))
-        HomeGlucoseSnapshot.load(persistence, from, now)
+        SensorGlucoseSnapshot.load(persistence, from, now)
         verify(persistence).getBgReadingsDataFromTimeToTime(from, now, true)
         verifyNoMoreInteractions(persistence)
     }
 
     @Test fun `empty history remains unavailable`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
-        whenever(persistence.getBgReadingsDataFromTimeToTime(0, from - 1, false)).thenReturn(emptyList())
-        assertNull(HomeGlucoseSnapshot.load(persistence, from, now).glucose.reading)
+        whenever(persistence.getLastUsableGlucoseValueForDisplay(from - 1)).thenReturn(null)
+        assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
     }
 }

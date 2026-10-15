@@ -25,6 +25,9 @@ internal interface GlucoseValueDao : TraceableDao<GlucoseValue> {
     @Query("SELECT * FROM $TABLE_GLUCOSE_VALUES WHERE isValid = 1 AND referenceId IS NULL ORDER BY timestamp DESC limit 1")
     fun getLast(): Maybe<GlucoseValue>
 
+    @Query("SELECT * FROM $TABLE_GLUCOSE_VALUES WHERE isValid = 1 AND referenceId IS NULL AND timestamp BETWEEN 0 AND :notAfter AND value >= 39 AND value <= 1.7976931348623157e308 ORDER BY timestamp DESC, id DESC LIMIT 1")
+    fun getLastUsableForDisplay(notAfter: Long): Maybe<GlucoseValue>
+
     @Query("SELECT id FROM $TABLE_GLUCOSE_VALUES ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

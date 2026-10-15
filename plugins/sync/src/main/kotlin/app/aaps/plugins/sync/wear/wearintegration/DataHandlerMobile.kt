@@ -15,7 +15,6 @@ import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TB
 import app.aaps.core.data.model.TDD
 import app.aaps.core.data.model.TT
-import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -61,7 +60,6 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.HardLimits
-import app.aaps.core.interfaces.utils.TrendCalculator
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
@@ -73,6 +71,8 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.convertedToAbsolute
 import app.aaps.core.objects.ui.TherapyDisplay
+import app.aaps.core.objects.ui.SensorGlucose
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.core.objects.extensions.valueToUnits
@@ -116,7 +116,6 @@ class DataHandlerMobile @Inject constructor(
     private val processedDeviceStatusData: ProcessedDeviceStatusData,
     private val receiverStatusStore: ReceiverStatusStore,
     private val quickWizard: QuickWizard,
-    private val trendCalculator: TrendCalculator,
     private val dateUtil: DateUtil,
     private val constraintChecker: ConstraintsChecker,
     private val uel: UserEntryLogger,
@@ -1248,8 +1247,7 @@ class DataHandlerMobile @Inject constructor(
 
     fun resendData(from: String) {
         aapsLogger.debug(LTag.WEAR, "Sending data to wear from $from")
-        // SingleBg
-        iobCobCalculator.ads.lastBg()?.let { rxBus.send(EventMobileToWear(getSingleBG(it))) }
+        sendGlucose()
         // Preferences
         rxBus.send(
             EventMobileToWear(
@@ -1279,7 +1277,7 @@ class DataHandlerMobile @Inject constructor(
         sendUserActions()
         // GraphData
         iobCobCalculator.ads.getBucketedDataTableCopy()?.let { bucketedData ->
-            rxBus.send(EventMobileToWear(EventData.GraphData(ArrayList(bucketedData.map { getSingleBG(it) }))))
+            rxBus.send(EventMobileToWear(EventData.GraphData(ArrayList(bucketedData.map { graphReadingToWear(it) }))))
         }
         // Treatments
         sendTreatments()
@@ -1555,16 +1553,6 @@ class DataHandlerMobile @Inject constructor(
         )
     }
 
-    private fun deltaString(deltaMGDL: Double, deltaMMOL: Double, units: GlucoseUnit): String {
-        var deltaString = if (deltaMGDL >= 0) "+" else "-"
-        deltaString += if (units == GlucoseUnit.MGDL) {
-            decimalFormatter.to0Decimal(abs(deltaMGDL))
-        } else {
-            decimalFormatter.to1Decimal(abs(deltaMMOL))
-        }
-        return deltaString
-    }
-
     private fun deltaStringDetailed(deltaMGDL: Double, deltaMMOL: Double, units: GlucoseUnit): String {
         var deltaStringDetailed = if (deltaMGDL >= 0) "+" else "-"
         deltaStringDetailed += if (units == GlucoseUnit.MGDL) {
@@ -1575,8 +1563,48 @@ class DataHandlerMobile @Inject constructor(
         return deltaStringDetailed
     }
 
-    private fun getSingleBG(glucoseValue: InMemoryGlucoseValue): EventData.SingleBg {
-        val glucoseStatus = glucoseStatusProvider.getGlucoseStatusData(true)
+    /** Display-only CGM refresh: never waits for or updates loop inputs or therapy status. */
+    @Synchronized fun sendGlucose() {
+        val now = dateUtil.now()
+        val glucose = try {
+            SensorGlucoseSnapshot.load(persistenceLayer, now - T.hours(3).msecs(), now).glucose
+        } catch (e: Exception) {
+            fabricPrivacy.logException(e)
+            SensorGlucose()
+        }
+        rxBus.send(EventMobileToWear(sensorGlucoseToWear(glucose, now)))
+    }
+
+    internal fun sensorGlucoseToWear(glucose: SensorGlucose, now: Long): EventData.SingleBg {
+        val units = profileFunction.getUnits()
+        val low = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
+        val high = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
+        val reading = glucose.reading
+        val delta = glucose.deltaMgdl.takeIf { glucose.isFresh(now) }
+        return EventData.SingleBg(
+            dataset = 0,
+            timeStamp = reading?.timestamp ?: 0L,
+            sgvString = reading?.let { profileUtil.fromMgdlToStringInUnits(it.value) } ?: "--",
+            glucoseUnits = units.asText,
+            slopeArrow = glucose.trendSymbol(now),
+            delta = delta?.let { profileUtil.fromMgdlToSignedStringInUnits(it, units) } ?: "--",
+            deltaDetailed = delta?.let { deltaStringDetailed(it, it * Constants.MGDL_TO_MMOLL, units) } ?: "--",
+            // APS averages are not sensor deltas and may refer to an older loop bucket.
+            avgDelta = "--",
+            avgDeltaDetailed = "--",
+            sgvLevel = if (reading == null) 0L else if (reading.value > high) 1L else if (reading.value < low) -1L else 0L,
+            sgv = reading?.value ?: 0.0,
+            high = high,
+            low = low,
+            color = 0,
+            deltaMgdl = delta,
+            avgDeltaMgdl = null
+        )
+    }
+
+    // Graph points are loop-derived history, not headline readings. Do not attach today's delta
+    // and trend to every historical point or let a full resend replace the sensor headline.
+    private fun graphReadingToWear(glucoseValue: InMemoryGlucoseValue): EventData.SingleBg {
         val units = profileFunction.getUnits()
         val lowLine = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highLine = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
@@ -1586,18 +1614,18 @@ class DataHandlerMobile @Inject constructor(
             timeStamp = glucoseValue.timestamp,
             sgvString = profileUtil.stringInCurrentUnitsDetect(glucoseValue.recalculated),
             glucoseUnits = units.asText,
-            slopeArrow = (trendCalculator.getTrendArrow(iobCobCalculator.ads) ?: TrendArrow.NONE).symbol,
-            delta = glucoseStatus?.let { deltaString(it.delta, it.delta * Constants.MGDL_TO_MMOLL, units) } ?: "--",
-            deltaDetailed = glucoseStatus?.let { deltaStringDetailed(it.delta, it.delta * Constants.MGDL_TO_MMOLL, units) } ?: "--",
-            avgDelta = glucoseStatus?.let { deltaString(it.shortAvgDelta, it.shortAvgDelta * Constants.MGDL_TO_MMOLL, units) } ?: "--",
-            avgDeltaDetailed = glucoseStatus?.let { deltaStringDetailed(it.shortAvgDelta, it.shortAvgDelta * Constants.MGDL_TO_MMOLL, units) } ?: "--",
+            slopeArrow = "",
+            delta = "--",
+            deltaDetailed = "--",
+            avgDelta = "--",
+            avgDeltaDetailed = "--",
             sgvLevel = if (glucoseValue.recalculated > highLine) 1L else if (glucoseValue.recalculated < lowLine) -1L else 0L,
             sgv = glucoseValue.recalculated,
             high = highLine,
             low = lowLine,
             color = 0,
-            deltaMgdl = glucoseStatus?.delta,
-            avgDeltaMgdl = glucoseStatus?.shortAvgDelta
+            deltaMgdl = null,
+            avgDeltaMgdl = null
         )
     }
 
