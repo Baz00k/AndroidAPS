@@ -47,7 +47,7 @@ class SensorNotificationTest {
             aapsLogger = mock(), rh = rh, aapsSchedulers = mock(), profileFunction = mock(),
             profileUtil = profileUtil, fabricPrivacy = mock(), activePlugins = mock(),
             iobCobCalculator = mock(), processedTbrEbData = mock(), rxBus = mock(), context = context,
-            notificationHolder = mock(), dummyServiceHelper = mock(), iconsProvider = mock(), config = mock(),
+            notificationHolder = mock(), dummyServiceHelper = mock(), iconsProvider = mock(), glucoseStatusProvider = mock(), config = mock(),
             decimalFormatter = mock(), preferences = mock(), persistenceLayer = mock(), dateUtil = dateUtil
         )
         fun reading(time: Long, value: Double, trend: TrendArrow) = GV(

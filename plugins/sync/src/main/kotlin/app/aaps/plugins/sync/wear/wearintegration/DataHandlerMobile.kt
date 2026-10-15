@@ -1578,6 +1578,8 @@ class DataHandlerMobile @Inject constructor(
         val low = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val high = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
         val delta = glucose.deltaMgdl.takeIf { glucose.isFresh(now) }
+        // From the last loop calculation; its resend refreshes this once the calculation catches up.
+        val avgDelta = glucoseStatusProvider.getGlucoseStatusData(true)?.shortAvgDelta.takeIf { glucose.isFresh(now) }
         rxBus.send(EventMobileToWear(EventData.SingleBg(
             dataset = 0,
             timeStamp = reading.timestamp,
@@ -1586,16 +1588,15 @@ class DataHandlerMobile @Inject constructor(
             slopeArrow = glucose.trendSymbol(now),
             delta = delta?.let { profileUtil.fromMgdlToSignedStringInUnits(it, units) } ?: "--",
             deltaDetailed = delta?.let { deltaStringDetailed(it, it * Constants.MGDL_TO_MMOLL, units) } ?: "--",
-            // APS averages are not sensor deltas and may refer to an older loop bucket.
-            avgDelta = "--",
-            avgDeltaDetailed = "--",
+            avgDelta = avgDelta?.let { profileUtil.fromMgdlToSignedStringInUnits(it, units) } ?: "--",
+            avgDeltaDetailed = avgDelta?.let { deltaStringDetailed(it, it * Constants.MGDL_TO_MMOLL, units) } ?: "--",
             sgvLevel = if (reading.value > high) 1L else if (reading.value < low) -1L else 0L,
             sgv = reading.value,
             high = high,
             low = low,
             color = 0,
             deltaMgdl = delta,
-            avgDeltaMgdl = null
+            avgDeltaMgdl = avgDelta
         )))
     }
 

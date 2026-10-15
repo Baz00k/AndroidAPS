@@ -15,6 +15,7 @@ import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.db.ProcessedTbrEbData
+import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.notifications.NotificationHolder
@@ -68,6 +69,7 @@ class PersistentNotificationPlugin @Inject constructor(
     private val notificationHolder: NotificationHolder,
     private val dummyServiceHelper: DummyServiceHelper,
     private val iconsProvider: IconsProvider,
+    private val glucoseStatusProvider: GlucoseStatusProvider,
     private val config: Config,
     private val decimalFormatter: DecimalFormatter,
     private val preferences: Preferences,
@@ -157,6 +159,7 @@ class PersistentNotificationPlugin @Inject constructor(
         var line2: String? = null
         var line3: String? = null
         var tempBasalText: String? = null
+        var avgDeltaText: String? = null
         var unreadConversationBuilder: NotificationCompat.CarExtender.UnreadConversation.Builder? = null
         val therapy = TherapyDisplay.load(profileFunction, iobCobCalculator, rh, decimalFormatter, "PersistentNotificationPlugin", compact = true) {
             BasalDisplay(rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate))
@@ -177,6 +180,8 @@ class PersistentNotificationPlugin @Inject constructor(
                         "  Δ" + (glucose.deltaMgdl?.let { profileUtil.fromMgdlToSignedStringInUnits(it) }
                             ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short))
                     line1aa += "  " + glucose.trendSymbol(now)
+                    glucoseStatusProvider.glucoseStatusData
+                        ?.let { avgDeltaText = "avgΔ" + profileUtil.fromMgdlToSignedStringInUnits(it.shortAvgDelta) }
                 } else {
                     line1 += " " +
                         rh.gs(R.string.old_data) +
@@ -201,7 +206,7 @@ class PersistentNotificationPlugin @Inject constructor(
                         .string.cob
                 ) + ": " + cob.value
             // Displaced from the title so it stays short enough to read when bundled.
-            tempBasalText?.let { line2 += "  " + it }
+            listOfNotNull(tempBasalText, avgDeltaText).forEach { line2 += "  " + it }
             if (cob.unavailableReason.isNotBlank()) line2 += " · " + cob.unavailableReason
             val line2aa =
                 rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + iob.total + ". " + rh.gs(
@@ -285,9 +290,9 @@ class PersistentNotificationPlugin @Inject constructor(
      * Attaches the lock-screen readout: the glucose value at a size that survives being glanced at,
      * a trend arrow, and the last 3 h of glucose as a chart.
      *
-     * This exists because the plain-text notification put BG, delta and the temp
+     * This exists because the plain-text notification put BG, delta, average delta and the temp
      * basal into one contentTitle, which the lock screen then ellipsized mid-string. Those numbers
-     * remain available in the title and expanded view's status row.
+     * are not lost - they moved to the expanded view's status row, where there is room for them.
      *
      * @return true if the custom views were attached, false if there is nothing to draw.
      */

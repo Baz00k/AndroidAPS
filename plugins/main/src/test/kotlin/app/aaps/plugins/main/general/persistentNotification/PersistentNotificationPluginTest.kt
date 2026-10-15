@@ -20,7 +20,7 @@ class PersistentNotificationPluginTest : TestBaseWithProfile() {
 
     private fun startedPlugin() = spy(PersistentNotificationPlugin(aapsLogger, rh, schedulers, profileFunction, profileUtil,
         fabricPrivacy, activePlugin, iobCobCalculator, processedTbrEbData, rxBus, context, mock(), mock(),
-        mock(), config, decimalFormatter, preferences, mock(), dateUtil)).also {
+        mock(), mock(), config, decimalFormatter, preferences, mock(), dateUtil)).also {
         doNothing().whenever(it).triggerNotificationUpdate()
         doNothing().whenever(it).updateNotification()
         it.onStart()
