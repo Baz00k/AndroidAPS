@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.verify
 import app.aaps.core.interfaces.rx.events.EventProfileAvailabilityChanged
+import app.aaps.core.interfaces.rx.events.EventNewBG
 
 class WearPluginTest : TestBaseWithProfile() {
 
@@ -43,6 +44,16 @@ class WearPluginTest : TestBaseWithProfile() {
         try {
             rxBus.send(EventProfileAvailabilityChanged())
             verify(dataHandlerMobile).resendData("EventProfileAvailabilityChanged")
+        } finally {
+            wearPlugin.onStop()
+        }
+    }
+
+    @Test fun sensorReadingRefreshesGlucoseWithoutWaitingForLoop() {
+        wearPlugin.onStart()
+        try {
+            rxBus.send(EventNewBG(1_700_000_000_000L))
+            verify(dataHandlerMobile).sendGlucose()
         } finally {
             wearPlugin.onStop()
         }

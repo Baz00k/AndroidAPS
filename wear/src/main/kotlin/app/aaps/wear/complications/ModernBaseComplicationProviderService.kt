@@ -9,6 +9,7 @@ import androidx.wear.watchface.complications.datasource.ComplicationDataSourceSe
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.rx.weardata.forGlucoseDisplay
 import app.aaps.wear.data.ComplicationDataRepository
 import app.aaps.wear.interaction.utils.Constants
 import app.aaps.wear.interaction.utils.DisplayFormat
@@ -126,7 +127,10 @@ abstract class ModernBaseComplicationProviderService : ComplicationDataSourceSer
         scope.launch {
             // Read from DataStore (fast, type-safe) - includes all 3 datasets
             val data = try {
-                complicationDataRepository.complicationData.first()
+                val now = System.currentTimeMillis()
+                complicationDataRepository.complicationData.first().let {
+                    it.copy(bgData = it.bgData.forGlucoseDisplay(now), bgData1 = it.bgData1.forGlucoseDisplay(now), bgData2 = it.bgData2.forGlucoseDisplay(now))
+                }
             } catch (e: Exception) {
                 aapsLogger.error(LTag.WEAR, "Error reading from DataStore", e)
                 // Fallback to defaults

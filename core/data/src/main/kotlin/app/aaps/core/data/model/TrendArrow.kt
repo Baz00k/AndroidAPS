@@ -2,7 +2,7 @@ package app.aaps.core.data.model
 
 enum class TrendArrow(val text: String, val symbol: String) {
     NONE("NONE", "??"),
-    TRIPLE_UP("TripleUp", "X"),
+    TRIPLE_UP("TripleUp", "\u290a"),
     DOUBLE_UP("DoubleUp", "\u21c8"),
     SINGLE_UP("SingleUp", "\u2191"),
     FORTY_FIVE_UP("FortyFiveUp", "\u2197"),
@@ -10,7 +10,7 @@ enum class TrendArrow(val text: String, val symbol: String) {
     FORTY_FIVE_DOWN("FortyFiveDown", "\u2198"),
     SINGLE_DOWN("SingleDown", "\u2193"),
     DOUBLE_DOWN("DoubleDown", "\u21ca"),
-    TRIPLE_DOWN("TripleDown", "X")
+    TRIPLE_DOWN("TripleDown", "\u290b")
     ;
 
     companion object {

@@ -97,7 +97,6 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.TE
 import app.aaps.core.data.model.GV
-import app.aaps.core.data.model.TrendArrow
 import app.aaps.plugins.main.general.overview.compose.HomeActions
 import app.aaps.plugins.main.general.overview.compose.HomeScreen
 import app.aaps.plugins.main.general.overview.compose.TreatmentKind
@@ -115,7 +114,8 @@ import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
-import app.aaps.plugins.main.general.overview.compose.HomeGlucose
+import app.aaps.core.objects.ui.SensorGlucose
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.plugins.main.general.overview.compose.recentInsulinEntries
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
@@ -169,7 +169,7 @@ class OverviewFragment : DaggerFragment() {
     private val graphSettings = mutableStateOf(HomeGraphSettings())
     private val additionalGraphSettings = mutableStateOf(AdditionalGraphSettings.decode(""))
     private val chartData = mutableStateOf(HomeChartData())
-    private var sensorGlucose = HomeGlucose()
+    private var sensorGlucose = SensorGlucose()
     // The visible range is UI state: switching it re-windows the loaded snapshot immediately, with
     // no rebuild. The horizontal position is shared by every graph panel and never read off-thread.
     private val chartRangeHours = mutableStateOf(6)
@@ -472,17 +472,6 @@ class OverviewFragment : DaggerFragment() {
         )
     }
 
-    private fun trendSymbol(arrow: TrendArrow?): String = when (arrow) {
-        TrendArrow.TRIPLE_UP, TrendArrow.DOUBLE_UP -> "⇈"
-        TrendArrow.SINGLE_UP                       -> "↑"
-        TrendArrow.FORTY_FIVE_UP                   -> "↗"
-        TrendArrow.FLAT                            -> "→"
-        TrendArrow.FORTY_FIVE_DOWN                 -> "↘"
-        TrendArrow.SINGLE_DOWN                     -> "↓"
-        TrendArrow.TRIPLE_DOWN, TrendArrow.DOUBLE_DOWN -> "⇊"
-        else                                       -> ""
-    }
-
     /** Map the current Overview providers into [HomeUiState]. Runs on the UI thread. */
     @SuppressLint("SetTextI18n")
     private fun buildHomeState() {
@@ -662,7 +651,7 @@ class OverviewFragment : DaggerFragment() {
             bgTone = bgTone,
             bgStale = !isActual,
             units = unitsStr,
-            trendArrow = if (isActual) trendSymbol(sensorGlucose.trend) else "",
+            trendArrow = sensorGlucose.trendSymbol(now),
             delta = if (isActual) sensorGlucose.deltaMgdl?.let { profileUtil.fromMgdlToSignedStringInUnits(it) }.orEmpty() else "",
             timeAgo = dateUtil.minOrSecAgo(rh, lastBg?.timestamp),
             eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
@@ -703,7 +692,7 @@ class OverviewFragment : DaggerFragment() {
             val now = dateUtil.now()
             val from = now - CHART_HISTORY_MS
             try {
-                val snapshot = HomeGlucoseSnapshot.load(persistenceLayer, from, now)
+                val snapshot = SensorGlucoseSnapshot.load(persistenceLayer, from, now)
                 val chart = try { buildChartData(snapshot.readings, from, now) } catch (e: Exception) {
                     fabricPrivacy.logException(e)
                     HomeChartData()
@@ -720,7 +709,7 @@ class OverviewFragment : DaggerFragment() {
                 // Do not retain a seemingly fresh value when the database snapshot cannot be read.
                 runOnUiThread {
                     if (composeHome != null) {
-                        sensorGlucose = HomeGlucose()
+                        sensorGlucose = SensorGlucose()
                         chartData.value = HomeChartData()
                         buildHomeState()
                     }

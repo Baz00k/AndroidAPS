@@ -1,29 +1,32 @@
-package app.aaps.plugins.main.general.overview.compose
+package app.aaps.core.objects.ui
 
 import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.TrendArrow
 import kotlin.math.abs
 
 /** Sensor-only presentation data. Never published to the calculator's dosing-input store. */
-data class HomeGlucose(
+data class SensorGlucose(
     val reading: GV? = null,
     val deltaMgdl: Double? = null,
     val trend: TrendArrow? = null
 ) {
     fun isFresh(now: Long): Boolean = reading?.timestamp?.let { it <= now && it > now - 9 * 60_000L } == true
 
+    fun trendSymbol(now: Long): String =
+        if (isFresh(now)) trend?.takeUnless { it == TrendArrow.NONE }?.symbol.orEmpty() else ""
+
     companion object {
         /** Prefer the later-inserted database record when sensor sources share a timestamp. */
         fun sensorReadings(readings: List<GV>, now: Long): List<GV> = readings
+            // Match the existing glucose-history query's lower bound; this is not a dosing limit.
             .filter { it.isValid && it.value.isFinite() && it.value >= 39 && it.timestamp in 0..now }
             .sortedWith(compareByDescending<GV> { it.timestamp }.thenByDescending { it.id })
             .distinctBy { it.timestamp }
             .reversed()
 
-        fun from(readings: List<GV>, now: Long): HomeGlucose {
-            // The database's glucose-history query excludes sensor error values below 39 mg/dL.
+        fun from(readings: List<GV>, now: Long): SensorGlucose {
             val samples = sensorReadings(readings, now).asReversed()
-            val latest = samples.firstOrNull() ?: return HomeGlucose()
+            val latest = samples.firstOrNull() ?: return SensorGlucose()
             // Keep delta in mg/dL per five minutes regardless of the sensor's reporting interval.
             // Use an actual sample nearest five minutes ago; do not bridge a large gap or invent zero.
             val previous = samples.drop(1)
@@ -41,7 +44,7 @@ data class HomeGlucose(
                     else        -> TrendArrow.DOUBLE_UP
                 }
             }
-            return HomeGlucose(latest, delta, trend)
+            return SensorGlucose(latest, delta, trend)
         }
     }
 }

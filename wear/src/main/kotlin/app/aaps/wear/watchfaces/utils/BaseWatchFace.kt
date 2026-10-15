@@ -22,6 +22,7 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventWearToMobile
 import app.aaps.core.interfaces.rx.weardata.EventData.ActionResendData
+import app.aaps.core.interfaces.rx.weardata.forGlucoseDisplay
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.ui.extensions.toVisibility
@@ -72,11 +73,13 @@ abstract class BaseWatchFace : WatchFace() {
      * Each entry contains current BG, trend arrow, delta, and range info.
      */
     protected val singleBg
-        get() = arrayOf(
-            complicationData.bgData,
-            complicationData.bgData1,
-            complicationData.bgData2
-        )
+        get() = System.currentTimeMillis().let { now ->
+            arrayOf(
+                complicationData.bgData.forGlucoseDisplay(now),
+                complicationData.bgData1.forGlucoseDisplay(now),
+                complicationData.bgData2.forGlucoseDisplay(now)
+            )
+        }
 
     /**
      * Status data for all three datasets (primary + 2 followers).
