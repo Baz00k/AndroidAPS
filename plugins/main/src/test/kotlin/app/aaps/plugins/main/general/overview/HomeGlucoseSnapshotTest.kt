@@ -43,19 +43,16 @@ class HomeGlucoseSnapshotTest {
         }
     }
 
-    @Test fun `a newer unusable reading does not hide valid stale history outside the chart`() {
+    @Test fun `empty chart keeps the last reading as stale without loading historical series`() {
         val valid = reading(from - 60 * 60_000, 99.0, 1)
-        val error = reading(now - 60_000, 38.0, 2)
-        val future = reading(now + 60_000, 120.0, 3)
-        whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(listOf(error, future))
-        whenever(persistence.getLastGlucoseValue()).thenReturn(future)
-        whenever(persistence.getLastUsableGlucoseValueForDisplay(from - 1)).thenReturn(valid)
+        whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
+        whenever(persistence.getLastGlucoseValue()).thenReturn(valid)
         val snapshot = SensorGlucoseSnapshot.load(persistence, from, now)
         assertEquals(valid, snapshot.glucose.reading)
         assertFalse(snapshot.glucose.isFresh(now))
         assertTrue(snapshot.readings.isEmpty())
         assertNull(snapshot.glucose.deltaMgdl)
-        verify(persistence).getLastUsableGlucoseValueForDisplay(from - 1)
+        verify(persistence).getLastGlucoseValue()
         verify(persistence).getBgReadingsDataFromTimeToTime(from, now, true)
         verifyNoMoreInteractions(persistence)
     }
@@ -69,7 +66,15 @@ class HomeGlucoseSnapshotTest {
 
     @Test fun `empty history remains unavailable`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
-        whenever(persistence.getLastUsableGlucoseValueForDisplay(from - 1)).thenReturn(null)
+        whenever(persistence.getLastGlucoseValue()).thenReturn(null)
         assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
+    }
+
+    @Test fun `fallback does not trust an invalid or future last record`() {
+        whenever(persistence.getBgReadingsDataFromTimeToTime(from, now, true)).thenReturn(emptyList())
+        for (last in listOf(reading(now + 1, 120.0, 1), reading(now, 120.0, 1).copy(isValid = false))) {
+            whenever(persistence.getLastGlucoseValue()).thenReturn(last)
+            assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
+        }
     }
 }

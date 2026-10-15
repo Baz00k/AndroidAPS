@@ -173,11 +173,6 @@ class AppRepository @Inject internal constructor(
             .subscribeOn(Schedulers.io())
             .blockingGet()
 
-    fun getLastUsableGlucoseValueForDisplay(notAfter: Long): GlucoseValue? =
-        database.glucoseValueDao.getLastUsableForDisplay(notAfter)
-            .subscribeOn(Schedulers.io())
-            .blockingGet()
-
     /*
        * returns a Pair of the next entity to sync and the ID of the "update".
        * The update id might either be the entry id itself if it is a new entry - or the id

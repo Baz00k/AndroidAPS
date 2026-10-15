@@ -353,14 +353,14 @@ class PersistentNotificationPlugin @Inject constructor(
  * pixels away. These are the same paths with a solid fill, so the tint takes.
  */
 private fun TrendArrow.notificationIcon(): Int? = when (this) {
-    TrendArrow.TRIPLE_DOWN,
+    TrendArrow.TRIPLE_DOWN     -> R.drawable.notification_arrow_invalid
     TrendArrow.DOUBLE_DOWN     -> R.drawable.notification_arrow_doubledown
     TrendArrow.SINGLE_DOWN     -> R.drawable.notification_arrow_singledown
     TrendArrow.FORTY_FIVE_DOWN -> R.drawable.notification_arrow_fortyfivedown
     TrendArrow.FLAT            -> R.drawable.notification_arrow_flat
     TrendArrow.FORTY_FIVE_UP   -> R.drawable.notification_arrow_fortyfiveup
     TrendArrow.SINGLE_UP       -> R.drawable.notification_arrow_singleup
-    TrendArrow.TRIPLE_UP,
+    TrendArrow.TRIPLE_UP       -> R.drawable.notification_arrow_invalid
     TrendArrow.DOUBLE_UP       -> R.drawable.notification_arrow_doubleup
     // No trend to show is better than a question mark taking the arrow's slot.
     TrendArrow.NONE            -> null

@@ -100,5 +100,8 @@ class SensorGlucoseTest {
         assertEquals("→", glucose.trendSymbol(now))
         assertEquals("", glucose.trendSymbol(now + 9 * minute))
         assertEquals("", SensorGlucose().trendSymbol(now))
+        for (arrow in listOf(TrendArrow.TRIPLE_UP, TrendArrow.TRIPLE_DOWN)) {
+            assertEquals(arrow.symbol, SensorGlucose.from(listOf(reading(0, 151.0, arrow)), now).trendSymbol(now))
+        }
     }
 }

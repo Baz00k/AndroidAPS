@@ -12,14 +12,6 @@ class GlucoseDisplayTest {
         sgvLevel = 0, sgv = 151.0, high = 180.0, low = 70.0, color = 0, deltaMgdl = -15.0
     )
 
-    @Test fun `custom watchface numeric inputs reject missing glucose placeholders`() {
-        for (sentinel in listOf("--", "---")) {
-            assertNull(payload().copy(timeStamp = 0, sgvString = sentinel, sgv = 0.0).glucoseValueOrNull())
-            assertNull(payload().copy(sgvString = sentinel).glucoseValueOrNull())
-        }
-        assertEquals(151.0, payload().glucoseValueOrNull())
-    }
-
     @Test fun `disconnected watch loses trend at freshness boundary without receiving another payload`() {
         val received = payload()
         assertEquals("→", received.forGlucoseDisplay(time + 539_999).slopeArrow)

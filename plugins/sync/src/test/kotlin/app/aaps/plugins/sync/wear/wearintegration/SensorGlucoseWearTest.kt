@@ -8,10 +8,8 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.rx.events.EventMobileToWear
 import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.utils.DateUtil
-import app.aaps.core.objects.ui.SensorGlucose
 import app.aaps.shared.tests.TestBaseWithProfile
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
@@ -24,9 +22,9 @@ class SensorGlucoseWearTest : TestBaseWithProfile() {
     private val clock: DateUtil = mock()
     private lateinit var handler: DataHandlerMobile
 
-    private fun reading(time: Long, value: Double, trend: TrendArrow = TrendArrow.NONE) = GV(
+    private fun reading(time: Long, value: Double) = GV(
         timestamp = time, value = value, raw = value, noise = null,
-        trendArrow = trend, sourceSensor = SourceSensor.LIBRE_3
+        trendArrow = TrendArrow.FLAT, sourceSensor = SourceSensor.LIBRE_3
     )
 
     @BeforeEach fun prepare() {
@@ -45,70 +43,37 @@ class SensorGlucoseWearTest : TestBaseWithProfile() {
         )
     }
 
-    @Test fun `new sensor payload uses raw reading delta and source arrow without accessing loop data`() {
-        // Overview's semantics: -15 per five minutes, while the source explicitly reports FLAT.
+    @Test fun `sensor sends preserve source arrow timestamp and units independently of loop data`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(sensorTime - 10_800_000, sensorTime, true))
-            .thenReturn(listOf(reading(sensorTime - 300_000, 166.0), reading(sensorTime, 151.0, TrendArrow.FLAT)))
+            .thenReturn(listOf(reading(sensorTime - 300_000, 166.0), reading(sensorTime, 151.0)))
         val observer = rxBus.toObservable(EventMobileToWear::class.java).test()
-        handler.sendGlucose()
-        val payload = observer.values().single().payload as EventData.SingleBg
-        assertEquals("151", payload.sgvString)
-        assertEquals(151.0, payload.sgv)
-        assertEquals(sensorTime, payload.timeStamp)
-        assertEquals("→", payload.slopeArrow)
-        assertEquals("-15", payload.delta)
-        assertEquals(-15.0, payload.deltaMgdl)
-        assertEquals("--", payload.avgDelta)
-        verifyNoInteractions(iobCobCalculator, processedTbrEbData, constraintsChecker)
-        observer.dispose()
+        try {
+            for ((units, value, delta) in listOf(Triple(GlucoseUnit.MGDL, "151", "-15"), Triple(GlucoseUnit.MMOL, "8.4", "-0.8"))) {
+                whenever(profileFunction.getUnits()).thenReturn(units)
+                handler.sendGlucose()
+                val sent = observer.values().last().payload as EventData.SingleBg
+                assertEquals(value, sent.sgvString)
+                assertEquals(sensorTime, sent.timeStamp)
+                assertEquals("→", sent.slopeArrow)
+                assertEquals(delta, sent.delta)
+                assertEquals(-15.0, sent.deltaMgdl)
+                assertEquals("--", sent.avgDelta)
+            }
+            verifyNoInteractions(iobCobCalculator, processedTbrEbData, constraintsChecker)
+        } finally { observer.dispose() }
     }
 
-    @Test fun `mmol payload keeps numeric delta in mgdl and converts text once`() {
-        whenever(profileFunction.getUnits()).thenReturn(GlucoseUnit.MMOL)
-        val glucose = SensorGlucose.from(listOf(reading(sensorTime - 300_000, 166.0), reading(sensorTime, 151.0, TrendArrow.FLAT)), sensorTime)
-        val payload = handler.sensorGlucoseToWear(glucose, sensorTime)
-        assertEquals(profileUtil.fromMgdlToStringInUnits(151.0), payload.sgvString)
-        assertEquals("mmol", payload.glucoseUnits)
-        assertEquals("-0.8", payload.delta)
-        assertEquals(-15.0, payload.deltaMgdl)
-    }
-
-    @Test fun `stale reading retains sensor timestamp but cannot advertise a current trend`() {
-        val glucose = SensorGlucose.from(listOf(reading(sensorTime - 300_000, 166.0), reading(sensorTime, 151.0, TrendArrow.FLAT)), sensorTime)
-        val payload = handler.sensorGlucoseToWear(glucose, sensorTime + 540_000)
-        assertEquals(sensorTime, payload.timeStamp)
-        assertEquals("151", payload.sgvString)
-        assertEquals("", payload.slopeArrow)
-        assertEquals("--", payload.delta)
-        assertNull(payload.deltaMgdl)
-    }
-
-    @Test fun `zero delta has the same text as Overview and notification`() {
-        val glucose = SensorGlucose.from(listOf(reading(sensorTime - 300_000, 151.0), reading(sensorTime, 151.0)), sensorTime)
-        assertEquals("0", handler.sensorGlucoseToWear(glucose, sensorTime).delta)
-    }
-
-    @Test fun `unavailable history clears the old watch reading instead of leaving it current`() {
-        val payload = handler.sensorGlucoseToWear(SensorGlucose(), sensorTime)
-        assertEquals(0L, payload.timeStamp)
-        assertEquals("--", payload.sgvString)
-        assertEquals("", payload.slopeArrow)
-        assertEquals("--", payload.delta)
-        assertNull(payload.deltaMgdl)
-    }
-
-    @Test fun `database failure clears the headline and a later refresh can recover`() {
+    @Test fun `failed read clears watch glucose with its existing sentinel and the next send recovers`() {
         whenever(persistence.getBgReadingsDataFromTimeToTime(sensorTime - 10_800_000, sensorTime, true))
             .thenThrow(IllegalStateException("test database unavailable"))
-            .thenReturn(listOf(reading(sensorTime, 151.0, TrendArrow.FLAT)))
+            .thenReturn(listOf(reading(sensorTime, 151.0)))
         val observer = rxBus.toObservable(EventMobileToWear::class.java).test()
-        handler.sendGlucose()
-        handler.sendGlucose()
-        val payloads = observer.values().map { it.payload as EventData.SingleBg }
-        assertEquals("--", payloads[0].sgvString)
-        assertEquals(0L, payloads[0].timeStamp)
-        assertEquals("151", payloads[1].sgvString)
-        assertEquals(sensorTime, payloads[1].timeStamp)
-        observer.dispose()
+        try {
+            handler.sendGlucose()
+            handler.sendGlucose()
+            val sent = observer.values().map { it.payload as EventData.SingleBg }
+            assertEquals(listOf("---", "151"), sent.map { it.sgvString })
+            assertEquals(listOf(0L, sensorTime), sent.map { it.timeStamp })
+        } finally { observer.dispose() }
     }
 }

@@ -1575,7 +1575,7 @@ class DataHandlerMobile @Inject constructor(
         rxBus.send(EventMobileToWear(sensorGlucoseToWear(glucose, now)))
     }
 
-    internal fun sensorGlucoseToWear(glucose: SensorGlucose, now: Long): EventData.SingleBg {
+    private fun sensorGlucoseToWear(glucose: SensorGlucose, now: Long): EventData.SingleBg {
         val units = profileFunction.getUnits()
         val low = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val high = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
@@ -1584,7 +1584,7 @@ class DataHandlerMobile @Inject constructor(
         return EventData.SingleBg(
             dataset = 0,
             timeStamp = reading?.timestamp ?: 0L,
-            sgvString = reading?.let { profileUtil.fromMgdlToStringInUnits(it.value) } ?: "--",
+            sgvString = reading?.let { profileUtil.fromMgdlToStringInUnits(it.value, units) } ?: "---",
             glucoseUnits = units.asText,
             slopeArrow = glucose.trendSymbol(now),
             delta = delta?.let { profileUtil.fromMgdlToSignedStringInUnits(it, units) } ?: "--",

@@ -594,9 +594,6 @@ class PersistenceLayerImpl @Inject constructor(
     override fun getLastGlucoseValue(): GV? =
         repository.getLastGlucoseValue()?.fromDb()
 
-    override fun getLastUsableGlucoseValueForDisplay(notAfter: Long): GV? =
-        repository.getLastUsableGlucoseValueForDisplay(notAfter)?.fromDb()
-
     override fun getLastGlucoseValueId(): Long? = repository.getLastGlucoseValueId()
 
     override fun getNextSyncElementGlucoseValue(id: Long): Maybe<Pair<GV, GV>> =

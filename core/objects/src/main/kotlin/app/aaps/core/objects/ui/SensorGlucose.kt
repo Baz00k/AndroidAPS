@@ -12,12 +12,8 @@ data class SensorGlucose(
 ) {
     fun isFresh(now: Long): Boolean = reading?.timestamp?.let { it <= now && it > now - 9 * 60_000L } == true
 
-    fun trendSymbol(now: Long): String = if (!isFresh(now)) "" else when (trend) {
-        TrendArrow.TRIPLE_UP, TrendArrow.DOUBLE_UP -> "⇈"
-        TrendArrow.TRIPLE_DOWN, TrendArrow.DOUBLE_DOWN -> "⇊"
-        null, TrendArrow.NONE -> ""
-        else -> trend.symbol
-    }
+    fun trendSymbol(now: Long): String =
+        if (isFresh(now)) trend?.takeUnless { it == TrendArrow.NONE }?.symbol.orEmpty() else ""
 
     companion object {
         /** Prefer the later-inserted database record when sensor sources share a timestamp. */
@@ -28,7 +24,7 @@ data class SensorGlucose(
             .reversed()
 
         fun from(readings: List<GV>, now: Long): SensorGlucose {
-            // The database's glucose-history query excludes sensor error values below 39 mg/dL.
+            // Match the existing glucose-history query's lower bound; this is not a dosing limit.
             val samples = sensorReadings(readings, now).asReversed()
             val latest = samples.firstOrNull() ?: return SensorGlucose()
             // Keep delta in mg/dL per five minutes regardless of the sensor's reporting interval.

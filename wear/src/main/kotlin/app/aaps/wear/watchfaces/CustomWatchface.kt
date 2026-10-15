@@ -1,7 +1,5 @@
 package app.aaps.wear.watchfaces
 
-import app.aaps.core.interfaces.rx.weardata.glucoseValueOrNull
-
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -965,8 +963,8 @@ class CustomWatchface : BaseWatchFace() {
         val dataValue: Double?
             get() = when (valueMap) {
                 ValueMap.NONE             -> 0.0
-                ValueMap.SGV              -> cwf.singleBg[0].glucoseValueOrNull()
-                ValueMap.SGV_LEVEL        -> cwf.singleBg[0].glucoseValueOrNull()?.let { cwf.singleBg[0].sgvLevel.toDouble() }
+                ValueMap.SGV              -> if (cwf.singleBg[0].sgvString != "---") cwf.singleBg[0].sgv else null
+                ValueMap.SGV_LEVEL        -> if (cwf.singleBg[0].sgvString != "---") cwf.singleBg[0].sgvLevel.toDouble() else null
                 ValueMap.DIRECTION        -> TrendArrowMap.value()
                 ValueMap.DELTA            -> cwf.singleBg[0].deltaMgdl
                 ValueMap.AVG_DELTA        -> cwf.singleBg[0].avgDeltaMgdl
@@ -981,8 +979,8 @@ class CustomWatchface : BaseWatchFace() {
                 ValueMap.DAY_NAME         -> LocalDateTime.now().dayOfWeek.value.toDouble()
                 ValueMap.MONTH            -> LocalDateTime.now().monthValue.toDouble()
                 ValueMap.WEEK_NUMBER      -> LocalDateTime.now().get(WeekFields.ISO.weekOfWeekBasedYear()).toDouble()
-                ValueMap.SGV_EXT1         -> cwf.singleBg[1].glucoseValueOrNull()
-                ValueMap.SGV_LEVEL_EXT1   -> cwf.singleBg[1].glucoseValueOrNull()?.let { cwf.singleBg[1].sgvLevel.toDouble() }
+                ValueMap.SGV_EXT1         -> if (cwf.singleBg[1].sgvString != "---") cwf.singleBg[1].sgv else null
+                ValueMap.SGV_LEVEL_EXT1   -> if (cwf.singleBg[1].sgvString != "---") cwf.singleBg[1].sgvLevel.toDouble() else null
                 ValueMap.DIRECTION_EXT1   -> TrendArrowMap.valueExt1()
                 ValueMap.DELTA_EXT1       -> cwf.singleBg[1].deltaMgdl
                 ValueMap.AVG_DELTA_EXT1   -> cwf.singleBg[1].avgDeltaMgdl
@@ -992,8 +990,8 @@ class CustomWatchface : BaseWatchFace() {
                 ValueMap.RIG_BATTERY_EXT1 -> cwf.status[1].rigBattery.replace("%", "").toDoubleOrNull()
                 ValueMap.LOOP_EXT1        -> if (cwf.status[1].openApsStatus != -1L) ((System.currentTimeMillis() - cwf.status[1].openApsStatus) / 1000 / 60).toDouble() else null
                 ValueMap.TIMESTAMP_EXT1   -> if (cwf.singleBg[1].timeStamp != 0L) floor(cwf.timeSince(1) / (1000 * 60)) else null
-                ValueMap.SGV_EXT2         -> cwf.singleBg[2].glucoseValueOrNull()
-                ValueMap.SGV_LEVEL_EXT2   -> cwf.singleBg[2].glucoseValueOrNull()?.let { cwf.singleBg[2].sgvLevel.toDouble() }
+                ValueMap.SGV_EXT2         -> if (cwf.singleBg[2].sgvString != "---") cwf.singleBg[2].sgv else null
+                ValueMap.SGV_LEVEL_EXT2   -> if (cwf.singleBg[2].sgvString != "---") cwf.singleBg[2].sgvLevel.toDouble() else null
                 ValueMap.DIRECTION_EXT2   -> TrendArrowMap.valueExt2()
                 ValueMap.DELTA_EXT2       -> cwf.singleBg[2].deltaMgdl
                 ValueMap.AVG_DELTA_EXT2   -> cwf.singleBg[2].avgDeltaMgdl

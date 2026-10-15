@@ -56,8 +56,6 @@ import app.aaps.wear.tile.TempTargetTileService
 import app.aaps.wear.tile.UserActionTileService
 import com.google.android.gms.wearable.WearableListenerService
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import io.reactivex.rxjava3.core.Observable
-import java.util.concurrent.TimeUnit
 import io.reactivex.rxjava3.kotlin.plusAssign
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,9 +85,6 @@ class DataHandlerWear @Inject constructor(
     }
 
     private fun setupBus() {
-        // Complications must re-evaluate sensor age even if the phone disconnects or CGM stops.
-        disposable += Observable.interval(1, 1, TimeUnit.MINUTES, aapsSchedulers.io)
-            .subscribe({ triggerComplicationUpdates() }, { aapsLogger.error(LTag.WEAR, "Glucose expiry refresh failed", it) })
         disposable += rxBus
             .toObservable(EventData.ActionPing::class.java)
             .observeOn(aapsSchedulers.io)

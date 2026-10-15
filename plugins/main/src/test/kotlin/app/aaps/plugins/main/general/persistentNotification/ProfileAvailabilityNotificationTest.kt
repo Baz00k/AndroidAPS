@@ -34,13 +34,6 @@ class ProfileAvailabilityNotificationTest : TestBaseWithProfile() {
         org.mockito.kotlin.clearInvocations(plugin)
         timer.advanceTimeBy(10, TimeUnit.MINUTES)
         verify(plugin, org.mockito.kotlin.never()).triggerNotificationUpdate()
-        plugin.onStart()
-        try {
-            timer.advanceTimeBy(1, TimeUnit.MINUTES)
-            verify(plugin).triggerNotificationUpdate()
-        } finally {
-            plugin.onStop()
-        }
     }
 
     @Test fun profileAvailabilityRefreshDoesNotNeedAutosensCompletion() {

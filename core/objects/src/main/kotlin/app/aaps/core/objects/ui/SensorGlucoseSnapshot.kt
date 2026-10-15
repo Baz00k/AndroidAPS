@@ -10,9 +10,9 @@ data class SensorGlucoseSnapshot(val readings: List<GV>, val glucose: SensorGluc
             val readings = SensorGlucose.sensorReadings(persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true), now)
             if (readings.isNotEmpty()) return SensorGlucoseSnapshot(readings, SensorGlucose.from(readings, now))
 
-            // A single unrestricted "last" record could be future-dated or a sensor error.
-            // Fetch only the latest usable older record; keep stale fallback history off the chart.
-            val older = persistenceLayer.getLastUsableGlucoseValueForDisplay(from - 1)
+            // Keep an old reading visible, but never scan all history for a display fallback.
+            // The same validation below rejects an invalid or future-dated last record.
+            val older = persistenceLayer.getLastGlucoseValue()
             return SensorGlucoseSnapshot(emptyList(), SensorGlucose.from(listOfNotNull(older), now))
         }
     }
