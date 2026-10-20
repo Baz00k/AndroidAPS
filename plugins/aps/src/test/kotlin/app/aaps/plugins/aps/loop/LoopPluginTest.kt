@@ -717,7 +717,9 @@ class LoopPluginTest : TestBaseWithProfile() {
         val glucoseTimestamp = dateUtil.now() - T.mins(1).msecs()
         givenClosedLoopRequest(glucoseTimestamp, highTempRequest())
         whenever(iobCobCalculator.isGlucoseSuperseded(glucoseTimestamp)).thenReturn(false)
+        // A previous run was refused; a fresh run must clear both markers.
         loopPlugin.runDeferredForGlucose = true
+        loopPlugin.lastRun = Loop.LastRun().also { it.supersededByGlucose = true }
 
         assertThat(loopPlugin.invoke("Loop menu", allowNotification = false)).isTrue()
 
