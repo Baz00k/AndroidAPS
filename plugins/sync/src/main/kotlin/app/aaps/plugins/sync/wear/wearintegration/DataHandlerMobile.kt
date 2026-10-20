@@ -667,7 +667,8 @@ class DataHandlerMobile @Inject constructor(
             sendError(rh.gs(app.aaps.core.ui.R.string.wizard_no_active_profile))
             return
         }
-        val bgReading = iobCobCalculator.ads.actualBg()
+        val now = dateUtil.now()
+        val bgReading = SensorGlucoseSnapshot.latest(persistenceLayer, now).freshReading(now)
         if (bgReading == null) {
             sendError(rh.gs(app.aaps.core.ui.R.string.wizard_no_actual_bg))
             return
@@ -677,7 +678,7 @@ class DataHandlerMobile @Inject constructor(
             sendError(rh.gs(app.aaps.core.ui.R.string.wizard_no_cob))
             return
         }
-        val tempTarget = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
+        val tempTarget = persistenceLayer.getTemporaryTargetActiveAt(now)
 
         // Store the preference values before calling doCalc
         val useBgPref = preferences.get(BooleanKey.WearWizardBg)
@@ -787,7 +788,8 @@ class DataHandlerMobile @Inject constructor(
     }
 
     private fun handleQuickWizardPreCheck(command: EventData.ActionQuickWizardPreCheck) {
-        val actualBg = iobCobCalculator.ads.actualBg()
+        val now = dateUtil.now()
+        val actualBg = SensorGlucoseSnapshot.latest(persistenceLayer, now).freshReading(now)
         val profile = profileFunction.getProfile()
         val profileName = profileFunction.getProfileName()
         val quickWizardEntry = quickWizard.get(command.guid)

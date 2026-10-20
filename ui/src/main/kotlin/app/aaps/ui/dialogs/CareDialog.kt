@@ -15,7 +15,6 @@ import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.db.PersistenceLayer
-import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -24,6 +23,7 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
@@ -49,7 +49,6 @@ class CareDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
     @Inject lateinit var profileFunction: ProfileFunction
     @Inject lateinit var translator: Translator
     @Inject lateinit var persistenceLayer: PersistenceLayer
-    @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
@@ -114,7 +113,8 @@ class CareDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
         }
 
         val mmol = profileFunction.getUnits() == GlucoseUnit.MMOL
-        val bgInitial = profileUtil.fromMgdlToUnits(glucoseStatusProvider.glucoseStatusData?.glucose ?: 0.0)
+        val now = dateUtil.now()
+        val bgInitial = profileUtil.fromMgdlToUnits(SensorGlucoseSnapshot.latest(persistenceLayer, now).freshReading(now)?.value ?: 0.0)
 
         return CareSheetState(
             title = rh.gs(

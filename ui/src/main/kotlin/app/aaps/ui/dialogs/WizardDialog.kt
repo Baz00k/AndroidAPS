@@ -9,6 +9,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import app.aaps.core.data.model.TE
+import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -101,15 +102,11 @@ class WizardDialog : DaggerBottomSheetFragment() {
         }
     }
 
-    private fun glucose(inputs: WizardInputs): CalculatorGlucose {
-        val last = iobCobCalculator.ads.lastBg()
-        return CalculatorGlucose.resolve(
-            manualMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, profileFunction.getUnits()) },
-            sensorMgdl = last?.recalculated,
-            sensorTimestamp = last?.timestamp,
-            now = dateUtil.now()
-        )
-    }
+    private fun glucose(inputs: WizardInputs): CalculatorGlucose = CalculatorGlucose.load(
+        persistenceLayer,
+        manualMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, profileFunction.getUnits()) },
+        now = dateUtil.now()
+    )
 
     private fun outcome(w: BolusWizard, carbs: Int) = CalculatorOutcome.of(
         calculatedInsulin = w.calculatedTotalInsulin,
@@ -144,7 +141,6 @@ class WizardDialog : DaggerBottomSheetFragment() {
                 else                                                    -> GlucoseTone.IN_RANGE
             }
         } ?: GlucoseTone.NONE
-        val delta = w.glucoseStatus?.delta ?: 0.0
         return WizardResult(
             available = true,
             glucoseText = shownMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "--",
@@ -161,7 +157,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
                 else                        -> ""
             },
             // A trend is a property of a live sensor trace; none for a stale, missing or typed-in value.
-            trendArrow = if (glucose is CalculatorGlucose.Sensor) when { delta > 3 -> "↗"; delta < -3 -> "↘"; else -> "→" } else "",
+            trendArrow = (glucose as? CalculatorGlucose.Sensor)?.trend?.takeUnless { it == TrendArrow.NONE }?.symbol.orEmpty(),
             bgEntryMin = if (mmol) 1.0 else 20.0,
             bgEntryMax = if (mmol) 30.0 else 540.0,
             bgEntryStep = if (mmol) 0.1 else 1.0,

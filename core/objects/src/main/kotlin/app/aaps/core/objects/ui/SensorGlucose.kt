@@ -4,13 +4,16 @@ import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.TrendArrow
 import kotlin.math.abs
 
-/** Sensor-only presentation data. Never published to the calculator's dosing-input store. */
+/** Sensor-only glucose from history. Never published to the IOB/COB calculator's loop-input store. */
 data class SensorGlucose(
     val reading: GV? = null,
     val deltaMgdl: Double? = null,
     val trend: TrendArrow? = null
 ) {
     fun isFresh(now: Long): Boolean = reading?.timestamp?.let { it <= now && it > now - 9 * 60_000L } == true
+
+    /** The reading when it is fresh enough to act on; null when it is missing or old. */
+    fun freshReading(now: Long): GV? = reading?.takeIf { isFresh(now) }
 
     fun trendSymbol(now: Long): String =
         if (isFresh(now)) trend?.takeUnless { it == TrendArrow.NONE }?.symbol.orEmpty() else ""

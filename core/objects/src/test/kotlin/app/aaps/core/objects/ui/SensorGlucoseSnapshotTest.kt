@@ -51,4 +51,14 @@ class SensorGlucoseSnapshotTest {
             assertNull(SensorGlucoseSnapshot.load(persistence, from, now).glucose.reading)
         }
     }
+
+    @Test fun `latest is the newest one-minute reading, fresh enough to act on only while under nine minutes old`() {
+        val window = now - SensorGlucoseSnapshot.LATEST_WINDOW_MS
+        val oneMinute = (0..5).map { reading(now - (5 - it) * 60_000L, 170.0 + 6 * it, it.toLong() + 1) }
+        whenever(persistence.getBgReadingsDataFromTimeToTime(window, now, true)).thenReturn(oneMinute)
+        val latest = SensorGlucoseSnapshot.latest(persistence, now)
+        assertEquals(oneMinute.last(), latest.freshReading(now))
+        assertEquals(30.0, latest.deltaMgdl)
+        assertNull(latest.freshReading(now + 9 * 60_000L))
+    }
 }
