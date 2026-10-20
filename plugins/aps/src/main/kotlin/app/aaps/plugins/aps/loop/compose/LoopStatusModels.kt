@@ -28,10 +28,12 @@ data class LoopStatusState(
  * action should be offered. Same condition the legacy Overview accept button used:
  * the suggestion was never accepted, or a new APS run happened after the last acceptance,
  * and the processed result actually requests a change — while the pump is ready,
- * the loop runs in OPEN_LOOP mode and the loop plugin is enabled.
+ * the loop runs in OPEN_LOOP mode and the loop plugin is enabled. A result superseded by
+ * newer glucose is never offered.
  */
 fun openLoopSuggestionPending(lastRun: Loop.LastRun?, pumpInitialized: Boolean, openLoop: Boolean, loopEnabled: Boolean): Boolean =
     lastRun != null &&
+        !lastRun.supersededByGlucose &&
         (lastRun.lastOpenModeAccept == 0L || lastRun.lastOpenModeAccept < lastRun.lastAPSRun) &&
         lastRun.constraintsProcessed?.isChangeRequested == true &&
         pumpInitialized &&

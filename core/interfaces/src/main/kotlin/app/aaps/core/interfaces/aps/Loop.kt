@@ -35,6 +35,9 @@ interface Loop {
 
         /** Newest glucose reading the run calculated from; its request is outdated once a newer one is stored. */
         var glucoseTimestamp: Long = 0
+
+        /** The run's request was superseded by newer glucose before it was enacted or offered; it must never be. */
+        var supersededByGlucose = false
     }
 
     /**

@@ -62,7 +62,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `one minute events invoke only once per processed bucket`() = runBlocking {
+    fun `one minute events invoke only once per processed bucket`() = runBlocking<Unit> {
         val start = System.currentTimeMillis() - T.mins(8).msecs()
         var store = AutosensDataStoreObject()
         for (minute in 0L..9L) {
@@ -84,7 +84,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `non glucose calculation does not initiate a new loop run`() = runBlocking {
+    fun `non glucose calculation does not initiate a new loop run`() = runBlocking<Unit> {
         whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(T.hours(2).msecs(), 100.0))
 
         run(EventNewHistoryData(0, false))
@@ -93,7 +93,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `missing or outdated glucose does not initiate a loop run`() = runBlocking {
+    fun `missing or outdated glucose does not initiate a loop run`() = runBlocking<Unit> {
         whenever(ads.actualBg()).thenReturn(null)
 
         run(EventNewBG(T.hours(2).msecs()))
@@ -102,7 +102,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `older and duplicate buckets cannot repeat a loop run`() = runBlocking {
+    fun `older and duplicate buckets cannot repeat a loop run`() = runBlocking<Unit> {
         val start = T.hours(2).msecs()
         for (time in listOf(start, start, start - T.mins(5).msecs())) {
             whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
@@ -113,7 +113,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a newer pending reading defers the run without consuming the bucket`() = runBlocking {
+    fun `a newer pending reading defers the run without consuming the bucket`() = runBlocking<Unit> {
         val time = T.hours(2).msecs()
         whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
         whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(true)
@@ -128,7 +128,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a run the loop defers for newer glucose still runs within the same bucket`() = runBlocking {
+    fun `a run the loop defers for newer glucose still runs within the same bucket`() = runBlocking<Unit> {
         val time = T.hours(2).msecs()
         whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
         // Newer glucose arrives between the worker's check and the loop's own check; the loop defers.

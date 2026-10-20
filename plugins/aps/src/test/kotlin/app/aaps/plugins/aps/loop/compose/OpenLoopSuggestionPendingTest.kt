@@ -39,6 +39,12 @@ class OpenLoopSuggestionPendingTest : TestBase() {
     }
 
     @Test
+    fun `not pending when newer glucose superseded the suggestion`() {
+        val run = lastRun(constraintsProcessed = changeRequested()).also { it.supersededByGlucose = true }
+        assertThat(pending(run)).isFalse()
+    }
+
+    @Test
     fun `not pending when nothing was requested`() {
         assertThat(pending(lastRun())).isFalse()
     }

@@ -708,6 +708,8 @@ class LoopPluginTest : TestBaseWithProfile() {
         verify(commandQueue, never()).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
         verify(commandQueue, never()).bolus(any(), anyOrNull())
         assertThat(loopPlugin.runDeferredForGlucose).isTrue()
+        // Nor can the refused result be offered for open-loop acceptance.
+        assertThat(loopPlugin.lastRun?.supersededByGlucose).isTrue()
     }
 
     @Test
@@ -721,6 +723,7 @@ class LoopPluginTest : TestBaseWithProfile() {
 
         verify(commandQueue).tempBasalAbsolute(eq(2.0), eq(30), any(), any(), any(), any())
         assertThat(loopPlugin.runDeferredForGlucose).isFalse()
+        assertThat(loopPlugin.lastRun?.supersededByGlucose).isFalse()
     }
 
     @Test

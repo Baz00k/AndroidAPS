@@ -528,6 +528,7 @@ class LoopPlugin @Inject constructor(
                 lastRun.lastAPSRun = dateUtil.now()
                 lastRun.source = (usedAPS as PluginBase).name
                 lastRun.glucoseTimestamp = glucoseTimestamp
+                lastRun.supersededByGlucose = false
                 lastRun.tbrSetByPump = null
                 lastRun.smbSetByPump = null
                 lastRun.lastTBREnact = 0
@@ -541,6 +542,7 @@ class LoopPlugin @Inject constructor(
                 if (iobCobCalculator.isGlucoseSuperseded(glucoseTimestamp)) {
                     aapsLogger.debug(LTag.APS, rh.gs(R.string.request_outdated_by_newer_glucose))
                     rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.request_outdated_by_newer_glucose)))
+                    lastRun.supersededByGlucose = true
                     runDeferredForGlucose = true
                     return false
                 }
