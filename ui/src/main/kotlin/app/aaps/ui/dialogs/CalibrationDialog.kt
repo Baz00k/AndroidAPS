@@ -8,11 +8,13 @@ import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.interfaces.iob.GlucoseStatusProvider
+import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.sync.XDripBroadcast
+import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
@@ -29,14 +31,16 @@ class CalibrationDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var xDripBroadcast: XDripBroadcast
     @Inject lateinit var uel: UserEntryLogger
-    @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
+    @Inject lateinit var persistenceLayer: PersistenceLayer
+    @Inject lateinit var dateUtil: DateUtil
 
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         isCancelable = true
 
         val mmol = profileUtil.units == GlucoseUnit.MMOL
-        val bg = profileUtil.fromMgdlToUnits(glucoseStatusProvider.glucoseStatusData?.glucose ?: 0.0)
+        val now = dateUtil.now()
+        val bg = profileUtil.fromMgdlToUnits(SensorGlucoseSnapshot.latest(persistenceLayer, now).freshReading(now)?.value ?: 0.0)
         val state = CalibrationSheetState(
             initial = bg,
             min = if (mmol) 2.0 else 36.0,

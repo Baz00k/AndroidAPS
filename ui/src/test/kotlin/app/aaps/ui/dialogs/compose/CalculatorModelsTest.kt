@@ -1,7 +1,14 @@
 package app.aaps.ui.dialogs.compose
 
+import app.aaps.core.data.model.GV
+import app.aaps.core.data.model.SourceSensor
+import app.aaps.core.data.model.TrendArrow
+import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
 
 class CalculatorModelsTest {
 
@@ -13,6 +20,32 @@ class CalculatorModelsTest {
         assertThat(CalculatorGlucose.resolve(null, 150.0, now, now)).isEqualTo(CalculatorGlucose.Sensor(150.0, now))
         val almostNine = now - 9 * minute + 1
         assertThat(CalculatorGlucose.resolve(null, 150.0, almostNine, now).usedMgdl).isEqualTo(150.0)
+    }
+
+    private fun reading(time: Long, value: Double) = GV(
+        timestamp = time, value = value, raw = value, noise = null, trendArrow = TrendArrow.NONE, sourceSensor = SourceSensor.LIBRE_3
+    )
+
+    @Test
+    fun `the newest one-minute reading drives the correction, not an older loop bucket`() {
+        // Rising fast: the loop's last five-minute bucket held 181 from three minutes ago.
+        val readings = listOf(170.0, 175.0, 181.0, 188.0, 195.0).mapIndexed { i, v -> reading(now - (5 - i) * minute, v) } +
+            reading(now - 15_000L, 202.0)
+        val persistence: PersistenceLayer = mock()
+        whenever(persistence.getBgReadingsDataFromTimeToTime(now - SensorGlucoseSnapshot.LATEST_WINDOW_MS, now, true)).thenReturn(readings)
+
+        assertThat(CalculatorGlucose.load(persistence, null, now)).isEqualTo(CalculatorGlucose.Sensor(202.0, now - 15_000L, TrendArrow.DOUBLE_UP))
+    }
+
+    @Test
+    fun `the newest reading, when old, is shown but never corrects`() {
+        val persistence: PersistenceLayer = mock()
+        whenever(persistence.getBgReadingsDataFromTimeToTime(now - SensorGlucoseSnapshot.LATEST_WINDOW_MS, now, true)).thenReturn(emptyList())
+        whenever(persistence.getLastGlucoseValue()).thenReturn(reading(now - 20 * minute, 150.0))
+
+        val glucose = CalculatorGlucose.load(persistence, null, now)
+        assertThat(glucose).isEqualTo(CalculatorGlucose.Stale(150.0, now - 20 * minute))
+        assertThat(glucose.usedMgdl).isNull()
     }
 
     @Test

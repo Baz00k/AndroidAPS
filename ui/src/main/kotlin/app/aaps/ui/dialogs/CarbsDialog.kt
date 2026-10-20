@@ -17,7 +17,6 @@ import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
-import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -39,6 +38,7 @@ import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
@@ -71,7 +71,6 @@ class CarbsDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var constraintChecker: ConstraintsChecker
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var iobCobCalculator: IobCobCalculator
-    @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var persistenceLayer: PersistenceLayer
@@ -105,20 +104,21 @@ class CarbsDialog : DaggerBottomSheetFragment() {
         val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
         // Auto-select a Hypo temp target when BG is low (mirrors the legacy pre-check).
         var autoHypo = false
-        iobCobCalculator.ads.actualBg()?.let { bgReading ->
-            if (bgReading.recalculated < 72) {
-                val activeTT = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
-                val hypoTTDuration = preferences.get(IntKey.OverviewHypoDuration)
-                var shouldAutoCheckHypo = true
-                if (activeTT != null) {
-                    val remainingDurationMin = ((activeTT.timestamp + activeTT.duration) - System.currentTimeMillis()) / 60000
-                    if (activeTT.highTarget > Constants.NORMAL_TARGET_MGDL && remainingDurationMin > hypoTTDuration) shouldAutoCheckHypo = false
-                }
-                autoHypo = shouldAutoCheckHypo
+        val now = dateUtil.now()
+        val glucose = SensorGlucoseSnapshot.latest(persistenceLayer, now)
+        val reading = glucose.freshReading(now)
+        if (reading != null && reading.value < 72) {
+            val activeTT = persistenceLayer.getTemporaryTargetActiveAt(now)
+            val hypoTTDuration = preferences.get(IntKey.OverviewHypoDuration)
+            var shouldAutoCheckHypo = true
+            if (activeTT != null) {
+                val remainingDurationMin = ((activeTT.timestamp + activeTT.duration) - now) / 60000
+                if (activeTT.highTarget > Constants.NORMAL_TARGET_MGDL && remainingDurationMin > hypoTTDuration) shouldAutoCheckHypo = false
             }
+            autoHypo = shouldAutoCheckHypo
         }
         val showBolusReminder = preferences.get(BooleanKey.OverviewUseBolusReminder) &&
-            (glucoseStatusProvider.glucoseStatusData?.let { it.glucose + 3 * it.delta < 70.0 } ?: false)
+            (reading != null && glucose.deltaMgdl?.let { reading.value + 3 * it < 70.0 } == true)
         return CarbsSheetState(
             maxCarbs = maxCarbs,
             quickIncrements = listOf(

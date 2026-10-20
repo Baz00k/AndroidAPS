@@ -1,7 +1,10 @@
 package app.aaps.ui.dialogs.compose
 
 import androidx.compose.runtime.Immutable
+import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
+import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.objects.ui.SensorGlucoseSnapshot
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -15,7 +18,8 @@ sealed interface CalculatorGlucose {
     /** mg/dL behind the correction and trend, or null when there is nothing trustworthy to correct from. */
     val usedMgdl: Double?
 
-    data class Sensor(val mgdl: Double, val timestamp: Long) : CalculatorGlucose {
+    /** [trend] is the reading's arrow, as the Overview headline shows it. Display only. */
+    data class Sensor(val mgdl: Double, val timestamp: Long, val trend: TrendArrow? = null) : CalculatorGlucose {
 
         override val usedMgdl: Double get() = mgdl
     }
@@ -42,6 +46,17 @@ sealed interface CalculatorGlucose {
 
         /** Clock skew tolerated between sensor and phone. Anything further ahead has no trustworthy time. */
         val MAX_SENSOR_AHEAD_MS = T.mins(1).msecs()
+
+        /**
+         * The newest sensor reading ([SensorGlucoseSnapshot.latest]), not the loop's last five-minute bucket: a
+         * correction from a reading minutes old under- or over-doses while glucose moves fast.
+         */
+        fun load(persistenceLayer: PersistenceLayer, manualMgdl: Double?, now: Long): CalculatorGlucose {
+            if (manualMgdl != null) return resolve(manualMgdl, null, null, now)
+            val sensor = SensorGlucoseSnapshot.latest(persistenceLayer, now)
+            val glucose = resolve(null, sensor.reading?.value, sensor.reading?.timestamp, now)
+            return if (glucose is Sensor) glucose.copy(trend = sensor.trend) else glucose
+        }
 
         fun resolve(manualMgdl: Double?, sensorMgdl: Double?, sensorTimestamp: Long?, now: Long): CalculatorGlucose = when {
             manualMgdl != null                                                   -> if (usable(manualMgdl)) Manual(manualMgdl) else None

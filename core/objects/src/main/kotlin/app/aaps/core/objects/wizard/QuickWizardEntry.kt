@@ -1,7 +1,7 @@
 package app.aaps.core.objects.wizard
 
 import app.aaps.annotations.OpenForTesting
-import app.aaps.core.data.iob.InMemoryGlucoseValue
+import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.RM
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -109,7 +109,7 @@ class QuickWizardEntry @Inject constructor(
 
     fun isActive(): Boolean = time.secondsFromMidnight() >= validFrom() && time.secondsFromMidnight() <= validTo() && forDevice(DEVICE_PHONE)
 
-    fun doCalc(profile: Profile, profileName: String, lastBG: InMemoryGlucoseValue): BolusWizard {
+    fun doCalc(profile: Profile, profileName: String, lastBG: GV): BolusWizard {
         val tempTarget = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
         //BG
         var bg = 0.0

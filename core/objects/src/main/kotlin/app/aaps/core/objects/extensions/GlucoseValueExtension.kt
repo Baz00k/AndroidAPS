@@ -24,6 +24,10 @@ fun InMemoryGlucoseValue.valueToUnits(units: GlucoseUnit): Double =
     if (units == GlucoseUnit.MGDL) recalculated
     else recalculated * Constants.MGDL_TO_MMOLL
 
+fun GV.valueToUnits(units: GlucoseUnit): Double =
+    if (units == GlucoseUnit.MGDL) value
+    else value * Constants.MGDL_TO_MMOLL
+
 fun TrendArrow.directionToIcon(): Int =
     when (this) {
         TrendArrow.TRIPLE_DOWN     -> R.drawable.ic_invalid
