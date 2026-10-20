@@ -48,10 +48,8 @@ class LoadBgDataWorker(
 
     private fun AutosensDataStore.smoothData(activePlugin: ActivePlugin) {
         synchronized(dataLock) {
-            bucketedData?.let {
-                val smoothedData = activePlugin.activeSmoothing.smooth(it)
-                bucketedData = smoothedData
-            }
+            bucketedData = bucketedData?.let { activePlugin.activeSmoothing.smooth(it) }
+            latestBucketedData = latestBucketedData?.let { activePlugin.activeSmoothing.smooth(it) }
         }
     }
 
@@ -60,8 +58,13 @@ class LoadBgDataWorker(
         val data = dataWorkerStorage.pickupObject(inputData.getLong(DataWorkerStorage.STORE_KEY, -1)) as LoadBgData?
             ?: return Result.failure(workDataOf("Error" to "missing input data"))
 
-        data.iobCobCalculator.ads.loadBgData(data.end, persistenceLayer, aapsLogger, dateUtil)
-        data.iobCobCalculator.ads.smoothData(activePlugin)
+        // Dosing reads these buckets concurrently; never expose them before smoothing.
+        data.iobCobCalculator.updateAds { ads ->
+            synchronized(ads.dataLock) {
+                ads.loadBgData(data.end, persistenceLayer, aapsLogger, dateUtil)
+                ads.smoothData(activePlugin)
+            }
+        }
         rxBus.send(EventBucketedDataCreated())
         data.iobCobCalculator.clearCache()
         return Result.success()

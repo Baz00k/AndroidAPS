@@ -24,7 +24,7 @@ class TriggerDeltaTest : TriggerTestBase() {
     }
 
     @Test fun shouldRunTest() {
-        whenever(autosensDataStore.getBucketedDataTableCopy()).thenReturn(generateValidBgData())
+        whenever(autosensDataStore.getLatestBucketedDataCopy()).thenReturn(generateValidBgData())
         var t = TriggerDelta(injector).units(GlucoseUnit.MGDL).setValue(73.0, DeltaType.LONG_AVERAGE).comparator(Comparator.Compare.IS_EQUAL)
         assertThat(t.shouldRun()).isFalse()
         assertThat(t.delta.deltaType).isEqualTo(DeltaType.LONG_AVERAGE)
@@ -46,7 +46,7 @@ class TriggerDeltaTest : TriggerTestBase() {
         assertThat(t.shouldRun()).isFalse()
         t = TriggerDelta(injector).units(GlucoseUnit.MGDL).setValue(-0.2, DeltaType.LONG_AVERAGE).comparator(Comparator.Compare.IS_EQUAL_OR_LESSER)
         assertThat(t.shouldRun()).isTrue()
-        whenever(autosensDataStore.getBucketedDataTableCopy()).thenReturn(ArrayList())
+        whenever(autosensDataStore.getLatestBucketedDataCopy()).thenReturn(ArrayList())
         t = TriggerDelta(injector).units(GlucoseUnit.MGDL).setValue(213.0, DeltaType.DELTA).comparator(Comparator.Compare.IS_EQUAL_OR_LESSER)
         assertThat(t.shouldRun()).isFalse()
         t = TriggerDelta(injector).comparator(Comparator.Compare.IS_NOT_AVAILABLE)

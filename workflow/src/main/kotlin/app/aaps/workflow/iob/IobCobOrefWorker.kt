@@ -264,7 +264,11 @@ class IobCobOrefWorker @Inject internal constructor(
                 autosensData.autosensResult = sensitivity
                 aapsLogger.debug(LTag.AUTOSENS, autosensData.toString())
             }
-            data.iobCobCalculator.ads = ads
+            // A replaced or cancelled calculation must not overwrite newer glucose with this clone.
+            if (isStopped || !data.iobCobCalculator.publishAds(ads)) {
+                aapsLogger.debug(LTag.AUTOSENS, "Discarding outdated calculation: ${data.reason}")
+                return Result.failure(workDataOf("Error" to "Discarding outdated calculation: ${data.reason}"))
+            }
             Thread {
                 SystemClock.sleep(1000)
                 rxBus.send(EventAutosensCalculationFinished(data.cause))

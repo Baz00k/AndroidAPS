@@ -40,6 +40,13 @@ class AutosensDataStoreObject : AutosensDataStore {
         @Synchronized set
         @Synchronized get
 
+    override var latestBucketedData: MutableList<InMemoryGlucoseValue>? = null
+        @Synchronized set
+        @Synchronized get
+
+    @Volatile override var generation: Long = 0
+        private set
+
     override fun clone(): AutosensDataStore =
         AutosensDataStoreObject().also {
             synchronized(dataLock) {
@@ -50,14 +57,19 @@ class AutosensDataStoreObject : AutosensDataStore {
                 it.bgReadings = this.bgReadings.toMutableList()
                 it.autosensDataTable = LongSparseArray<AutosensData>(this.autosensDataTable.size).apply { putAll(this@AutosensDataStoreObject.autosensDataTable) }
                 it.bucketedData = this.bucketedData?.toMutableList()
+                it.latestBucketedData = this.latestBucketedData?.toMutableList()
+                it.generation = this.generation
             }
         }
 
     override fun getBucketedDataTableCopy(): MutableList<InMemoryGlucoseValue>? = synchronized(dataLock) { bucketedData?.toMutableList() }
+    override fun getLatestBucketedDataCopy(): MutableList<InMemoryGlucoseValue>? = synchronized(dataLock) { latestBucketedData?.toMutableList() }
     override fun getBgReadingsDataTableCopy(): List<GV> = synchronized(dataLock) { bgReadings.toMutableList() }
 
+    // Each mutation bumps generation afterwards: a clone taken mid-change keeps the old value and cannot be published.
     override fun reset() {
         synchronized(autosensDataTable) { autosensDataTable = LongSparseArray() }
+        generation++
     }
 
     override fun newHistoryData(time: Long, aapsLogger: AAPSLogger, dateUtil: DateUtil) {
@@ -71,6 +83,7 @@ class AutosensDataStoreObject : AutosensDataStore {
                 }
             }
         }
+        generation++
     }
 
     // roundup to whole minute
@@ -206,6 +219,7 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         lastUsed5minCalculation = fiveMinData
         if (fiveMinData) createBucketedData5min(aapsLogger, dateUtil) else createBucketedDataRecalculated(aapsLogger, dateUtil)
+        generation++
     }
 
     fun findNewer(time: Long): GV? {
@@ -238,17 +252,28 @@ class AutosensDataStoreObject : AutosensDataStore {
         val readings = bgReadings
         if (readings.size < 3) {
             bucketedData = null
+            latestBucketedData = null
             return
         }
         val lastBg = readings[0]
-        val newBucketedData = ArrayList<InMemoryGlucoseValue>()
         val adjustedTime = adjustToReferenceTime(lastBg.timestamp)
         // A retained grid can sit just after the newest reading because of sensor jitter.
         // Keep that measured sample within the existing 30-second tolerance instead of
         // dropping a whole five-minute bucket (upstream 6300e492). Larger shifts step back.
         // The bucket timestamp can consequently be up to 30 seconds newer than the sample.
-        var currentTime = if (adjustedTime - lastBg.timestamp > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs() else adjustedTime
-        aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(currentTime))
+        val gridTime = if (adjustedTime - lastBg.timestamp > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs() else adjustedTime
+        aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(gridTime))
+        val grid = recalculatedBuckets(readings, gridTime)
+        bucketedData = grid
+        // Between grid slots the newest reading is missing from the grid. Dosing must not
+        // act on the older slot, so give it buckets that start at the newest reading.
+        latestBucketedData = if (gridTime >= lastBg.timestamp) grid.deepCopy() else recalculatedBuckets(readings, lastBg.timestamp)
+    }
+
+    private fun recalculatedBuckets(readings: List<GV>, newestBucketTime: Long): MutableList<InMemoryGlucoseValue> {
+        val lastBg = readings[0]
+        val newBucketedData = ArrayList<InMemoryGlucoseValue>()
+        var currentTime = newestBucketTime
         val firstBucket = if (currentTime > lastBg.timestamp) {
             val bucket = InMemoryGlucoseValue.fromGv(lastBg).copy(timestamp = currentTime)
             currentTime -= T.mins(5).msecs()
@@ -274,13 +299,17 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         // Do not invent a lone flat trend when there is no historical bucket to support it.
         if (firstBucket != null && newBucketedData.isNotEmpty()) newBucketedData.add(0, firstBucket)
-        bucketedData = newBucketedData
+        return newBucketedData
     }
+
+    // Smoothing writes into the values, so the two series must not share them.
+    private fun List<InMemoryGlucoseValue>.deepCopy(): MutableList<InMemoryGlucoseValue> = mapTo(ArrayList(size)) { it.copy() }
 
     private fun createBucketedData5min(aapsLogger: AAPSLogger, dateUtil: DateUtil) {
         val readings = bgReadings
         if (readings.size < 3) {
             bucketedData = null
+            latestBucketedData = null
             return
         }
         val lastBg = readings[0]
@@ -363,6 +392,8 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         aapsLogger.debug(LTag.AUTOSENS, "Bucketed data created. Size: " + bData.size)
         bucketedData = bData
+        // Bucket 0 already holds the newest reading.
+        latestBucketedData = bData.deepCopy()
     }
 
     override fun slowAbsorptionPercentage(timeInMinutes: Int): Double {

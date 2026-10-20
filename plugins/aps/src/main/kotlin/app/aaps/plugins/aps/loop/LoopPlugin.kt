@@ -474,6 +474,13 @@ class LoopPlugin @Inject constructor(
 
             // Check if pump info is loaded
             if (pump.baseBasalRate < 0.01) return
+            // A newer reading is stored but not yet bucketed: do not dose from the older one.
+            // Its calculation will run the loop when it finishes.
+            if (iobCobCalculator.isGlucoseCalculationPending()) {
+                aapsLogger.debug(LTag.APS, rh.gs(R.string.glucose_calculation_pending))
+                rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.glucose_calculation_pending)))
+                return
+            }
             val usedAPS = activePlugin.activeAPS
             if (usedAPS.isEnabled()) {
                 usedAPS.invoke(initiator, tempBasalFallback)

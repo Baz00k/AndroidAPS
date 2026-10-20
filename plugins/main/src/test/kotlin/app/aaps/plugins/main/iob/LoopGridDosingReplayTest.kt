@@ -6,6 +6,7 @@ import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.aps.AutosensResult
 import app.aaps.core.interfaces.aps.CurrentTemp
+import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.MealData
 import app.aaps.core.interfaces.aps.OapsProfile
@@ -164,6 +165,74 @@ class LoopGridDosingReplayTest : TestBaseWithProfile() {
         assertThat(results.last().rate).isEqualTo(0.0)
         assertThat(results.last().units).isNull()
     }
+
+    @Test
+    fun `a run between grid slots uses the newest reading and its trend`() {
+        val start = now
+        var store = AutosensDataStoreObject()
+        for (minute in 0L..9L) {
+            now = start + T.mins(minute).msecs()
+            whenever(dateUtil.now()).thenReturn(now)
+            store.bgReadings = (minute downTo minute - 45L).map { reading(start, it, 150.0 - 3 * it) }
+            store.createBucketedData(aapsLogger, dateUtil)
+            store = store.clone() as AutosensDataStoreObject
+            whenever(iobCobCalculator.ads).thenReturn(store)
+
+            val status = glucoseStatusCalculatorSMB.getGlucoseStatusData(false)!!
+            assertThat(status.date).isEqualTo(now)
+            assertThat(status.glucose).isEqualTo(150.0 - 3 * minute)
+            assertThat(status.delta).isEqualTo(-15.0)
+            // IOB/COB keeps the stable grid; only the slot reading triggers an automatic run.
+            assertThat(store.lastBg()!!.timestamp).isEqualTo(start + T.mins(minute / 5 * 5).msecs())
+        }
+    }
+
+    @Test
+    fun `a manual run after a sharp drop between slots does not repeat the slot SMB`() {
+        val start = now
+        // Rising into the minute-0 slot, then dropping 15 mg/dL per minute.
+        val glucoseAt = { minute: Long -> if (minute <= 0) 180.0 + 2 * minute else 180.0 - 15 * minute }
+        var store = AutosensDataStoreObject()
+        val decisions = (0L..4L).map { minute ->
+            now = start + T.mins(minute).msecs()
+            whenever(dateUtil.now()).thenReturn(now)
+            store.bgReadings = (minute downTo minute - 45L).map { reading(start, it, glucoseAt(it)) }
+            store.createBucketedData(aapsLogger, dateUtil)
+            store = store.clone() as AutosensDataStoreObject
+            whenever(iobCobCalculator.ads).thenReturn(store)
+            decide(glucoseStatusCalculatorSMB.getGlucoseStatusData(false)!!)
+        }
+
+        // The automatic slot run is high and rising: an SMB is the expected baseline.
+        assertThat(decisions.first().bg).isEqualTo(180.0)
+        assertThat(decisions.first().units!!).isGreaterThan(0.0)
+        // Four minutes later (past the 3-minute SMB interval) the newest reading is 120 and falling.
+        assertThat(decisions.last().bg).isEqualTo(120.0)
+        assertThat(decisions.last().units).isNull()
+        assertThat(decisions.last().rate).isEqualTo(0.0)
+    }
+
+    private fun reading(start: Long, minute: Long, value: Double) = GV(
+        timestamp = start + T.mins(minute).msecs(), value = value, raw = value,
+        noise = 0.0, sourceSensor = SourceSensor.LIBRE_3, trendArrow = TrendArrow.NONE
+    )
+
+    private fun decide(status: GlucoseStatus): RT =
+        DetermineBasalSMB(profileUtil, fabricPrivacy).determine_basal(
+            glucose_status = status,
+            currenttemp = CurrentTemp(duration = 0, rate = 1.0, minutesrunning = 0),
+            iob_data_array = Array(48) { step ->
+                val time = now + T.mins(step * 5L).msecs()
+                IobTotal(time = time, iobWithZeroTemp = IobTotal(time = time))
+            },
+            profile = profile(),
+            autosens_data = AutosensResult(),
+            meal_data = MealData(),
+            microBolusAllowed = true,
+            currentTime = now,
+            flatBGsDetected = false,
+            dynIsfMode = false
+        )
 
     @Test
     fun `stale and absent bucket history are rejected by glucose status`() {

@@ -38,6 +38,8 @@ class InvokeLoopWorker(
             ?: return Result.failure(workDataOf("Error" to "missing input data"))
 
         if (data.cause !is EventNewBG) return Result.success(workDataOf("Result" to "no calculation needed"))
+        // A newer reading arrived during this calculation. Leave the slot to its calculation.
+        if (iobCobCalculator.isGlucoseCalculationPending()) return Result.success(workDataOf("Result" to "newer glucose pending"))
         val glucoseValue = iobCobCalculator.ads.actualBg() ?: return Result.success(workDataOf("Result" to "bg outdated"))
         if (glucoseValue.timestamp <= loop.lastBgTriggeredRun) return Result.success(workDataOf("Result" to "already looped with that value"))
         loop.lastBgTriggeredRun = glucoseValue.timestamp

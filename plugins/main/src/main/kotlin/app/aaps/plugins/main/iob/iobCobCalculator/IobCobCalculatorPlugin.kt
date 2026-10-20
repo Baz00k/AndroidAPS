@@ -97,6 +97,24 @@ class IobCobCalculatorPlugin @Inject constructor(
 
     // Workers publish a replacement store; readers on other threads must see the initialized result.
     @Volatile override var ads: AutosensDataStore = AutosensDataStoreObject()
+    private val adsLock = Any()
+
+    override fun updateAds(update: (AutosensDataStore) -> Unit) = synchronized(adsLock) { update(ads) }
+
+    override fun publishAds(calculated: AutosensDataStore): Boolean = synchronized(adsLock) {
+        if (calculated.generation != ads.generation) return false
+        ads = calculated
+        true
+    }
+
+    override fun isGlucoseCalculationPending(): Boolean {
+        val now = dateUtil.now()
+        // Same filter and future allowance as LoadBgDataWorker. Without recent glucose the APS refuses anyway.
+        val newestStored = persistenceLayer.getBgReadingsDataFromTimeToTime(now - T.mins(10).msecs(), now + T.mins(2).msecs(), false).firstOrNull() ?: return false
+        val store = ads
+        val newestLoaded = synchronized(store.dataLock) { store.bgReadings.firstOrNull() } ?: return true
+        return newestStored.timestamp > newestLoaded.timestamp
+    }
 
     private val dataLock = Any()
     private var thread: Thread? = null
@@ -187,7 +205,7 @@ class IobCobCalculatorPlugin @Inject constructor(
     private fun resetDataAndRunCalculation(reason: String, event: Event?) {
         calculationWorkflow.stopCalculation(CalculationWorkflow.MAIN_CALCULATION, reason)
         clearCache()
-        ads.reset()
+        updateAds { it.reset() }
         calculationWorkflow.runCalculation(
             job = CalculationWorkflow.MAIN_CALCULATION,
             iobCobCalculator = this,
@@ -430,6 +448,8 @@ class IobCobCalculatorPlugin @Inject constructor(
             scheduledEvent?.let {
                 // set reload bg data if was not set
                 event.reloadBgData = event.reloadBgData || it.reloadBgData
+                // keep the new glucose so its calculation still runs the loop
+                if ((it.newestGlucoseValueTimestamp ?: 0L) > (event.newestGlucoseValueTimestamp ?: 0L)) event.newestGlucoseValueTimestamp = it.newestGlucoseValueTimestamp
             }
             scheduledEvent = event
             scheduledHistoryPost = historyWorker?.schedule(
@@ -485,7 +505,7 @@ class IobCobCalculatorPlugin @Inject constructor(
                     break
                 }
             }
-            ads.newHistoryData(time, aapsLogger, dateUtil)
+            updateAds { it.newHistoryData(time, aapsLogger, dateUtil) }
         }
         calculationWorkflow.runCalculation(
             job = CalculationWorkflow.MAIN_CALCULATION,

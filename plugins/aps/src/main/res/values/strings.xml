@@ -110,6 +110,7 @@
     <string name="loop_shortname">LOOP</string>
     <string name="description_loop">Activate or deactivate the implementation triggering the loop.</string>
     <string name="no_aps_selected">NO APS SELECTED OR PROVIDED RESULT</string>
+    <string name="glucose_calculation_pending">New glucose is still being processed. Try again in a few seconds.</string>
     <string name="ignore5m">Ignore 5m</string>
     <string name="ignore15m">Ignore 15m</string>
     <string name="ignore30m">Ignore 30m</string>

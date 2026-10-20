@@ -108,12 +108,13 @@ class LoopFragment : DaggerFragment() {
         accepting = true
         handler.post {
             try {
+                val previousAPSRun = loop.lastRun?.lastAPSRun
                 loop.invoke("Accept temp button", false)
                 val lastRun = loop.lastRun
                 // Re-validate on the state as it is NOW: only offer the confirmation while an
                 // open-loop suggestion is actually still pending — never a stale one from before a
                 // mode change, and never when this invocation failed to produce a fresh result.
-                if (!openLoopSuggestionPending(
+                if (lastRun?.lastAPSRun == previousAPSRun || !openLoopSuggestionPending(
                         lastRun = lastRun,
                         pumpInitialized = activePlugin.activePump.isInitialized(),
                         openLoop = loop.runningMode == RM.Mode.OPEN_LOOP,

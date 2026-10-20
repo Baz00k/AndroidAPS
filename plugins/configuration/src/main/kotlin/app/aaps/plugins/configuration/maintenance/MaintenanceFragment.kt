@@ -158,7 +158,7 @@ class MaintenanceFragment : DaggerFragment() {
                             dataSyncSelectorXdrip.resetToNextFullSync()
                             pumpSync.connectNewPump()
                             overviewData.reset()
-                            iobCobCalculator.ads.reset()
+                            iobCobCalculator.updateAds { it.reset() }
                             iobCobCalculator.clearCache()
                         }
                             .subscribeOn(aapsSchedulers.io)

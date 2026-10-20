@@ -25,7 +25,7 @@ class GlucoseStatusCalculatorAutoIsf @Inject constructor(
 ) {
 
     fun getGlucoseStatusData(allowOldData: Boolean): GlucoseStatusAutoIsf? {
-        val data = iobCobCalculator.ads.getBucketedDataTableCopy() ?: return null
+        val data = iobCobCalculator.ads.getLatestBucketedDataCopy() ?: return null
 
         val sizeRecords = data.size
         if (sizeRecords == 0) {

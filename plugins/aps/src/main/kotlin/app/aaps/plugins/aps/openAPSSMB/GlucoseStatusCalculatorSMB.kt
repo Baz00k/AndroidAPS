@@ -28,7 +28,7 @@ class GlucoseStatusCalculatorSMB @Inject constructor(
         get() = getGlucoseStatusData(false)
 
     override fun getGlucoseStatusData(allowOldData: Boolean): GlucoseStatusSMB? {
-        val data = iobCobCalculator.ads.getBucketedDataTableCopy() ?: return null
+        val data = iobCobCalculator.ads.getLatestBucketedDataCopy() ?: return null
 
         val sizeRecords = data.size
         if (sizeRecords == 0) {

@@ -9,6 +9,7 @@ import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
+import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.constraints.Constraint
@@ -624,6 +625,36 @@ class LoopPluginTest : TestBaseWithProfile() {
         assertThat(loopPlugin.lastRun?.lastOpenModeAccept).isEqualTo(0L)
         verify(preferences, never()).inc(IntNonKey.ObjectivesManualEnacts)
         assertThat(events).hasSize(1)
+    }
+
+// endregion
+
+// region ---- glucose freshness ----
+
+    @Test
+    fun `invoke does not run the APS while newer glucose is still being processed`() {
+        setupForPreCheck()
+        mockCurrentMode(RM(mode = RM.Mode.CLOSED_LOOP, timestamp = dateUtil.now(), duration = 0))
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        whenever(profileFunction.isProfileValid(any())).thenReturn(true)
+        whenever(commandQueue.size()).thenReturn(0)
+        whenever(commandQueue.performing()).thenReturn(null)
+        whenever(virtualPumpPlugin.baseBasalRate).thenReturn(0.5)
+        val aps = mock<APS>()
+        whenever(aps.isEnabled()).thenReturn(true)
+        whenever(activePlugin.activeAPS).thenReturn(aps)
+        whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(true)
+        whenever(rh.gs(app.aaps.plugins.aps.R.string.glucose_calculation_pending)).thenReturn("pending")
+        whenever(rh.gs(app.aaps.plugins.aps.R.string.no_aps_selected)).thenReturn("no result")
+        loopPlugin.invoke("Loop menu", allowNotification = true)
+
+        verify(aps, never()).invoke(any(), any())
+        verify(commandQueue, never()).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
+
+        // Once processed, the same request reaches the APS.
+        whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(false)
+        loopPlugin.invoke("Loop menu", allowNotification = true)
+        verify(aps).invoke(eq("Loop menu"), eq(false))
     }
 
 // endregion

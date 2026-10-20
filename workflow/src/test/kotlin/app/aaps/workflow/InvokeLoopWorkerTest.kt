@@ -110,4 +110,19 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
 
         verify(loop, times(1)).invoke(any(), eq(true), eq(false))
     }
+
+    @Test
+    fun `a newer pending reading defers the run without consuming the bucket`() = runBlocking {
+        val time = T.hours(2).msecs()
+        whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
+        whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(true)
+
+        run(EventNewBG(time))
+        verify(loop, never()).invoke(any(), any(), any())
+
+        // The newer reading's calculation then runs the loop for the same bucket.
+        whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(false)
+        run(EventNewBG(time))
+        verify(loop, times(1)).invoke(any(), eq(true), eq(false))
+    }
 }

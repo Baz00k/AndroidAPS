@@ -13,6 +13,22 @@ interface IobCobCalculator {
 
     var ads: AutosensDataStore
 
+    /** Change the live store in place. Serialised with [publishAds], so the change cannot land in a store that is being replaced. */
+    fun updateAds(update: (AutosensDataStore) -> Unit)
+
+    /**
+     * Replace the live store with a finished calculation, unless the live store changed after
+     * [calculated] was cloned from it (for example, a newer glucose reading was loaded).
+     *
+     * @return true if [calculated] became the live store
+     */
+    fun publishAds(calculated: AutosensDataStore): Boolean
+
+    /**
+     * True while the database holds a glucose reading newer than the newest one in the live store:
+     * its calculation has not finished, so dosing must wait rather than act on older glucose.
+     */
+    fun isGlucoseCalculationPending(): Boolean
     fun getMealDataWithWaitingForCalculationFinish(): MealData
     fun getLastAutosensDataWithWaitForCalculationFinish(reason: String): AutosensData?
 

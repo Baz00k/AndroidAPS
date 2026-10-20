@@ -143,20 +143,24 @@ class GlucoseInputDosingReplayTest : TestBaseWithProfile() {
             assertThat(store.bucketedData!!.first().value).isEqualTo(slotGlucose)
             assertThat(store.bucketedData!!.first().filledGap).isFalse()
             store.bucketedData = smoothing.smooth(store.bucketedData!!)
+            store.latestBucketedData = smoothing.smooth(store.latestBucketedData!!)
+            // At a slot the automatic loop sees exactly the grid input it saw before.
+            if (minute == slotMinute) assertThat(store.latestBucketedData).isEqualTo(store.bucketedData)
 
             // Production computes on a clone and publishes it, retaining the grid.
             // Replay proposals on every calculation; automatic loop eligibility is tested separately.
+            // Between slots, dosing input starts at the newest reading, not at the grid slot.
             store = store.clone() as AutosensDataStoreObject
             whenever(iobCobCalculator.ads).thenReturn(store)
             val status = autoStatus.getGlucoseStatusData(false)!!
             val smbStatus = glucoseStatusCalculatorSMB.getGlucoseStatusData(false)!!
-            assertThat(status.date).isEqualTo(slotTime)
-            assertThat(smbStatus.date).isEqualTo(slotTime)
+            assertThat(status.date).isEqualTo(clock)
+            assertThat(smbStatus.date).isEqualTo(clock)
             assertThat(status.glucose).isEqualTo(smbStatus.glucose)
             assertThat(status.delta).isEqualTo(smbStatus.delta)
             assertThat(status.glucose.isFinite()).isTrue()
             assertThat(status.bgAcceleration.isFinite()).isTrue()
-            if (smoothingName != "exponential") assertThat(status.glucose).isEqualTo(slotGlucose)
+            if (smoothingName != "exponential") assertThat(status.glucose).isEqualTo(glucose)
             if (minute == 10L) {
                 assertThat(status.delta).isGreaterThan(0.0)
                 if (smoothingName != "exponential") assertThat(status.delta).isEqualTo(50.0)
@@ -228,6 +232,7 @@ class GlucoseInputDosingReplayTest : TestBaseWithProfile() {
             it.createBucketedData(aapsLogger, dateUtil)
             assertThat(it.bucketedData!!.take(5).map { bucket -> bucket.value }).containsExactly(140.0, 140.0, 140.0, 140.0, 140.0).inOrder()
             it.bucketedData = smoothing(smoothingName).smooth(it.bucketedData!!)
+            it.latestBucketedData = smoothing(smoothingName).smooth(it.latestBucketedData!!)
         }.clone()
         whenever(iobCobCalculator.ads).thenReturn(store)
 
