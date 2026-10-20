@@ -24,9 +24,16 @@ interface IobCobCalculator {
      */
     fun publishAds(calculated: AutosensDataStore): Boolean
 
+    /** Timestamp of the newest glucose reading in the live store, or null if none is loaded. */
+    fun newestLoadedGlucoseTimestamp(): Long?
+
+    /** True if the database holds a valid glucose reading newer than [timestamp] (at most two minutes ahead of now). */
+    fun isNewerGlucoseStored(timestamp: Long): Boolean
+
     /**
-     * True while the database holds a glucose reading newer than the newest one in the live store:
-     * its calculation has not finished, so dosing must wait rather than act on older glucose.
+     * True while the database holds a glucose reading newer than the newest one in the live store,
+     * so dosing must wait rather than act on older glucose. Requests a calculation for that reading,
+     * in case none is under way (for example, it was beyond the window of the last load).
      */
     fun isGlucoseCalculationPending(): Boolean
     fun getMealDataWithWaitingForCalculationFinish(): MealData

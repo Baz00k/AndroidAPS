@@ -52,6 +52,7 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
         whenever(iobCobCalculator.ads).thenReturn(ads)
         whenever(loop.lastBgTriggeredRun).thenAnswer { lastTimestamp }
         doAnswer { lastTimestamp = it.getArgument(0); null }.whenever(loop).lastBgTriggeredRun = any()
+        whenever(loop.invoke(any(), any(), any())).thenReturn(true)
     }
 
     private suspend fun run(cause: Event?) {
@@ -124,5 +125,20 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
         whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(false)
         run(EventNewBG(time))
         verify(loop, times(1)).invoke(any(), eq(true), eq(false))
+    }
+
+    @Test
+    fun `a run the loop defers for newer glucose does not consume the bucket`() = runBlocking {
+        val time = T.hours(2).msecs()
+        whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
+        // Newer glucose arrives between the worker's check and the loop's own check.
+        whenever(loop.invoke(any(), any(), any())).thenReturn(false, true)
+
+        run(EventNewBG(time))
+        run(EventNewBG(time))
+        run(EventNewBG(time))
+
+        // Deferred once, then run once; the bucket is consumed only by the run that calculated.
+        verify(loop, times(2)).invoke(any(), eq(true), eq(false))
     }
 }

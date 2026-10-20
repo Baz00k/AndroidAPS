@@ -42,8 +42,13 @@ class InvokeLoopWorker(
         if (iobCobCalculator.isGlucoseCalculationPending()) return Result.success(workDataOf("Result" to "newer glucose pending"))
         val glucoseValue = iobCobCalculator.ads.actualBg() ?: return Result.success(workDataOf("Result" to "bg outdated"))
         if (glucoseValue.timestamp <= loop.lastBgTriggeredRun) return Result.success(workDataOf("Result" to "already looped with that value"))
+        val previousTriggeredRun = loop.lastBgTriggeredRun
         loop.lastBgTriggeredRun = glucoseValue.timestamp
-        loop.invoke("Calculation for $glucoseValue", true)
+        if (!loop.invoke("Calculation for $glucoseValue", true)) {
+            // Newer glucose arrived after the check above. Its calculation must still run this slot.
+            if (loop.lastBgTriggeredRun == glucoseValue.timestamp) loop.lastBgTriggeredRun = previousTriggeredRun
+            return Result.success(workDataOf("Result" to "newer glucose pending"))
+        }
         return Result.success()
     }
 }

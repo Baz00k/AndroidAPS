@@ -446,7 +446,7 @@ class LoopPlugin @Inject constructor(
     }
 
     @Synchronized
-    override fun invoke(initiator: String, allowNotification: Boolean, tempBasalFallback: Boolean) {
+    override fun invoke(initiator: String, allowNotification: Boolean, tempBasalFallback: Boolean): Boolean {
         try {
             aapsLogger.debug(LTag.APS, "invoke from $initiator")
             val currentMode = runningModeRecord
@@ -454,33 +454,34 @@ class LoopPlugin @Inject constructor(
                 val message = rh.gs(app.aaps.core.ui.R.string.loop_disabled) + "\n" + currentMode.reasons
                 aapsLogger.debug(LTag.APS, message)
                 rxBus.send(EventLoopSetLastRunGui(message))
-                return
+                return true
             }
             val pump = activePlugin.activePump
             var apsResult: APSResult? = null
-            if (!isEnabled()) return
+            if (!isEnabled()) return true
             val profile = profileFunction.getProfile()
             if (profile == null || !profileFunction.isProfileValid("Loop")) {
                 aapsLogger.debug(LTag.APS, rh.gs(app.aaps.core.ui.R.string.no_profile_set))
                 rxBus.send(EventLoopSetLastRunGui(rh.gs(app.aaps.core.ui.R.string.no_profile_set)))
-                return
+                return true
             }
 
             if (!isEmptyQueue()) {
                 aapsLogger.debug(LTag.APS, rh.gs(app.aaps.core.ui.R.string.pump_busy))
                 rxBus.send(EventLoopSetLastRunGui(rh.gs(app.aaps.core.ui.R.string.pump_busy)))
-                return
+                return true
             }
 
             // Check if pump info is loaded
-            if (pump.baseBasalRate < 0.01) return
+            if (pump.baseBasalRate < 0.01) return true
             // A newer reading is stored but not yet bucketed: do not dose from the older one.
             // Its calculation will run the loop when it finishes.
             if (iobCobCalculator.isGlucoseCalculationPending()) {
                 aapsLogger.debug(LTag.APS, rh.gs(R.string.glucose_calculation_pending))
                 rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.glucose_calculation_pending)))
-                return
+                return false
             }
+            val glucoseTimestamp = iobCobCalculator.newestLoadedGlucoseTimestamp() ?: 0L
             val usedAPS = activePlugin.activeAPS
             if (usedAPS.isEnabled()) {
                 usedAPS.invoke(initiator, tempBasalFallback)
@@ -490,7 +491,7 @@ class LoopPlugin @Inject constructor(
             // Check if we have any result
             if (apsResult == null) {
                 rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.no_aps_selected)))
-                return
+                return true
             }
 
             // Store calculations to DB
@@ -524,6 +525,7 @@ class LoopPlugin @Inject constructor(
                 lastRun.constraintsProcessed = resultAfterConstraints
                 lastRun.lastAPSRun = dateUtil.now()
                 lastRun.source = (usedAPS as PluginBase).name
+                lastRun.glucoseTimestamp = glucoseTimestamp
                 lastRun.tbrSetByPump = null
                 lastRun.smbSetByPump = null
                 lastRun.lastTBREnact = 0
@@ -535,7 +537,7 @@ class LoopPlugin @Inject constructor(
                 if (runningMode.isSuspended()) {
                     aapsLogger.debug(LTag.APS, rh.gs(app.aaps.core.ui.R.string.loopsuspended))
                     rxBus.send(EventLoopSetLastRunGui(rh.gs(app.aaps.core.ui.R.string.loopsuspended)))
-                    return
+                    return true
                 }
                 // Store reasons
                 closedLoopEnabled = constraintChecker.isClosedLoopAllowed()
@@ -633,7 +635,7 @@ class LoopPlugin @Inject constructor(
                                     resultAfterConstraints.deliverAt = lastRun.lastTBREnact
                                     rxBus.send(EventLoopUpdateGui())
                                     if (resultAfterConstraints.isBolusRequested)
-                                        applySMBRequest(resultAfterConstraints, object : Callback() {
+                                        applySMBRequest(resultAfterConstraints, glucoseTimestamp, object : Callback() {
                                             override fun run() {
                                                 // Callback is only called if a bolus was actually requested
                                                 if (result.enacted || result.success) {
@@ -683,6 +685,7 @@ class LoopPlugin @Inject constructor(
                 }
                 rxBus.send(EventLoopUpdateGui())
             }
+            return true
         } finally {
             aapsLogger.debug(LTag.APS, "invoke end")
         }
@@ -732,6 +735,14 @@ class LoopPlugin @Inject constructor(
     override fun acceptChangeRequest() {
         val profile = profileFunction.getProfile() ?: return
         lastRun?.let { lastRun ->
+            // The suggestion may have waited for confirmation on the phone or watch. Never enact it
+            // once newer glucose is stored; the user has to review the next suggestion instead.
+            if (iobCobCalculator.isNewerGlucoseStored(lastRun.glucoseTimestamp)) {
+                aapsLogger.debug(LTag.APS, "acceptChangeRequest: " + rh.gs(R.string.request_outdated_by_newer_glucose))
+                uiInteraction.addNotificationValidFor(Notification.OPEN_LOOP_SUGGESTION_OUTDATED, rh.gs(R.string.open_loop_suggestion_outdated), Notification.NORMAL, 5)
+                rxBus.send(EventAcceptOpenLoopChange())
+                return
+            }
             lastRun.constraintsProcessed?.let { constraintsProcessed ->
                 applyTBRRequest(constraintsProcessed, profile, object : Callback() {
                     override fun run() {
@@ -851,8 +862,14 @@ class LoopPlugin @Inject constructor(
         }
     }
 
-    private fun applySMBRequest(request: APSResult, callback: Callback?) {
+    private fun applySMBRequest(request: APSResult, glucoseTimestamp: Long, callback: Callback?) {
         val pump = activePlugin.activePump
+        // The temp basal goes first and can take a while; do not deliver an SMB for glucose that has since been superseded.
+        if (iobCobCalculator.isNewerGlucoseStored(glucoseTimestamp)) {
+            aapsLogger.debug(LTag.APS, "applySMBRequest: " + rh.gs(R.string.request_outdated_by_newer_glucose))
+            callback?.result(pumpEnactResultProvider.get().comment(R.string.request_outdated_by_newer_glucose).enacted(false).success(false))?.run()
+            return
+        }
         val lastBolusTime = persistenceLayer.getNewestBolus()?.timestamp ?: 0L
         if (lastBolusTime != 0L && lastBolusTime + T.mins(preferences.get(IntKey.ApsMaxSmbFrequency).toLong()).msecs() > dateUtil.now()) {
             aapsLogger.debug(LTag.APS, "SMB requested but still in ${preferences.get(IntKey.ApsMaxSmbFrequency)} min interval")

@@ -32,6 +32,9 @@ interface Loop {
         var lastTBRRequest: Long = 0
         var lastSMBRequest: Long = 0
         var lastOpenModeAccept: Long = 0
+
+        /** Newest glucose reading the run calculated from; its request is outdated once a newer one is stored. */
+        var glucoseTimestamp: Long = 0
     }
 
     /**
@@ -78,8 +81,9 @@ interface Loop {
      * @param initiator Identifies who triggered the run
      * @param allowNotification Allow notification to be sent (false in open loop mode)
      * @param tempBasalFallback true if called from failed SMB
+     * @return false if the run was deferred because newer glucose is still being processed; that calculation runs the loop
      */
-    fun invoke(initiator: String, allowNotification: Boolean, tempBasalFallback: Boolean = false)
+    fun invoke(initiator: String, allowNotification: Boolean, tempBasalFallback: Boolean = false): Boolean
 
     /**
      * Open loop mode trigger

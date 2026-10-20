@@ -66,24 +66,28 @@ class AutosensDataStoreObject : AutosensDataStore {
     override fun getLatestBucketedDataCopy(): MutableList<InMemoryGlucoseValue>? = synchronized(dataLock) { latestBucketedData?.toMutableList() }
     override fun getBgReadingsDataTableCopy(): List<GV> = synchronized(dataLock) { bgReadings.toMutableList() }
 
-    // Each mutation bumps generation afterwards: a clone taken mid-change keeps the old value and cannot be published.
+    // Mutations and clone() share dataLock, so a clone holds either the old data and generation or the new ones.
     override fun reset() {
-        synchronized(autosensDataTable) { autosensDataTable = LongSparseArray() }
-        generation++
+        synchronized(dataLock) {
+            synchronized(autosensDataTable) { autosensDataTable = LongSparseArray() }
+            generation++
+        }
     }
 
     override fun newHistoryData(time: Long, aapsLogger: AAPSLogger, dateUtil: DateUtil) {
-        synchronized(autosensDataTable) {
-            for (index in autosensDataTable.size() - 1 downTo 0) {
-                if (autosensDataTable.keyAt(index) > time) {
-                    aapsLogger.debug(LTag.AUTOSENS) { "Removing from autosensDataTable: ${dateUtil.dateAndTimeAndSecondsString(autosensDataTable.keyAt(index))}" }
-                    autosensDataTable.removeAt(index)
-                } else {
-                    break
+        synchronized(dataLock) {
+            synchronized(autosensDataTable) {
+                for (index in autosensDataTable.size() - 1 downTo 0) {
+                    if (autosensDataTable.keyAt(index) > time) {
+                        aapsLogger.debug(LTag.AUTOSENS) { "Removing from autosensDataTable: ${dateUtil.dateAndTimeAndSecondsString(autosensDataTable.keyAt(index))}" }
+                        autosensDataTable.removeAt(index)
+                    } else {
+                        break
+                    }
                 }
             }
+            generation++
         }
-        generation++
     }
 
     // roundup to whole minute
@@ -211,15 +215,17 @@ class AutosensDataStoreObject : AutosensDataStore {
     }
 
     override fun createBucketedData(aapsLogger: AAPSLogger, dateUtil: DateUtil) {
-        val fiveMinData = isAbout5minData(aapsLogger)
-        if (lastUsed5minCalculation != null && lastUsed5minCalculation != fiveMinData) {
-            // changing mode => clear cache
-            aapsLogger.debug("Invalidating cached data because of changed mode.")
-            reset()
+        synchronized(dataLock) {
+            val fiveMinData = isAbout5minData(aapsLogger)
+            if (lastUsed5minCalculation != null && lastUsed5minCalculation != fiveMinData) {
+                // changing mode => clear cache
+                aapsLogger.debug("Invalidating cached data because of changed mode.")
+                reset()
+            }
+            lastUsed5minCalculation = fiveMinData
+            if (fiveMinData) createBucketedData5min(aapsLogger, dateUtil) else createBucketedDataRecalculated(aapsLogger, dateUtil)
+            generation++
         }
-        lastUsed5minCalculation = fiveMinData
-        if (fiveMinData) createBucketedData5min(aapsLogger, dateUtil) else createBucketedDataRecalculated(aapsLogger, dateUtil)
-        generation++
     }
 
     fun findNewer(time: Long): GV? {

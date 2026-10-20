@@ -159,6 +159,7 @@ open class Notification {
         const val YPSOPUMP_TBR_UNMATCHED = 101
         const val YPSOPUMP_HISTORY_INCOMPLETE = 102
         const val YPSOPUMP_KEY_EXPIRY = 103
+        const val OPEN_LOOP_SUGGESTION_OUTDATED = 104
 
         const val USER_MESSAGE = 1000
 

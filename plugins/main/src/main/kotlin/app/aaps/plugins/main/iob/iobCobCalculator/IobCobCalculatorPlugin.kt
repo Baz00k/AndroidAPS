@@ -107,13 +107,34 @@ class IobCobCalculatorPlugin @Inject constructor(
         true
     }
 
+    override fun newestLoadedGlucoseTimestamp(): Long? {
+        val store = ads
+        return synchronized(store.dataLock) { store.bgReadings.firstOrNull()?.timestamp }
+    }
+
+    override fun isNewerGlucoseStored(timestamp: Long): Boolean {
+        val now = dateUtil.now()
+        // Same filter and future allowance as LoadBgDataWorker; dosing never uses glucose older than ten minutes.
+        val from = max(timestamp + 1, now - T.mins(10).msecs())
+        return persistenceLayer.getBgReadingsDataFromTimeToTime(from, now + T.mins(2).msecs(), false).isNotEmpty()
+    }
+
+    // Last reading a recalculation was requested for, so a refusing caller does not restart it repeatedly.
+    @Volatile private var recalculationRequestedFor = 0L
+
     override fun isGlucoseCalculationPending(): Boolean {
         val now = dateUtil.now()
-        // Same filter and future allowance as LoadBgDataWorker. Without recent glucose the APS refuses anyway.
+        // Without recent stored glucose there is nothing to wait for; the APS rejects stale glucose anyway.
         val newestStored = persistenceLayer.getBgReadingsDataFromTimeToTime(now - T.mins(10).msecs(), now + T.mins(2).msecs(), false).firstOrNull() ?: return false
-        val store = ads
-        val newestLoaded = synchronized(store.dataLock) { store.bgReadings.firstOrNull() } ?: return true
-        return newestStored.timestamp > newestLoaded.timestamp
+        val newestLoaded = newestLoadedGlucoseTimestamp()
+        if (newestLoaded != null && newestStored.timestamp <= newestLoaded) return false
+        // The reading's own calculation normally follows. One stored beyond the last load's window
+        // (a sensor clock running ahead) has none, so request it; the debounce merges duplicates.
+        if (recalculationRequestedFor != newestStored.timestamp) {
+            recalculationRequestedFor = newestStored.timestamp
+            rxBus.send(EventNewHistoryData(newestStored.timestamp, true, newestStored.timestamp))
+        }
+        return true
     }
 
     private val dataLock = Any()

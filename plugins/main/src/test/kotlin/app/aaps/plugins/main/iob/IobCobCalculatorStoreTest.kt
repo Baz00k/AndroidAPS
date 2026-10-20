@@ -6,6 +6,7 @@ import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.overview.OverviewData
+import app.aaps.core.interfaces.rx.events.EventNewHistoryData
 import app.aaps.core.interfaces.workflow.CalculationWorkflow
 import app.aaps.plugins.main.iob.iobCobCalculator.IobCobCalculatorPlugin
 import app.aaps.shared.tests.TestBaseWithProfile
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.whenever
 
@@ -82,5 +84,32 @@ class IobCobCalculatorStoreTest : TestBaseWithProfile() {
         // Without recent stored glucose there is nothing to wait for; the APS rejects stale data.
         whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(any(), any(), eq(false))).thenReturn(emptyList())
         assertThat(plugin.isGlucoseCalculationPending()).isFalse()
+    }
+
+    @Test
+    fun `a pending reading requests its own calculation once`() {
+        val requests = mutableListOf<EventNewHistoryData>()
+        rxBus.toObservable(EventNewHistoryData::class.java).subscribe(requests::add)
+        load(-1)
+        // Stored beyond the last load's window, so no calculation of its own is under way.
+        whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(any(), any(), eq(false))).thenReturn(readings(0))
+
+        repeat(3) { assertThat(plugin.isGlucoseCalculationPending()).isTrue() }
+
+        assertThat(requests).hasSize(1)
+        assertThat(requests.single().reloadBgData).isTrue()
+        assertThat(requests.single().newestGlucoseValueTimestamp).isEqualTo(now)
+    }
+
+    @Test
+    fun `newer glucose is detected only after the reading a calculation used`() {
+        val used = now - T.mins(1).msecs()
+        val from = argumentCaptor<Long>()
+        whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(from.capture(), any(), eq(false))).thenReturn(readings(0))
+        assertThat(plugin.isNewerGlucoseStored(used)).isTrue()
+        assertThat(from.lastValue).isEqualTo(used + 1)
+
+        whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(any(), any(), eq(false))).thenReturn(emptyList())
+        assertThat(plugin.isNewerGlucoseStored(used)).isFalse()
     }
 }

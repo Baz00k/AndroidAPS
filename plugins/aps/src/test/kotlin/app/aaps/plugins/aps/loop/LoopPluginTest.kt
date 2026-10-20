@@ -12,12 +12,16 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.logging.UserEntryLogger
+import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
+import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
+import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpStatusProvider
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Callback
@@ -35,6 +39,7 @@ import com.google.common.truth.Truth.assertThat
 import io.reactivex.rxjava3.core.Single
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.anyInt
 import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.Mock
 import org.mockito.kotlin.any
@@ -655,6 +660,75 @@ class LoopPluginTest : TestBaseWithProfile() {
         whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(false)
         loopPlugin.invoke("Loop menu", allowNotification = true)
         verify(aps).invoke(eq("Loop menu"), eq(false))
+    }
+
+    /** Closed loop whose APS asks for a 0.5 U SMB and no temp basal change, calculated from the reading at [glucoseTimestamp]. */
+    private fun givenClosedLoopSmbRequest(glucoseTimestamp: Long) {
+        setupForPreCheck()
+        whenever(rh.gs(anyInt())).thenReturn("")
+        mockCurrentMode(RM(mode = RM.Mode.CLOSED_LOOP, timestamp = dateUtil.now(), duration = 0))
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        whenever(profileFunction.isProfileValid(any())).thenReturn(true)
+        whenever(commandQueue.size()).thenReturn(0)
+        whenever(commandQueue.performing()).thenReturn(null)
+        whenever(virtualPumpPlugin.baseBasalRate).thenReturn(0.5)
+        whenever(virtualPumpPlugin.isInitialized()).thenReturn(true)
+        whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
+        whenever(constraintsChecker.isClosedLoopAllowed()).thenReturn(ConstraintObject(true, aapsLogger))
+        whenever(constraintChecker.applyBasalConstraints(any(), any())).thenAnswer { it.getArgument(0) }
+        whenever(constraintChecker.applyBasalPercentConstraints(any(), any())).thenAnswer { it.getArgument(0) }
+        whenever(constraintChecker.applyBolusConstraints(any())).thenAnswer { it.getArgument(0) }
+        whenever(persistenceLayer.insertOrUpdateApsResult(any())).thenReturn(Single.just(PersistenceLayer.TransactionResult()))
+        val result = apsResultProvider.get().with(RT(runningDynamicIsf = false, timestamp = dateUtil.now(), units = 0.5, deliverAt = dateUtil.now()))
+        val aps = mock<PluginBase>(extraInterfaces = arrayOf(APS::class)) as APS
+        whenever((aps as PluginBase).name).thenReturn("SMB")
+        whenever(aps.isEnabled()).thenReturn(true)
+        whenever(aps.lastAPSResult).thenReturn(result)
+        whenever(activePlugin.activeAPS).thenReturn(aps)
+        whenever(iobCobCalculator.isGlucoseCalculationPending()).thenReturn(false)
+        whenever(iobCobCalculator.newestLoadedGlucoseTimestamp()).thenReturn(glucoseTimestamp)
+    }
+
+    @Test
+    fun `an SMB calculated from glucose that was superseded before delivery is not delivered`() {
+        val glucoseTimestamp = dateUtil.now() - T.mins(1).msecs()
+        givenClosedLoopSmbRequest(glucoseTimestamp)
+        // A newer, falling reading is stored while the temp basal step runs.
+        whenever(iobCobCalculator.isNewerGlucoseStored(glucoseTimestamp)).thenReturn(true)
+
+        loopPlugin.invoke("Loop menu", allowNotification = false)
+
+        verify(commandQueue, never()).bolus(any(), anyOrNull())
+        assertThat(loopPlugin.lastRun?.glucoseTimestamp).isEqualTo(glucoseTimestamp)
+    }
+
+    @Test
+    fun `an SMB calculated from the newest glucose is delivered`() {
+        val glucoseTimestamp = dateUtil.now() - T.mins(1).msecs()
+        givenClosedLoopSmbRequest(glucoseTimestamp)
+        whenever(iobCobCalculator.isNewerGlucoseStored(glucoseTimestamp)).thenReturn(false)
+
+        loopPlugin.invoke("Loop menu", allowNotification = false)
+
+        val bolus = argumentCaptor<DetailedBolusInfo>()
+        verify(commandQueue).bolus(bolus.capture(), anyOrNull())
+        assertThat(bolus.firstValue.insulin).isEqualTo(0.5)
+    }
+
+    @Test
+    fun `acceptChangeRequest refuses a suggestion once newer glucose is stored`() {
+        whenever(profileFunction.getProfile()).thenReturn(validProfile)
+        givenPendingSuggestion()
+        loopPlugin.lastRun?.glucoseTimestamp = dateUtil.now() - T.mins(2).msecs()
+        whenever(iobCobCalculator.isNewerGlucoseStored(dateUtil.now() - T.mins(2).msecs())).thenReturn(true)
+        val events = eventAcceptOpenLoopChanges()
+
+        loopPlugin.acceptChangeRequest()
+
+        verify(commandQueue, never()).tempBasalAbsolute(any(), any(), any(), any(), any(), any())
+        verify(uiInteraction).addNotificationValidFor(eq(Notification.OPEN_LOOP_SUGGESTION_OUTDATED), anyOrNull(), any(), any())
+        verify(preferences, never()).inc(IntNonKey.ObjectivesManualEnacts)
+        assertThat(events).hasSize(1)
     }
 
 // endregion
