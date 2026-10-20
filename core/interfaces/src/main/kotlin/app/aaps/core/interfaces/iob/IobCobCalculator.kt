@@ -27,8 +27,12 @@ interface IobCobCalculator {
     /** Timestamp of the newest glucose reading in the live store, or null if none is loaded. */
     fun newestLoadedGlucoseTimestamp(): Long?
 
-    /** True if the database holds a valid glucose reading newer than [timestamp] (at most two minutes ahead of now). */
-    fun isNewerGlucoseStored(timestamp: Long): Boolean
+    /**
+     * True if a request calculated from the reading at [timestamp] must no longer be enacted: a newer
+     * valid reading is stored (at most two minutes ahead of now), or the reading is more than ten
+     * minutes old, so supersession can no longer be ruled out.
+     */
+    fun isGlucoseSuperseded(timestamp: Long): Boolean
 
     /**
      * True while the database holds a glucose reading newer than the newest one in the live store,

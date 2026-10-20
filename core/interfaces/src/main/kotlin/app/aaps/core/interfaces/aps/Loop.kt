@@ -76,12 +76,18 @@ interface Loop {
     var lastBgTriggeredRun: Long
 
     /**
+     * Set when a run, an SMB or an open-loop acceptance was refused because newer glucose was stored.
+     * The next glucose calculation then runs the loop even if its five-minute slot was already used.
+     */
+    var runDeferredForGlucose: Boolean
+
+    /**
      * Invoke new loop run
      *
      * @param initiator Identifies who triggered the run
      * @param allowNotification Allow notification to be sent (false in open loop mode)
      * @param tempBasalFallback true if called from failed SMB
-     * @return false if the run was deferred because newer glucose is still being processed; that calculation runs the loop
+     * @return false if the run was deferred because of newer glucose; that glucose's calculation runs the loop
      */
     fun invoke(initiator: String, allowNotification: Boolean, tempBasalFallback: Boolean = false): Boolean
 

@@ -111,8 +111,8 @@
     <string name="description_loop">Activate or deactivate the implementation triggering the loop.</string>
     <string name="no_aps_selected">NO APS SELECTED OR PROVIDED RESULT</string>
     <string name="glucose_calculation_pending">New glucose is still being processed. Try again in a few seconds.</string>
-    <string name="request_outdated_by_newer_glucose">Not delivered: newer glucose arrived after the calculation</string>
-    <string name="open_loop_suggestion_outdated">Suggestion not enacted: newer glucose arrived. Review the next suggestion.</string>
+    <string name="request_outdated_by_newer_glucose">Not enacted: newer glucose arrived after the calculation, or its glucose is too old</string>
+    <string name="open_loop_suggestion_outdated">Suggestion not enacted: newer glucose arrived or the suggestion is too old. Review the next suggestion.</string>
     <string name="ignore5m">Ignore 5m</string>
     <string name="ignore15m">Ignore 15m</string>
     <string name="ignore30m">Ignore 30m</string>

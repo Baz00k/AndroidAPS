@@ -11,6 +11,7 @@ import app.aaps.core.objects.workflow.LoggingWorker
 import app.aaps.core.utils.receivers.DataWorkerStorage
 import kotlinx.coroutines.Dispatchers
 import javax.inject.Inject
+import kotlin.math.max
 
 class InvokeLoopWorker(
     context: Context,
@@ -41,14 +42,11 @@ class InvokeLoopWorker(
         // A newer reading arrived during this calculation. Leave the slot to its calculation.
         if (iobCobCalculator.isGlucoseCalculationPending()) return Result.success(workDataOf("Result" to "newer glucose pending"))
         val glucoseValue = iobCobCalculator.ads.actualBg() ?: return Result.success(workDataOf("Result" to "bg outdated"))
-        if (glucoseValue.timestamp <= loop.lastBgTriggeredRun) return Result.success(workDataOf("Result" to "already looped with that value"))
-        val previousTriggeredRun = loop.lastBgTriggeredRun
-        loop.lastBgTriggeredRun = glucoseValue.timestamp
-        if (!loop.invoke("Calculation for $glucoseValue", true)) {
-            // Newer glucose arrived after the check above. Its calculation must still run this slot.
-            if (loop.lastBgTriggeredRun == glucoseValue.timestamp) loop.lastBgTriggeredRun = previousTriggeredRun
-            return Result.success(workDataOf("Result" to "newer glucose pending"))
-        }
+        // A deferred run must still happen, even within a slot an earlier run already used.
+        if (glucoseValue.timestamp <= loop.lastBgTriggeredRun && !loop.runDeferredForGlucose) return Result.success(workDataOf("Result" to "already looped with that value"))
+        loop.lastBgTriggeredRun = max(loop.lastBgTriggeredRun, glucoseValue.timestamp)
+        // A deferral sets runDeferredForGlucose, so the newer glucose's calculation runs the loop.
+        if (!loop.invoke("Calculation for $glucoseValue", true)) return Result.success(workDataOf("Result" to "deferred for newer glucose"))
         return Result.success()
     }
 }

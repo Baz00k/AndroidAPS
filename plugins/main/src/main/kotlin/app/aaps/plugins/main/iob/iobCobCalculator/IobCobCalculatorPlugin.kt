@@ -112,11 +112,12 @@ class IobCobCalculatorPlugin @Inject constructor(
         return synchronized(store.dataLock) { store.bgReadings.firstOrNull()?.timestamp }
     }
 
-    override fun isNewerGlucoseStored(timestamp: Long): Boolean {
+    override fun isGlucoseSuperseded(timestamp: Long): Boolean {
         val now = dateUtil.now()
-        // Same filter and future allowance as LoadBgDataWorker; dosing never uses glucose older than ten minutes.
-        val from = max(timestamp + 1, now - T.mins(10).msecs())
-        return persistenceLayer.getBgReadingsDataFromTimeToTime(from, now + T.mins(2).msecs(), false).isNotEmpty()
+        // Fail closed rather than let a superseding reading age out of view while a request waits.
+        if (timestamp < now - T.mins(10).msecs()) return true
+        // Same filter and future allowance as LoadBgDataWorker.
+        return persistenceLayer.getBgReadingsDataFromTimeToTime(timestamp + 1, now + T.mins(2).msecs(), false).isNotEmpty()
     }
 
     // Last reading a recalculation was requested for, so a refusing caller does not restart it repeatedly.

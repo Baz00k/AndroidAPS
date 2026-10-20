@@ -102,14 +102,24 @@ class IobCobCalculatorStoreTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `newer glucose is detected only after the reading a calculation used`() {
+    fun `glucose is superseded by any newer stored reading`() {
         val used = now - T.mins(1).msecs()
         val from = argumentCaptor<Long>()
         whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(from.capture(), any(), eq(false))).thenReturn(readings(0))
-        assertThat(plugin.isNewerGlucoseStored(used)).isTrue()
+        assertThat(plugin.isGlucoseSuperseded(used)).isTrue()
         assertThat(from.lastValue).isEqualTo(used + 1)
 
         whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(any(), any(), eq(false))).thenReturn(emptyList())
-        assertThat(plugin.isNewerGlucoseStored(used)).isFalse()
+        assertThat(plugin.isGlucoseSuperseded(used)).isFalse()
+    }
+
+    @Test
+    fun `a superseding reading cannot age out while a request waits`() {
+        // Calculated at 12:00, superseded at 12:01, confirmed at 12:12 after the feed stopped.
+        val used = now - T.mins(12).msecs()
+        whenever(persistenceLayer.getBgReadingsDataFromTimeToTime(any(), any(), eq(false))).thenReturn(emptyList())
+
+        assertThat(plugin.isGlucoseSuperseded(used)).isTrue()
+        assertThat(plugin.isGlucoseSuperseded(0)).isTrue()
     }
 }

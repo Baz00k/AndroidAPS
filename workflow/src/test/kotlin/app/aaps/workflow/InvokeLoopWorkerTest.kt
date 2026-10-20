@@ -128,17 +128,20 @@ class InvokeLoopWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a run the loop defers for newer glucose does not consume the bucket`() = runBlocking {
+    fun `a run the loop defers for newer glucose still runs within the same bucket`() = runBlocking {
         val time = T.hours(2).msecs()
         whenever(ads.actualBg()).thenReturn(InMemoryGlucoseValue(time, 100.0))
-        // Newer glucose arrives between the worker's check and the loop's own check.
-        whenever(loop.invoke(any(), any(), any())).thenReturn(false, true)
+        // Newer glucose arrives between the worker's check and the loop's own check; the loop defers.
+        var deferred = false
+        whenever(loop.runDeferredForGlucose).thenAnswer { deferred }
+        var calls = 0
+        whenever(loop.invoke(any(), any(), any())).thenAnswer { deferred = ++calls == 1; !deferred }
 
         run(EventNewBG(time))
         run(EventNewBG(time))
         run(EventNewBG(time))
 
-        // Deferred once, then run once; the bucket is consumed only by the run that calculated.
+        // Deferred once, then run once within the same bucket; no further repeats.
         verify(loop, times(2)).invoke(any(), eq(true), eq(false))
     }
 }

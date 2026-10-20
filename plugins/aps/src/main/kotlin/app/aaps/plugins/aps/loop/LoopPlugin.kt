@@ -137,6 +137,7 @@ class LoopPlugin @Inject constructor(
 
     private val disposable = CompositeDisposable()
     override var lastBgTriggeredRun: Long = 0
+    @Volatile override var runDeferredForGlucose = false
     private var carbsSuggestionsSuspendedUntil: Long = 0
     private var prevCarbsreq = 0
     override var lastRun: LastRun? = null
@@ -479,6 +480,7 @@ class LoopPlugin @Inject constructor(
             if (iobCobCalculator.isGlucoseCalculationPending()) {
                 aapsLogger.debug(LTag.APS, rh.gs(R.string.glucose_calculation_pending))
                 rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.glucose_calculation_pending)))
+                runDeferredForGlucose = true
                 return false
             }
             val glucoseTimestamp = iobCobCalculator.newestLoadedGlucoseTimestamp() ?: 0L
@@ -533,6 +535,16 @@ class LoopPlugin @Inject constructor(
                 lastRun.lastSMBEnact = 0
                 lastRun.lastSMBRequest = 0
                 scheduleBuildAndStoreDeviceStatus("APS result")
+
+                // Newer glucose may have been stored while the APS calculated. Enact and suggest
+                // nothing from the older reading; that glucose's calculation runs the loop again.
+                if (iobCobCalculator.isGlucoseSuperseded(glucoseTimestamp)) {
+                    aapsLogger.debug(LTag.APS, rh.gs(R.string.request_outdated_by_newer_glucose))
+                    rxBus.send(EventLoopSetLastRunGui(rh.gs(R.string.request_outdated_by_newer_glucose)))
+                    runDeferredForGlucose = true
+                    return false
+                }
+                runDeferredForGlucose = false
 
                 if (runningMode.isSuspended()) {
                     aapsLogger.debug(LTag.APS, rh.gs(app.aaps.core.ui.R.string.loopsuspended))
@@ -737,8 +749,9 @@ class LoopPlugin @Inject constructor(
         lastRun?.let { lastRun ->
             // The suggestion may have waited for confirmation on the phone or watch. Never enact it
             // once newer glucose is stored; the user has to review the next suggestion instead.
-            if (iobCobCalculator.isNewerGlucoseStored(lastRun.glucoseTimestamp)) {
+            if (iobCobCalculator.isGlucoseSuperseded(lastRun.glucoseTimestamp)) {
                 aapsLogger.debug(LTag.APS, "acceptChangeRequest: " + rh.gs(R.string.request_outdated_by_newer_glucose))
+                runDeferredForGlucose = true
                 uiInteraction.addNotificationValidFor(Notification.OPEN_LOOP_SUGGESTION_OUTDATED, rh.gs(R.string.open_loop_suggestion_outdated), Notification.NORMAL, 5)
                 rxBus.send(EventAcceptOpenLoopChange())
                 return
@@ -865,8 +878,9 @@ class LoopPlugin @Inject constructor(
     private fun applySMBRequest(request: APSResult, glucoseTimestamp: Long, callback: Callback?) {
         val pump = activePlugin.activePump
         // The temp basal goes first and can take a while; do not deliver an SMB for glucose that has since been superseded.
-        if (iobCobCalculator.isNewerGlucoseStored(glucoseTimestamp)) {
+        if (iobCobCalculator.isGlucoseSuperseded(glucoseTimestamp)) {
             aapsLogger.debug(LTag.APS, "applySMBRequest: " + rh.gs(R.string.request_outdated_by_newer_glucose))
+            runDeferredForGlucose = true
             callback?.result(pumpEnactResultProvider.get().comment(R.string.request_outdated_by_newer_glucose).enacted(false).success(false))?.run()
             return
         }
