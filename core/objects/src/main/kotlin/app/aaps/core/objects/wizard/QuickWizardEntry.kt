@@ -154,7 +154,7 @@ class QuickWizardEntry @Inject constructor(
             carbs(),
             cob,
             bg,
-            0.0,
+            0.0, // adjustment: the quick wizard does not offer one
             percentage,
             true,
             useCOB() == YES,

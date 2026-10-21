@@ -182,7 +182,7 @@ class CompatDbHelperTest @Inject constructor() {
             carbs = 10,
             cob = 1.1,
             bg = 238.0,
-            correction = 0.2,
+            adjustment = 0.2,
             useBg = true,
             useCob = true,
             includeBolusIOB = true,

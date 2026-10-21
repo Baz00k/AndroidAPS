@@ -55,9 +55,11 @@ class BolusWizardTest : TestBaseWithProfile() {
     private fun setupProfile(targetLow: Double, targetHigh: Double, insulinSensitivityFactor: Double, insulinToCarbRatio: Double): Profile {
         val profile: Profile = mock()
         whenever(profile.getTargetLowMgdl()).thenReturn(targetLow)
-        whenever(profile.getTargetLowMgdl()).thenReturn(targetHigh)
+        whenever(profile.getTargetHighMgdl()).thenReturn(targetHigh)
         whenever(profile.getIsfMgdlForCarbs(any(), any(), any(), any())).thenReturn(insulinSensitivityFactor)
         whenever(profile.getIc()).thenReturn(insulinToCarbRatio)
+        whenever(profile.units).thenReturn(GlucoseUnit.MGDL)
+        whenever(profileFunction.getUnits()).thenReturn(GlucoseUnit.MGDL)
 
         whenever(iobCobCalculator.calculateIobFromBolus()).thenReturn(IobTotal(System.currentTimeMillis()))
         whenever(iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended()).thenReturn(IobTotal(System.currentTimeMillis()))
@@ -235,9 +237,100 @@ class BolusWizardTest : TestBaseWithProfile() {
         assertThat(bolusForLowBg).isLessThan(bolusForBgInRange)
     }
 
+    /**
+     * A wizard whose only varying inputs are the ones under test. The profile and pump are fixed:
+     * ISF 50 mg/dL, IC 10 g, 0.1 U bolus step.
+     */
+    private fun wizard(
+        bgMgdl: Double = 250.0,
+        carbs: Int = 30,
+        percentage: Int = 100,
+        adjustment: Double = 0.0,
+        maxBolus: Double? = null
+    ): BolusWizard {
+        val profile = setupProfile(100.0, 110.0, 50.0, 10.0)
+        if (maxBolus != null) {
+            doAnswer { invocation: InvocationOnMock ->
+                invocation.getArgument<Constraint<Double>>(0).setIfSmaller(maxBolus, "test max bolus", this)
+            }.whenever(constraintChecker).applyBolusConstraints(anyOrNull())
+        }
+        return BolusWizard(
+            aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
+            commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+            persistenceLayer, decimalFormatter, processedDeviceStatusData
+        ).doCalc(
+            profile, "", null, carbs, 0.0, bgMgdl, adjustment, percentage,
+            useBg = true, useCob = false, includeBolusIOB = false, includeBasalIOB = false, useSuperBolus = false,
+            useTT = false, useTrend = false, useAlarm = false
+        )
+    }
+
+    @Test
+    fun `a positive adjustment adds exactly its units to the total`() {
+        val base = wizard().calculatedTotalInsulin
+        val adjusted = wizard(adjustment = 0.5).calculatedTotalInsulin
+
+        assertThat(adjusted - base).isWithin(0.01).of(0.5)
+    }
+
+    @Test
+    fun `a negative adjustment subtracts exactly its units from the total`() {
+        val base = wizard().calculatedTotalInsulin
+        val adjusted = wizard(adjustment = -0.5).calculatedTotalInsulin
+
+        assertThat(base - adjusted).isWithin(0.01).of(0.5)
+    }
+
+    @Test
+    fun `the bolus percentage scales the calculation but not the adjustment`() {
+        val full = wizard(percentage = 100).calculatedTotalInsulin
+        val half = wizard(percentage = 50).calculatedTotalInsulin
+        val halfAdjusted = wizard(percentage = 50, adjustment = 0.5).calculatedTotalInsulin
+
+        // Percentage is still applied to the calculated total...
+        assertThat(half).isWithin(0.01).of(full * 0.5)
+        // ...but the adjustment is added after it, so half of +0.5 U is not 0.25 U.
+        assertThat(halfAdjusted - half).isWithin(0.01).of(0.5)
+    }
+
+    @Test
+    fun `an adjustment below zero clamps the total at zero and reports the carb equivalent`() {
+        val base = wizard().calculatedTotalInsulin
+        val adjusted = wizard(adjustment = -20.0)
+
+        assertThat(adjusted.calculatedTotalInsulin).isEqualTo(0.0)
+        assertThat(adjusted.insulinAfterConstraints).isEqualTo(0.0)
+        // The adjustment is capped at what there was to remove; the rest is still-needed carbs.
+        assertThat(adjusted.appliedAdjustment).isWithin(0.01).of(-base)
+        assertThat(adjusted.carbsEquivalent).isWithin(1.0).of((20.0 - base) * 10.0)
+    }
+
+    @Test
+    fun `a positive adjustment does not create a dose from a zero calculation`() {
+        val wizard = wizard(bgMgdl = 100.0, carbs = 0, adjustment = 1.0)
+
+        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
+        assertThat(wizard.insulinAfterConstraints).isEqualTo(0.0)
+        assertThat(wizard.appliedAdjustment).isEqualTo(0.0)
+    }
+
+    @Test
+    fun `max bolus still caps an adjusted dose`() {
+        val wizard = wizard(adjustment = 0.5, maxBolus = 3.0)
+
+        assertThat(wizard.calculatedTotalInsulin).isGreaterThan(3.0)
+        assertThat(wizard.insulinAfterConstraints).isWithin(0.01).of(3.0)
+    }
+
+    @Test
+    fun `the calculator record keeps the adjustment that reached the total`() {
+        assertThat(wizard(adjustment = 0.5).createBolusCalculatorResult().otherCorrection).isWithin(0.01).of(0.5)
+        // An adjustment that could not be applied is not recorded as if it had been.
+        assertThat(wizard(bgMgdl = 100.0, carbs = 0, adjustment = 1.0).createBolusCalculatorResult().otherCorrection).isEqualTo(0.0)
+    }
+
     private fun advisorWizard(bgMgdl: Double, carbs: Int, carbTime: Int, bolusIob: Double = 0.0): BolusWizard {
         val profile = setupProfile(100.0, 110.0, 50.0, 10.0)
-        whenever(profile.units).thenReturn(GlucoseUnit.MGDL)
         whenever(iobCobCalculator.calculateIobFromBolus()).thenReturn(IobTotal(System.currentTimeMillis()).also { it.iob = bolusIob })
         return BolusWizard(
             aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,

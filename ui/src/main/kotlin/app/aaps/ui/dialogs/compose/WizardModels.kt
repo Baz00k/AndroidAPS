@@ -44,6 +44,12 @@ data class WizardInputs(
     val useTrend: Boolean = false,
     val useSuperBolus: Boolean = false,
     /**
+     * Per-dose adjustment in insulin units, signed: + adds to the calculated dose, − subtracts. Set for
+     * one calculation only and never persisted as a setting. It is applied after the bolus percentage,
+     * so the percentage never scales it, and it cannot turn a zero calculation into a dose.
+     */
+    val adjustment: Double = 0.0,
+    /**
      * Bolus advisor: glucose is high, so bolus now and eat once it has come down. The carbs are not
      * logged yet; an eat reminder is scheduled instead. Only offered while the advisor applies.
      */
@@ -61,13 +67,14 @@ data class WizardInputs(
     companion object {
 
         val Saver: Saver<WizardInputs, Any> = listSaver(
-            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat, it.useCob) },
+            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat, it.useCob, it.adjustment) },
             restore = {
                 WizardInputs(
                     carbs = it[0] as Int, carbTime = it[1] as Int, carbDurationHours = it[2] as Int,
                     manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
                     useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
-                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean
+                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean,
+                    adjustment = it[11] as Double
                 )
             }
         )
@@ -106,6 +113,13 @@ data class WizardResult(
     val superBolusInsulin: String = "+0.00 U",
     /** The bolus percentage from settings, when it is not 100. */
     val scaledPercent: Int? = null,
+    /** The adjustment that actually reached the total; zero when there was no dose to adjust. */
+    val appliedAdjustment: Double = 0.0,
+    /** Step for the adjustment control: the pump's bolus step. */
+    val adjustmentStep: Double = 0.1,
+    /** The adjustment cannot exceed ±max bolus, and the total is still capped by the same limit. */
+    val adjustmentMax: Double = 0.0,
+    val adjustmentDecimals: Int = 1,
     val outcome: CalculatorOutcome = CalculatorOutcome(),
     val advisorAvailable: Boolean = false,
     /**
@@ -126,4 +140,10 @@ data class WizardResult(
     val bgCorrectionAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR || glucoseSource == GlucoseSource.MANUAL
     val trendAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR
     val cobAvailable: Boolean get() = cob != null
+
+    /**
+     * A nonzero adjustment that did not reach the total: the Calculator derived no dose, and a positive
+     * adjustment must not create one (a manual insulin entry is the path for a dose it did not derive).
+     */
+    fun adjustmentIgnored(adjustment: Double): Boolean = adjustment != 0.0 && appliedAdjustment == 0.0
 }

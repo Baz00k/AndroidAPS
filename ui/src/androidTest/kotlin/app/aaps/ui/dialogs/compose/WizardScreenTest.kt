@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import app.aaps.core.compose.theme.AapsTheme
 import com.google.common.truth.Truth.assertThat
@@ -56,6 +58,37 @@ class WizardScreenTest {
         assertThat(inputs).isEqualTo(WizardInputs(carbs = 5, carbTime = 5, carbDurationHours = 2))
     }
 
+    @Test
+    fun adjustmentIsEnteredInInsulinAndDoesNotChangeCarbs() {
+        var inputs = WizardInputs(carbs = 5)
+        showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        val add = compose.onNodeWithContentDescription("Add 0.1 U of dose adjustment")
+        val subtract = compose.onNodeWithContentDescription("Subtract 0.1 U of dose adjustment")
+
+        add.performScrollTo().performClick()
+        compose.waitForIdle()
+        assertThat(inputs.adjustment).isWithin(0.0001).of(0.1)
+        assertThat(inputs.carbs).isEqualTo(5)
+
+        subtract.performScrollTo().performClick()
+        compose.waitForIdle()
+        assertThat(inputs.adjustment).isWithin(0.0001).of(0.0)
+        assertThat(inputs.carbs).isEqualTo(5)
+    }
+
+    @Test
+    fun adjustmentAcceptsATypedSignedValueWithoutTouchingCarbs() {
+        var inputs = WizardInputs(carbs = 5)
+        showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        val field = compose.onNodeWithContentDescription("of dose adjustment")
+
+        field.performScrollTo().performTextClearance()
+        field.performTextInput("-0.3")
+        compose.waitForIdle()
+        assertThat(inputs.adjustment).isWithin(0.0001).of(-0.3)
+        assertThat(inputs.carbs).isEqualTo(5)
+    }
+
     private fun showCalculator(initial: WizardInputs = WizardInputs(), onInputs: (WizardInputs) -> Unit) {
         compose.setContent {
             AapsTheme {
@@ -64,7 +97,13 @@ class WizardScreenTest {
                         compute = {
                             onInputs(it)
                             // Include advice becoming available on the first carb tap in the same regression.
-                            WizardResult(advisorAvailable = it.carbs > 0)
+                            WizardResult(
+                                available = true,
+                                adjustmentStep = 0.1,
+                                adjustmentMax = 10.0,
+                                adjustmentDecimals = 1,
+                                advisorAvailable = it.carbs > 0
+                            )
                         },
                         onCommit = { _, _, _ -> error("Editing inputs must not commit") },
                         onCancel = {},

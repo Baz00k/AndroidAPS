@@ -101,6 +101,7 @@ fun WizardScreen(
     var carbsValid by remember { mutableStateOf(false) }
     var glucoseValid by remember { mutableStateOf(true) }
     var absorptionValid by remember { mutableStateOf(true) }
+    var adjustmentValid by remember { mutableStateOf(true) }
     // Validate even collapsed/restored fields against the current configuration.
     val savedInputsValid = inputs.carbs in 0..carbControls.maxCarbs && inputs.carbDurationHours in 0..MAX_ABSORPTION_H
     var mealDetailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -113,7 +114,7 @@ fun WizardScreen(
     }
     val result = remember(inputs, refresh) { compute(inputs) }
     val manualBgValid = inputs.manualBg?.let { it.isFinite() && it in result.bgEntryMin..result.bgEntryMax } ?: true
-    val draftsValid = savedInputsValid && manualBgValid && carbsValid && glucoseValid && (inputs.eatLater || absorptionValid)
+    val draftsValid = savedInputsValid && manualBgValid && carbsValid && glucoseValid && adjustmentValid && (inputs.eatLater || absorptionValid)
     // "Eat later" only exists while the advisor applies; drop it rather than act on a stale choice.
     LaunchedEffect(result.advisorAvailable) {
         if (!result.advisorAvailable && inputs.eatLater) inputs = inputs.copy(eatLater = false)
@@ -157,7 +158,7 @@ fun WizardScreen(
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
                 if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
                                          { if (!mealDetailsExpanded || inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
-                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it })
+                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it })
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }
         }
@@ -175,10 +176,15 @@ private fun InputCards(
     onInputs: (WizardInputs) -> Unit,
     onCarbsValidity: (Boolean) -> Unit,
     onGlucoseValidity: (Boolean) -> Unit,
-    onAbsorptionValidity: (Boolean) -> Unit
+    onAbsorptionValidity: (Boolean) -> Unit,
+    onAdjustmentValidity: (Boolean) -> Unit
 ) {
     GlucoseCard(inputs, result, colors, onInputs, onGlucoseValidity)
     CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs, onCarbsValidity, onAbsorptionValidity)
+    // The adjustment is insulin, not carbs: its own card, unit and signed range, so a gram count cannot
+    // be typed here and bolused as units (upstream #5305).
+    if (result.available)
+        AdjustmentCard(inputs, result, colors, onInputs, onAdjustmentValidity)
     AapsCard {
         Column {
             SectionLabel("Included", Modifier.padding(bottom = 4.dp))
@@ -207,6 +213,12 @@ private fun InputCards(
             if (result.superBolusAvailable)
                 FactorRow("Superbolus", null, result.superBolusInsulin, colors, on = inputs.useSuperBolus, onToggle = { onInputs(inputs.copy(useSuperBolus = it)) })
             result.scaledPercent?.let { FactorRow("Scaled", null, "$it%", colors) }
+            if (inputs.adjustment != 0.0)
+                FactorRow(
+                    "Adjustment",
+                    if (result.adjustmentIgnored(inputs.adjustment)) "Not applied: the Calculator derived no dose" else null,
+                    signedUnits(inputs.adjustment, result.adjustmentDecimals), colors
+                )
         }
     }
 }
@@ -415,6 +427,36 @@ private fun CarbsCard(
 }
 
 @Composable
+private fun AdjustmentCard(
+    inputs: WizardInputs,
+    result: WizardResult,
+    colors: AapsColors,
+    onInputs: (WizardInputs) -> Unit,
+    onValidity: (Boolean) -> Unit
+) {
+    val ignored = result.adjustmentIgnored(inputs.adjustment)
+    EntryCard("Adjustment") {
+        AmountStepper(
+            value = inputs.adjustment,
+            onValue = { onInputs(inputs.copy(adjustment = it)) },
+            step = result.adjustmentStep,
+            // Same limit as the final dose: the adjustment can never take the review past max bolus.
+            min = -result.adjustmentMax, max = result.adjustmentMax,
+            decimals = result.adjustmentDecimals, unit = "U", name = "of dose adjustment",
+            zeroLabel = "None", onValidityChange = onValidity
+        )
+        Text(
+            when {
+                ignored -> "Not applied: the Calculator derived no dose."
+                else    -> "Insulin, not carbs. Added after the percentage, so it is not scaled: + increases the dose, − reduces it."
+            },
+            style = AapsTheme.type.caption,
+            color = if (ignored) colors.high else colors.textTertiary
+        )
+    }
+}
+
+@Composable
 private fun MealDetailLabel(text: String) =
     Text(text, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
 
@@ -462,6 +504,12 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
                 BreakdownRow("Active insulin", result.iobInsulin, colors, iob = true, changed = baseline.iobInsulin != result.iobInsulin)
             if (result.superBolusAvailable && inputs.useSuperBolus) BreakdownRow("Superbolus", result.superBolusInsulin, colors)
             result.scaledPercent?.let { BreakdownRow("Scaled", "$it%", colors) }
+            if (inputs.adjustment != 0.0)
+                BreakdownRow(
+                    if (result.adjustmentIgnored(inputs.adjustment)) "Adjustment (not applied)" else "Adjustment",
+                    signedUnits(inputs.adjustment, result.adjustmentDecimals), colors,
+                    changed = baseline.appliedAdjustment != result.appliedAdjustment
+                )
             outcome.carbEquivalent?.let { BreakdownRow("Carb equivalent", "$it g", colors) }
             Box(
                 Modifier
@@ -499,6 +547,9 @@ private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCom
 }
 
 private fun units(v: Double) = "${formatNumeric(v, 2)} U"
+
+/** A signed contribution at the resolution of the control that produced it. */
+private fun signedUnits(v: Double, decimals: Int) = (if (v > 0) "+" else "") + formatNumeric(v, decimals) + " U"
 
 @Composable
 private fun Struck(text: String, colors: AapsColors) =

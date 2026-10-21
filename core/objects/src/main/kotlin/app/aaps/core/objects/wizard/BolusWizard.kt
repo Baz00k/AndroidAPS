@@ -100,8 +100,6 @@ class BolusWizard @Inject constructor(
         private set
     var insulinFromBasalIOB = 0.0
         private set
-    var insulinFromCorrection = 0.0
-        private set
     var insulinFromSuperBolus = 0.0
         private set
     var insulinFromCOB = 0.0
@@ -132,6 +130,14 @@ class BolusWizard @Inject constructor(
     var calculatedCorrection: Double = 0.0
         private set
 
+    /**
+     * The part of [adjustment] that was actually added to [calculatedTotalInsulin]. It differs from
+     * [adjustment] only when the adjustment was clamped at zero, and is zero when the Calculator
+     * derived no dose to adjust (a zero calculation stays zero).
+     */
+    var appliedAdjustment: Double = 0.0
+        private set
+
     // Input
     lateinit var profile: Profile
     lateinit var profileName: String
@@ -139,7 +145,14 @@ class BolusWizard @Inject constructor(
     var carbs: Int = 0
     var cob: Double = 0.0
     var bg: Double = 0.0
-    private var correction: Double = 0.0
+
+    /**
+     * Signed per-dose adjustment in insulin units, set by the user for this calculation only. Positive
+     * adds to the total, negative subtracts. It is applied AFTER the bolus percentage, so the percentage
+     * never scales it, and it cannot create a dose from a zero calculation. Not persisted anywhere but
+     * in the calculator record ([createBolusCalculatorResult]).
+     */
+    private var adjustment: Double = 0.0
     var percentageCorrection: Int = 100
     private var totalPercentage: Double = 100.0
     private var useBg: Boolean = false
@@ -170,7 +183,7 @@ class BolusWizard @Inject constructor(
         carbs: Int,
         cob: Double,
         bg: Double,
-        correction: Double,
+        adjustment: Double,
         percentageCorrection: Int = 100,
         useBg: Boolean,
         useCob: Boolean,
@@ -195,7 +208,7 @@ class BolusWizard @Inject constructor(
         this.carbs = carbs
         this.cob = cob
         this.bg = bg
-        this.correction = correction
+        this.adjustment = adjustment
         this.percentageCorrection = percentageCorrection
         this.useBg = useBg
         this.useCob = useCob
@@ -255,9 +268,6 @@ class BolusWizard @Inject constructor(
         var calculatedTotalIOB = insulinFromBolusIOB + insulinFromBasalIOB
         calculatedTotalIOB = if (positiveIOBOnly && calculatedTotalIOB < 0.0) 0.0 else -calculatedTotalIOB
 
-        // Insulin from correction
-        insulinFromCorrection = if (usePercentage) 0.0 else correction
-
         // Insulin from superbolus for 2h. Get basal rate now and after 1h
         if (useSuperBolus) {
             insulinFromSuperBolus = profile.getBasal()
@@ -266,8 +276,8 @@ class BolusWizard @Inject constructor(
             insulinFromSuperBolus += profile.getBasal(timeAfter1h)
         }
 
-        // Total
-        calculatedTotalInsulin = insulinFromBG + insulinFromTrend + insulinFromCarbs + calculatedTotalIOB + insulinFromCorrection + insulinFromSuperBolus + insulinFromCOB
+        // Total, before the percentage and the per-dose adjustment
+        calculatedTotalInsulin = insulinFromBG + insulinFromTrend + insulinFromCarbs + calculatedTotalIOB + insulinFromSuperBolus + insulinFromCOB
 
         val percentage = if (usePercentage) totalPercentage else percentageCorrection.toDouble()
 
@@ -289,7 +299,18 @@ class BolusWizard @Inject constructor(
         }
 
         val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
-        calculatedTotalInsulin = Round.roundTo(calculatedTotalInsulin, bolusStep)
+        val calculatedBeforeAdjustment = Round.roundTo(calculatedTotalInsulin, bolusStep)
+        // The adjustment refines a dose the Calculator derived; it never creates one. Upstream's
+        // Correction field does allow that; here a zero calculation stays zero and a dose the Calculator
+        // did not derive is a manual insulin entry.
+        appliedAdjustment = if (calculatedBeforeAdjustment > 0.0) adjustment else 0.0
+        calculatedTotalInsulin = Round.roundTo(calculatedBeforeAdjustment + appliedAdjustment, bolusStep)
+        if (calculatedTotalInsulin < 0.0) {
+            // Below zero clamps at zero, as a negative calculation does: the remainder is shown as carbs.
+            carbsEquivalent = -calculatedTotalInsulin * ic
+            appliedAdjustment = -calculatedBeforeAdjustment
+            calculatedTotalInsulin = 0.0
+        }
 
         insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(calculatedTotalInsulin, aapsLogger)).value()
 
@@ -322,7 +343,9 @@ class BolusWizard @Inject constructor(
             carbs = carbs.toDouble(),
             wereCarbsUsed = cob > 0,
             carbsInsulin = insulinFromCarbs,
-            otherCorrection = correction,
+            // The adjustment that reached the total, so the record explains the delivered amount. The
+            // field keeps its upstream name: Nightscout reads it as "other correction".
+            otherCorrection = appliedAdjustment,
             wasSuperbolusUsed = useSuperBolus,
             superbolusInsulin = insulinFromSuperBolus,
             wasTempTargetUsed = useTT,
@@ -655,8 +678,8 @@ class BolusWizard @Inject constructor(
 
     private fun calcPercentageWithConstraints() {
         calculatedPercentage = 100
-        if (totalBeforePercentageAdjustment != insulinFromCorrection)
-            calculatedPercentage = (calculatedTotalInsulin / (totalBeforePercentageAdjustment - insulinFromCorrection) * 100).toInt()
+        if (totalBeforePercentageAdjustment != 0.0)
+            calculatedPercentage = (calculatedTotalInsulin / totalBeforePercentageAdjustment * 100).toInt()
         calculatedPercentage = max(calculatedPercentage, 10)
         calculatedPercentage = min(calculatedPercentage, 250)
     }
