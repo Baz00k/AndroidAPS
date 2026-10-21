@@ -182,19 +182,19 @@
     <string name="openapsama_pp_ISF_weight_summary">Questo è il peso applicato mentre il glucosio sta aumentando e che rafforza ISF aumentando potenzialmente la somministrazione di insulina.\n\nIl valore predefinito 0.0 disattiva efficacemente questo effetto.</string>
     <string name="openapsama_bgAccel_ISF_weight_summary">Questo è il peso applicato mentre il glucosio accelera e che rafforza ISF aumentando potenzialmente la somministrazione di insulina.\n\nIl valore predefinito 0.0 disattiva efficacemente questo effetto.</string>
     <string name="openapsama_bgBrake_ISF_weight_summary">Questo è il peso applicato mentre il glucosio decelera e che indebolisce ISF riducendo potenzialmente la somministrazione di insulina.\n\nIl valore predefinito 0.0 disattiva efficacemente questo effetto.</string>
-    <string name="openapsama_autoISF_max">Rapporto max autoISF\n(autoISF_max)</string>
-    <string name="openapsama_autoISF_min">Rapporto min autoISF\n(autoISF_min)</string>
-    <string name="openapsama_lower_ISFrange_weight">livello inferiore all\'intervallo ISF\n(lower_ISFrange_weight)</string>
-    <string name="openapsama_higher_ISFrange_weight">livello superiore dell\'intervallo ISF\n(higher_ISFrange_weight)</string>
-    <string name="openapsama_pp_ISF_weight">ISF postprandiale\n(pp_ISF_weight)</string>
-    <string name="openapsama_bgAccel_ISF_weight">Peso mentre il BG accelera\n(bgAccel_ISF_weight)</string>
-    <string name="openapsama_bgBrake_ISF_weight">Peso mentre il BG decelera\n(bgBrake_ISF_weight)</string>
-    <string name="openapsama_dura_ISF_weight">peso dura_ISF\n(dura_ISF_weight)</string>
-    <string name="openapsama_smb_delivery_ratio">erogazione SMB fisso\n(smb_delivery_ratio)</string>
-    <string name="openapsama_smb_delivery_ratio_min">erogazione SMB variabile, livello inferiore\n(smb_delivery_ratio_min)</string>
-    <string name="openapsama_smb_delivery_ratio_max">erogazione SMB variabile, livello superiore\n(smb_delivery_ratio_max)</string>
-    <string name="openapsama_smb_delivery_ratio_bg_range">rapporto di erogazione SMB variabile, intervallo di glucosio mappato\n(smb_delivery_ratio_bg_range)</string>
-    <string name="openapsama_smb_max_range_extension">Estensione massima del raggio SMB/UAM\n(smb_max_range_extension)</string>
+    <string name="openapsama_autoISF_max">Rapporto max autoISF</string>
+    <string name="openapsama_autoISF_min">Rapporto min autoISF</string>
+    <string name="openapsama_lower_ISFrange_weight">livello inferiore all\'intervallo ISF</string>
+    <string name="openapsama_higher_ISFrange_weight">livello superiore dell\'intervallo ISF</string>
+    <string name="openapsama_pp_ISF_weight">ISF postprandiale</string>
+    <string name="openapsama_bgAccel_ISF_weight">Peso mentre il BG accelera</string>
+    <string name="openapsama_bgBrake_ISF_weight">Peso mentre il BG decelera</string>
+    <string name="openapsama_dura_ISF_weight">peso dura_ISF</string>
+    <string name="openapsama_smb_delivery_ratio">erogazione SMB fisso</string>
+    <string name="openapsama_smb_delivery_ratio_min">erogazione SMB variabile, livello inferiore</string>
+    <string name="openapsama_smb_delivery_ratio_max">erogazione SMB variabile, livello superiore</string>
+    <string name="openapsama_smb_delivery_ratio_bg_range">rapporto di erogazione SMB variabile, intervallo di glucosio mappato</string>
+    <string name="openapsama_smb_max_range_extension">Estensione massima del raggio SMB/UAM</string>
     <string name="openapsama_smb_delivery_ratio_summary">Valore predefinito: 0,5 Questo è un altro importante limite di sicurezza di OpenAPS e specifica quale parte dell\'insulina totale necessaria può essere somministrata come SMB. Questo per evitare che le persone si trovino in una zona pericolosa impostando contemporaneamente le richieste SMB dal telefono dei caregiver. Aumentare lentamente e con cautela questo valore sperimentale.</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">Valore predefinito: 0,5 Questo è il limite inferiore di un rapporto crescente lineare anziché il valore fisso soprastante.</string>
     <string name="openapsama_smb_delivery_ratio_max_summary">Valore predefinito: 0,5 Questo è il limite superiore di un rapporto che aumenta linearmente anziché il valore fisso sopra.</string>
@@ -203,5 +203,5 @@
     <string name="enableSMB_EvenOn_OddOff_always">Abilita l\'attivazione alternativa di SMB a seconda che il target attivo sia un numero pari</string>
     <string name="enableSMB_EvenOn_OddOff_always_summary">\nenabled ...\nif il target attivo(mmol/L) ha una cifra decimale pari\no il bersaglio attivo(mg/dL) è un numero pari\n\nnon abilitato altrimenti</string>
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">Percentuale di maxIOB al di sopra del quale gli SMB sono disabilitati.\nValore predefinito: 100%\nCon 100% questa funzione è effettivamente disabilitata.</string>
-    <string name="openapsama_iob_threshold_percent">soglia maxIOB percentuale per SMB\n(iob_threshold_percent)</string>
+    <string name="openapsama_iob_threshold_percent">soglia maxIOB percentuale per SMB</string>
 </resources>

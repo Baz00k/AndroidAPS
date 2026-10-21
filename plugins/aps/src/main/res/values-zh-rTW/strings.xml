@@ -182,19 +182,19 @@
     <string name="openapsama_pp_ISF_weight_summary">這是當血糖上升時所應用的權重，會加強 ISF（胰島素敏感因子），因此可能增加胰島素的釋放量。\n\n預設值 0.0 實際上會關閉這個效果。</string>
     <string name="openapsama_bgAccel_ISF_weight_summary">這是當血糖加速上升時所應用的權重，會加強 ISF（胰島素敏感因子），因此可能增加胰島素的釋放量。\n\n預設值 0.0 實際上會關閉這個效果。</string>
     <string name="openapsama_bgBrake_ISF_weight_summary">這是當血糖減速時所應用的權重，會削弱 ISF（胰島素敏感因子），因此可能減少胰島素的釋放量。\n\n預設值 0.0 實際上會關閉這個效果。</string>
-    <string name="openapsama_autoISF_max">最大自動ISF比率\n(autoISF_max)</string>
-    <string name="openapsama_autoISF_min">最小自動ISF比率\n(autoISF_min)</string>
-    <string name="openapsama_lower_ISFrange_weight">較低的 ISF 範圍權重\n(lower_ISFrange_weight)</string>
-    <string name="openapsama_higher_ISFrange_weight">較高的 ISF 範圍的權重\n(higher_ISFrange_weight)</string>
-    <string name="openapsama_pp_ISF_weight">餐後 ISF 權重\n(pp_ISF_weight)</string>
-    <string name="openapsama_bgAccel_ISF_weight">血糖加速时的權重\n(bgAccel_ISF_weight)</string>
-    <string name="openapsama_bgBrake_ISF_weight">血糖減速時的權重\n(bgBrake_ISF_weight)</string>
-    <string name="openapsama_dura_ISF_weight">dura_ISF 權重\n(dura_ISF_weight)</string>
-    <string name="openapsama_smb_delivery_ratio">固定的 SMB 傳輸率\n(smb_delivery_ratio)</string>
-    <string name="openapsama_smb_delivery_ratio_min">可變的 SMB 傳輸率的下限(smb_delivery_ratio_min)</string>
-    <string name="openapsama_smb_delivery_ratio_max">可變的 SMB 傳輸率的上限\n(smb_delivery_ratio_max)</string>
-    <string name="openapsama_smb_delivery_ratio_bg_range">可變的 SMB 傳輸率對應的血糖範圍\n(smb_delivery_ratio_bg_range)\"</string>
-    <string name="openapsama_smb_max_range_extension">SMB/UAM 最大範圍延伸\n(smb_max_range_extension)</string>
+    <string name="openapsama_autoISF_max">最大自動ISF比率</string>
+    <string name="openapsama_autoISF_min">最小自動ISF比率</string>
+    <string name="openapsama_lower_ISFrange_weight">較低的 ISF 範圍權重</string>
+    <string name="openapsama_higher_ISFrange_weight">較高的 ISF 範圍的權重</string>
+    <string name="openapsama_pp_ISF_weight">餐後 ISF 權重</string>
+    <string name="openapsama_bgAccel_ISF_weight">血糖加速时的權重</string>
+    <string name="openapsama_bgBrake_ISF_weight">血糖減速時的權重</string>
+    <string name="openapsama_dura_ISF_weight">dura_ISF 權重</string>
+    <string name="openapsama_smb_delivery_ratio">固定的 SMB 傳輸率</string>
+    <string name="openapsama_smb_delivery_ratio_min">可變的 SMB 傳輸率的下限</string>
+    <string name="openapsama_smb_delivery_ratio_max">可變的 SMB 傳輸率的上限</string>
+    <string name="openapsama_smb_delivery_ratio_bg_range">可變的 SMB 傳輸率對應的血糖範圍</string>
+    <string name="openapsama_smb_max_range_extension">SMB/UAM 最大範圍延伸</string>
     <string name="openapsama_smb_delivery_ratio_summary">預設值：0.5 這是另一個重要的 OpenAPS 安全上限，指定了總胰島素需求中可以通過 SMB 輸送的比例。這樣做是為了防止在護理人員的手機上同時設置 SMB 請求時進入危險區域。請慢慢地且謹慎地增加這個實驗值。</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">預設值：0.5 這是線性遞增比例的下限，而不是前面提到的固定值。</string>
     <string name="openapsama_smb_delivery_ratio_max_summary">預設值：0.5 這是線性遞增比例的上限，而不是前面提到的固定值。</string>
@@ -203,5 +203,5 @@
     <string name="enableSMB_EvenOn_OddOff_always">啟用根據活動目標是偶數的情況下啟用SMB的替代啟動</string>
     <string name="enableSMB_EvenOn_OddOff_always_summary">\n啟用 ...\n如果活動目標 (mmol/L) 是偶數小數\n或活動目標 (mg/dL) 是偶數\n\n否則停用</string>
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">當 maxIOB 的百分比超過此數值時，SMBs（小量胰島素注射）將被停用。\n預設值：100%\n設定為 100% 時，這個功能實際上會被關閉。</string>
-    <string name="openapsama_iob_threshold_percent">SMB 的 maxIOB 門檻值百分比設定\n(iob_threshold_percent)</string>
+    <string name="openapsama_iob_threshold_percent">SMB 的 maxIOB 門檻值百分比設定</string>
 </resources>

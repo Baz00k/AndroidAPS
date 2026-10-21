@@ -182,19 +182,19 @@
     <string name="openapsama_pp_ISF_weight_summary">Dit is het gewicht dat wordt toegepast bij een stijgende glucose waardoor ISF versterkt wordt en de insulinetoediening mogelijk verhoogt.\n\nDe standaardwaarde 0.0 schakelt dit effect effectief uit.</string>
     <string name="openapsama_bgAccel_ISF_weight_summary">Dit is het gewicht dat wordt toegepast wanneer de glucose waarde aan het versnellen is waardoor ISF versterkt en de insulinetoediening mogelijk toeneemt.\n\nDe standaardwaarde 0.0 schakelt dit effect effectief uit.</string>
     <string name="openapsama_bgBrake_ISF_weight_summary">Dit is het gewicht dat wordt toegepast wanneer de glucose waarde aan het vertragen is waardoor ISF verzwakt en de insulinetoediening mogelijk vermindert.\n\nDe standaardwaarde 0.0 schakelt dit effect effectief uit.</string>
-    <string name="openapsama_autoISF_max">Max autoISF verhouding\n(autoISF_max)</string>
-    <string name="openapsama_autoISF_min">Min autoISF ratio\n(autoISF_min)</string>
-    <string name="openapsama_lower_ISFrange_weight">lager ISF-bereik gewicht\n(lower_ISFrange_weight)</string>
-    <string name="openapsama_higher_ISFrange_weight">hoger ISF-bereik gewicht\n(lhigher_ISFrange_weight)</string>
-    <string name="openapsama_pp_ISF_weight">ISF gewicht na maaltijd\n(pp_ISF_weight)</string>
-    <string name="openapsama_bgAccel_ISF_weight">Gewicht wanneer BG accelereert\n(bgAccel_ISF_weight)</string>
-    <string name="openapsama_bgBrake_ISF_weight">Gewicht wanneer BG afremt\n(bgBrake_ISF_weight)</string>
-    <string name="openapsama_dura_ISF_weight">dura_ISF weight\n(dura_ISF_weight)</string>
-    <string name="openapsama_smb_delivery_ratio">vaste SMB uitleveringsverhouding\n(smb_delivery_ratio)</string>
-    <string name="openapsama_smb_delivery_ratio_min">variabele SMB leveringsverhouding, ondergrens\n(smb_delivery_ratio_min)</string>
-    <string name="openapsama_smb_delivery_ratio_max">variabele SMB leveringsverhouding, bovengrens\n(smb_delivery_ratio_max)</string>
-    <string name="openapsama_smb_delivery_ratio_bg_range">variabele SMB leveringsverhouding, gekoppelde glucosebereik\n(smb_delivery_ratio_bg_range)</string>
-    <string name="openapsama_smb_max_range_extension">SMB/UAM max bereik extensie\n(smb_max_range_extension)</string>
+    <string name="openapsama_autoISF_max">Max autoISF verhouding</string>
+    <string name="openapsama_autoISF_min">Min autoISF ratio</string>
+    <string name="openapsama_lower_ISFrange_weight">lager ISF-bereik gewicht</string>
+    <string name="openapsama_higher_ISFrange_weight">hoger ISF-bereik gewicht</string>
+    <string name="openapsama_pp_ISF_weight">ISF gewicht na maaltijd</string>
+    <string name="openapsama_bgAccel_ISF_weight">Gewicht wanneer BG accelereert</string>
+    <string name="openapsama_bgBrake_ISF_weight">Gewicht wanneer BG afremt</string>
+    <string name="openapsama_dura_ISF_weight">dura_ISF weight</string>
+    <string name="openapsama_smb_delivery_ratio">vaste SMB uitleveringsverhouding</string>
+    <string name="openapsama_smb_delivery_ratio_min">variabele SMB leveringsverhouding, ondergrens</string>
+    <string name="openapsama_smb_delivery_ratio_max">variabele SMB leveringsverhouding, bovengrens</string>
+    <string name="openapsama_smb_delivery_ratio_bg_range">variabele SMB leveringsverhouding, gekoppelde glucosebereik</string>
+    <string name="openapsama_smb_max_range_extension">SMB/UAM max bereik extensie</string>
     <string name="openapsama_smb_delivery_ratio_summary">Standaardwaarde: 0,5 Dit is een andere instelling voor de veiligheid van OpenAPS, en geeft aan welk deel van de benodigde totale insuline kan worden geleverd als SMB. Dit om te voorkomen dat mensen in een gevaarlijk situatie terechtkomen wanneer tegelijkertijd SMB verzoeken via een telefoon van een verzorger binnenkomen. Verhoog deze experimentele waarde langzaam en met voorzichtigheid.</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">Standaard waarde: 0.5 Dit is het ondergrens van een lineaire verhoging ratio in plaats van de bovenstaande vaste waarde.</string>
     <string name="openapsama_smb_delivery_ratio_max_summary">Standaard waarde: 0.5 Dit is het bovengrens van een lineaire verhoging ratio in plaats van de bovenstaande vaste waarde.</string>
@@ -203,5 +203,5 @@
     <string name="enableSMB_EvenOn_OddOff_always">Inschakelen van SMB afhankelijk van het feit dat het huidige doel een even getal is</string>
     <string name="enableSMB_EvenOn_OddOff_always_summary">\ningeschakeld...\nals actief doel (mmol/L) een even decimaal\nheeft of het actieve doel (mg/dL) een even getal is\n\nanders uitgeschakeld</string>
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">Percentage van maxIOB waarbij SMB\'s worden uitgeschakeld.\nStandaardwaarde: 100%\nMet 100% wordt deze functie effectief uitgeschakeld.</string>
-    <string name="openapsama_iob_threshold_percent">maxIOB drempelpercentage voor SMB\n(iob_threshold_percent)</string>
+    <string name="openapsama_iob_threshold_percent">maxIOB drempelpercentage voor SMB</string>
 </resources>
