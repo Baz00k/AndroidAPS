@@ -182,19 +182,19 @@
     <string name="openapsama_pp_ISF_weight_summary">Đây là trọng số được áp dụng khi đường huyết đang tăng, giúp tăng cường ISF và do đó có thể làm tăng lượng insulin được phân phối.\n\nGiá trị mặc định 0,0 về cơ bản tắt hiệu ứng này.</string>
     <string name="openapsama_bgAccel_ISF_weight_summary">Đây là trọng số được áp dụng khi đường huyết tăng nhanh, giúp tăng cường ISF và do đó có thể làm tăng lượng insulin được phân phối.\n\nGiá trị mặc định 0,0 về cơ bản tắt hiệu ứng này.</string>
     <string name="openapsama_bgBrake_ISF_weight_summary">Đây là trọng số được áp dụng khi đường huyết giảm tốc, giúp làm yếu ISF và do đó có thể làm giảm lượng insulin được phân phối.\n\nGiá trị mặc định 0,0 về cơ bản tắt hiệu ứng này.</string>
-    <string name="openapsama_autoISF_max">Tỷ lệ AutoISF tối đa\n(autoISF_max)</string>
-    <string name="openapsama_autoISF_min">Tỷ lệ AutoISF tối thiểu\n(autoISF_min)</string>
-    <string name="openapsama_lower_ISFrange_weight">Lower ISF-range weight\n(lower_ISFrange_weight)</string>
-    <string name="openapsama_higher_ISFrange_weight">Higher ISF-range weight\n(higher_ISFrange_weight)</string>
-    <string name="openapsama_pp_ISF_weight">Postprandial ISF weight\n(pp_ISF_weight)</string>
-    <string name="openapsama_bgAccel_ISF_weight">Weight while BG accelerates\n(bgAccel_ISF_weight)</string>
-    <string name="openapsama_bgBrake_ISF_weight">Weight while BG decelerates\n(bgBrake_ISF_weight)</string>
-    <string name="openapsama_dura_ISF_weight">Dura_ISF weight\n(dura_ISF_weight)</string>
-    <string name="openapsama_smb_delivery_ratio">Tỷ lệ phân phối SMB cố định\n(smb_delivery_ratio)</string>
-    <string name="openapsama_smb_delivery_ratio_min">Tỷ lệ phân phối SMB tối thiểu\n(smb_delivery_ratio_min)</string>
-    <string name="openapsama_smb_delivery_ratio_max">Tỷ lệ phân phối SMB tối đa\n(smb_delivery_ratio_max)</string>
-    <string name="openapsama_smb_delivery_ratio_bg_range">Khoảng BG cho tỷ lệ phân phối SMB\n(smb_delivery_ratio_bg_range)</string>
-    <string name="openapsama_smb_max_range_extension">Phạm vi mở rộng tối đa của SMB/UAM\n(smb_max_range_extension)</string>
+    <string name="openapsama_autoISF_max">Tỷ lệ AutoISF tối đa</string>
+    <string name="openapsama_autoISF_min">Tỷ lệ AutoISF tối thiểu</string>
+    <string name="openapsama_lower_ISFrange_weight">Lower ISF-range weight</string>
+    <string name="openapsama_higher_ISFrange_weight">Higher ISF-range weight</string>
+    <string name="openapsama_pp_ISF_weight">Postprandial ISF weight</string>
+    <string name="openapsama_bgAccel_ISF_weight">Weight while BG accelerates</string>
+    <string name="openapsama_bgBrake_ISF_weight">Weight while BG decelerates</string>
+    <string name="openapsama_dura_ISF_weight">Dura_ISF weight</string>
+    <string name="openapsama_smb_delivery_ratio">Tỷ lệ phân phối SMB cố định</string>
+    <string name="openapsama_smb_delivery_ratio_min">Tỷ lệ phân phối SMB tối thiểu</string>
+    <string name="openapsama_smb_delivery_ratio_max">Tỷ lệ phân phối SMB tối đa</string>
+    <string name="openapsama_smb_delivery_ratio_bg_range">Khoảng BG cho tỷ lệ phân phối SMB</string>
+    <string name="openapsama_smb_max_range_extension">Phạm vi mở rộng tối đa của SMB/UAM</string>
     <string name="openapsama_smb_delivery_ratio_summary">Giá trị mặc định: 0,5. Đây là một giới hạn an toàn quan trọng khác của OpenAPS, quy định tỷ lệ insulin cần thiết có thể được bơm dưới dạng SMB. Mục đích là để ngăn tình trạng nguy hiểm khi có yêu cầu SMB được gửi đồng thời từ điện thoại của người chăm sóc. Hãy tăng giá trị thử nghiệm này từ từ và thận trọng.</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">Giá trị mặc định: 0,5. Đây là giới hạn thấp của một tỷ lệ tăng tuyến tính, thay vì giá trị cố định ở trên.</string>
     <string name="openapsama_smb_delivery_ratio_max_summary">Giá trị mặc định: 0,5. Đây là giới hạn cao của một tỷ lệ tăng tuyến tính, thay vì giá trị cố định ở trên.</string>
@@ -204,5 +204,5 @@
     <string name="enableSMB_EvenOn_OddOff_always_summary">\nBật ...\n nếu mục tiêu đang hoạt động (mmol/L) có phần thập phân chẵn\n
 hoặc mục tiêu đang hoạt động (mg/dL) là số chẵn.\n\nNgược lại sẽ tắt</string>
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">Phần trăm của maxIOB mà trên mức đó SMB sẽ bị tắt.\nGiá trị mặc định: 100%\nVới 100%, tính năng này sẽ bị tắt hoàn toàn.</string>
-    <string name="openapsama_iob_threshold_percent">Ngưỡng maxIOB theo phần trăm cho SMB\n(iob_threshold_percent)</string>
+    <string name="openapsama_iob_threshold_percent">Ngưỡng maxIOB theo phần trăm cho SMB</string>
 </resources>

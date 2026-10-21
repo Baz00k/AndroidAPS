@@ -182,19 +182,19 @@
     <string name="openapsama_pp_ISF_weight_summary">Toto je váha ktorá je aplikovaná, keď glykémia stúpa a parameter, ktorý znižuje ISF, čím potenciálne zvyšuje množstvo dodaného inzulínu.\n\nPredvolená hodnota 0.0 túto funkciu vypne.</string>
     <string name="openapsama_bgAccel_ISF_weight_summary">Toto je váha ktorá je aplikovaná, keď stúpanie glykémie zrýchľuje a parameter, ktorý znižuje ISF, čím potenciálne zvyšuje podávanie inzulínu.\n\nPredvolená hodnota 0,0 túto funkciu vypne.</string>
     <string name="openapsama_bgBrake_ISF_weight_summary">Toto je váha ktorá je aplikovaná pri spomaľovaní vzostupu glykémie a parameter, ktorý zvyšuje ISF, čím potenciálne znižuje množstvo dodaného inzulínu.\n\nPredvolená hodnota 0,0 túto funkciu vypne.</string>
-    <string name="openapsama_autoISF_max">Max. autoISF\n(autoISF_max)</string>
-    <string name="openapsama_autoISF_min">Min. autoISF\n(autoISF_min)</string>
-    <string name="openapsama_lower_ISFrange_weight">váha nižšieho rozsahu ISF\n(lower_ISFrange_weight)</string>
-    <string name="openapsama_higher_ISFrange_weight">váha vyššieho rozsahu ISF\n(higher_ISFrange_weight)</string>
-    <string name="openapsama_pp_ISF_weight">váha postprandiálneho ISF\n(pp_ISF_weight)</string>
-    <string name="openapsama_bgAccel_ISF_weight">Váha pri zrýchľovaní glykémie\n(bgAccel_ISF_weight)</string>
-    <string name="openapsama_bgBrake_ISF_weight">Váha pri spomaľovaní glykémie\n(bgBrake_ISF_weight)</string>
-    <string name="openapsama_dura_ISF_weight">váha dura_ISF\n(dura_ISF_weight)</string>
-    <string name="openapsama_smb_delivery_ratio">pevná veľkosť SMB\n(smb_delivery_ratio)</string>
-    <string name="openapsama_smb_delivery_ratio_min">premenlivá veľkosť SMB, dolný limit\n(smb_delivery_ratio_min)</string>
-    <string name="openapsama_smb_delivery_ratio_max">premenlivá veľkosť SMB, horný limit\n(smb_delivery_ratio_max)</string>
-    <string name="openapsama_smb_delivery_ratio_bg_range">premenlivá veľkosť SMB, mapovaný rozsah glykémie\n(smb_delivery_ratio_bg_range)</string>
-    <string name="openapsama_smb_max_range_extension">Max. rozšířenie rozsahu SMB/UAM\n(smb_max_range_extension)</string>
+    <string name="openapsama_autoISF_max">Max. autoISF</string>
+    <string name="openapsama_autoISF_min">Min. autoISF</string>
+    <string name="openapsama_lower_ISFrange_weight">váha nižšieho rozsahu ISF</string>
+    <string name="openapsama_higher_ISFrange_weight">váha vyššieho rozsahu ISF</string>
+    <string name="openapsama_pp_ISF_weight">váha postprandiálneho ISF</string>
+    <string name="openapsama_bgAccel_ISF_weight">Váha pri zrýchľovaní glykémie</string>
+    <string name="openapsama_bgBrake_ISF_weight">Váha pri spomaľovaní glykémie</string>
+    <string name="openapsama_dura_ISF_weight">váha dura_ISF</string>
+    <string name="openapsama_smb_delivery_ratio">pevná veľkosť SMB</string>
+    <string name="openapsama_smb_delivery_ratio_min">premenlivá veľkosť SMB, dolný limit</string>
+    <string name="openapsama_smb_delivery_ratio_max">premenlivá veľkosť SMB, horný limit</string>
+    <string name="openapsama_smb_delivery_ratio_bg_range">premenlivá veľkosť SMB, mapovaný rozsah glykémie</string>
+    <string name="openapsama_smb_max_range_extension">Max. rozšířenie rozsahu SMB/UAM</string>
     <string name="openapsama_smb_delivery_ratio_summary">Štandardná hodnota: 0.5 Toto je ďalšie dôležité bezpečnostné nastavenie OpenAPS, ktoré určuje, aké percento celkového inzulinu je možné vydať prostredníctvom SMB. Jeho zmyslom je zabrániť tomu, aby sa užívatelia vystavili riziku kvôli tomu, že by požiadavka na SMB odišla v tej istej chvíli prostredníctvom telefónu. Zvyšujte túto experimentálnu hodnotu pomaly a opatrne.</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">Štandardná hodnota: 0.5 Toto je dolný limit lineárne narastajúcej veľkosti, skôr než fixné zvýšenie.</string>
     <string name="openapsama_smb_delivery_ratio_max_summary">Štandardná hodnota: 0.5 Toto je horný limit lineárne narastajúcej veľkosti, skôr než fixné zvýšenie.</string>
@@ -203,5 +203,5 @@
     <string name="enableSMB_EvenOn_OddOff_always">Povoliť alternativnu aktiváciu SMB v závislosti na tom, či je aktívny cieľ párne číslo</string>
     <string name="enableSMB_EvenOn_OddOff_always_summary">\npovolené...\nkeď má aktivny cieľ (mmol/L) párne číslo za desatinou čiarkou\nalebo ak je hodnota aktívneho cieľa (mg/dL) párne číslo\n\n\inak zakázané</string>
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">Percento maxIOB, pri prekročení ktorého sú SMB zakázané.\nPredvolená hodnota: 100 %\nPri hodnote 100 % je táto funkcia vypnutá.</string>
-    <string name="openapsama_iob_threshold_percent">Prahová hodnota maxIOB v percentách. Ak sa dosiahne, vypnú sa SMB\n(iob_threshold_percent)</string>
+    <string name="openapsama_iob_threshold_percent">Prahová hodnota maxIOB v percentách. Ak sa dosiahne, vypnú sa SMB</string>
 </resources>

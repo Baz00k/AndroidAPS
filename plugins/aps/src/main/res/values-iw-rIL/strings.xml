@@ -169,7 +169,7 @@
     <string name="autoISF_settings_title">הגדרות רגישות אוטומטית</string>
     <string name="autoISF_settings_summary">רגישות אוטומטית מאפשרת להתאים את יחס הרגישות (ISF) לתרחישים שונים של התנהגות הסוכר\n\nיכול להתאים גם לשימוש עם SMB</string>
     <string name="openapsama_enable_autoISF">אפשר התאמת רגישות בתגובה להתנהגות רמת הסוכר</string>
-    <string name="openapsama_smb_max_range_extension">הרחבת טווח SMB/UAM מקסימלי \n(smb_max_range_extension)</string>
+    <string name="openapsama_smb_max_range_extension">הרחבת טווח SMB/UAM מקסימלי</string>
     <string name="openapsama_smb_delivery_ratio_summary">ערך ברירת מחדל: 0.5 זוהי מגבלת בטיחות נוספת של OpenAPS המגדירה איזה חלק מסך האינסולין הנדרש יכול להינתן כ-SMB. מגבלה זו נועדה למנוע כפילות הזרקת SMB הנגרמת מפקודות מהמטפל המרוחק בנוסף למכשיר הראשי. יש להגדיל ערך ניסיוני זה בהדרגה ובזהירות.</string>
     <string name="openapsama_smb_delivery_ratio_min_summary">ערך ברירת מחדל: 0.5 זהו הקצה הנמוך של יחס שמתגבר באופן ליניארי ולא ערך קבוע כפי שמצוין לעיל.</string>
 </resources>
