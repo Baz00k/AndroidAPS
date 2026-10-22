@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -62,6 +63,7 @@ class WizardScreenTest {
     fun adjustmentIsEnteredInInsulinAndDoesNotChangeCarbs() {
         var inputs = WizardInputs(carbs = 5)
         showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        openAdjustment()
         val add = compose.onNodeWithContentDescription("Add 0.1 U of dose adjustment")
         val subtract = compose.onNodeWithContentDescription("Subtract 0.1 U of dose adjustment")
 
@@ -80,6 +82,7 @@ class WizardScreenTest {
     fun adjustmentAcceptsATypedSignedValueWithoutTouchingCarbs() {
         var inputs = WizardInputs(carbs = 5)
         showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        openAdjustment()
         val field = compose.onNodeWithContentDescription("of dose adjustment")
 
         field.performScrollTo().performTextClearance()
@@ -87,6 +90,34 @@ class WizardScreenTest {
         compose.waitForIdle()
         assertThat(inputs.adjustment).isWithin(0.0001).of(-0.3)
         assertThat(inputs.carbs).isEqualTo(5)
+    }
+
+    @Test
+    fun theAdjustmentFieldIsNotShownUntilTheActionIsOpened() {
+        showCalculator { }
+        compose.onNodeWithContentDescription("of dose adjustment").assertDoesNotExist()
+
+        openAdjustment()
+        compose.onNodeWithContentDescription("of dose adjustment").assertExists()
+    }
+
+    @Test
+    fun anOffStepAdjustmentCannotBeReviewed() {
+        var inputs = WizardInputs(carbs = 5)
+        showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        openAdjustment()
+        val field = compose.onNodeWithContentDescription("of dose adjustment")
+
+        field.performScrollTo().performTextClearance()
+        field.performTextInput("0.25")
+        compose.waitForIdle()
+        assertThat(inputs.adjustment).isWithin(0.0001).of(0.25)
+        compose.onNodeWithText("Use 0.1 U steps").assertExists()
+        compose.onNodeWithText("Review").assertIsNotEnabled()
+    }
+
+    private fun openAdjustment() {
+        compose.onNodeWithText("Adjust dose").performScrollTo().performClick()
     }
 
     private fun showCalculator(initial: WizardInputs = WizardInputs(), onInputs: (WizardInputs) -> Unit) {
@@ -99,10 +130,12 @@ class WizardScreenTest {
                             // Include advice becoming available on the first carb tap in the same regression.
                             WizardResult(
                                 available = true,
+                                appliedAdjustment = it.adjustment,
                                 adjustmentStep = 0.1,
                                 adjustmentMax = 10.0,
                                 adjustmentDecimals = 1,
-                                advisorAvailable = it.carbs > 0
+                                advisorAvailable = it.carbs > 0,
+                                outcome = CalculatorOutcome(insulin = 1.0, carbs = it.carbs)
                             )
                         },
                         onCommit = { _, _, _ -> error("Editing inputs must not commit") },

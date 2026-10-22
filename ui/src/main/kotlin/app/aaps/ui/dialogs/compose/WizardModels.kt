@@ -3,6 +3,7 @@ package app.aaps.ui.dialogs.compose
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
+import java.math.BigDecimal
 
 /** User-editable Calculator inputs. Carbs + the factor toggles shown as "included in this dose". */
 @Immutable
@@ -74,7 +75,8 @@ data class WizardInputs(
                     manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
                     useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
                     eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean,
-                    adjustment = it[11] as Double
+                    // Default to zero for state saved before the adjustment existed.
+                    adjustment = (it.getOrNull(11) as? Double) ?: 0.0
                 )
             }
         )
@@ -144,6 +146,18 @@ data class WizardResult(
     /**
      * A nonzero adjustment that did not reach the total: the Calculator derived no dose, and a positive
      * adjustment must not create one (a manual insulin entry is the path for a dose it did not derive).
+     * An off-step value is not reported as ignored: it is rejected by the control instead of rounded.
      */
-    fun adjustmentIgnored(adjustment: Double): Boolean = adjustment != 0.0 && appliedAdjustment == 0.0
+    fun adjustmentIgnored(adjustment: Double): Boolean =
+        adjustment != 0.0 && appliedAdjustment == 0.0 && isWholeStep(adjustment, adjustmentStep)
+}
+
+/**
+ * True when [value] is a whole number of pump [step]s. The pump cannot deliver anything finer, and
+ * silently rounding a typed adjustment would make the recorded adjustment disagree with the total.
+ * Decimal arithmetic ignores binary floating-point noise (0.3 is three 0.1 steps).
+ */
+fun isWholeStep(value: Double, step: Double): Boolean {
+    if (!value.isFinite() || !step.isFinite() || step <= 0.0) return false
+    return BigDecimal.valueOf(value).remainder(BigDecimal.valueOf(step)).compareTo(BigDecimal.ZERO) == 0
 }

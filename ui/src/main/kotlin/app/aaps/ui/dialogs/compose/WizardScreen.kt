@@ -105,6 +105,7 @@ fun WizardScreen(
     // Validate even collapsed/restored fields against the current configuration.
     val savedInputsValid = inputs.carbs in 0..carbControls.maxCarbs && inputs.carbDurationHours in 0..MAX_ABSORPTION_H
     var mealDetailsExpanded by rememberSaveable { mutableStateOf(false) }
+    var adjustmentExpanded by rememberSaveable { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -114,7 +115,10 @@ fun WizardScreen(
     }
     val result = remember(inputs, refresh) { compute(inputs) }
     val manualBgValid = inputs.manualBg?.let { it.isFinite() && it in result.bgEntryMin..result.bgEntryMax } ?: true
-    val draftsValid = savedInputsValid && manualBgValid && carbsValid && glucoseValid && adjustmentValid && (inputs.eatLater || absorptionValid)
+    val adjustmentInRange = inputs.adjustment in -result.adjustmentMax..result.adjustmentMax
+    val adjustmentWholeStep = isWholeStep(inputs.adjustment, result.adjustmentStep)
+    val draftsValid = savedInputsValid && manualBgValid && carbsValid && glucoseValid && adjustmentValid &&
+        adjustmentInRange && adjustmentWholeStep && (inputs.eatLater || absorptionValid)
     // "Eat later" only exists while the advisor applies; drop it rather than act on a stale choice.
     LaunchedEffect(result.advisorAvailable) {
         if (!result.advisorAvailable && inputs.eatLater) inputs = inputs.copy(eatLater = false)
@@ -138,7 +142,7 @@ fun WizardScreen(
                 }
             }
             else ReviewFooter(inputs, result.outcome) {
-                if (!savedInputsValid || !manualBgValid) {
+                if (!savedInputsValid || !manualBgValid || !adjustmentInRange || !adjustmentWholeStep) {
                     reviewing = false
                     return@ReviewFooter
                 }
@@ -158,7 +162,10 @@ fun WizardScreen(
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
                 if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
                                          { if (!mealDetailsExpanded || inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
-                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it })
+                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it },
+                                         adjustmentExpanded,
+                                         // Keep an invalid draft on screen: collapsing would hide why Review is disabled.
+                                         { if (!adjustmentExpanded || adjustmentValid) adjustmentExpanded = !adjustmentExpanded })
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }
         }
@@ -177,14 +184,12 @@ private fun InputCards(
     onCarbsValidity: (Boolean) -> Unit,
     onGlucoseValidity: (Boolean) -> Unit,
     onAbsorptionValidity: (Boolean) -> Unit,
-    onAdjustmentValidity: (Boolean) -> Unit
+    onAdjustmentValidity: (Boolean) -> Unit,
+    adjustmentExpanded: Boolean,
+    onToggleAdjustment: () -> Unit
 ) {
     GlucoseCard(inputs, result, colors, onInputs, onGlucoseValidity)
     CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs, onCarbsValidity, onAbsorptionValidity)
-    // The adjustment is insulin, not carbs: its own card, unit and signed range, so a gram count cannot
-    // be typed here and bolused as units (upstream #5305).
-    if (result.available)
-        AdjustmentCard(inputs, result, colors, onInputs, onAdjustmentValidity)
     AapsCard {
         Column {
             SectionLabel("Included", Modifier.padding(bottom = 4.dp))
@@ -216,11 +221,15 @@ private fun InputCards(
             if (inputs.adjustment != 0.0)
                 FactorRow(
                     "Adjustment",
-                    if (result.adjustmentIgnored(inputs.adjustment)) "Not applied: the Calculator derived no dose" else null,
-                    signedUnits(inputs.adjustment, result.adjustmentDecimals), colors
+                    if (result.adjustmentIgnored(inputs.adjustment)) "Not applied: no dose to adjust" else null,
+                    adjustmentContribution(inputs, result), colors
                 )
         }
     }
+    // Deliberately below the summary and collapsed by default: this is a deliberate refinement of the
+    // result, not another amount field next to carbs (upstream #5305).
+    if (result.available)
+        AdjustmentCard(inputs, result, colors, adjustmentExpanded, onToggleAdjustment, onInputs, onAdjustmentValidity)
 }
 
 /** The result as it stands, and the way to Review it. */
@@ -426,34 +435,108 @@ private fun CarbsCard(
     }
 }
 
+/**
+ * The per-dose adjustment, deliberately collapsed and below the summary: it refines the calculated
+ * result rather than being another amount field beside carbs. Upstream (#5305) got grams typed into an
+ * open correction field and bolused as units; here the user must open a separate action, and the
+ * collapsed row always states the signed amount and its unit.
+ */
 @Composable
 private fun AdjustmentCard(
     inputs: WizardInputs,
     result: WizardResult,
     colors: AapsColors,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onInputs: (WizardInputs) -> Unit,
     onValidity: (Boolean) -> Unit
 ) {
     val ignored = result.adjustmentIgnored(inputs.adjustment)
-    EntryCard("Adjustment") {
-        AmountStepper(
-            value = inputs.adjustment,
-            onValue = { onInputs(inputs.copy(adjustment = it)) },
-            step = result.adjustmentStep,
-            // Same limit as the final dose: the adjustment can never take the review past max bolus.
-            min = -result.adjustmentMax, max = result.adjustmentMax,
-            decimals = result.adjustmentDecimals, unit = "U", name = "of dose adjustment",
-            zeroLabel = "None", onValidityChange = onValidity
-        )
-        Text(
-            when {
-                ignored -> "Not applied: the Calculator derived no dose."
-                else    -> "Insulin, not carbs. Added after the percentage, so it is not scaled: + increases the dose, − reduces it."
-            },
-            style = AapsTheme.type.caption,
-            color = if (ignored) colors.high else colors.textTertiary
-        )
+    val onStep = isWholeStep(inputs.adjustment, result.adjustmentStep)
+    val stepText = formatNumeric(result.adjustmentStep, result.adjustmentDecimals)
+    AapsCard {
+        Column(verticalArrangement = Arrangement.spacedBy(if (expanded) 10.dp else 0.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(AapsTheme.shape.cardSmall)
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = if (expanded) "Hide dose adjustment" else "Adjust the calculated dose",
+                        onClick = onToggle
+                    )
+                    .semantics {
+                        stateDescription = when {
+                            expanded -> "Expanded"
+                            ignored  -> "Collapsed, adjustment not applied"
+                            else     -> "Collapsed"
+                        }
+                    }
+                    .heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Adjust dose", style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+                    Text(
+                        when {
+                            !onStep                  -> "Use $stepText U steps"
+                            ignored                  -> "Not applied: no dose to adjust"
+                            inputs.adjustment == 0.0 -> "None"
+                            else                     -> "Insulin, added to the calculated dose"
+                        },
+                        style = AapsTheme.type.caption,
+                        color = if (!onStep || ignored) colors.high else colors.textSecondary,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (inputs.adjustment != 0.0)
+                    Text(
+                        adjustmentContribution(inputs, result),
+                        style = AapsTheme.type.listTitle, color = colors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                Icon(
+                    AapsIcons.ExpandLess,
+                    contentDescription = null, tint = colors.textSecondary,
+                    modifier = Modifier.size(24.dp).rotate(if (expanded) 0f else 180f)
+                )
+            }
+            if (expanded) {
+                AmountStepper(
+                    value = inputs.adjustment,
+                    onValue = { onInputs(inputs.copy(adjustment = it)) },
+                    step = result.adjustmentStep,
+                    // Same limit as the final dose: the adjustment can never take the review past max bolus.
+                    min = -result.adjustmentMax, max = result.adjustmentMax,
+                    decimals = result.adjustmentDecimals, unit = "U", name = "of dose adjustment",
+                    zeroLabel = "None", onValidityChange = onValidity
+                )
+                Text(
+                    when {
+                        !onStep -> "The pump delivers in $stepText U steps. Use − and + to land on one."
+                        ignored -> "Not applied: the calculated dose is zero after rounding to the pump step."
+                        else    -> "Insulin, not carbs." +
+                            (if (result.scaledPercent != null) " Added after the percentage, so it is not scaled." else "") +
+                            " + increases the dose, − reduces it."
+                    },
+                    style = AapsTheme.type.caption,
+                    color = if (!onStep || ignored) colors.high else colors.textTertiary
+                )
+            }
+        }
     }
+}
+
+/**
+ * What the adjustment contributes to the total. When the entered amount was clamped or rounded to the
+ * pump's step, the applied amount is shown with the entered one in parentheses, so the breakdown adds up
+ * and matches the record.
+ */
+private fun adjustmentContribution(inputs: WizardInputs, result: WizardResult): String {
+    val entered = signedUnits(inputs.adjustment, result.adjustmentDecimals)
+    if (result.adjustmentIgnored(inputs.adjustment)) return entered
+    val applied = signedUnits(result.appliedAdjustment, result.adjustmentDecimals)
+    return if (applied == entered) entered else "$applied (entered $entered)"
 }
 
 @Composable
@@ -507,7 +590,7 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
             if (inputs.adjustment != 0.0)
                 BreakdownRow(
                     if (result.adjustmentIgnored(inputs.adjustment)) "Adjustment (not applied)" else "Adjustment",
-                    signedUnits(inputs.adjustment, result.adjustmentDecimals), colors,
+                    adjustmentContribution(inputs, result), colors,
                     changed = baseline.appliedAdjustment != result.appliedAdjustment
                 )
             outcome.carbEquivalent?.let { BreakdownRow("Carb equivalent", "$it g", colors) }
