@@ -3,6 +3,7 @@ package app.aaps.ui.dialogs.compose
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
+import java.math.BigDecimal
 
 /** User-editable Calculator inputs. Carbs + the factor toggles shown as "included in this dose". */
 @Immutable
@@ -43,6 +44,8 @@ data class WizardInputs(
     val useCob: Boolean = false,
     val useTrend: Boolean = false,
     val useSuperBolus: Boolean = false,
+    /** Signed per-dose adjustment in U, for this calculation only. */
+    val adjustment: Double = 0.0,
     /**
      * Bolus advisor: glucose is high, so bolus now and eat once it has come down. The carbs are not
      * logged yet; an eat reminder is scheduled instead. Only offered while the advisor applies.
@@ -61,13 +64,14 @@ data class WizardInputs(
     companion object {
 
         val Saver: Saver<WizardInputs, Any> = listSaver(
-            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat, it.useCob) },
+            save = { listOf(it.carbs, it.carbTime, it.carbDurationHours, it.manualBg ?: Double.NaN, it.useBg, it.useIob, it.useTrend, it.useSuperBolus, it.eatLater, it.remindToEat, it.useCob, it.adjustment) },
             restore = {
                 WizardInputs(
                     carbs = it[0] as Int, carbTime = it[1] as Int, carbDurationHours = it[2] as Int,
                     manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
                     useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
-                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean
+                    eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean,
+                    adjustment = (it.getOrNull(11) as? Double) ?: 0.0
                 )
             }
         )
@@ -106,6 +110,12 @@ data class WizardResult(
     val superBolusInsulin: String = "+0.00 U",
     /** The bolus percentage from settings, when it is not 100. */
     val scaledPercent: Int? = null,
+    val appliedAdjustment: Double = 0.0,
+    /** The pump's bolus step. */
+    val adjustmentStep: Double = 0.1,
+    /** Max bolus; the adjustment is limited to ±this. */
+    val adjustmentMax: Double = 0.0,
+    val adjustmentDecimals: Int = 1,
     val outcome: CalculatorOutcome = CalculatorOutcome(),
     val advisorAvailable: Boolean = false,
     /**
@@ -126,4 +136,14 @@ data class WizardResult(
     val bgCorrectionAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR || glucoseSource == GlucoseSource.MANUAL
     val trendAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR
     val cobAvailable: Boolean get() = cob != null
+
+    /** A valid nonzero adjustment that did not reach the total because there was no dose to adjust. */
+    fun adjustmentIgnored(adjustment: Double): Boolean =
+        adjustment != 0.0 && appliedAdjustment == 0.0 && isWholeStep(adjustment, adjustmentStep)
+}
+
+/** True when [value] is a whole number of [step]s; decimal arithmetic, so 0.3 is three 0.1 steps. */
+fun isWholeStep(value: Double, step: Double): Boolean {
+    if (!value.isFinite() || !step.isFinite() || step <= 0.0) return false
+    return BigDecimal.valueOf(value).remainder(BigDecimal.valueOf(step)).compareTo(BigDecimal.ZERO) == 0
 }

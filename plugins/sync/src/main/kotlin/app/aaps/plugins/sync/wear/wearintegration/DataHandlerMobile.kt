@@ -694,7 +694,7 @@ class DataHandlerMobile @Inject constructor(
             carbs = carbsAfterConstraints,
             cob = cobInfo.displayCob!!,
             bg = bgReading.valueToUnits(profileFunction.getUnits()),
-            correction = 0.0,
+            adjustment = 0.0,
             percentageCorrection = percentage,
             useBg = useBgPref,
             useCob = useCobPref,
