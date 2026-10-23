@@ -57,7 +57,7 @@ class YpsoStatusIntegrationTest {
         val sync: PumpSync = mock()
         val ui: UiInteraction = mock()
         val plugin = YpsoPumpPlugin(AAPSLoggerTest(), rh, preferences, mock(), state, fixture.manager, sync, mock(), ui,
-                                    Provider { PumpEnactResultObject(rh) }, provisioning, mock(), mock(), mock<AppLifecycle>())
+                                    Provider { PumpEnactResultObject(rh) }, provisioning, mock(), mock(), mock<AppLifecycle>(), mock())
         // Status polling schedules bounded background history recovery. Run it inline so the
         // queue-empty disconnect assertions below cannot race the recovery lease.
         plugin.dispatchHistoryRecovery = { task -> task() }

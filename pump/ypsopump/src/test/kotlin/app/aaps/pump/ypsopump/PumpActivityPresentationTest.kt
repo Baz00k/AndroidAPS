@@ -174,7 +174,7 @@ class PumpActivityPresentationTest {
             AAPSLoggerTest(), resources, mock<Preferences>(), commandQueue, YpsoPumpState(), mock<YpsoBleManager>(),
             mock<PumpSync>(), mock<RxBus>(), mock<UiInteraction>(),
             Provider { PumpEnactResultObject(resources).success(true).enacted(true) },
-            mock<YpsoProvisioningService>(), mock<ProfileFunction>(), constraints, mock<AppLifecycle>()
+            mock<YpsoProvisioningService>(), mock<ProfileFunction>(), constraints, mock<AppLifecycle>(), mock()
         )
     }
 }

@@ -6,6 +6,7 @@ import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.pump.defs.TimeChangeType
+import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.lifecycle.AppLifecycle
@@ -30,6 +31,7 @@ import app.aaps.core.interfaces.rx.events.EventProfileSwitchChanged
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.ui.toast.ToastUtils
+import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
@@ -93,6 +95,7 @@ class YpsoPumpPlugin @Inject constructor(
     private val profileFunction: ProfileFunction,
     private val constraintsChecker: ConstraintsChecker,
     private val appLifecycle: AppLifecycle,
+    private val config: Config,
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -1509,11 +1512,15 @@ class YpsoPumpPlugin @Inject constructor(
 
     @Synchronized
     internal fun publishAvailabilityNotification() {
-        if (!provisioning.notificationRequired()) {
+        val availability = provisioning.availability()
+        // The app-wide alarm owns connection failures only when it can actually fire. A
+        // pump-control build has no alarm, and the user may disable it, so keep the driver
+        // notification as the fallback in those cases.
+        val coreAlarmCoversConnection = config.APS && preferences.get(BooleanKey.AlertPumpUnreachable)
+        if (!provisioning.notificationRequired(availability, suppressConnectionCauses = coreAlarmCoversConnection)) {
             dismissAvailabilityNotification()
             return
         }
-        val availability = provisioning.availability()
         val presentation = pumpSetupPresentation(
             causes = availability.causes,
             hasSavedDetails = provisioning.installed() != null,

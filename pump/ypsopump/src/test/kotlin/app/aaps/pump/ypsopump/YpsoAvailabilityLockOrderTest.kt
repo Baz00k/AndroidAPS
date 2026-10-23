@@ -60,7 +60,7 @@ class YpsoAvailabilityLockOrderTest {
         val plugin = YpsoPumpPlugin(
             AAPSLoggerTest(), rh, mock<Preferences>(), mock<CommandQueue>(), state, mock<YpsoBleManager>(), mock<PumpSync>(), mock<RxBus>(),
             mock<UiInteraction>(), Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, mock<ProfileFunction>(),
-            mock<ConstraintsChecker>(), mock<AppLifecycle>(),
+            mock<ConstraintsChecker>(), mock<AppLifecycle>(), mock(),
         )
         store.armed = true
 
