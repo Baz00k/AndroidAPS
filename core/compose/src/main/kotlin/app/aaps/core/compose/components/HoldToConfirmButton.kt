@@ -1,8 +1,5 @@
 package app.aaps.core.compose.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -21,10 +18,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +51,7 @@ import app.aaps.core.compose.theme.AapsTheme
  * never reads as an ordinary tap button; held, it fills with solid accent from the leading edge
  * over [holdMillis], the label switching ink as the fill passes, so progress has full contrast in
  * either theme. Completing the hold fires [onConfirm] with a haptic tick; releasing early cancels.
+ * The hold takes [holdMillis] whatever the system animation scale.
  * This is a UI affordance ONLY — the caller must still run the same constraint + confirmation +
  * delivery path.
  *
@@ -71,20 +71,18 @@ fun HoldToConfirmButton(
     val haptics = LocalHapticFeedback.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     var holding by remember(confirms) { mutableStateOf(false) }
+    var progress by remember(confirms) { mutableFloatStateOf(0f) }
     val currentOnConfirm by rememberUpdatedState(onConfirm)
-    // progress animates to 1f while holding, back to 0f on release
-    val progress by animateFloatAsState(
-        targetValue = if (holding) 1f else 0f,
-        animationSpec = tween(durationMillis = if (holding) holdMillis else 180, easing = LinearEasing),
-        label = "hold-progress"
-    )
-    // fire once the fill reaches the end
-    LaunchedEffect(progress, holding) {
-        if (holding && progress >= 1f) {
-            holding = false
-            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-            currentOnConfirm()
-        }
+    // Timed from frame timestamps, not an animation: animations follow the system animator scale, and
+    // with animations removed the fill would complete on the first frame, so a tap would confirm.
+    LaunchedEffect(holding) {
+        progress = 0f
+        if (!holding) return@LaunchedEffect
+        val start = withFrameMillis { it }
+        while (progress < 1f) progress = withFrameMillis { ((it - start).toFloat() / holdMillis).coerceAtMost(1f) }
+        holding = false
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        currentOnConfirm()
     }
     Column(
         modifier
