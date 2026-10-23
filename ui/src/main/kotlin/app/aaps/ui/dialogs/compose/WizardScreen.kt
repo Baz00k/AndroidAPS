@@ -164,7 +164,6 @@ fun WizardScreen(
                                          { if (!mealDetailsExpanded || inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
                                          { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it },
                                          adjustmentExpanded,
-                                         // Keep an invalid draft on screen: collapsing would hide why Review is disabled.
                                          { if (!adjustmentExpanded || adjustmentValid) adjustmentExpanded = !adjustmentExpanded })
                 else ReviewContent(inputs, result, reviewed ?: result, colors)
             }
@@ -226,8 +225,7 @@ private fun InputCards(
                 )
         }
     }
-    // Deliberately below the summary and collapsed by default: this is a deliberate refinement of the
-    // result, not another amount field next to carbs (upstream #5305).
+    // Below the summary and collapsed, away from carbs (upstream #5305: grams bolused as units).
     if (result.available)
         AdjustmentCard(inputs, result, colors, adjustmentExpanded, onToggleAdjustment, onInputs, onAdjustmentValidity)
 }
@@ -435,12 +433,6 @@ private fun CarbsCard(
     }
 }
 
-/**
- * The per-dose adjustment, deliberately collapsed and below the summary: it refines the calculated
- * result rather than being another amount field beside carbs. Upstream (#5305) got grams typed into an
- * open correction field and bolused as units; here the user must open a separate action, and the
- * collapsed row always states the signed amount and its unit.
- */
 @Composable
 private fun AdjustmentCard(
     inputs: WizardInputs,
@@ -506,7 +498,6 @@ private fun AdjustmentCard(
                     value = inputs.adjustment,
                     onValue = { onInputs(inputs.copy(adjustment = it)) },
                     step = result.adjustmentStep,
-                    // Same limit as the final dose: the adjustment can never take the review past max bolus.
                     min = -result.adjustmentMax, max = result.adjustmentMax,
                     decimals = result.adjustmentDecimals, unit = "U", name = "of dose adjustment",
                     zeroLabel = "None", onValidityChange = onValidity
@@ -527,11 +518,7 @@ private fun AdjustmentCard(
     }
 }
 
-/**
- * What the adjustment contributes to the total. When the entered amount was clamped or rounded to the
- * pump's step, the applied amount is shown with the entered one in parentheses, so the breakdown adds up
- * and matches the record.
- */
+/** The applied adjustment, with the entered one in parentheses when clamping changed it. */
 private fun adjustmentContribution(inputs: WizardInputs, result: WizardResult): String {
     val entered = signedUnits(inputs.adjustment, result.adjustmentDecimals)
     if (result.adjustmentIgnored(inputs.adjustment)) return entered
@@ -631,7 +618,6 @@ private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCom
 
 private fun units(v: Double) = "${formatNumeric(v, 2)} U"
 
-/** A signed contribution at the resolution of the control that produced it. */
 private fun signedUnits(v: Double, decimals: Int) = (if (v > 0) "+" else "") + formatNumeric(v, decimals) + " U"
 
 @Composable

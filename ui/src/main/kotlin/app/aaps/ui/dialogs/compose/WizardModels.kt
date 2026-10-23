@@ -44,11 +44,7 @@ data class WizardInputs(
     val useCob: Boolean = false,
     val useTrend: Boolean = false,
     val useSuperBolus: Boolean = false,
-    /**
-     * Per-dose adjustment in insulin units, signed: + adds to the calculated dose, − subtracts. Set for
-     * one calculation only and never persisted as a setting. It is applied after the bolus percentage,
-     * so the percentage never scales it, and it cannot turn a zero calculation into a dose.
-     */
+    /** Signed per-dose adjustment in U, for this calculation only. */
     val adjustment: Double = 0.0,
     /**
      * Bolus advisor: glucose is high, so bolus now and eat once it has come down. The carbs are not
@@ -75,7 +71,6 @@ data class WizardInputs(
                     manualBg = (it[3] as Double).takeUnless { v -> v.isNaN() },
                     useBg = it[4] as Boolean, useIob = it[5] as Boolean, useTrend = it[6] as Boolean, useSuperBolus = it[7] as Boolean,
                     eatLater = it[8] as Boolean, remindToEat = it[9] as Boolean, useCob = it[10] as Boolean,
-                    // Default to zero for state saved before the adjustment existed.
                     adjustment = (it.getOrNull(11) as? Double) ?: 0.0
                 )
             }
@@ -115,11 +110,10 @@ data class WizardResult(
     val superBolusInsulin: String = "+0.00 U",
     /** The bolus percentage from settings, when it is not 100. */
     val scaledPercent: Int? = null,
-    /** The adjustment that actually reached the total; zero when there was no dose to adjust. */
     val appliedAdjustment: Double = 0.0,
-    /** Step for the adjustment control: the pump's bolus step. */
+    /** The pump's bolus step. */
     val adjustmentStep: Double = 0.1,
-    /** The adjustment cannot exceed ±max bolus, and the total is still capped by the same limit. */
+    /** Max bolus; the adjustment is limited to ±this. */
     val adjustmentMax: Double = 0.0,
     val adjustmentDecimals: Int = 1,
     val outcome: CalculatorOutcome = CalculatorOutcome(),
@@ -143,20 +137,12 @@ data class WizardResult(
     val trendAvailable: Boolean get() = glucoseSource == GlucoseSource.SENSOR
     val cobAvailable: Boolean get() = cob != null
 
-    /**
-     * A nonzero adjustment that did not reach the total: the Calculator derived no dose, and a positive
-     * adjustment must not create one (a manual insulin entry is the path for a dose it did not derive).
-     * An off-step value is not reported as ignored: it is rejected by the control instead of rounded.
-     */
+    /** A valid nonzero adjustment that did not reach the total because there was no dose to adjust. */
     fun adjustmentIgnored(adjustment: Double): Boolean =
         adjustment != 0.0 && appliedAdjustment == 0.0 && isWholeStep(adjustment, adjustmentStep)
 }
 
-/**
- * True when [value] is a whole number of pump [step]s. The pump cannot deliver anything finer, and
- * silently rounding a typed adjustment would make the recorded adjustment disagree with the total.
- * Decimal arithmetic ignores binary floating-point noise (0.3 is three 0.1 steps).
- */
+/** True when [value] is a whole number of [step]s; decimal arithmetic, so 0.3 is three 0.1 steps. */
 fun isWholeStep(value: Double, step: Double): Boolean {
     if (!value.isFinite() || !step.isFinite() || step <= 0.0) return false
     return BigDecimal.valueOf(value).remainder(BigDecimal.valueOf(step)).compareTo(BigDecimal.ZERO) == 0

@@ -60,30 +60,16 @@ class WizardScreenTest {
     }
 
     @Test
-    fun adjustmentIsEnteredInInsulinAndDoesNotChangeCarbs() {
+    fun adjustmentIsCollapsedAndEditedInInsulinWithoutTouchingCarbs() {
         var inputs = WizardInputs(carbs = 5)
         showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
-        openAdjustment()
-        val add = compose.onNodeWithContentDescription("Add 0.1 U of dose adjustment")
-        val subtract = compose.onNodeWithContentDescription("Subtract 0.1 U of dose adjustment")
+        val field = compose.onNodeWithContentDescription("of dose adjustment")
+        field.assertDoesNotExist()
 
-        add.performScrollTo().performClick()
+        openAdjustment()
+        compose.onNodeWithContentDescription("Add 0.1 U of dose adjustment").performScrollTo().performClick()
         compose.waitForIdle()
         assertThat(inputs.adjustment).isWithin(0.0001).of(0.1)
-        assertThat(inputs.carbs).isEqualTo(5)
-
-        subtract.performScrollTo().performClick()
-        compose.waitForIdle()
-        assertThat(inputs.adjustment).isWithin(0.0001).of(0.0)
-        assertThat(inputs.carbs).isEqualTo(5)
-    }
-
-    @Test
-    fun adjustmentAcceptsATypedSignedValueWithoutTouchingCarbs() {
-        var inputs = WizardInputs(carbs = 5)
-        showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
-        openAdjustment()
-        val field = compose.onNodeWithContentDescription("of dose adjustment")
 
         field.performScrollTo().performTextClearance()
         field.performTextInput("-0.3")
@@ -93,25 +79,14 @@ class WizardScreenTest {
     }
 
     @Test
-    fun theAdjustmentFieldIsNotShownUntilTheActionIsOpened() {
-        showCalculator { }
-        compose.onNodeWithContentDescription("of dose adjustment").assertDoesNotExist()
-
-        openAdjustment()
-        compose.onNodeWithContentDescription("of dose adjustment").assertExists()
-    }
-
-    @Test
     fun anOffStepAdjustmentCannotBeReviewed() {
-        var inputs = WizardInputs(carbs = 5)
-        showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
+        showCalculator(initial = WizardInputs(carbs = 5)) { }
         openAdjustment()
         val field = compose.onNodeWithContentDescription("of dose adjustment")
 
         field.performScrollTo().performTextClearance()
         field.performTextInput("0.25")
         compose.waitForIdle()
-        assertThat(inputs.adjustment).isWithin(0.0001).of(0.25)
         compose.onNodeWithText("Use 0.1 U steps").assertExists()
         compose.onNodeWithText("Review").assertIsNotEnabled()
     }

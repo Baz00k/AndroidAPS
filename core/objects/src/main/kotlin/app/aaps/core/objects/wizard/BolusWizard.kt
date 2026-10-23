@@ -117,10 +117,8 @@ class BolusWizard @Inject constructor(
     private fun onceOnSuccess(): Boolean = !succeeded.also { succeeded = true }
 
     // Result
-    /** The pump-rounded dose including the per-dose adjustment, before bolus constraints. */
     var calculatedTotalInsulin: Double = 0.0
         private set
-    /** The total the bolus percentage was applied to. Excludes the adjustment, which is added after it. */
     var totalBeforePercentageAdjustment: Double = 0.0
         private set
     var carbsEquivalent: Double = 0.0
@@ -132,11 +130,7 @@ class BolusWizard @Inject constructor(
     var calculatedCorrection: Double = 0.0
         private set
 
-    /**
-     * The part of [adjustment] that was actually added to [calculatedTotalInsulin]. It differs from
-     * [adjustment] only when the adjustment was clamped at zero, and is zero when the Calculator
-     * derived no dose to adjust (a zero calculation stays zero).
-     */
+    /** The part of [adjustment] that reached [calculatedTotalInsulin], after clamping at zero. */
     var appliedAdjustment: Double = 0.0
         private set
 
@@ -148,12 +142,7 @@ class BolusWizard @Inject constructor(
     var cob: Double = 0.0
     var bg: Double = 0.0
 
-    /**
-     * Signed per-dose adjustment in insulin units, set by the user for this calculation only. Positive
-     * adds to the total, negative subtracts. It is applied AFTER the bolus percentage, so the percentage
-     * never scales it, and it cannot create a dose from a zero calculation. Not persisted anywhere but
-     * in the calculator record ([createBolusCalculatorResult]).
-     */
+    /** Signed per-dose adjustment in U, added after the percentage. */
     private var adjustment: Double = 0.0
     var percentageCorrection: Int = 100
     private var totalPercentage: Double = 100.0
@@ -278,7 +267,7 @@ class BolusWizard @Inject constructor(
             insulinFromSuperBolus += profile.getBasal(timeAfter1h)
         }
 
-        // Total, before the percentage and the per-dose adjustment
+        // Total
         calculatedTotalInsulin = insulinFromBG + insulinFromTrend + insulinFromCarbs + calculatedTotalIOB + insulinFromSuperBolus + insulinFromCOB
 
         val percentage = if (usePercentage) totalPercentage else percentageCorrection.toDouble()
@@ -302,17 +291,11 @@ class BolusWizard @Inject constructor(
 
         val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
         val calculatedBeforeAdjustment = Round.roundTo(calculatedTotalInsulin, bolusStep)
-        // The adjustment refines a dose the Calculator derived; it never creates one. Upstream's
-        // Correction field does allow that; here a zero calculation stays zero and a dose the Calculator
-        // did not derive is a manual insulin entry. The gate is the pump-rounded baseline: a calculation
-        // that scales to less than one pump step has nothing the pump can adjust.
+        // The adjustment refines a calculated dose; it never creates one from zero.
         val requestedAdjustment = if (calculatedBeforeAdjustment > 0.0) adjustment else 0.0
         calculatedTotalInsulin = Round.roundTo(calculatedBeforeAdjustment + requestedAdjustment, bolusStep)
-        // Record the delta the rounded total actually includes, so the record and the delivered amount
-        // agree even if a caller supplies a value finer than the pump's step.
         appliedAdjustment = Round.roundTo(calculatedTotalInsulin - calculatedBeforeAdjustment, bolusStep)
         if (calculatedTotalInsulin < 0.0) {
-            // Below zero clamps at zero, as a negative calculation does: the remainder is shown as carbs.
             carbsEquivalent = -calculatedTotalInsulin * ic
             appliedAdjustment = -calculatedBeforeAdjustment
             calculatedTotalInsulin = 0.0
@@ -349,8 +332,6 @@ class BolusWizard @Inject constructor(
             carbs = carbs.toDouble(),
             wereCarbsUsed = cob > 0,
             carbsInsulin = insulinFromCarbs,
-            // The adjustment that reached the total, so the record explains the delivered amount. The
-            // field keeps its upstream name: Nightscout reads it as "other correction".
             otherCorrection = appliedAdjustment,
             wasSuperbolusUsed = useSuperBolus,
             superbolusInsulin = insulinFromSuperBolus,
@@ -532,7 +513,6 @@ class BolusWizard @Inject constructor(
         if (useSuperBolus) message += "\n" + rh.gs(app.aaps.core.ui.R.string.wizard_explain_superbolus, insulinFromSuperBolus)
         if (adjustment != 0.0) message += "\n" + rh.gs(app.aaps.core.ui.R.string.wizard_explain_adjustment, appliedAdjustment)
         if (percentageCorrection != 100) {
-            // The total before the adjustment, so the adjustment is not counted as part of the percentage.
             val afterPercentage = calculatedTotalInsulin - appliedAdjustment
             message += "\n" + rh.gs(app.aaps.core.ui.R.string.wizard_explain_percent, totalBeforePercentageAdjustment, percentageCorrection, afterPercentage)
         }

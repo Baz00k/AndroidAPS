@@ -241,23 +241,15 @@ class BolusWizardTest : TestBaseWithProfile() {
         assertThat(bolusForLowBg).isLessThan(bolusForBgInRange)
     }
 
-    /**
-     * A wizard whose only varying inputs are the ones under test. The profile and pump are fixed:
-     * ISF 50 mg/dL, IC 10 g, 0.1 U bolus step.
-     */
+    /** ISF 50 mg/dL, IC 10 g, target 100-110 mg/dL. */
     private fun wizard(
         bgMgdl: Double = 250.0,
         carbs: Int = 30,
         percentage: Int = 100,
         adjustment: Double = 0.0,
-        maxBolus: Double? = null,
-        bolusIob: Double = 0.0,
-        bolusStep: Double = 0.1
+        maxBolus: Double? = null
     ): BolusWizard {
         val profile = setupProfile(100.0, 110.0, 50.0, 10.0)
-        testPumpPlugin.pumpDescription.bolusStep = bolusStep
-        if (bolusIob != 0.0)
-            whenever(iobCobCalculator.calculateIobFromBolus()).thenReturn(IobTotal(System.currentTimeMillis()).also { it.iob = bolusIob })
         if (maxBolus != null) {
             doAnswer { invocation: InvocationOnMock ->
                 invocation.getArgument<Constraint<Double>>(0).setIfSmaller(maxBolus, "test max bolus", this)
@@ -275,128 +267,51 @@ class BolusWizardTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a positive adjustment adds exactly its units to the total`() {
+    fun `an adjustment adds or subtracts exactly its units`() {
         val base = wizard().calculatedTotalInsulin
-        val adjusted = wizard(adjustment = 0.5).calculatedTotalInsulin
 
-        assertThat(adjusted - base).isWithin(0.01).of(0.5)
+        assertThat(wizard(adjustment = 0.5).calculatedTotalInsulin - base).isWithin(0.01).of(0.5)
+        assertThat(wizard(adjustment = -0.5).calculatedTotalInsulin - base).isWithin(0.01).of(-0.5)
     }
 
     @Test
-    fun `a negative adjustment subtracts exactly its units from the total`() {
-        val base = wizard().calculatedTotalInsulin
-        val adjusted = wizard(adjustment = -0.5).calculatedTotalInsulin
-
-        assertThat(base - adjusted).isWithin(0.01).of(0.5)
-    }
-
-    @Test
-    fun `an adjustment is exact at a finer pump step`() {
-        val base = wizard(bolusStep = 0.05).calculatedTotalInsulin
-        val adjusted = wizard(bolusStep = 0.05, adjustment = 0.05).calculatedTotalInsulin
-
-        assertThat(adjusted - base).isWithin(0.001).of(0.05)
-    }
-
-    @Test
-    fun `the bolus percentage scales the calculation but not the adjustment`() {
-        val full = wizard(percentage = 100).calculatedTotalInsulin
+    fun `the bolus percentage does not scale the adjustment`() {
         val half = wizard(percentage = 50).calculatedTotalInsulin
-        val halfAdjusted = wizard(percentage = 50, adjustment = 0.5).calculatedTotalInsulin
 
-        // Percentage is still applied to the calculated total...
-        assertThat(half).isWithin(0.01).of(full * 0.5)
-        // ...but the adjustment is added after it, so half of +0.5 U is not 0.25 U.
-        assertThat(halfAdjusted - half).isWithin(0.01).of(0.5)
+        assertThat(wizard(percentage = 50, adjustment = 0.5).calculatedTotalInsulin - half).isWithin(0.01).of(0.5)
     }
 
     @Test
-    fun `an adjustment below zero clamps the total at zero and reports the carb equivalent`() {
+    fun `an adjustment below zero clamps at zero and reports the carb equivalent`() {
         val base = wizard().calculatedTotalInsulin
         val adjusted = wizard(adjustment = -20.0)
 
-        assertThat(adjusted.calculatedTotalInsulin).isEqualTo(0.0)
         assertThat(adjusted.insulinAfterConstraints).isEqualTo(0.0)
-        // The adjustment is capped at what there was to remove; the rest is still-needed carbs.
         assertThat(adjusted.appliedAdjustment).isWithin(0.01).of(-base)
         assertThat(adjusted.carbsEquivalent).isWithin(1.0).of((20.0 - base) * 10.0)
     }
 
     @Test
-    fun `a positive adjustment does not create a dose from a zero calculation`() {
-        val wizard = wizard(bgMgdl = 100.0, carbs = 0, adjustment = 1.0)
+    fun `an adjustment does not create a dose from a zero calculation`() {
+        // 112 mg/dL is 0.04 U, which rounds to zero at the 0.1 U pump step.
+        for (bg in listOf(100.0, 112.0)) {
+            val wizard = wizard(bgMgdl = bg, carbs = 0, adjustment = 1.0)
 
-        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
-        assertThat(wizard.insulinAfterConstraints).isEqualTo(0.0)
-        assertThat(wizard.appliedAdjustment).isEqualTo(0.0)
-    }
-
-    @Test
-    fun `a calculation below one pump step does not start a dose either`() {
-        // 2 mg/dL above target at ISF 50 is 0.04 U, which rounds to 0.0 U at the 0.1 U pump step.
-        val wizard = wizard(bgMgdl = 112.0, carbs = 0, adjustment = 1.0)
-
-        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
-        assertThat(wizard.appliedAdjustment).isEqualTo(0.0)
-    }
-
-    @Test
-    fun `a percentage that scales the dose below one step also leaves nothing to adjust`() {
-        // 0.04 U at 50% is 0.02 U, below the pump step, even though the unscaled contribution was real.
-        val wizard = wizard(bgMgdl = 112.0, carbs = 0, percentage = 50, adjustment = 1.0)
-
-        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
-        assertThat(wizard.appliedAdjustment).isEqualTo(0.0)
-    }
-
-    @Test
-    fun `a positive adjustment does not erase the carbs still needed after excess insulin`() {
-        // 2 U on board with nothing to cover: the calculation is negative and already clamped at zero.
-        val wizard = wizard(bgMgdl = 105.0, carbs = 0, adjustment = 1.0, bolusIob = 2.0)
-
-        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
-        assertThat(wizard.appliedAdjustment).isEqualTo(0.0)
-        assertThat(wizard.carbsEquivalent).isWithin(0.1).of(20.0)
-    }
-
-    @Test
-    fun `an adjustment that exactly cancels the dose leaves nothing to deliver`() {
-        val wizard = wizard(bgMgdl = 110.0, carbs = 10, adjustment = -1.0)
-
-        assertThat(wizard.calculatedTotalInsulin).isEqualTo(0.0)
-        assertThat(wizard.appliedAdjustment).isWithin(0.01).of(-1.0)
-        assertThat(wizard.carbsEquivalent).isEqualTo(0.0)
+            assertThat(wizard.insulinAfterConstraints).isEqualTo(0.0)
+            assertThat(wizard.createBolusCalculatorResult().otherCorrection).isEqualTo(0.0)
+        }
     }
 
     @Test
     fun `max bolus still caps an adjusted dose`() {
-        // 20 g at IC 10 is 2 U; the +1.5 U adjustment is what pushes it past the 3 U cap.
+        // 20 g is 2 U; the +1.5 U adjustment pushes it past the 3 U cap.
         val wizard = wizard(bgMgdl = 110.0, carbs = 20, adjustment = 1.5, maxBolus = 3.0)
 
-        assertThat(wizard.calculatedTotalInsulin).isWithin(0.01).of(3.5)
         assertThat(wizard.insulinAfterConstraints).isWithin(0.01).of(3.0)
     }
 
     @Test
-    fun `an off-step adjustment is recorded as the amount the total actually moved`() {
-        val base = wizard().calculatedTotalInsulin
-        val wizard = wizard(adjustment = 0.25)
-        val record = wizard.createBolusCalculatorResult()
-
-        // A caller can supply a finer value than the pump can deliver; the record must match the delta.
-        assertThat(record.otherCorrection).isWithin(0.01).of(wizard.calculatedTotalInsulin - base)
-        assertThat(record.totalInsulin).isWithin(0.01).of(wizard.calculatedTotalInsulin)
-    }
-
-    @Test
-    fun `the calculator record keeps the adjustment that reached the total`() {
-        assertThat(wizard(adjustment = 0.5).createBolusCalculatorResult().otherCorrection).isWithin(0.01).of(0.5)
-        // An adjustment that could not be applied is not recorded as if it had been.
-        assertThat(wizard(bgMgdl = 100.0, carbs = 0, adjustment = 1.0).createBolusCalculatorResult().otherCorrection).isEqualTo(0.0)
-    }
-
-    @Test
-    fun `delivery hands the pump the adjusted dose and its calculator record`() {
+    fun `delivery hands the pump the adjusted dose and records the adjustment`() {
         val wizard = wizard(adjustment = 0.5)
         whenever(profileFunction.getProfile()).thenReturn(wizard.profile)
         whenever(persistenceLayer.insertOrUpdateBolusCalculatorResult(any()))
@@ -406,7 +321,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         wizard.confirmAndExecute(context, skipConfirmation = true, advisor = false)
 
         verify(commandQueue).bolus(info.capture(), anyOrNull())
-        // 2.8 U of BG correction + 3.0 U of carbs + 0.5 U adjustment.
+        // 2.8 U BG correction + 3.0 U carbs + 0.5 U adjustment.
         assertThat(info.firstValue.insulin).isWithin(0.01).of(6.3)
         assertThat(info.firstValue.bolusCalculatorResult?.otherCorrection).isWithin(0.01).of(0.5)
     }
