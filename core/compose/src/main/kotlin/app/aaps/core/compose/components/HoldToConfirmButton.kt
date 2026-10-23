@@ -1,8 +1,11 @@
 package app.aaps.core.compose.components
 
+import android.animation.ValueAnimator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
@@ -44,6 +48,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
+import kotlinx.coroutines.launch
 
 /**
  * A press-and-hold confirmation, for commands that cannot be undone (insulin). [label] names the
@@ -51,7 +56,8 @@ import app.aaps.core.compose.theme.AapsTheme
  * never reads as an ordinary tap button; held, it fills with solid accent from the leading edge
  * over [holdMillis], the label switching ink as the fill passes, so progress has full contrast in
  * either theme. Completing the hold fires [onConfirm] with a haptic tick; releasing early cancels.
- * The hold takes [holdMillis] whatever the system animation scale.
+ * The gesture alone times the hold; the fill only shows it, and is left out when the system has
+ * animations removed.
  * This is a UI affordance ONLY — the caller must still run the same constraint + confirmation +
  * delivery path.
  *
@@ -73,16 +79,13 @@ fun HoldToConfirmButton(
     var holding by remember(confirms) { mutableStateOf(false) }
     var progress by remember(confirms) { mutableFloatStateOf(0f) }
     val currentOnConfirm by rememberUpdatedState(onConfirm)
-    // Timed from frame timestamps, not an animation: animations follow the system animator scale, and
-    // with animations removed the fill would complete on the first frame, so a tap would confirm.
+    val scope = rememberCoroutineScope()
+    val animate = remember { ValueAnimator.areAnimatorsEnabled() }
     LaunchedEffect(holding) {
         progress = 0f
-        if (!holding) return@LaunchedEffect
+        if (!holding || !animate) return@LaunchedEffect
         val start = withFrameMillis { it }
-        while (progress < 1f) progress = withFrameMillis { ((it - start).toFloat() / holdMillis).coerceAtMost(1f) }
-        holding = false
-        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-        currentOnConfirm()
+        while (true) progress = withFrameMillis { ((it - start).toFloat() / holdMillis).coerceAtMost(1f) }
     }
     Column(
         modifier
@@ -92,7 +95,7 @@ fun HoldToConfirmButton(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         // Above the button, where the thumb holding it does not cover it.
-        Text("Press and hold for ${holdSeconds(holdMillis)} s", style = AapsTheme.type.caption, color = colors.textSecondary)
+        Text(if (holding && !animate) "Keep holding" else "Press and hold for ${holdSeconds(holdMillis)} s", style = AapsTheme.type.caption, color = colors.textSecondary)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -118,16 +121,23 @@ fun HoldToConfirmButton(
                 .then(
                     // Keyed on [confirms]: a change cancels the gesture under the finger, not just the fill.
                     if (enabled) Modifier.pointerInput(confirms) {
-                        detectTapGestures(
-                            onPress = {
-                                holding = true
-                                try {
-                                    tryAwaitRelease()
-                                } finally {
+                        awaitEachGesture {
+                            awaitFirstDown()
+                            holding = true
+                            try {
+                                // Confirms only if the finger is still down, inside the button, when the time is up.
+                                val ended = withTimeoutOrNull(holdMillis.toLong()) { waitForUpOrCancellation(); true }
+                                if (ended == null) {
                                     holding = false
+                                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                                    // Outside pointer dispatch: confirming can close the sheet, which cancels this gesture.
+                                    scope.launch { currentOnConfirm() }
+                                    waitForUpOrCancellation()
                                 }
+                            } finally {
+                                holding = false
                             }
-                        )
+                        }
                     } else Modifier
                 ),
             contentAlignment = Alignment.Center
