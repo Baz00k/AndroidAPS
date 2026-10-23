@@ -184,6 +184,9 @@ private fun InputCards(
 ) {
     GlucoseCard(inputs, result, colors, onInputs, onGlucoseValidity)
     CarbsCard(inputs, carbControls, result.advisorAvailable, mealDetailsExpanded, onToggleMealDetails, onInputs, onCarbsValidity, onAbsorptionValidity)
+    // Its own card in U, not a field beside carbs (upstream #5305: grams bolused as units).
+    if (result.available)
+        AdjustmentCard(inputs, result, colors, onInputs, onAdjustmentValidity)
     AapsCard {
         Column {
             SectionLabel("Included", Modifier.padding(bottom = 4.dp))
@@ -220,9 +223,6 @@ private fun InputCards(
                 )
         }
     }
-    // Below the summary, away from carbs (upstream #5305: grams bolused as units).
-    if (result.available)
-        AdjustmentCard(inputs, result, colors, onInputs, onAdjustmentValidity)
 }
 
 /** The result as it stands, and the way to Review it. */
