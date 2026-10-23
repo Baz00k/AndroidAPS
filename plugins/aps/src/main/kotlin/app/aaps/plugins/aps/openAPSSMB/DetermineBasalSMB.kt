@@ -12,6 +12,7 @@ import app.aaps.core.interfaces.aps.Predictions
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
+import app.aaps.plugins.aps.openAPS.smbLowTemp
 import java.text.DecimalFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -1073,18 +1074,9 @@ class DetermineBasalSMB @Inject constructor(
                     durationReq = 0
                 }
 
-                var smbLowTempReq = 0.0
-                if (durationReq <= 0) {
-                    durationReq = 0
-                    // don't set an SMB zero temp longer than 60 minutes
-                } else if (durationReq >= 30) {
-                    durationReq = round(durationReq / 30.0) * 30
-                    durationReq = min(60, max(0, durationReq))
-                } else {
-                    // if SMB durationReq is less than 30m, set a nonzero low temp
-                    smbLowTempReq = round(basal * durationReq / 30.0, 2)
-                    durationReq = 30
-                }
+                val (lowTempDuration, lowTempRate) = smbLowTemp(durationReq, basal)
+                durationReq = lowTempDuration
+                val smbLowTempReq = round(lowTempRate, 2)
                 rT.reason.append(" insulinReq $insulinReq")
                 if (microBolus >= maxBolus) {
                     rT.reason.append("; maxBolus $maxBolus")
