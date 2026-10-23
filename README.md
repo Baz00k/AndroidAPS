@@ -9,6 +9,12 @@
 This is a fork of [AndroidAPS](https://github.com/nightscout/AndroidAPS) with a redesigned native Android
 UI and YpsoPump support.
 
+<p align="center">
+  <img src="docs/screenshots/home.png" width="250" alt="Home screen with glucose, insulin on board, basal and a six-hour glucose graph">
+  <img src="docs/screenshots/calculator.png" width="250" alt="Calculator with carbs, dose adjustment and the included terms of the suggested dose">
+  <img src="docs/screenshots/actions.png" width="250" alt="Actions screen with therapy actions, event logging and history">
+</p>
+
 ## What this fork changes
 
 - [YpsoPump](pump/ypsopump/README.md): a pump driver with status, event history, boluses and temporary
@@ -38,12 +44,9 @@ see the [AndroidAPS documentation](https://wiki.aaps.app/en/latest/) and the
 [upstream repository](https://github.com/nightscout/AndroidAPS). The upstream documentation describes
 upstream behavior, so it may not match the changes listed above.
 
-## Build
+## Install
 
-```bash
-./gradlew :app:assembleFullLoop   # non-debuggable/AOT-eligible
-./gradlew :app:assembleFullDebug  # debuggable development build
-```
+See [Building the app](docs/building.md).
 
 ## Project status
 
