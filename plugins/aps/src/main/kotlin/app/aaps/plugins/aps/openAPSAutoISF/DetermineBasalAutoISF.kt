@@ -11,6 +11,10 @@ import app.aaps.core.interfaces.aps.OapsProfileAutoIsf
 import app.aaps.core.interfaces.aps.Predictions
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.profile.ProfileUtil
+import app.aaps.plugins.aps.openAPS.UntrustedValueException
+import app.aaps.plugins.aps.openAPS.requireFinite
+import app.aaps.plugins.aps.openAPS.requirePositive
+import app.aaps.plugins.aps.openAPS.safeFallback
 import app.aaps.plugins.aps.openAPS.smbLowTemp
 import java.text.DecimalFormat
 import java.time.Instant
@@ -36,14 +40,15 @@ class DetermineBasalAutoISF @Inject constructor(
 
     // Rounds value to 'digits' decimal places
     // different for negative numbers fun round(value: Double, digits: Int): Double = BigDecimal(value).setScale(digits, RoundingMode.HALF_EVEN).toDouble()
+    // Math.round turns ±Infinity into a large finite number, so a non-finite value ends the run instead.
     fun round(value: Double, digits: Int): Double {
-        if (value.isNaN()) return Double.NaN
+        value.requireFinite("rounded value")
         val scale = 10.0.pow(digits.toDouble())
         return Math.round(value * scale) / scale
     }
 
     fun Double.withoutZeros(): String = DecimalFormat("0.##").format(this)
-    fun round(value: Double): Int = value.roundToInt()
+    fun round(value: Double): Int = value.requireFinite("rounded value").roundToInt()
 
     // we expect BG to rise or fall at the rate of BGI,
     // adjusted by the rate at which BG would need to rise /
@@ -154,6 +159,72 @@ class DetermineBasalAutoISF @Inject constructor(
     ): RT {
         consoleError.clear()
         consoleLog.clear()
+        return try {
+            requireValidInputs(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, autoIsfMode, smb_ratio, smb_max_range_extension)
+            calculate(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, microBolusAllowed, currentTime, flatBGsDetected, autoIsfMode, loop_wanted_smb, profile_percentage, smb_ratio, smb_max_range_extension, iob_threshold_percent, auto_isf_consoleError, auto_isf_consoleLog).also { requireValidResult(it) }
+        } catch (e: UntrustedValueException) {
+            consoleError.add("Aborting run: ${e.message} at ${e.stackTrace.take(3).joinToString(" < ") { "${it.fileName}:${it.lineNumber}" }}")
+            val rT = RT(algorithm = APSResult.Algorithm.AUTO_ISF, runningDynamicIsf = autoIsfMode, timestamp = currentTime, consoleLog = consoleLog, consoleError = consoleError)
+            rT.reason.append("Aborting run: ${e.message}")
+            safeFallback(rT, currenttemp, round_basal(profile.current_basal), currentTime)
+        }
+    }
+
+    private fun requireValidInputs(
+        glucose_status: GlucoseStatus, currenttemp: CurrentTemp, iob_data_array: Array<IobTotal>, profile: OapsProfileAutoIsf, autosens_data: AutosensResult, meal_data: MealData,
+        autoIsfMode: Boolean, smb_ratio: Double, smb_max_range_extension: Double
+    ) {
+        glucose_status.glucose.requireFinite("bg")
+        glucose_status.noise.requireFinite("noise")
+        glucose_status.delta.requireFinite("delta")
+        glucose_status.shortAvgDelta.requireFinite("shortAvgDelta")
+        glucose_status.longAvgDelta.requireFinite("longAvgDelta")
+        currenttemp.rate.requireFinite("currenttemp.rate")
+        iob_data_array.forEach {
+            it.iob.requireFinite("iob")
+            it.activity.requireFinite("activity")
+            it.iobWithZeroTemp?.iob?.requireFinite("iobWithZeroTemp.iob")
+            it.iobWithZeroTemp?.activity?.requireFinite("iobWithZeroTemp.activity")
+        }
+        meal_data.carbs.requireFinite("carbs")
+        meal_data.mealCOB.requireFinite("mealCOB")
+        meal_data.slopeFromMaxDeviation.requireFinite("slopeFromMaxDeviation")
+        meal_data.slopeFromMinDeviation.requireFinite("slopeFromMinDeviation")
+        profile.min_bg.requireFinite("min_bg")
+        profile.max_bg.requireFinite("max_bg")
+        profile.max_iob.requireFinite("max_iob")
+        profile.max_basal.requireFinite("max_basal")
+        profile.max_daily_basal.requireFinite("max_daily_basal")
+        profile.max_daily_safety_multiplier.requireFinite("max_daily_safety_multiplier")
+        profile.current_basal_safety_multiplier.requireFinite("current_basal_safety_multiplier")
+        profile.autosens_max.requireFinite("autosens_max")
+        profile.sens.requirePositive("sens")
+        profile.carb_ratio.requirePositive("carb_ratio")
+        profile.current_basal.requirePositive("current_basal")
+        profile.bolus_increment.requirePositive("bolus_increment")
+        autosens_data.ratio.requirePositive("autosens ratio")
+        if (autoIsfMode) profile.variable_sens.requirePositive("variable_sens")
+        smb_ratio.requireFinite("smb_ratio")
+        smb_max_range_extension.requireFinite("smb_max_range_extension")
+    }
+
+    private fun requireValidResult(rT: RT) {
+        rT.bg?.requireFinite("result bg")
+        rT.eventualBG?.requireFinite("eventualBG")
+        rT.targetBG?.requireFinite("targetBG")
+        rT.insulinReq?.requireFinite("insulinReq")
+        rT.sensitivityRatio?.requireFinite("sensitivityRatio")
+        rT.COB?.requireFinite("COB")
+        rT.IOB?.requireFinite("IOB")
+        rT.rate?.requireFinite("rate")
+        rT.units?.requireFinite("units")
+    }
+
+    private fun calculate(
+        glucose_status: GlucoseStatus, currenttemp: CurrentTemp, iob_data_array: Array<IobTotal>, profile: OapsProfileAutoIsf, autosens_data: AutosensResult, meal_data: MealData,
+        microBolusAllowed: Boolean, currentTime: Long, flatBGsDetected: Boolean, autoIsfMode: Boolean, loop_wanted_smb: String, profile_percentage: Int, smb_ratio: Double,
+        smb_max_range_extension: Double, iob_threshold_percent: Int, auto_isf_consoleError: MutableList<String>, auto_isf_consoleLog: MutableList<String>
+    ): RT {
         var rT = RT(
             algorithm = APSResult.Algorithm.AUTO_ISF,
             runningDynamicIsf = autoIsfMode,
@@ -191,22 +262,7 @@ class DetermineBasalAutoISF @Inject constructor(
             rT.reason.append("Error: CGM data is unchanged for the past ~45m")
         }
         if (bg <= 10 || bg == 38.0 || noise >= 3 || minAgo > 12 || minAgo < -5 || (bg > 60 && flatBGsDetected)) {
-            if (currenttemp.rate > basal) { // high temp is running
-                rT.reason.append(". Replacing high temp basal of ${currenttemp.rate} with neutral temp of $basal")
-                rT.deliverAt = deliverAt
-                rT.duration = 30
-                rT.rate = basal
-                return rT
-            } else if (currenttemp.rate == 0.0 && currenttemp.duration > 30) { //shorten long zero temps to 30m
-                rT.reason.append(". Shortening " + currenttemp.duration + "m long zero temp to 30m. ")
-                rT.deliverAt = deliverAt
-                rT.duration = 30
-                rT.rate = 0.0
-                return rT
-            } else { //do nothing.
-                rT.reason.append(". Temp ${currenttemp.rate} <= current basal ${round(basal, 2)}U/hr; doing nothing. ")
-                return rT
-            }
+            return safeFallback(rT, currenttemp, basal, deliverAt)
         }
 
         // TODO eliminate
@@ -501,6 +557,7 @@ class DetermineBasalAutoISF @Inject constructor(
         // area of the /\ triangle is the same as a remainingCIpeak-height rectangle out to remainingCATime/2
         // remainingCIpeak (mg/dL/5m) = remainingCarbs (g) * CSF (mg/dL/g) * 5 (m/5m) * 1h/60m / (remainingCATime/2) (h)
         val remainingCIpeak = remainingCarbs * csf * 5 / 60 / (remainingCATime / 2)
+        remainingCIpeak.requireFinite("remainingCIpeak")
         //console.error(profile.min_5m_carbimpact,ci,totalCI,totalCA,remainingCarbs,remainingCI,remainingCATime);
 
         // calculate peak deviation in last hour, and slope from that to current deviation
@@ -595,6 +652,12 @@ class DetermineBasalAutoISF @Inject constructor(
             }
             UAMpredBG = UAMpredBGs[UAMpredBGs.size - 1] + predUAMBGI + min(0.0, predDev) + predUCI
             //console.error(predBGI, predCI, predUCI);
+            // A NaN prediction would slip past every "<" comparison below, so it ends the run instead.
+            IOBpredBG.requireFinite("IOBpredBG")
+            ZTpredBG.requireFinite("ZTpredBG")
+            COBpredBG?.requireFinite("COBpredBG")
+            aCOBpredBG?.requireFinite("aCOBpredBG")
+            UAMpredBG?.requireFinite("UAMpredBG")
             // truncate all BG predictions at 4 hours
             if (IOBpredBGs.size < 48) IOBpredBGs.add(IOBpredBG)
             if (COBpredBGs.size < 48) COBpredBGs.add(COBpredBG)
@@ -685,7 +748,9 @@ class DetermineBasalAutoISF @Inject constructor(
         minUAMPredBG = max(39.0, minUAMPredBG)
         minPredBG = round(minIOBPredBG, 0)
 
-        val fractionCarbsLeft = meal_data.mealCOB / meal_data.carbs
+        // meal_data.carbs counts only entries inside the absorption window, while mealCOB comes from autosens,
+        // so carbs can be 0 with COB left. Weight that as no carbs left, which keeps avgPredBG on UAM.
+        val fractionCarbsLeft = if (meal_data.carbs > 0.0) meal_data.mealCOB / meal_data.carbs else 0.0
         // if we have COB and UAM is enabled, average both
         if (minUAMPredBG < 999 && minCOBPredBG < 999) {
             // weight COBpredBG vs. UAMpredBG based on how many carbs remain as COB
