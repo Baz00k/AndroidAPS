@@ -17,32 +17,19 @@ UI and YpsoPump support.
 
 ## What this fork changes
 
-- [YpsoPump](pump/ypsopump/README.md): a pump driver with status, event history, boluses and temporary
-  basals, usable in open and closed loop. Basal schedules are programmed on the pump by hand; AAPS only
-  compares them with its profile. Credentials come from an external source-device workflow. The AAPS
-  device needs neither root nor ADB.
-- Infusion sites: the bolus wizard shows a fresh-site advisory, and site-change recording accepts
-  back-dated events.
-- Compose UI: Material 3 screens for home, dosing, loop, history, statistics, profile, configuration and
-  pump status, plus file-based skins. Dosing still goes through the existing constraint and confirmation
-  paths.
-  Unavailable readings use `--`, not numeric zero. Home, the widget and status outputs show IOB
-  as unavailable without an active profile and explain why; Home keeps recorded doses visible.
-  Profile-derived basal is unavailable too. This does not mean no insulin is active or being delivered.
-  Statistics loads glucose before insulin history; TIR uses completed days, the glucose summary and
-  hourly profile use a rolling window, and TDD reports available daily history. Missing history and load failures are shown explicitly.
-- Calculator: a signed per-dose adjustment refines the calculated dose in insulin units. It is added
-  after the bolus percentage, so the percentage never scales it, and it cannot turn a zero calculation
-  into a dose.
-- Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
-- Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
+- A redesigned interface for home, dosing, loop control, history, statistics, profile and settings.
+- [YpsoPump](pump/ypsopump/README.md) support: boluses, temporary basals and pump history, in open and
+  closed loop.
+- A dose adjustment in the Calculator, to add or remove units from the calculated dose.
+- A Calculator reminder to split large boluses into a new cannula, which absorbs insulin more slowly.
+  Cannula changes can be logged after the fact.
+- English only, for phones with a 64-bit ARM processor.
 
 ## Upstream AndroidAPS
 
-Most of the app is still AndroidAPS. For concepts, setup guides and everything this fork has not changed,
-see the [AndroidAPS documentation](https://wiki.aaps.app/en/latest/) and the
-[upstream repository](https://github.com/nightscout/AndroidAPS). The upstream documentation describes
-upstream behavior, so it may not match the changes listed above.
+Most of the app is still AndroidAPS. For everything else, see the
+[AndroidAPS documentation](https://wiki.aaps.app/en/latest/). It describes upstream AndroidAPS, so it may
+not match the changes above.
 
 ## Install
 
