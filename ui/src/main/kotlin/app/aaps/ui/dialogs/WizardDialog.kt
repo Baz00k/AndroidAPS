@@ -131,6 +131,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
             is CalculatorGlucose.Stale -> glucose.mgdl
             else                       -> glucose.usedMgdl
         }
+        val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
         // Colour against the display low/high marks — the band the rest of the app colours BG by, not
         // the target band (a single-point target would make an at-target reading look "high").
         val tone = shownMgdl?.let { mgdl ->
@@ -171,6 +172,10 @@ class WizardDialog : DaggerBottomSheetFragment() {
             trendInsulin = signed(w.insulinFromTrend),
             superBolusInsulin = signed(w.insulinFromSuperBolus),
             scaledPercent = preferences.get(IntKey.OverviewBolusPercentage).takeIf { it != 100 },
+            appliedAdjustment = w.appliedAdjustment,
+            adjustmentStep = bolusStep,
+            adjustmentMax = constraintChecker.getMaxBolusAllowed().value(),
+            adjustmentDecimals = if (bolusStep < 0.1) 2 else 1,
             outcome = outcome(w, carbs),
             advisorAvailable = w.bolusAdvisorApplies(),
             siteWarning = freshSiteWarning(w.insulinAfterConstraints),
@@ -262,7 +267,7 @@ class WizardDialog : DaggerBottomSheetFragment() {
             carbs = carbs,
             cob = cob?.takeIf { useCob } ?: 0.0,
             bg = glucose.usedMgdl?.let { profileUtil.fromMgdlToUnits(it, profileFunction.getUnits()) } ?: 0.0,
-            correction = 0.0,
+            adjustment = inputs.adjustment,
             // pre-bolus: BolusWizard timestamps the carbs at now + carbTime (see its carbsTimestamp), so the
             // bolus goes in immediately while the loop is told when the carbs actually land.
             carbTime = inputs.carbTime,

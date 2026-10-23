@@ -25,6 +25,9 @@ UI and YpsoPump support.
   Profile-derived basal is unavailable too. This does not mean no insulin is active or being delivered.
   Statistics loads glucose before insulin history; TIR uses completed days, the glucose summary and
   hourly profile use a rolling window, and TDD reports available daily history. Missing history and load failures are shown explicitly.
+- Calculator: a signed per-dose adjustment refines the calculated dose in insulin units. It is added
+  after the bolus percentage, so the percentage never scales it, and it cannot turn a zero calculation
+  into a dose.
 - Slim build: fewer modules, locales and ABIs, and eligible for Android AOT compilation.
 - Private-network Nightscout: allows explicitly configured cleartext hosts for VPN or mesh use.
 
