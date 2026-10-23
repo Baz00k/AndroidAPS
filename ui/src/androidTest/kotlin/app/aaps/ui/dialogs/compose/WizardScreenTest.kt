@@ -60,13 +60,11 @@ class WizardScreenTest {
     }
 
     @Test
-    fun adjustmentIsCollapsedAndEditedInInsulinWithoutTouchingCarbs() {
+    fun adjustmentIsEditedInInsulinWithoutTouchingCarbs() {
         var inputs = WizardInputs(carbs = 5)
         showCalculator(initial = WizardInputs(carbs = 5)) { inputs = it }
         val field = compose.onNodeWithContentDescription("of dose adjustment")
-        field.assertDoesNotExist()
 
-        openAdjustment()
         compose.onNodeWithContentDescription("Add 0.1 U of dose adjustment").performScrollTo().performClick()
         compose.waitForIdle()
         assertThat(inputs.adjustment).isWithin(0.0001).of(0.1)
@@ -81,7 +79,6 @@ class WizardScreenTest {
     @Test
     fun anOffStepAdjustmentCannotBeReviewed() {
         showCalculator(initial = WizardInputs(carbs = 5)) { }
-        openAdjustment()
         val field = compose.onNodeWithContentDescription("of dose adjustment")
 
         field.performScrollTo().performTextClearance()
@@ -89,10 +86,6 @@ class WizardScreenTest {
         compose.waitForIdle()
         compose.onNodeWithText("Use 0.1 U steps").assertExists()
         compose.onNodeWithText("Review").assertIsNotEnabled()
-    }
-
-    private fun openAdjustment() {
-        compose.onNodeWithText("Adjust dose").performScrollTo().performClick()
     }
 
     private fun showCalculator(initial: WizardInputs = WizardInputs(), onInputs: (WizardInputs) -> Unit) {
