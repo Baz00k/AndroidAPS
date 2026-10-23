@@ -21,9 +21,6 @@ UI and YpsoPump support.
 - [YpsoPump](pump/ypsopump/README.md) support: boluses, temporary basals and pump history, in open and
   closed loop.
 - A dose adjustment in the Calculator, to add or remove units from the calculated dose.
-- A Calculator reminder to split large boluses into a new cannula, which absorbs insulin more slowly.
-  Cannula changes can be logged after the fact.
-- English only, for phones with a 64-bit ARM processor.
 
 ## Upstream AndroidAPS
 
