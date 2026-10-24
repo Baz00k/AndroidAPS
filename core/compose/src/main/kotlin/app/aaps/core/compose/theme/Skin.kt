@@ -77,6 +77,13 @@ data class AapsSkin(
         materialGround?.let { materialScheme(context, dark, it).toAapsColors(dark, it) } ?: colors(dark)
 }
 
+/**
+ * Default palettes, outside [AapsSkins] so reading a skin file off the main thread does not create
+ * [AapsSkins.installed].
+ */
+internal val DefaultDarkColors: AapsColors = BaselineDarkScheme.toAapsColors(dark = true)
+internal val DefaultLightColors: AapsColors = BaselineLightScheme.toAapsColors(dark = false)
+
 /** The built-in skins. */
 object AapsSkins {
 
@@ -84,8 +91,8 @@ object AapsSkins {
     val Default = AapsSkin(
         id = "default",
         label = "Default",
-        dark = BaselineDarkScheme.toAapsColors(dark = true),
-        light = BaselineLightScheme.toAapsColors(dark = false),
+        dark = DefaultDarkColors,
+        light = DefaultLightColors,
         materialGround = MaterialGround.Tonal
     )
 
@@ -107,6 +114,8 @@ object AapsSkins {
      *
      * Snapshot state so installing or deleting one repaints the picker — and the app, if the deleted
      * skin was the active one — without anything having to be restarted.
+     *
+     * Main thread only, because the UI reads it under a render snapshot.
      */
     var installed: List<AapsSkin> by mutableStateOf(emptyList())
 
