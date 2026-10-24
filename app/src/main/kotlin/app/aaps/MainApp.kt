@@ -138,10 +138,14 @@ class MainApp : DaggerApplication() {
         }
         disposable += compatDBHelper.dbChangeDisposable()
         registerActivityLifecycleCallbacks(activityMonitor)
-        // Reads storage, so it runs here on doInit's background thread; the appearance is then
-        // applied on the main thread with the installed skins already in the registry.
-        themeSwitcherPlugin.reloadInstalledSkins()
-        runOnUiThread { themeSwitcherPlugin.applyAppearance() }
+        // Reads storage, so the file I/O runs here on doInit's background thread. The registry is
+        // Compose snapshot state, though, and is only ever created and written on the main thread —
+        // doing either here would let the UI read a state created after its snapshot was taken.
+        val installedSkins = themeSwitcherPlugin.readInstalledSkins()
+        runOnUiThread {
+            themeSwitcherPlugin.publishInstalledSkins(installedSkins)
+            themeSwitcherPlugin.applyAppearance()
+        }
         aapsLogger.debug("Version: " + config.VERSION_NAME)
         aapsLogger.debug("BuildVersion: " + config.BUILD_VERSION)
         aapsLogger.debug("Remote: " + config.REMOTE)
