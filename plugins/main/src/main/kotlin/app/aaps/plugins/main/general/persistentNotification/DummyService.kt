@@ -1,6 +1,6 @@
 package app.aaps.plugins.main.general.persistentNotification
 
-import android.app.Notification
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
@@ -38,12 +38,9 @@ class DummyService : DaggerService() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            aapsLogger.debug("Starting DummyService with ID ${notificationHolder.notificationID} notification ${notificationHolder.notification}")
-            startForeground(notificationHolder.notificationID, notificationHolder.notification)
-        } catch (e: Exception) {
-            startForeground(4711, Notification())
-        }
+        // A refused foreground start has already stopped the service, so there is nothing left to
+        // listen for.
+        if (!startForegroundGuarded()) return
         disposable.add(
             rxBus
                 .toObservable(EventAppExit::class.java)
@@ -64,12 +61,35 @@ class DummyService : DaggerService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        startForegroundGuarded()
+        // Sticky makes the system restart the service after the process was killed, and such a
+        // restart happens in the background where the foreground start is not allowed. Retrying it
+        // can only fail, so let the service stay down until something starts it again.
+        return START_NOT_STICKY
+    }
+
+    /**
+     * Enters the foreground with the ongoing notification.
+     *
+     * Restarting this service after the process was killed is not one of the exemptions from the
+     * Android 12+ restrictions on starting foreground services from the background, so
+     * [startForeground] throws [ForegroundServiceStartNotAllowedException] there. Letting that
+     * escape would kill the process - and with it a running loop - so the service stops instead.
+     *
+     * @return true if the service is in the foreground
+     */
+    internal fun startForegroundGuarded(): Boolean {
         try {
             aapsLogger.debug("Starting DummyService with ID ${notificationHolder.notificationID} notification ${notificationHolder.notification}")
             startForeground(notificationHolder.notificationID, notificationHolder.notification)
+            return true
+        } catch (e: ForegroundServiceStartNotAllowedException) {
+            aapsLogger.warn(LTag.CORE, "Foreground start not allowed in background, stopping: ${e.message}")
         } catch (e: Exception) {
-            startForeground(4711, Notification())
+            aapsLogger.error(LTag.CORE, "Cannot enter foreground, stopping", e)
         }
-        return START_STICKY
+        disposable.clear()
+        stopSelf()
+        return false
     }
 }
