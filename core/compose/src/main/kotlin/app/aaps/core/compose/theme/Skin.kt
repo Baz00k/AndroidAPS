@@ -77,6 +77,17 @@ data class AapsSkin(
         materialGround?.let { materialScheme(context, dark, it).toAapsColors(dark, it) } ?: colors(dark)
 }
 
+/**
+ * The palettes [AapsSkins.Default] renders on each ground.
+ *
+ * Deliberately outside [AapsSkins]: a skin file read from storage inherits from the default ground,
+ * and startup reads those files off the main thread. Going through [AapsSkins] for the base would
+ * make that worker the first thread to create the object — and with it [AapsSkins.installed], the
+ * snapshot state the UI reads, which may only be created on the main thread.
+ */
+internal val DefaultDarkColors: AapsColors = BaselineDarkScheme.toAapsColors(dark = true)
+internal val DefaultLightColors: AapsColors = BaselineLightScheme.toAapsColors(dark = false)
+
 /** The built-in skins. */
 object AapsSkins {
 
@@ -84,8 +95,8 @@ object AapsSkins {
     val Default = AapsSkin(
         id = "default",
         label = "Default",
-        dark = BaselineDarkScheme.toAapsColors(dark = true),
-        light = BaselineLightScheme.toAapsColors(dark = false),
+        dark = DefaultDarkColors,
+        light = DefaultLightColors,
         materialGround = MaterialGround.Tonal
     )
 
@@ -106,7 +117,9 @@ object AapsSkins {
      * Skins unpacked from files, published by `SkinStore` once storage has been read.
      *
      * Snapshot state so installing or deleting one repaints the picker — and the app, if the deleted
-     * skin was the active one — without anything having to be restarted.
+     * skin was the active one — without anything having to be restarted. It is created and assigned
+     * on the main thread only (`ThemeSwitcherPlugin.publishInstalledSkins`): the UI reads it under a
+     * render snapshot, and a state created after that snapshot was taken cannot be read from it.
      */
     var installed: List<AapsSkin> by mutableStateOf(emptyList())
 
