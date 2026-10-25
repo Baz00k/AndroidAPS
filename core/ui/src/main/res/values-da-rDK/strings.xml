@@ -77,8 +77,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Vagthund</string>
-    <string name="btwatchdog_summary">Slår telefonens bluetooth fra i et sekund, hvis der ikke er mulighed for tilslutning til pumpen. Dette kan hjælpe på nogle telefoner, hvis bluetooth stakken fryser.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Pumpetid opdateret</string>
     <string name="exit">Afslut</string>

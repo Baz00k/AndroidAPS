@@ -77,8 +77,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">Bluetooth-övervakare</string>
-    <string name="btwatchdog_summary">Startar om bluetooth på telefonen om anslutning till pumpen misslyckas. Detta hjälper på en del telefoner där bluetooth ibland hänger sig.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Tiden uppdaterad i pumpen</string>
     <string name="exit">Avsluta</string>

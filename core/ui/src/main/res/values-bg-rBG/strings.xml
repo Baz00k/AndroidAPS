@@ -77,8 +77,6 @@
     <string name="shortgram">гр.</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT ограничения</string>
-    <string name="btwatchdog_summary">Изключва Bluetooth на телефона за една секунда, ако няма връзка с помпата. Това може да помогне на някои телефони, където Bluetooth блокира.</string>
     <string name="virtualpump_resultok">ОК</string>
     <string name="pump_time_updated">Актуализирано време на помпата</string>
     <string name="exit">Изход</string>

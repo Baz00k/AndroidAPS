@@ -71,8 +71,6 @@
     <string name="shortgram">克</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">蓝牙</string>
-    <string name="btwatchdog_title">蓝牙看门狗</string>
-    <string name="btwatchdog_summary">如果无法与泵连接，将关闭手机的蓝牙一秒钟后再自动打开。在一些蓝牙堆栈僵死的手机上是有帮助的。</string>
     <string name="virtualpump_resultok">确定</string>
     <string name="pump_time_updated">泵时间已经更新</string>
     <string name="exit">退出</string>

@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">Oprește bluetooth-ul telefonului pentru o secundă dacă nu se poate conecta la pompă. Aceasta poate ajuta în cazul telefoanelor cu bluetooth incompatitibil.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Timpul din pompă a fost actualizat</string>
     <string name="exit">Ieșire</string>

@@ -78,8 +78,6 @@
     <string name="shortgram">г</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">Дежурный режим Watchdog</string>
-    <string name="btwatchdog_summary">Выключает bluetooth телефона на одну секунду, если подключение к помпе невозможно. Это помогает на тех телефонах, где зависает модуль bluetooth.</string>
     <string name="virtualpump_resultok">ОК</string>
     <string name="pump_time_updated">Время на помпе обновлено</string>
     <string name="exit">Выйти</string>

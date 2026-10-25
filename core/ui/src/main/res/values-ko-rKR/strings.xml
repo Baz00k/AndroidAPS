@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">블루투스</string>
-    <string name="btwatchdog_title">블루투스 감시기능</string>
-    <string name="btwatchdog_summary">펌프에 연결이 되지 않을때 폰의 블루투스를 1초간 껐다 켭니다. 블루투스 스택이 정지되는 일부폰에 이 기능이 도움이 됩니다.</string>
     <string name="virtualpump_resultok">네</string>
     <string name="pump_time_updated">펌프 시간 업데이트</string>
     <string name="exit">종료</string>

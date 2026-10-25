@@ -208,7 +208,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             addPreferencesIfEnabled(activePlugin.activeAPS as PluginBase, rootKey, config.APS)
             addPreferencesIfEnabled(activePlugin.activeSensitivity as PluginBase, rootKey)
             addPreferencesIfEnabled(activePlugin.activePump as PluginBase, rootKey)
-            addPumpScreen(rootKey)
             addPreferencesIfEnabled(activePlugin.activeInsulin as PluginBase, rootKey)
             activePlugin.getSpecificPluginsList(PluginType.SYNC).forEach { addPreferencesIfEnabled(it, rootKey) }
             addPreferencesIfEnabled(autotunePlugin, rootKey)
@@ -547,22 +546,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
                                         calculatedVisibility = { preferences.get(IntKey.ProtectionTypeBolus) == CUSTOM_PIN.ordinal })
             )
             addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.ProtectionTimeout, title = app.aaps.core.ui.R.string.protection_timeout_title, summary = app.aaps.core.ui.R.string.protection_timeout_summary))
-        }
-    }
-
-    private fun addPumpScreen(rootKey: String?) {
-        if (rootKey != null) return
-
-        val context = requireContext()
-        val rootScreen = preferenceScreen ?: preferenceManager.createPreferenceScreen(context).also { preferenceScreen = it }
-
-        val category = PreferenceCategory(context)
-        rootScreen.addPreference(category)
-        category.apply {
-            key = "pump_settings"
-            title = rh.gs(app.aaps.core.ui.R.string.pump)
-            initialExpandedChildrenCount = 0
-            addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.PumpBtWatchdog, title = app.aaps.core.ui.R.string.btwatchdog_title, summary = app.aaps.core.ui.R.string.btwatchdog_summary))
         }
     }
 

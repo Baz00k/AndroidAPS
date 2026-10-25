@@ -67,8 +67,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">Apaga el bluetooth del telèfon un segon si no és possible connectar amb la bomba. Pot ajudar amb certs telèfons a on la connexió bluetooth es bloqueja.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Actualitzada hora de la bomba</string>
     <string name="exit">Sortir</string>

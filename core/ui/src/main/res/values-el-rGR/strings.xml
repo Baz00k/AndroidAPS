@@ -77,8 +77,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">Απενεργοποιεί το bluetooth του τηλεφώνου για ένα δευτερόλεπτο αν δεν είναι δυνατή η σύνδεση με την αντλία. Αυτό μπορεί να βοηθήσει σε ορισμένα τηλέφωνα όπου το bluetooth παγώνει.</string>
     <string name="virtualpump_resultok">ΟΚ</string>
     <string name="pump_time_updated">Η ώρα στην αντλία άλλαξε</string>
     <string name="exit">Έξοδος</string>

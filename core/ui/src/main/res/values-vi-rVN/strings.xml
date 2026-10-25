@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">Giám sát BT</string>
-    <string name="btwatchdog_summary">Tắt Bluetooth của điện thoại trong một giây nếu không thể kết nối với bơm. Điều này có thể hữu ích trên một số điện thoại khi ngăn xếp Bluetooth bị treo.</string>
     <string name="virtualpump_resultok">ĐỒNG Ý</string>
     <string name="pump_time_updated">Đã cập nhật thời gian bơm</string>
     <string name="exit">Thoát</string>

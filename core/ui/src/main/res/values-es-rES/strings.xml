@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">Vigilante de BT</string>
-    <string name="btwatchdog_summary">Desconecta el bluetooth del teléfono móvil durante un instante, si no hay conexión con la bomba. Esto ayuda con algunos teléfonos móviles que tienen problemas para establecer una conexión bluetooth estable.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Hora actualizada en la bomba</string>
     <string name="exit">Salir</string>
