@@ -10,7 +10,6 @@ import androidx.fragment.app.FragmentManager
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
-import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -43,17 +42,13 @@ import app.aaps.ui.R
 import app.aaps.ui.dialogs.compose.FillInputs
 import app.aaps.ui.dialogs.compose.FillSheet
 import app.aaps.ui.dialogs.compose.FillSheetState
+import app.aaps.ui.dialogs.compose.fillRecordTime
 import com.google.common.base.Joiner
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-/**
- * Redesigned Prime / Fill dialog. UI is Compose ([FillSheet]); [submit] runs the SAME constraint +
- * `OKDialog` confirmation + prime-`commandQueue.bolus` + site/insulin-change persistence + site-rotation
- * path as the legacy dialog. Event time is `dateUtil.now()` (the legacy sheet had no time offset input).
- */
 class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
@@ -102,11 +97,8 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
         val insulin = inputs.insulin
         val actions: LinkedList<String?> = LinkedList()
 
-        // Back-date the RECORD only. `requestPrimeBolus` below is untouched and still delivers now --
-        // insulin cannot be given retroactively, and letting the offset reach the bolus would put a
-        // fictional delivery time into IOB.
-        var eventTime = dateUtil.now() - T.mins(inputs.minutesAgo.toLong()).msecs()
-        eventTime -= eventTime % 1000
+        // Back-date only the records; the prime is delivered now. Confirmation and persistence share this moment.
+        val eventTime = fillRecordTime(dateUtil.now(), inputs.changedAt)
 
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         if (insulinAfterConstraints > 0) {
@@ -130,8 +122,7 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
         val notes: String = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
-        // Surface the back-dated time in the confirmation because site age feeds post-change analysis.
-        if (inputs.minutesAgo > 0)
+        if (inputs.changedAt != null)
             actions.add(
                 (rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor)
@@ -139,8 +130,7 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
 
         if (insulinAfterConstraints > 0 || siteChange || insulinChange) {
             activity?.let { activity ->
-                // A prime is insulin too, so pre-flight it whenever this dialog will push one. Logging a
-                // site/cartridge change on its own reaches nothing, so that path stays ungated.
+                // Only a prime needs a delivery-ready pump; a record-only change is allowed without one.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
                     if (insulinAfterConstraints > 0) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
@@ -169,10 +159,9 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
                         ).subscribe()
                     }
                     if (insulinChange)
-                    // add a second for case of both checked
                         disposable += persistenceLayer.insertPumpTherapyEventIfNewByTimestamp(
                             therapyEvent = TE(
-                                timestamp = eventTime + 1000,
+                                timestamp = eventTime,
                                 type = TE.Type.INSULIN_CHANGE,
                                 note = notes,
                                 glucoseUnit = GlucoseUnit.MGDL

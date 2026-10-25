@@ -1,114 +1,120 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.aaps.core.compose.components.ActionChip
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
-import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
+import app.aaps.core.compose.components.TimeStepper
 import app.aaps.core.compose.components.ToggleRow
-import app.aaps.core.compose.theme.AapsSpacing
+import app.aaps.core.compose.components.formatNumeric
+import app.aaps.core.compose.components.rememberNow
+import kotlin.math.roundToInt
 
-/** Presentation params for the redesigned Prime / Fill sheet. */
 data class FillSheetState(
     val maxInsulin: Double,
     val insulinStep: Double,
     val insulinDecimals: Int,
-    /** Fill-button presets from prefs; only values > 0 are passed in. */
     val presets: List<Double>,
     val showNotes: Boolean
 )
 
-/** Values the legacy [submit] path needs. */
 data class FillInputs(
     val insulin: Double,
     val siteChange: Boolean,
     val insulinChange: Boolean,
     val notes: String,
     /**
-     * How long ago the site/cartridge change actually happened, in minutes. Back-dates ONLY the
-     * therapy events -- any prime bolus is still delivered now, because insulin cannot be given
-     * retroactively.
-     *
-     * A cannula change may be made away from the phone and recorded later. Preserve its actual
-     * timestamp because site age drives post-change analysis.
+     * When the site/cartridge change happened; null means now at submission. Only the records use
+     * it: the prime is delivered now. Kept as a moment so waiting does not move the chosen time.
      */
-    val minutesAgo: Int
+    val changedAt: Long?
 )
 
-/**
- * Redesigned Prime / Fill sheet. [onSubmit] runs the SAME constraint + `OKDialog` confirmation +
- * prime-`commandQueue.bolus` + site/insulin-change persistence path as the legacy dialog.
- */
+private const val MAX_CHANGE_AGE_MIN = 24 * 60
+
+// Treatment timestamps are whole seconds; a clock rollback must not future-date a record.
+internal fun fillRecordTime(now: Long, changedAt: Long?): Long =
+    (changedAt ?: now).coerceAtMost(now).let { it - it % 1000 }
+
 @Composable
 fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: () -> Unit) {
-    var insulin by remember { mutableStateOf(0.0) }
-    var siteChange by remember { mutableStateOf(false) }
-    var insulinChange by remember { mutableStateOf(false) }
-    var notes by remember { mutableStateOf("") }
-    var minutesAgo by remember { mutableStateOf(0.0) }
+    var insulin by rememberSaveable { mutableStateOf(0.0) }
+    var siteChange by rememberSaveable { mutableStateOf(false) }
+    var insulinChange by rememberSaveable { mutableStateOf(false) }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var changedAt by rememberSaveable { mutableStateOf<Long?>(null) }
     var insulinValid by remember { mutableStateOf(false) }
-    var timeValid by remember { mutableStateOf(false) }
-    val valid = insulinValid && (!(siteChange || insulinChange) || timeValid)
+    var submitted by rememberSaveable { mutableStateOf(false) }
+    val now = rememberNow()
+    val changeOffset = changedAt?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
+    val records = siteChange || insulinChange
 
-    SheetSurface(title = "Prime / Fill", onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            NumberField(
-                label = "Insulin", value = insulin, onValue = { insulin = it },
-                step = state.insulinStep, min = 0.0, max = state.maxInsulin, decimals = state.insulinDecimals, unit = "U",
-                modifier = Modifier.fillMaxWidth(), onValidityChange = { insulinValid = it }
+    // Read state when invoked: a same-frame second tap must still see the latch.
+    fun canSubmit() = insulinValid && !submitted && (insulin > 0.0 || records)
+
+    fun submit() {
+        if (!canSubmit()) return
+        submitted = true
+        onSubmit(
+            FillInputs(
+                insulin = insulin,
+                siteChange = siteChange,
+                insulinChange = insulinChange,
+                notes = notes,
+                changedAt = if (records) changedAt else null
+            )
+        )
+    }
+
+    SheetSurface(
+        title = "Prime / Fill",
+        onClose = onClose,
+        footer = { PrimaryButton("Confirm", onClick = ::submit, enabled = canSubmit()) }
+    ) {
+        EntryCard("Insulin") {
+            AmountStepper(
+                value = insulin, onValue = { insulin = it },
+                step = state.insulinStep, min = 0.0, max = state.maxInsulin,
+                decimals = state.insulinDecimals, unit = "U", name = "of insulin",
+                onValidityChange = { insulinValid = it }
             )
             if (state.presets.isNotEmpty())
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
+                ChoiceRow {
                     state.presets.forEach { preset ->
-                        ActionChip(label = String.format(java.util.Locale.getDefault(), "%.${state.insulinDecimals}f", preset), onClick = { insulin = preset.coerceIn(0.0, state.maxInsulin) })
+                        ActionChip(
+                            label = formatNumeric(preset, state.insulinDecimals),
+                            modifier = Modifier.weight(1f),
+                            onClick = { insulin = preset.coerceIn(0.0, state.maxInsulin) }
+                        )
                     }
                 }
-
-            ToggleRow("Pump site change", siteChange, { siteChange = it }, sub = "Record cannula change")
-            ToggleRow("Insulin cartridge change", insulinChange, { insulinChange = it }, sub = "Record reservoir change")
-
-            // Only meaningful when something is being recorded; a prime on its own always happens now.
-            if (siteChange || insulinChange) {
-                NumberField(
-                    label = "Changed", value = minutesAgo, onValue = { minutesAgo = it },
-                    step = 5.0, min = 0.0, max = 1440.0, decimals = 0, unit = "min ago",
-                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { timeValid = it }
-                )
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-                    listOf("now" to 0, "30m" to 30, "1h" to 60, "2h" to 120, "4h" to 240, "8h" to 480, "12h" to 720)
-                        .forEach { (label, mins) -> ActionChip(label = label, onClick = { minutesAgo = mins.toDouble() }) }
-                }
-            }
-
-            if (state.showNotes) NotesField(notes, { notes = it })
-
-            PrimaryButton(
-                label = "Confirm",
-                enabled = valid && (insulin > 0.0 || siteChange || insulinChange),
-                onClick = {
-                    if (!valid) return@PrimaryButton
-                    onSubmit(
-                        FillInputs(
-                            insulin, siteChange, insulinChange, notes,
-                            // back-dating only applies to what is being recorded
-                            minutesAgo = if (siteChange || insulinChange) minutesAgo.toInt() else 0
-                        )
-                    )
-                }
-            )
         }
+
+        ToggleRow("Pump site change", siteChange, { siteChange = it }, sub = "Record cannula change")
+        ToggleRow("Insulin cartridge change", insulinChange, { insulinChange = it }, sub = "Record reservoir change")
+
+        if (records) {
+            EntryCard("Changed") {
+                TimeStepper(
+                    offsetMin = changeOffset,
+                    onOffset = { changedAt = if (it == 0) null else System.currentTimeMillis() + it * 60_000L },
+                    minOffsetMin = -MAX_CHANGE_AGE_MIN,
+                    maxOffsetMin = 0,
+                    atMs = changedAt
+                )
+            }
+        }
+
+        if (state.showNotes) NotesField(notes, { notes = it })
     }
 }

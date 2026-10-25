@@ -24,7 +24,6 @@ import com.google.common.base.Joiner
 import java.util.LinkedList
 import javax.inject.Inject
 
-/** Redesigned Calibration dialog. UI is Compose ([CalibrationSheet]); the send path is unchanged. */
 class CalibrationDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var rh: ResourceHelper

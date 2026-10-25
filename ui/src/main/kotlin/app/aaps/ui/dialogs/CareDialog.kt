@@ -37,12 +37,6 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable
 import java.util.LinkedList
 import javax.inject.Inject
 
-/**
- * Redesigned generic careportal event dialog. UI is Compose ([CareSheet]); [submit] runs the SAME
- * `TE` construction + `persistenceLayer.insertPumpTherapyEventIfNewByTimestamp` + `uel.log` /
- * `OKDialog` confirmation path as the legacy dialog. Which fields are shown (glucose + source /
- * duration / notes) is derived from the [UiInteraction.EventType] arg, exactly as before.
- */
 class CareDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
 
     @Inject lateinit var rh: ResourceHelper
@@ -86,10 +80,6 @@ class CareDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
     }
 
     private fun buildState(): CareSheetState {
-        // Visibility mirrors the legacy XML-driven dialog exactly:
-        //   glucose + source: BGCHECK, QUESTION, ANNOUNCEMENT
-        //   duration:         NOTE, EXERCISE
-        //   notes:            NOTE, QUESTION, ANNOUNCEMENT, EXERCISE (independent of preferences)
         val showBg = when (options) {
             UiInteraction.EventType.BGCHECK,
             UiInteraction.EventType.QUESTION,
