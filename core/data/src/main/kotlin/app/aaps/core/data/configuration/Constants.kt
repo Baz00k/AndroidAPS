@@ -44,7 +44,6 @@ object Constants {
 
     // Pump
     const val PUMP_MAX_CONNECTION_TIME_IN_SECONDS = 120 - 1
-    const val MIN_WATCHDOG_INTERVAL_IN_SECONDS = 12 * 60
 
     //SMS Communicator
     const val SMS_CONFIRM_TIMEOUT = 5L * 60 * 1000

@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">Deaktiviert Bluetooth kurzzeitig, falls keine Verbindung zur Pumpe besteht. Dies kann für Smartphones mit Verbindungsproblemen nützlich sein.</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Pumpenzeit aktualisiert</string>
     <string name="exit">Verlassen</string>

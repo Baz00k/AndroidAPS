@@ -49,7 +49,6 @@ class QueueWorkerTest : TestBaseWithProfile() {
                 it.rxBus = rxBus
                 it.activePlugin = activePlugin
                 it.rh = rh
-                it.preferences = preferences
                 it.androidPermission = androidPermission
                 it.config = config
             }

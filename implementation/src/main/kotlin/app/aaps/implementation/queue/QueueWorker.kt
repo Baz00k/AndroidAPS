@@ -1,6 +1,5 @@
 package app.aaps.implementation.queue
 
-import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.os.PowerManager
 import android.os.SystemClock
@@ -18,14 +17,9 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDismissBolusProgressIfRunning
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.interfaces.rx.events.EventQueueChanged
-import app.aaps.core.keys.BooleanKey
-import app.aaps.core.keys.LongNonKey
-import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.workflow.LoggingWorker
 import app.aaps.core.ui.R
 import app.aaps.core.ui.toast.ToastUtils
-import app.aaps.core.utils.extensions.safeDisable
-import app.aaps.core.utils.extensions.safeEnable
 import kotlinx.coroutines.Dispatchers
 import javax.inject.Inject
 
@@ -39,7 +33,6 @@ class QueueWorker internal constructor(
     @Inject lateinit var rxBus: RxBus
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var rh: ResourceHelper
-    @Inject lateinit var preferences: Preferences
     @Inject lateinit var androidPermission: AndroidPermission
     @Inject lateinit var config: Config
 
@@ -52,7 +45,7 @@ class QueueWorker internal constructor(
         rxBus.send(EventQueueChanged())
         var lastCommandTime: Long
         lastCommandTime = System.currentTimeMillis()
-        var connectionStartTime = lastCommandTime
+        val connectionStartTime = lastCommandTime
         try {
             while (true) {
                 if (isStopped) return Result.failure()
@@ -73,35 +66,15 @@ class QueueWorker internal constructor(
                     aapsLogger.debug(LTag.PUMPQUEUE, "timed out")
                     pump.stopConnecting()
 
-                    //BLUETOOTH-WATCHDOG
-                    var watchdog = preferences.get(BooleanKey.PumpBtWatchdog)
-                    val lastWatchdog = preferences.get(LongNonKey.BtWatchdogLastBark)
-                    watchdog = watchdog && System.currentTimeMillis() - lastWatchdog > Constants.MIN_WATCHDOG_INTERVAL_IN_SECONDS * 1000
-                    if (watchdog) {
-                        aapsLogger.debug(LTag.PUMPQUEUE, "BT watchdog - toggling the phone bluetooth")
-                        //write time
-                        preferences.put(LongNonKey.BtWatchdogLastBark, System.currentTimeMillis())
-                        //toggle BT
-                        pump.disconnect("watchdog")
-                        SystemClock.sleep(1000)
-                        (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter?.let { bluetoothAdapter ->
-                            bluetoothAdapter.safeDisable(1000)
-                            bluetoothAdapter.safeEnable(1000)
-                        }
-                        //start over again once after watchdog barked
-                        //Notification notification = new Notification(Notification.OLD_NSCLIENT, "Watchdog", Notification.URGENT);
-                        //rxBus.send(new EventNewNotification(notification));
-                        lastCommandTime = System.currentTimeMillis()
-                        connectionStartTime = lastCommandTime
-                        pump.connect("watchdog")
-                    } else {
-                        queue.clear()
-                        aapsLogger.debug(LTag.PUMPQUEUE, "no connection possible")
-                        rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTING))
-                        pump.disconnect("Queue empty")
-                        rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
-                        return Result.success()
-                    }
+                    // Apps cannot restart Bluetooth any more, and a command that could not be delivered
+                    // must not be retried because that could duplicate insulin. Cancel the queue so every
+                    // callback reports failure, then stop instead of waiting to reconnect.
+                    queue.clear()
+                    aapsLogger.debug(LTag.PUMPQUEUE, "no connection possible")
+                    rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTING))
+                    pump.disconnect("Connection timed out")
+                    rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
+                    return Result.success()
                 }
                 if (pump.isHandshakeInProgress()) {
                     aapsLogger.debug(LTag.PUMPQUEUE, "handshaking $secondsElapsed")

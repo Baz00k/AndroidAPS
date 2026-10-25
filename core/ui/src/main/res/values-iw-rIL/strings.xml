@@ -78,8 +78,6 @@
     <string name="shortgram">גר\'</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">בלוטות\'</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">מכבה את הבלוטות\' של הטלפון לשנייה אחת אם לא ניתן לתקשר עם המשאבה. זה עשוי לעזור במס\' דגמי טלפונים שבהם מערכת הבלוטות\' קופאת.</string>
     <string name="virtualpump_resultok">אישור</string>
     <string name="pump_time_updated">שעון המשאבה עודכן</string>
     <string name="exit">יציאה</string>

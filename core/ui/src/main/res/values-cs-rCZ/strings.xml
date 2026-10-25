@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">Hlídač BT</string>
-    <string name="btwatchdog_summary">Vypne na 1 sek bluetooth v telefonu, pokud se nedaří připojit k pumpě. Může to pomoci u telefonů, které mají problémy s BT</string>
     <string name="virtualpump_resultok">OK</string>
     <string name="pump_time_updated">Čas v pumpě aktualizován</string>
     <string name="exit">Konec</string>

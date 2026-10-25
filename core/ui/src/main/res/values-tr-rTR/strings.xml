@@ -78,8 +78,6 @@
     <string name="shortgram">gr</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="btwatchdog_title">BT Watchdog</string>
-    <string name="btwatchdog_summary">Pompa ile herhangi bir bağlantı sorunu yaşanıyorsa, Akıllı telefonunuzda Bluetooth bağlantısını kapatıp açın. Bu bluetooth bağlantı sorununu giderecektir.</string>
     <string name="virtualpump_resultok">Tamam</string>
     <string name="pump_time_updated">Pompa zamanı güncellendi</string>
     <string name="exit">Çıkış</string>

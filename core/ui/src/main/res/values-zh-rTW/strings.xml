@@ -78,8 +78,6 @@
     <string name="shortgram">g</string>
     <string name="shortpercent">%</string>
     <string name="bluetooth">藍牙</string>
-    <string name="btwatchdog_title">藍牙看門狗</string>
-    <string name="btwatchdog_summary">如果無法連線幫浦，將關閉手機的藍牙一秒鐘。這可能有助於某些藍牙異常的手機。</string>
     <string name="virtualpump_resultok">確定</string>
     <string name="pump_time_updated">幫浦時間已更新</string>
     <string name="exit">退出</string>

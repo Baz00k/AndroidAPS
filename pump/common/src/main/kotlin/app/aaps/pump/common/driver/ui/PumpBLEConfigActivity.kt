@@ -1,6 +1,5 @@
 package app.aaps.pump.common.driver.ui
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -11,9 +10,6 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -24,12 +20,11 @@ import android.widget.AdapterView
 import android.widget.AdapterView.OnItemClickListener
 import android.widget.BaseAdapter
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.app.ActivityCompat
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.pump.BlePreCheck
+import app.aaps.core.interfaces.pump.BlePreCheck.Result
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
@@ -68,17 +63,9 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
     var scanning = false
     private val devicesMap: MutableMap<String, BluetoothDevice> = kotlin.collections.HashMap()
 
-    // Apps can't switch Bluetooth on themselves, so the user is asked to. A refusal ends the screen
-    // rather than asking again on every resume.
+    // Apps can't switch Bluetooth on themselves, so the pre-check asks the user to. If Bluetooth is
+    // still off when the screen resumes, the user refused and the screen ends instead of asking again.
     private var bluetoothEnableRequested = false
-    private val enableBluetooth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            bluetoothEnableRequested = false
-        } else {
-            ToastUtils.errorToast(context, context.getString(app.aaps.core.ui.R.string.ble_not_enabled))
-            finish()
-        }
-    }
 
     private val stopScanAfterTimeoutRunnable = Runnable {
         if (scanning) {
@@ -92,12 +79,6 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
         binding = PumpBleConfigActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        if (!blePreCheck.prerequisitesCheck(this)) {
-            aapsLogger.error(TAG, "prerequisitesCheck failed.")
-            finish()
-            return
-        }
-
         // Configuration
         val activePump = activePlugin.activePump
 
@@ -110,13 +91,6 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
             }
         } else {
             throw kotlin.RuntimeException("PumpBLEConfigActivity can be used only with PumpDriverConfigurationCapable pump driver.")
-        }
-
-        if (!blePreCheck.prerequisitesCheck(this, bleSelector.getAdditionalPermissions())) {
-            aapsLogger.error(TAG, "prerequisitesCheck failed.")
-            ToastUtils.errorToast(context, context.getString(app.aaps.core.ui.R.string.need_connect_permission))
-            finish()
-            return
         }
 
         binding.pumpBleConfigCurrentlySelectedText.text = bleSelector.getText(PumpBLESelectorText.SELECTED_PUMP_TITLE)
@@ -210,21 +184,28 @@ open class PumpBLEConfigActivity : TranslatedDaggerAppCompatActivity() {
         super.onResume()
         bleSelector.onResume()
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-            if (bluetoothAdapter?.isEnabled != true) {
-                if (!bluetoothEnableRequested) {
-                    bluetoothEnableRequested = true
-                    enableBluetooth.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-                }
-                return
-            }
-            prepareForScanning()
-            updateCurrentlySelectedBTDevice()
-        } else {
-            ToastUtils.errorToast(context, context.getString(app.aaps.core.ui.R.string.need_connect_permission))
+        // The pre-check asks the user to enable Bluetooth. If it is still off when we come back,
+        // the user refused; end the screen instead of asking again on every resume.
+        if (bluetoothAdapter?.isEnabled != true && bluetoothEnableRequested) {
+            ToastUtils.errorToast(context, context.getString(app.aaps.core.ui.R.string.ble_not_enabled))
             finish()
+            return
         }
 
+        when (blePreCheck.prerequisitesCheck(this, bleSelector.getAdditionalPermissions())) {
+            Result.READY                 -> {
+                bluetoothEnableRequested = false
+                prepareForScanning()
+                updateCurrentlySelectedBTDevice()
+            }
+
+            Result.BLUETOOTH_DISABLED    -> bluetoothEnableRequested = true
+
+            Result.FAILED                -> {
+                aapsLogger.error(TAG, "prerequisitesCheck failed.")
+                finish()
+            }
+        }
     }
 
     override fun onDestroy() {
