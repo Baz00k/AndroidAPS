@@ -174,7 +174,7 @@ class AndroidPermissionImpl @Inject constructor(
         if (!Settings.canDrawOverlays(activity))
             uiInteraction.addNotification(
                 id = Notification.PERMISSION_SYSTEM_WINDOW,
-                text = rh.gs(R.string.need_location_permission),
+                text = rh.gs(R.string.need_system_window_permission),
                 level = Notification.URGENT,
                 actionButtonId = R.string.request,
                 action = {
