@@ -74,6 +74,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.ui.BasalDisplay
 import app.aaps.core.objects.ui.TherapyDisplay
 import app.aaps.core.ui.UIRunnable
+import app.aaps.core.ui.activities.DrawsToBottomEdge
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.extensions.runOnUiThread
 import app.aaps.core.utils.compactDurationLabel
@@ -126,7 +127,7 @@ import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
-class OverviewFragment : DaggerFragment() {
+class OverviewFragment : DaggerFragment(), DrawsToBottomEdge {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var aapsSchedulers: AapsSchedulers

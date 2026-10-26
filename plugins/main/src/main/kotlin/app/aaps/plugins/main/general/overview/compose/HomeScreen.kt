@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import app.aaps.core.compose.components.bottomControls
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -463,7 +466,9 @@ private fun ActionBar(layout: HomeActionLayout, calculatorEnabled: Boolean, acti
         Modifier
             .fillMaxWidth()
             .background(colors.bar)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            // The bar's colour runs under the gesture handle; its buttons stay above the gesture area.
+            .windowInsetsPadding(WindowInsets.bottomControls.union(WindowInsets(bottom = 8.dp)))
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -591,7 +596,8 @@ private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: 
         containerColor = AapsTheme.colors.surface3,
         shape = AapsTheme.shape.sheet,
         scrimColor = AapsTheme.colors.scrim,
-        dragHandle = null
+        dragHandle = null,
+        contentWindowInsets = { WindowInsets.bottomControls }
     ) {
         CompositionLocalProvider(LocalSheetDraggable provides true) { content(close) }
     }
