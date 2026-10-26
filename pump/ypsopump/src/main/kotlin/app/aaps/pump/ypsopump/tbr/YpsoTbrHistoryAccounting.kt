@@ -7,6 +7,7 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.history.YpsoPumpModeChange
 import java.time.ZoneId
+import kotlin.math.abs
 
 /** Read-back of temporary basal records. */
 interface YpsoTbrRecordLookup {
@@ -60,6 +61,7 @@ class YpsoTbrHistoryAccounting(
      * [pumpClockOffsetMs] is the pump clock minus the phone clock, measured on the read that returned
      * this event, or null when it could not be measured or does not hold for this event because the
      * pump clock was set after it. [waitForClock] is true while a later read may still measure it.
+     * [scanRows] are all rows of the read that returned this event.
      */
     fun apply(
         event: YpsoHistoryEvent,
@@ -67,6 +69,7 @@ class YpsoTbrHistoryAccounting(
         zone: ZoneId,
         pumpClockOffsetMs: Long? = null,
         waitForClock: Boolean = false,
+        scanRows: List<YpsoHistoryEvent> = emptyList(),
     ): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
@@ -86,12 +89,20 @@ class YpsoTbrHistoryAccounting(
         // seconds; without it, only the drift profile reads allow bounds it.
         val starts = YpsoPumpLocalTime.candidates(event.entry.factorySeconds, zone).map { it - (pumpClockOffsetMs ?: 0L) }
         val skew = if (pumpClockOffsetMs != null) MEASURED_SKEW else CLOCK_SKEW
-        // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Only an
-        // AAPS start whose window holds one of them places the row; its record is timed by AAPS. A row
-        // no start explains could be either, and importing it at a guess would misplace its basal.
+        // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
+        // row is an AAPS start's own only when that start's window holds one of them and no other row of
+        // this read could be the start's: another start an hour away, evicted from the journal or set on
+        // the pump, would carry the same wall time. Status reads wait for history, so every effective
+        // start's row is in this read. The bound record is timed by AAPS. A row nothing places could be
+        // either, and importing it at a guess would misplace its basal.
         if (tbr && starts.size > 1) {
-            starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }
-                .distinct().singleOrNull()?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
+            val owner = starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }
+                .distinct().singleOrNull()
+            val rivalSkew = CLOCK_SKEW + abs(pumpClockOffsetMs ?: 0L)
+            if (owner != null && scanRows.none { it.identity.aapsPumpId != pumpId && couldBeRowOf(owner, it, zone, rivalSkew) }) {
+                return syncAttempt(owner, pumpId, minutes * MINUTE)
+            }
         }
         val start = starts.singleOrNull() ?: return "TBR or pump-mode timestamp is ambiguous"
         if (tbr) {
@@ -133,10 +144,7 @@ class YpsoTbrHistoryAccounting(
         if (until <= registered && lookup.byPumpId(pumpId, pumpSerial, from) == null) return null
         // A start whose outcome status has not proven yet may be this very row: importing it now would
         // record the same TBR twice. Hold until status settles it.
-        journal.all().firstOrNull {
-            it.kind == YpsoTbrAttempt.Kind.START && it.pumpSerial == pumpSerial && it.percent == percent &&
-                (it.baselinePumpId == null || it.baselinePumpId < pumpId) && it.awaitsStatus && it.dispatchedAt != null
-        }?.let { return "TBR row $pumpId may belong to AAPS start ${it.id}, which status has not resolved yet" }
+        awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
         val duration = (until - from).coerceAtLeast(1L)
         return sync(pumpId, pumpSerial, from, duration, keepStart = true) { at ->
             pumpSync.syncTemporaryBasalWithPumpId(
@@ -160,11 +168,32 @@ class YpsoTbrHistoryAccounting(
             .filter {
                 it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial && it.percent == percent &&
                     (requestedMinutes == null || it.durationMinutes == requestedMinutes) &&
-                    (it.baselinePumpId == null || it.baselinePumpId < pumpId) &&
-                    rowStart >= checkNotNull(it.dispatchedAt) - skew &&
-                    rowStart <= (it.effectiveBy ?: checkNotNull(it.effectiveAt)) + skew
+                    (it.baselinePumpId == null || it.baselinePumpId < pumpId) && it.windowHolds(rowStart, skew)
             }
             .minByOrNull { checkNotNull(it.dispatchedAt) }
+
+    private fun YpsoTbrAttempt.windowHolds(rowStart: Long, skew: Long) =
+        rowStart >= checkNotNull(dispatchedAt) - skew && rowStart <= (effectiveBy ?: checkNotNull(effectiveAt)) + skew
+
+    /**
+     * Whether [row], a TBR no AAPS start owns yet, could be [attempt]'s own at any time its wall time
+     * names, within [skew]. Its duration is left out, so this errs towards a rival.
+     */
+    private fun couldBeRowOf(attempt: YpsoTbrAttempt, row: YpsoHistoryEvent, zone: ZoneId, skew: Long): Boolean {
+        val rowPumpId = row.identity.aapsPumpId
+        return row.semantics.kind in TBR_KINDS && row.entry.value1 == attempt.percent &&
+            journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
+            YpsoPumpLocalTime.candidates(row.entry.factorySeconds, zone).any { attempt.windowHolds(it, skew) }
+    }
+
+    /** A start with this row's percent whose outcome status has not proven yet. */
+    private fun awaitingStatus(serial: String, percent: Int, pumpId: Long): YpsoTbrAttempt? = journal.all().firstOrNull {
+        it.kind == YpsoTbrAttempt.Kind.START && it.pumpSerial == serial && it.percent == percent &&
+            (it.baselinePumpId == null || it.baselinePumpId < pumpId) && it.awaitsStatus && it.dispatchedAt != null
+    }
+
+    private fun awaitingStatusReason(pumpId: Long, attempt: YpsoTbrAttempt) =
+        "TBR row $pumpId may belong to AAPS start ${attempt.id}, which status has not resolved yet"
 
     private fun syncAttempt(attempt: YpsoTbrAttempt, pumpId: Long, pumpDuration: Long): String? {
         val start = checkNotNull(attempt.effectiveAt)

@@ -48,12 +48,16 @@ class YpsoPumpLocalTimeTest {
     }
 
     @Test
-    fun `pump clock offset is not measured while the pump reads a repeated or skipped wall time`() {
+    fun `pump clock offset is measured on either side of a DST change`() {
         val zone = ZoneId.of("Europe/Warsaw")
-        val phone = Instant.parse("2026-10-25T01:30:00Z").toEpochMilli()
+        fun offset(pump: LocalDateTime, phone: String) = YpsoPumpLocalTime.clockOffsetMs(pump, Instant.parse(phone).toEpochMilli(), zone)
 
-        assertNull(YpsoPumpLocalTime.clockOffsetMs(LocalDateTime.of(2026, 10, 25, 2, 29, 24), phone, zone))
-        assertNull(YpsoPumpLocalTime.clockOffsetMs(LocalDateTime.of(2026, 3, 29, 2, 30), phone, zone))
-        assertEquals(-36_000L, YpsoPumpLocalTime.clockOffsetMs(LocalDateTime.of(2026, 10, 25, 3, 29, 24), Instant.parse("2026-10-25T02:30:00Z").toEpochMilli(), zone))
+        // A pump 36 s behind the phone, in both passes of the repeated hour and while it has yet to fall back.
+        assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 2, 29, 24), "2026-10-25T00:30:00Z"))
+        assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 2, 29, 24), "2026-10-25T01:30:00Z"))
+        assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 2, 59, 34), "2026-10-25T01:00:10Z"))
+        assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 3, 29, 24), "2026-10-25T02:30:00Z"))
+        // A pump that has not sprung forward reads a skipped time an hour behind the phone.
+        assertEquals(-3_636_000L, offset(LocalDateTime.of(2026, 3, 29, 2, 29, 24), "2026-03-29T01:30:00Z"))
     }
 }

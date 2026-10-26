@@ -518,6 +518,37 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `a row in the repeated hour is not bound when another row of the read could be the same start`() {
+        // Only the start after the fall-back is still journalled. The row before it, from a start the
+        // journal evicted or a TBR set on the pump, carries the same wall time and percent.
+        startedAttempt(percent = 200, minutes = 30, at = afterFallBack + 1_000L)
+        val first = event(55_473, 10, 200, 4, seconds = repeatedHourSeconds)
+        val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 2)
+
+        for (row in listOf(first, second)) {
+            assertNotNull(accounting.apply(row, serial, warsaw, scanRows = listOf(first, second)))
+        }
+
+        assertTrue(saved.isEmpty())
+        assertNull(store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `a row in the repeated hour waits while a start with its percent has no proven outcome`() {
+        startedAttempt(percent = 0, minutes = 60, at = beforeFallBack + 1_000L)
+        val pending = YpsoTbrAttempt(
+            id = "pending", kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 0, durationMinutes = 60,
+            type = "NORMAL", temporaryId = 7L, baselinePumpId = 48_222L, createdAt = afterFallBack,
+        )
+        journal.prepare(pending)
+        journal.dispatched("pending", afterFallBack + 500L)
+
+        assertNotNull(accounting.apply(event(55_473, 9, 0, 60, seconds = repeatedHourSeconds), serial, warsaw))
+
+        assertTrue(saved.isEmpty())
+    }
+
+    @Test
     fun `re-applying the same rows writes nothing more`() {
         accounting.apply(event(48_224, 9, 110, 15), serial, zone)
         accounting.apply(event(48_224, 9, 110, 15), serial, zone)

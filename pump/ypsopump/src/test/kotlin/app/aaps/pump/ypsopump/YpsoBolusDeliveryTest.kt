@@ -280,6 +280,7 @@ class YpsoBolusDeliveryTest {
         YpsoHistoryIngestion(
             historyState, pumpSync,
             hasRecordedBolus = { serial, pumpId -> delivery.ownsHistoryBolus(serial, pumpId) },
+            bolusDispatchedAt = { serial, pumpId -> delivery.historyBolusDispatchedAt(serial, pumpId) },
             resolveProvisional = { serial, pumpId, timestamp, amount, type -> delivery.bindProvisional(serial, pumpId, timestamp, amount, type) },
         )
     }

@@ -206,7 +206,7 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock)?.let {
+                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock, scanRows = events)?.let {
                             val clockWait = app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.isClockWait(it)
                             if (clockWait) clocklessScans.incrementAndGet()
                             return YpsoHistoryIngestionResult.Blocked(it, retry = if (clockWait) YpsoHistoryIngestionResult.Retry.BOUNDED else YpsoHistoryIngestionResult.Retry.NONE)
