@@ -1,38 +1,33 @@
-# Driver behavior
+# Using YpsoPump with AAPS
 
-## What the driver does
+Set up the connection first: [connection setup](provisioning.md).
 
-The YpsoPump driver delivers immediate and square extended boluses and temporary basal rates (TBRs), and cancels either. Basal profiles are programmed on the pump: AAPS reads and compares them but never writes them. Combination-bolus UI and TDD loading are not supported.
+## Doses
 
-- Immediate boluses use 0.1 U steps (0.1–30 U).
-- Extended boluses use 15-minute steps (15 minutes to 12 hours).
-- TBRs run 0–500% (15 minutes to 24 hours).
-- AAPS can cancel only a bolus it started.
+- Bolus: 0.1 U steps, 0.1–30 U, within your AAPS maximum bolus.
+- Extended bolus: 15-minute steps, 15 minutes to 12 hours.
+- Temporary basal: 0–500 %, 15 minutes to 24 hours. Percent only: absolute rates are converted, and 100 % cancels.
 
-## Status
-
-A status read provides reservoir, battery, pump running/Stop state and the active TBR. Pump Stop and an empty reservoir are shown as suspended. A status reading is used for therapy for five minutes; after that, AAPS must read the pump again.
-
-## Alerts
-
-AAPS notifies you about setup, Bluetooth, pairing, permission, key and connection problems. With **Pump unreachable** enabled, connection failures use that alarm and its configured threshold. If it is disabled, the YpsoPump driver still posts its own connection notification.
-
-A pump code 140 means the pump rejected the saved key. AAPS stops automatic retries until you verify a different key. Key expiry reminders are advisory; see [connection setup](provisioning.md#key-expiry-and-reminders).
+Combination boluses and TDD loading are not supported. AAPS cancels only boluses it started; cancel others on the pump.
 
 ## Basal profiles
 
-Basal programming and A/B selection are manual. After editing schedules or switching programs, use **YpsoPump Preferences → Basal configuration → Read pump basal profiles**. Use **Check active pump profile** after switching A/B. A mismatch shows an urgent notification and a pump-tab banner. A timezone change requires another full read.
+Program the rates and active A/B schedule on the pump, then use **YpsoPump Preferences → Basal configuration → Read pump basal profiles** (one to three minutes). Read again after pump basal changes, A/B switches (**Check active pump profile**) and time zone changes.
 
-## Temporary basal
+AAPS never writes basal rates. A mismatch shows an urgent notification and a banner on the pump screen; the pump delivers its own schedule, so fix the pump or switch AAPS profiles.
 
-The pump accepts percent TBRs only; absolute requests are converted to a percent of the profile rate. A 100% TBR is a cancellation. A running TBR cannot be replaced, so AAPS stops it and starts the new one.
+## Status
 
-A TBR reports success only when pump status proves the requested rate and duration. If the result cannot be proven, AAPS keeps the command open and shows an urgent notification until a later status read resolves it. AAPS does not retry it automatically.
+AAPS trusts a status reading for five minutes; the pump screen shows how old it is. A pump you stopped or an empty reservoir counts as suspended in AAPS: no bolus or temporary basal.
 
-## Bolus delivery
+## Alerts
 
-Before sending a bolus, AAPS checks that pump status and pump history are ready. A pump acknowledgement does not prove insulin was delivered. If delivery is uncertain, AAPS records the requested amount provisionally and waits for pump history; do not repeat the dose while that warning is shown. A cancellation does not reduce insulin already recorded as delivered.
+Only the **Pump unreachable** alarm in Preferences → Local alerts reports a lost connection, using the threshold set there; turning it off leaves lost connections unreported.
 
-## History and records
+YpsoPump notifications explain why AAPS cannot use the pump: setup not finished, Bluetooth off, Bluetooth pairing missing, missing permissions, a wrong or expired pump key, or a different pump answered. Fix key problems in **Pump connection setup**. Key expiry reminders are advisory and do not stop delivery ([details](provisioning.md#key-expiry-and-reminders)).
 
-Pump history is the accounting authority for delivery. AAPS imports pump-originated boluses and TBRs when it can identify them, and reconciles its records with status. See [event history](history.md) for row identity, time and ingestion details.
+## When delivery is uncertain
+
+If AAPS reports a bolus as uncertain or possibly given, check the pump and glucose and do not repeat the dose. The requested amount stays in insulin on board until pump history shows what was delivered.
+
+If AAPS reports a temporary basal change as uncertain, check the pump before relying on the loop; it is not retried, and the warning stays until a later status reading resolves it.
