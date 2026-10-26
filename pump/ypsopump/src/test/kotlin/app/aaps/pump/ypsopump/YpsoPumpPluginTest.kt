@@ -14,6 +14,7 @@ import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.alerts.LocalAlertUtils
+import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventProfileSwitchChanged
@@ -76,9 +77,12 @@ class YpsoPumpPluginTest {
         on { getMaxExtendedBolusAllowed() } doReturn maxBolusConstraint
     }
     private val appLifecycle: AppLifecycle = mock()
+    private val config: Config = mock {
+        on { APS } doReturn true
+    }
     private val plugin = YpsoPumpPlugin(
         AAPSLoggerTest(), rh, preferences, commandQueue, state, manager, sync, rxBus, ui,
-        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker, appLifecycle
+        Provider { PumpEnactResultObject(rh).success(true).enacted(true) }, provisioning, profileFunction, constraintsChecker, appLifecycle, config
     )
 
     @Test fun `key reminder publication uses advisory channel and never invokes pump or therapy accounting`() {
@@ -1404,11 +1408,41 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `availability notification replaces stale or changed text but does not churn identical state`() {
-        whenever(provisioning.notificationRequired()).thenReturn(true)
+    fun `full build leaves connection failures to the app alarm`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.availability()).thenReturn(
-            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT)),
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
+        )
+        whenever(provisioning.notificationRequired(any(), eq(true))).thenReturn(false)
+        whenever(provisioning.notificationRequired(any(), eq(false))).thenReturn(true)
+
+        plugin.publishAvailabilityNotification()
+
+        verify(provisioning).notificationRequired(any(), eq(true))
+        verify(ui, never()).addNotification(any(), any(), any())
+    }
+
+    @Test
+    fun `pump-control build keeps the connection notification because it has no app alarm`() {
+        whenever(config.APS).thenReturn(false)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
+        )
+        whenever(provisioning.notificationRequired(any(), eq(false))).thenReturn(true)
+
+        plugin.publishAvailabilityNotification()
+
+        verify(provisioning).notificationRequired(any(), eq(false))
+        verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
+    }
+
+    @Test
+    fun `availability notification replaces stale or changed text but does not churn identical state`() {
+        whenever(provisioning.notificationRequired(any(), any())).thenReturn(true)
+        whenever(provisioning.installed()).thenReturn(installed)
+        whenever(provisioning.availability()).thenReturn(
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.BOND_MISSING)),
             PumpSession.Availability(setOf(PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED)),
         )
 
@@ -1428,7 +1462,7 @@ class YpsoPumpPluginTest {
 
     @Test
     fun `repeated unavailable absence dismisses a possible stale notification once`() {
-        whenever(provisioning.notificationRequired()).thenReturn(false)
+        whenever(provisioning.notificationRequired(any(), any())).thenReturn(false)
 
         plugin.publishAvailabilityNotification()
         plugin.publishAvailabilityNotification()
@@ -1439,10 +1473,10 @@ class YpsoPumpPluginTest {
 
     @Test
     fun `plugin stop dismisses a published availability notification once`() {
-        whenever(provisioning.notificationRequired()).thenReturn(true)
+        whenever(provisioning.notificationRequired(any(), any())).thenReturn(true)
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.availability()).thenReturn(
-            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
+            PumpSession.Availability(setOf(PumpSession.AvailabilityCause.BOND_MISSING))
         )
 
         plugin.publishAvailabilityNotification()

@@ -222,6 +222,7 @@ class KeepAliveWorker(
                     && !commandQueue.isRunning(Command.CommandType.BASAL_PROFILE)
                 )
         ) {
+            lastReadStatus = now
             rxBus.send(EventProfileSwitchChanged())
         } else if (isStatusOutdated && !pump.isBusy()) {
             lastReadStatus = now
@@ -229,6 +230,8 @@ class KeepAliveWorker(
         } else if (isBasalOutdated && !pump.isBusy()) {
             lastReadStatus = now
             commandQueue.readStatus(rh.gs(app.aaps.core.ui.R.string.keepalive_basal_outdated), null)
+        } else if (isStatusOutdated || isBasalOutdated) {
+            lastReadStatus = now
         }
     }
 }

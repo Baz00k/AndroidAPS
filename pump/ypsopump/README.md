@@ -5,7 +5,7 @@ The YpsoPump plugin connects AndroidAPS to a bonded pump using an existing encry
 ## Documentation
 
 - [Connection setup](docs/provisioning.md): Bluetooth pairing, import or manual session entry, verification and controller handoff.
-- [Driver behavior](docs/driver.md): status, basal profiles, temporary basal, bolus accounting and availability.
+- [Using the pump](docs/driver.md): basal rates, doses, alarms, and what to do when a dose may or may not have been given.
 - [Pump protocol](docs/protocol.md): BLE authentication, encrypted messages, counters, settings and status fields.
 - [Event history](docs/history.md): row format, identity, pump-local time and ingestion.
 

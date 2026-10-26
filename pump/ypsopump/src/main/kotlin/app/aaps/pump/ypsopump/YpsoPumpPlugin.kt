@@ -6,6 +6,7 @@ import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.pump.defs.TimeChangeType
+import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.lifecycle.AppLifecycle
@@ -93,6 +94,7 @@ class YpsoPumpPlugin @Inject constructor(
     private val profileFunction: ProfileFunction,
     private val constraintsChecker: ConstraintsChecker,
     private val appLifecycle: AppLifecycle,
+    private val config: Config,
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
@@ -1509,11 +1511,11 @@ class YpsoPumpPlugin @Inject constructor(
 
     @Synchronized
     internal fun publishAvailabilityNotification() {
-        if (!provisioning.notificationRequired()) {
+        val availability = provisioning.availability()
+        if (!provisioning.notificationRequired(availability, suppressConnectionCauses = config.APS)) {
             dismissAvailabilityNotification()
             return
         }
-        val availability = provisioning.availability()
         val presentation = pumpSetupPresentation(
             causes = availability.causes,
             hasSavedDetails = provisioning.installed() != null,

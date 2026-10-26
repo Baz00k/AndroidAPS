@@ -644,7 +644,7 @@ class YpsoProvisioningServiceTest {
     }
 
     @Test
-    fun `retry is bounded and transport notification starts at the documented threshold`() {
+    fun `retry is bounded and transport alone leaves the alert to the pump unreachable alarm`() {
         val (service) = service()
         install(service)
         for (failure in 1..7) {
@@ -653,10 +653,39 @@ class YpsoProvisioningServiceTest {
             val availability = service.availability()
             assertEquals(failure.coerceAtMost(5), availability.failures)
             assertFalse(service.retryAllowed(now))
-            assertEquals(failure >= 3, service.notificationRequired())
+            assertFalse(service.notificationRequired(availability, suppressConnectionCauses = true))
+            assertTrue(service.notificationRequired(availability, suppressConnectionCauses = false))
         }
         assertEquals(5 * 60_000L, service.availability().retryAt!! - 7_000L)
         assertTrue(service.retryAllowed(service.availability().retryAt!!))
+    }
+
+    @Test
+    fun `connection suppression never hides an actionable cause`() {
+        val (service) = service()
+        install(service)
+        service.recordUnavailable(
+            setOf(PumpSession.AvailabilityCause.TRANSPORT, PumpSession.AvailabilityCause.SUSPECTED_REKEY_REQUIRED),
+            operation = "poll",
+            now = 1_000
+        )
+
+        val availability = service.availability()
+
+        assertTrue(service.notificationRequired(availability, suppressConnectionCauses = true))
+        assertTrue(service.notificationRequired(availability, suppressConnectionCauses = false))
+    }
+
+    @Test
+    fun `authentication failures fall back to a driver notification without the app alarm`() {
+        val (service) = service()
+        install(service)
+        service.recordUnavailable(setOf(PumpSession.AvailabilityCause.AUTHENTICATION), operation = "auth", now = 1_000)
+
+        val availability = service.availability()
+
+        assertFalse(service.notificationRequired(availability, suppressConnectionCauses = true))
+        assertTrue(service.notificationRequired(availability, suppressConnectionCauses = false))
     }
 
     @Test

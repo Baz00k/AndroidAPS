@@ -52,6 +52,11 @@ class KeepAliveWorkerTest : TestBaseWithProfile() {
         whenever(workManager.getWorkInfos(any())).thenReturn(listenableFuture)
         whenever(listenableFuture.get()).thenReturn(emptyList())
         whenever(workerParameters.inputData).thenReturn(workDataOf("schedule" to "KA_5"))
+        resetLastReadStatus()
+    }
+
+    private fun resetLastReadStatus() {
+        KeepAliveWorker::class.java.getDeclaredField("lastReadStatus").apply { isAccessible = true }.setLong(null, 0L)
     }
 
     // Helper to create the worker instance directly
@@ -92,6 +97,21 @@ class KeepAliveWorkerTest : TestBaseWithProfile() {
         // Assert
         verify(commandQueue).readStatus(anyOrNull(), anyOrNull())
         Unit
+    }
+
+    @Test
+    fun `profile mismatch keeps the unreachable alarm check alive`() = runBlocking {
+        worker = createWorker()
+        whenever(loop.runningMode).thenReturn(RM.Mode.OPEN_LOOP)
+        whenever(profileFunction.getRequestedProfile()).thenReturn(profileSwitch)
+        testPumpPlugin.isProfileSet = false
+        testPumpPlugin.lastData = now - T.mins(20).msecs()
+
+        worker.checkPump()
+        verify(localAlertUtils, never()).checkPumpUnreachableAlarm(any(), any(), any())
+
+        worker.checkPump()
+        verify(localAlertUtils).checkPumpUnreachableAlarm(any(), any(), any())
     }
 
     @Test

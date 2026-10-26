@@ -667,12 +667,16 @@ class YpsoProvisioningService internal constructor(
         verificationAttemptRequested = true
     }
 
-    fun notificationRequired(): Boolean {
-        val value = pumpState.availability
-        val actionable = value.causes - PumpSession.AvailabilityCause.COUNTER_UNCERTAIN
-        if (actionable.isEmpty()) return false
-        return actionable.any { it != PumpSession.AvailabilityCause.TRANSPORT } || value.failures >= TRANSPORT_NOTIFICATION_THRESHOLD
+    fun notificationRequired(
+        availability: PumpSession.Availability,
+        suppressConnectionCauses: Boolean
+    ): Boolean = availability.causes.any {
+        it != PumpSession.AvailabilityCause.COUNTER_UNCERTAIN &&
+            !(suppressConnectionCauses && it in CONNECTION_CAUSES)
     }
+
+    fun notificationRequired(): Boolean =
+        notificationRequired(pumpState.availability, suppressConnectionCauses = false)
 
     @Synchronized
     fun refreshState() {
@@ -815,6 +819,9 @@ class YpsoProvisioningService internal constructor(
     companion object {
         private val RETRY_DELAYS_MS = longArrayOf(5_000, 15_000, 30_000, 60_000, 5 * 60_000)
         private const val MAX_RECORDED_FAILURES = 5
-        private const val TRANSPORT_NOTIFICATION_THRESHOLD = 3
+        private val CONNECTION_CAUSES = setOf(
+            PumpSession.AvailabilityCause.TRANSPORT,
+            PumpSession.AvailabilityCause.AUTHENTICATION,
+        )
     }
 }

@@ -1,51 +1,106 @@
-# Driver behavior
+# Using YpsoPump with AAPS
 
-## Capabilities
+Set up the connection first. See [Connection setup](provisioning.md).
 
-The driver delivers immediate and square extended boluses and temporary basals, and cancels each. It validates exact 0.1 U bolus steps (0.1–30 U, subject to AAPS constraints); extended delivery requires 15-minute steps from 15 minutes to 12 hours. Stop/cancel applies only to an identified AAPS-started bolus. TBRs run 0–500% for 15 minutes to 24 hours. The plugin does not program basal profiles, offer combination-bolus UI or load TDDs.
+## Basal rates
 
-## Status and availability
+You set basal rates on the pump. AAPS cannot send basal rates to the pump. It reads them and checks that they match your AAPS profile.
 
-An authenticated encrypted status read makes reservoir, pump running/Stop state, active TBR percentage and a coarse battery display available (the pump reports 0–5 bars, mapped to 0–100%). Pump Stop and an empty reservoir are reported to AAPS as suspended. Current basal from status includes any TBR scaling; it is not proof of the scheduled profile. Status samples expire after five minutes, including across an idle disconnect. Failed reads invalidate the current sample. An absent GATT serial is never replaced with a serial inferred from the BLE address.
+Your AAPS profile must have the same rate as the pump's active program (A or B) for every hour. The pump has one rate per hour, so change rates in your AAPS profile only on the full hour. A profile switch with a percentage or time shift must also end up with exactly the pump's rates.
 
-The protected session records distinct causes for missing setup, bond/permission, transport, authentication, encrypted-status failure, identity mismatch, counter uncertainty and suspected re-key. Counter uncertainty is informational: an unknown write floor can be established by a pump-accepted write. Transport retries back off; persistent failures and actionable non-transport failures produce notifications. A pump code 140 is presented as suspected session/key loss: automatic retries stop pending a different key and successful verification. Its exact pump-side lifetime is unknown. Key expiry reminders are advisory; see [connection setup](provisioning.md#key-expiry-and-reminders). They never clear code 140 or affect dosing.
+AAPS does not see changes you make on the pump until you read the pump again:
 
-## Basal schedules
+| When                                                  | Tap                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------- |
+| After setup, and after every basal change on the pump | **Read pump basal profiles** (takes one to three minutes) |
+| After you switch between A and B on the pump          | **Check active pump profile** (takes a few seconds)       |
+| After the phone changes time zone                     | **Read pump basal profiles**                              |
 
-Pump basal programming and A/B activation remain manual. In **YpsoPump Preferences → Basal configuration**, use **Read pump basal profiles** after setup or editing schedules on the pump. This reads the active program, all 24 hourly settings for A and B, the active program again and pump clock on one connection.
+To find these, open the YpsoPump tab, open the menu and choose **YpsoPump Preferences**. They are under **Basal configuration**. Keep the pump close to the phone while AAPS reads it.
 
-The read has a three-minute timeout and can run while the loop is active. It yields to queued boluses, including extended boluses. Temporary basals, including cancellation and zero TBRs, and profile-switch retries wait until the read finishes or yields.
+When the read is done, AAPS tells you whether the pump matches. For example, it shows **Pump profile A matches the active AAPS profile.** If you see **Not completed; previous schedules retained**, try again. If **Check active pump profile** does not complete, use **Read pump basal profiles** instead.
 
-An incomplete or inconsistent read does not replace the last complete configuration or trigger pending-switch acceptance. After a coherent read, a matching pending AAPS profile switch is rechecked through the normal switch path without waiting for keepalive. The stored schedules survive disconnects and restarts for that pump-session generation; they do not expire with status samples.
+### When the pump and AAPS do not match
 
-Use **Check active pump profile** after switching A/B on the pump. It checks the active selector against the stored schedules without rereading all hours. The driver compares the complete effective AAPS basal schedule with the last observed active pump schedule and reports *not read*, *matches* or *mismatch*. A mismatch displays an urgent notification and pump-tab banner. `setNewBasalProfile()` never writes the pump: it returns success without enacting only when the retained configuration matches. Routine status polls do not read profile settings. Unreported manual edits or a switch away and back between reads may leave the stored comparison outdated; a timezone change requires another full read.
+You see this notification, and the same text at the top of the YpsoPump tab:
 
-## Temporary basal
+**Pump basal profile A does not match the active AAPS profile. The pump is delivering its own schedule. Fix it on the pump or switch AAPS profiles.**
 
-The pump runs percent TBRs only. A percent request is sent as given (capped at 500%); an absolute request is converted once to a percent of the AAPS profile rate at enactment, rounded to 1%. AAPS records percent TBRs against the profile rate at each instant, and a profile is accepted only when it matches the pump's schedule, so the record follows what the pump delivers across later rate changes. A 100% request is a cancellation.
+The pump keeps giving its own rates, not the rates in your AAPS profile. Correct the rates on the pump, or switch to an AAPS profile with the same rates. If you changed the pump, read it again.
 
-Every request starts with a fresh status read. A running TBR cannot be replaced on the pump, so a change is a stop followed by a start. Each command is journalled before it can leave the phone and is resolved only by pump status read on the same link. AAPS records a stop at the pump acknowledgement and the new start at its own acknowledgement, so the short scheduled-rate gap between them is recorded. When an acknowledgement is lost, the dispatch time is used if status still proves the effect. A request reports success only when the pump is proven to run exactly what was asked, because AAPS delivers a paired SMB on success. Any other outcome is reported as a failure, and nothing is retried automatically.
+If you switch profiles in AAPS and the new profile does not match the pump, AAPS shows the **Failed to update basal profile** alarm. AAPS keeps the previous profile and shows the alarm again until the rates match. You get the same alarm before you first read the pump. Set the pump to the same rates, then tap **Read pump basal profiles**. AAPS then finishes the profile switch.
 
-A command whose effect status could not prove stays open in the journal, with an urgent notification, until a later status read resolves it. A start that status proves later is recorded from its dispatch time. The notification is derived from the journal, so it survives restarts. Cancellation stops any running TBR, including one set on the pump.
+## Doses
 
-Each routine status read also reconciles AAPS records with the pump. If the pump is idle while AAPS shows a TBR, or is running while AAPS shows a pump stop, the record is shortened by duration only. The end is chosen so IOB errs high: a low TBR or a stop ends when it was last seen matching, and a high TBR ends at the contradicting observation. Pump history later sets the pump's own time. When status shows the pump stopped, every open TBR record is ended and a zero-basal stop record starts at that observation, so IOB reflects the stop without waiting for history.
+From AAPS you can give:
 
-A TBR command does only the pump work and the checks that make its result truthful: the status read before it, the command, and the status read after it. History reading and matching run in the background afterwards.
+- boluses from 0.1 to 30 U, in steps of 0.1 U
+- extended boluses lasting 15 minutes to 12 hours, in 15-minute steps
+- temporary basals from 0 to 500 %, lasting 15 minutes to 24 hours
 
-Pump history is the accounting authority for end times. Each history read also reads the pump clock (two plain reads, no selector write) and measures its offset from the phone clock to within a few seconds. The offset is applied only to rows newer than the last date or time change in the pump's history, since an earlier row was written on the clock as it was then. A TBR row's time, corrected by that offset, must fall between the AAPS command's dispatch and its latest possible effect, within 15 seconds, to be that start's own row. The row then updates the AAPS record instead of adding a second one. This is identity, not a guess: an identical TBR set again on the pump would have to start within seconds of the AAPS command, and the pump rejects a start while a TBR runs.
+Your AAPS limits, such as maximum bolus, also apply. AAPS cannot give combination (multiwave) boluses. It cannot read daily totals from the pump.
 
-Without a usable offset (the clock could not be read, or it was changed after the row), the row is matched within 90 seconds of the AAPS command instead. If that fails and an AAPS start with the same percent is still unmatched, the row waits up to three history scans for a clock reading. After that, the start is marked unmatched: its AAPS record stands in for that row and the row is never imported, so the TBR is never counted twice and later history keeps flowing. The AAPS stop, expiry or status reconciliation ends such a record, and a notification reports it. A hand-set TBR with the same percent at that moment is not imported either; the AAPS record covers the same basal. A start that matches no row keeps its own record, which status reconciles against the pump.
+AAPS can stop only the boluses that AAPS started. To stop a bolus or extended bolus that you started on the pump, use the pump.
 
-While a start's outcome is still unknown, history holds a TBR row with its percent rather than importing it, since status may still prove it is that start. TBRs set on the pump are imported at pump time and shortened to the elapsed minutes when they end. A pump Stop row records zero basal from the Stop until the Resume row. If status already recorded that stop, the Stop row's record covers only the time before status saw it, so the stop is never counted twice. A Resume only extends or ends the stop directly before it. A record removed in AAPS is not recreated. AAPS accepts no record from before a pump's registration, so delivery before then is not counted. A TBR or Stop that ended before registration is passed over; one still running at registration is recorded from registration until it ends.
+Doses you give on the pump show up in AAPS after a delay. An extended bolus started on the pump shows up only after it has finished. AAPS does not record combination (multiwave) boluses given on the pump, so your insulin on board in AAPS will be too low. Avoid them while you use AAPS.
 
-A TBR or Stop row in the repeated hour of a daylight-saving fall-back cannot be placed in time and blocks history ingestion, as bolus rows do.
+## If AAPS is not sure a dose was given
 
-## Connection ownership
+The connection can drop while AAPS is sending a bolus. AAPS then cannot tell if the pump gave it. You get a bolus error alarm and this notification:
 
-The plugin alone closes an idle connection, in one place. Every queued pump command holds a link lock for its whole run, and the idle disconnect only closes the link if it can take that lock and nothing else is queued, running, or reading history. A command that finds the link just closed reopens it before starting. A link fault still closes it wherever it is detected. Command code never disconnects to end its own work.
+**A previous bolus could not be fully confirmed. Check the pump and glucose before giving more insulin.**
 
-## Bolus delivery and history
+If AAPS ever tells you to check the pump before giving more insulin:
 
-Before dispatch, therapy checks current pump/bolus status and a usable durable history cursor. A bolus attempt is persisted before the write. A transport ACK or idle bolus status does not prove delivered insulin. Same-link fast/slow sequence readback identifies the bolus for subsequent observation or cancellation; terminal history is the accounting authority. If an immediate bolus may have reached the pump, its requested amount is provisionally recorded until history resolves it, rather than retrying a possibly delivered dose. A short bolus (most SMBs) can finish before any status read shows its programmed amount. The pump still names the bolus sequence on its bolus notification, so the first new sequence notified on the command's connection after the dispatch was committed is kept in the journal. It is never used to cancel or to report success, and any second new sequence, from a notification or a status read, voids it. If the pump also announced that sequence stopped, the command returns enacted but unconfirmed ("Pump reported a bolus stopping. Amount awaiting history confirmation. Do not repeat this dose.") and waits quietly, without the urgent warning, for history. When history imports the row with exactly that sequence, the provisional record is merged into it if the row is no larger than the request and neither record was removed; otherwise both records stay and the warning shows. The warning also shows if history has not confirmed the dose within 30 minutes. A dose that proved neither a status identity nor a notified sequence is never merged by amount or time. Accepted residual risk: if the AAPS bolus's notification is lost and a pump-button bolus starts within about 1–3 s of the dispatch, the provisional record can be merged onto that other bolus's row. IOB is correct once both rows are imported, and too low by the difference until then. A square extended bolus is recorded after its pump identity is established; an uncertain start without that identity has no provisional PumpSync entry and awaits terminal-history recovery. An unconfirmed cancellation does not reduce an existing recorded dose.
+1. Do not give the bolus again.
+2. Look at the bolus history on the pump.
+3. Check your glucose.
 
-Status polling schedules bounded background history recovery instead of scanning history on the therapy queue. Recovery yields to queued therapy; active delivery observes status and then terminal history. Later pump-originated immediate and square boluses can be imported from terminal history rows. A square bolus still running at pump registration is recorded from registration, with the share of its amount delivered from then on (evenly spread, rounded up); a running pump-originated square bolus is not yet imported. Pump-originated combination boluses are not imported because their immediate part cannot be separated reliably for accounting. See [event history](history.md) for identity and timestamp handling.
+For a normal bolus, AAPS already counts the full amount in insulin on board. It corrects the amount once the pump history shows what was given.
+
+If you see **The pump did not confirm that the extended bolus stopped; it may still be delivering.**, look at the pump. If the extended bolus is still running, stop it on the pump.
+
+If you see **A temporary basal change could not be confirmed. Check the pump before relying on the loop.**, look at the pump to see which temporary basal is running, if any.
+
+## Pump stopped or reservoir empty
+
+If you stop the pump, or the reservoir is empty, the pump gives no insulin. AAPS shows **Pump suspended** and pauses the loop. AAPS cannot give boluses or temporary basals until the pump runs again. If you try, it says **The pump is stopped or the reservoir is empty.**
+
+When the reservoir gets low, AAPS warns you: **Pump reservoir low: … U left. Change the cartridge soon.** You choose when this warning starts with the **Threshold critical reservoir level [U]** setting. An empty reservoir sounds an alarm: **Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.**
+
+When you start the pump again, AAPS notices the next time it reads the pump. Then the loop continues.
+
+## Alerts
+
+### Lost connection
+
+In AAPS, only the **Pump unreachable** alarm tells you that AAPS cannot reach the pump. You find it in **Preferences → Local alerts**:
+
+- **Alert if pump is unreachable** turns the alarm on or off. It is on by default.
+- **Pump unreachable threshold [min]** sets how long AAPS waits before the alarm sounds. You can pick 30 to 300 minutes.
+
+If you turn this alarm off, AAPS does not warn you when it cannot reach the pump.
+
+When the alarm sounds, bring the phone close to the pump and check that Bluetooth is on. Even when AAPS cannot reach it, the pump keeps giving insulin by itself.
+
+### Problems you need to fix
+
+YpsoPump notifications start with **YpsoPump:** and tell you what to do, for example **YpsoPump: Turn Bluetooth on.** Do what the notification says. For pairing and pump key problems, see [Connection setup](provisioning.md).
+
+## Less common situations
+
+### Pump clock and time zones
+
+Keep the pump's date and time the same as the phone's. If they differ, doses given on the pump can show up at the wrong time in AAPS. If a notification says that temporary basals set by AAPS could not be matched to pump history, check the pump clock.
+
+When you move to another time zone, set the pump clock to the new local time. Then tap **Read pump basal profiles**.
+
+Before a daylight saving time change, AAPS shows **Daylight Saving time change in 24h or less**. After the change, AAPS pauses the closed loop for 3 hours.
+
+### History incomplete
+
+**YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.** means some doses from the pump may be missing in AAPS. If so, insulin on board in AAPS is wrong. Compare the pump history with the doses in AAPS before you give extra insulin.
+
+### Battery level
+
+The pump reports its battery in bars, so AAPS shows the battery level in steps of 20 %.

@@ -31,7 +31,8 @@ class YpsoPreferenceScreenTest : TestBaseWithProfile() {
             mock<YpsoProvisioningService>(),
             profileFunction,
             mock(),
-            mock<AppLifecycle>()
+            mock<AppLifecycle>(),
+            mock()
         )
         val screen = preferenceManager.createPreferenceScreen(context)
 
