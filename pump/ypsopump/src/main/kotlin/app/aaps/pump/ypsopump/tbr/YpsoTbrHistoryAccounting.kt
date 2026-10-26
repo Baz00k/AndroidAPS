@@ -82,12 +82,18 @@ class YpsoTbrHistoryAccounting(
         if (tbr) (journal.boundTo(pumpId) ?: journal.identifiedAs(pumpId))?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
         // The AAPS record of an unmatched start stands in for this row, in every later rewrite too.
         if (tbr && journal.unmatchedAs(pumpId) != null) return null
-        val pumpTime = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-            ?.instant?.toEpochMilli()
         // On the phone's clock. With the offset measured on this read, a row's time is exact to a few
         // seconds; without it, only the drift profile reads allow bounds it.
-        val start = pumpTime?.let { it - (pumpClockOffsetMs ?: 0L) } ?: return "TBR or pump-mode timestamp is ambiguous"
+        val starts = YpsoPumpLocalTime.candidates(event.entry.factorySeconds, zone).map { it - (pumpClockOffsetMs ?: 0L) }
         val skew = if (pumpClockOffsetMs != null) MEASURED_SKEW else CLOCK_SKEW
+        // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Only an
+        // AAPS start whose window holds one of them places the row; its record is timed by AAPS. A row
+        // no start explains could be either, and importing it at a guess would misplace its basal.
+        if (tbr && starts.size > 1) {
+            starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }
+                .distinct().singleOrNull()?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+        }
+        val start = starts.singleOrNull() ?: return "TBR or pump-mode timestamp is ambiguous"
         if (tbr) {
             bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
                 ?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }

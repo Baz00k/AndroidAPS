@@ -483,6 +483,10 @@ internal class YpsoBolusDelivery(
     // ---- history ----
 
     /** Whether a bolus history row is already accounted: a record carries it, or a journalled dose owns it. */
+    /** When AAPS sent the journalled immediate dose that owns this history row; null when none or several claim it. */
+    fun historyBolusDispatchedAt(pumpSerial: String, pumpId: Long): Long? =
+        runCatching { journalledImmediate(journal.all(), pumpSerial, pumpId) }.getOrNull()?.dispatchedAt
+
     fun ownsHistoryBolus(pumpSerial: String, pumpId: Long): Boolean =
         records.bolus(pumpId, pumpSerial) != null || journalledImmediate(journal.all(), pumpSerial, pumpId) != null
 
@@ -724,8 +728,7 @@ internal class YpsoBolusDelivery(
         }
         when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.stateUpdates + stable.newEventsOldestFirst)) {
             is YpsoImmediateBolusReconciliation.AttemptCompleted -> {
-                val timestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-                    ?.instant?.toEpochMilli() ?: return
+                val timestamp = YpsoPumpLocalTime.epochMillis(resolution.event.entry.factorySeconds, zone, near = attempt.dispatchedAt) ?: return
                 controller.confirmTerminal(
                     resolution.amountCentiUnits,
                     timestamp,
@@ -748,8 +751,7 @@ internal class YpsoBolusDelivery(
     private fun reconcileExtended(attempt: YpsoBolusAttempt, pumpSerial: String, zone: ZoneId, stable: YpsoHistoryReconciliation.Stable) {
         when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.stateUpdates + stable.newEventsOldestFirst)) {
             is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
-                val historyTimestamp = (YpsoPumpLocalTime.resolve(resolution.event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-                    ?.instant?.toEpochMilli() ?: return
+                val historyTimestamp = YpsoPumpLocalTime.epochMillis(resolution.event.entry.factorySeconds, zone, near = attempt.dispatchedAt) ?: return
                 val observedWindow = YpsoExtendedBolusAccounting.terminalWindow(attempt, resolution.amountCentiUnits, now())
                 val terminal = if (resolution.event.entry.eventType == 3)
                     observedWindow.copy(

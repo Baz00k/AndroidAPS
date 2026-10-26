@@ -66,6 +66,37 @@ class YpsoHistoryIngestionTest {
             verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(amount / 100.0), any(), eq(100L), any(), eq("10000001"))
         }
     }
+    @Test
+    fun `bolus row in the repeated hour is placed by the dose AAPS sent and stays blocked without one`() {
+        val zone = ZoneId.of("Europe/Warsaw")
+        val earlier = row(100, 2, 40).copy(
+            factorySeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 1, 59, 48)),
+        )
+        // 02:54:33 local exists at 00:54:33Z and again at 01:54:33Z.
+        val repeated = row(101, 2, 200).copy(
+            factorySeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 2, 54, 33)),
+        )
+        val afterFallBack = java.time.Instant.parse("2026-10-25T01:54:33Z").toEpochMilli()
+        for (dispatchedAt in listOf(null, afterFallBack + 36_000L)) {
+            val store = Store()
+            val sync: PumpSync = mock()
+            whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
+                .thenReturn(PumpSync.BolusSyncResult.INSERTED)
+            val ingestion = YpsoHistoryIngestion(store, sync, bolusDispatchedAt = { _, id -> dispatchedAt.takeIf { id == 101L } })
+            ingestion.ingest("10000001", zone, 21, snapshot(listOf(earlier)))
+
+            val result = ingestion.ingest("10000001", zone, 21, snapshot(listOf(repeated, earlier)))
+
+            if (dispatchedAt == null) {
+                assertEquals(YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous"), result)
+                assertEquals(100, store.value.cursor?.identity?.sequence)
+            } else {
+                assertTrue(result is YpsoHistoryIngestionResult.Applied)
+                verify(sync).replayConfirmedBolusWithPumpIdDetailed(eq(afterFallBack), eq(2.0), any(), eq(101L), any(), eq("10000001"))
+            }
+        }
+    }
+
     private class Store(var value: YpsoHistoryState = YpsoHistoryState()) : YpsoHistoryStateStore {
         override fun load() = value
         override fun commit(value: YpsoHistoryState) { this.value = value }

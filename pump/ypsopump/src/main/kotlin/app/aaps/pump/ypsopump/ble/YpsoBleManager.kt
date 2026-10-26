@@ -31,6 +31,7 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import java.time.Duration
@@ -899,11 +900,7 @@ class YpsoBleManager @Inject internal constructor(
                 plain(CHAR_SYSTEM_TIME) { time ->
                     val after = System.currentTimeMillis()
                     val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
-                    val offset = local?.let {
-                        val phone = (before + after) / 2
-                        val pumpAsPhoneLocal = it.atZone(pumpState.historyZone).toInstant().toEpochMilli()
-                        pumpAsPhoneLocal - phone
-                    }
+                    val offset = local?.let { YpsoPumpLocalTime.clockOffsetMs(it, (before + after) / 2, pumpState.historyZone) }
                     // The time is read after the date; near midnight the pair may straddle two days.
                     val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
                     done(offset?.takeIf { !nearMidnight })

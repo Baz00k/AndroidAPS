@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+import kotlin.math.abs
 
 /** Conversion of pump-local wall-clock seconds since 2000-01-01, with DST ambiguity explicit. */
 object YpsoPumpLocalTime {
@@ -46,4 +47,31 @@ object YpsoPumpLocalTime {
             else -> Resolution.Overlap(local, zoneId, offsets)
         }
     }
+
+    /** Every instant this wall time can name: one, none in a gap, or each offset of an overlap. */
+    fun candidates(factorySeconds: Long, zoneId: ZoneId): List<Long> {
+        val local = localDateTime(factorySeconds)
+        return zoneId.rules.getValidOffsets(local).map { local.toInstant(it).toEpochMilli() }
+    }
+
+    /**
+     * The row's instant. [near] only picks an overlap's offset: it is when AAPS sent the command this
+     * row records, so the row lies within [NEAR_TOLERANCE_MS] of it and the other offset an hour away.
+     * Null in a gap, or in an overlap without [near] or with no candidate close to it.
+     */
+    fun epochMillis(factorySeconds: Long, zoneId: ZoneId, near: Long? = null): Long? {
+        val candidates = candidates(factorySeconds, zoneId)
+        if (candidates.size <= 1) return candidates.singleOrNull()
+        return near?.let { reference -> candidates.singleOrNull { abs(it - reference) <= NEAR_TOLERANCE_MS } }
+    }
+
+    /** Pump clock drift plus the time a dose takes, far below the half hour separating overlap offsets. */
+    const val NEAR_TOLERANCE_MS = 10 * 60_000L
+
+    /**
+     * Pump wall clock minus [phoneMs] on the phone's own scale, or null while the pump clock reads an
+     * ambiguous or nonexistent wall time: an overlap would otherwise read an hour off.
+     */
+    fun clockOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long, zoneId: ZoneId): Long? =
+        zoneId.rules.getValidOffsets(pumpLocal).singleOrNull()?.let { pumpLocal.toInstant(it).toEpochMilli() - phoneMs }
 }

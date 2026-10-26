@@ -478,6 +478,45 @@ class YpsoTbrHistoryAccountingTest {
         assertEquals(pumpStart to 1_200_000L, saved[48_215L])
     }
 
+    /** 02:04:44 on 2026-10-25 in Warsaw: 00:04:44Z before the fall-back, 01:04:44Z after it. */
+    private val warsaw = ZoneId.of("Europe/Warsaw")
+    private val repeatedHourSeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 2, 4, 44))
+    private val beforeFallBack = java.time.Instant.parse("2026-10-25T00:04:44Z").toEpochMilli()
+    private val afterFallBack = java.time.Instant.parse("2026-10-25T01:04:44Z").toEpochMilli()
+
+    @Test
+    fun `a row in the repeated hour binds the AAPS start whose window holds one of its instants`() {
+        for (at in listOf(beforeFallBack, afterFallBack)) {
+            store.attempts = emptyList()
+            saved.clear()
+            startedAttempt(percent = 0, minutes = 60, at = at + 1_000L)
+
+            assertNull(accounting.apply(event(55_473, 9, 0, 60, seconds = repeatedHourSeconds), serial, warsaw))
+
+            assertEquals(at + 1_000L to 60 * 60_000L, saved[55_473L])
+            assertEquals(55_473L, store.attempts.single().pumpId)
+        }
+    }
+
+    @Test
+    fun `a row in the repeated hour that no AAPS start explains stays blocked`() {
+        assertNotNull(accounting.apply(event(55_473, 9, 0, 60, seconds = repeatedHourSeconds), serial, warsaw))
+        assertNotNull(accounting.apply(event(55_474, 14, 3, 0, seconds = repeatedHourSeconds), serial, warsaw))
+
+        assertTrue(saved.isEmpty())
+    }
+
+    @Test
+    fun `a row in the repeated hour that two AAPS starts could explain stays blocked`() {
+        startedAttempt(id = "first", percent = 0, minutes = 60, at = beforeFallBack + 1_000L, tempId = 1L)
+        startedAttempt(id = "second", percent = 0, minutes = 60, at = afterFallBack + 1_000L, tempId = 2L)
+
+        assertNotNull(accounting.apply(event(55_473, 9, 0, 60, seconds = repeatedHourSeconds), serial, warsaw))
+
+        assertTrue(saved.isEmpty())
+        assertTrue(store.attempts.all { it.pumpId == null })
+    }
+
     @Test
     fun `re-applying the same rows writes nothing more`() {
         accounting.apply(event(48_224, 9, 110, 15), serial, zone)
