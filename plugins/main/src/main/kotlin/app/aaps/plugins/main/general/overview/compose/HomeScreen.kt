@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import app.aaps.core.compose.components.bottomControls
 import androidx.compose.foundation.layout.widthIn
@@ -597,7 +598,7 @@ private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: 
         shape = AapsTheme.shape.sheet,
         scrimColor = AapsTheme.colors.scrim,
         dragHandle = null,
-        contentWindowInsets = { WindowInsets.bottomControls }
+        contentWindowInsets = { WindowInsets.navigationBars.union(WindowInsets.bottomControls) }
     ) {
         CompositionLocalProvider(LocalSheetDraggable provides true) { content(close) }
     }

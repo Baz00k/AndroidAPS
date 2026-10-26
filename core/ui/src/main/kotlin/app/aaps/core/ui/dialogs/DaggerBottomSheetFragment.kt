@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -93,13 +95,14 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
                     LocalSheetDraggable provides isCancelable,
                     LocalSheetDragHandle provides { dragHandle = it }
                 ) {
-                    // The sheet surface reaches the screen edge; its controls stay above the gesture area.
+                    // The sheet surface reaches the screen edge; its controls stay above the gesture area and
+                    // the keyboard, which Material's own padding (switched off in the theme) used to clear.
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .clip(AapsTheme.shape.sheet)
                             .background(AapsTheme.colors.surface3)
-                            .windowInsetsPadding(WindowInsets.bottomControls)
+                            .windowInsetsPadding(WindowInsets.bottomControls.union(WindowInsets.ime))
                     ) { content() }
                 }
             }

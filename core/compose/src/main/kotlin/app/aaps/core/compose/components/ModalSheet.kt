@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -139,7 +140,7 @@ fun ModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () 
                             paneTitle = "Sheet"
                             dismiss { close {}; true }
                         }
-                        .windowInsetsPadding(WindowInsets.bottomControls.union(WindowInsets.ime))
+                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.bottomControls).union(WindowInsets.ime))
                 ) {
                     CompositionLocalProvider(
                         LocalSheetDraggable provides true,
