@@ -14,6 +14,7 @@ import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.plugins.aps.openAPS.UntrustedValueException
 import app.aaps.plugins.aps.openAPS.requireFinite
 import app.aaps.plugins.aps.openAPS.requirePositive
+import app.aaps.plugins.aps.openAPS.requireWithin
 import app.aaps.plugins.aps.openAPS.safeFallback
 import app.aaps.plugins.aps.openAPS.smbLowTemp
 import java.text.DecimalFormat
@@ -40,15 +41,15 @@ class DetermineBasalAutoISF @Inject constructor(
 
     // Rounds value to 'digits' decimal places
     // different for negative numbers fun round(value: Double, digits: Int): Double = BigDecimal(value).setScale(digits, RoundingMode.HALF_EVEN).toDouble()
-    // Math.round turns ±Infinity into a large finite number, so a non-finite value ends the run instead.
+    // Math.round saturates ±Infinity and out-of-range values to a large finite number, so such a value ends the run instead.
     fun round(value: Double, digits: Int): Double {
         value.requireFinite("rounded value")
         val scale = 10.0.pow(digits.toDouble())
-        return Math.round(value * scale) / scale
+        return Math.round((value * scale).requireWithin(Long.MAX_VALUE.toDouble(), "rounded value * $scale")) / scale
     }
 
     fun Double.withoutZeros(): String = DecimalFormat("0.##").format(this)
-    fun round(value: Double): Int = value.requireFinite("rounded value").roundToInt()
+    fun round(value: Double): Int = value.requireWithin(Int.MAX_VALUE.toDouble(), "rounded value").roundToInt()
 
     // we expect BG to rise or fall at the rate of BGI,
     // adjusted by the rate at which BG would need to rise /
