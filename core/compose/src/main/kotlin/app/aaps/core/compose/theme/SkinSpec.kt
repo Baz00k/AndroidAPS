@@ -168,15 +168,15 @@ data class SkinSpec(
 
         // A single palette inherits from whichever default ground it resembles, so a pale skin that
         // names only its pinks does not pick up dark surfaces for everything it left out.
-        val single = palette?.let { it.toColors(if (it.background?.parseSkinColor()?.isDark() == false) AapsSkins.Default.light else AapsSkins.Default.dark) }
-        val darkColors = if (single != null) dark.toColors(single) else dark.toColors(AapsSkins.Default.dark)
+        val single = palette?.let { it.toColors(if (it.background?.parseSkinColor()?.isDark() == false) DefaultLightColors else DefaultDarkColors) }
+        val darkColors = if (single != null) dark.toColors(single) else dark.toColors(DefaultDarkColors)
         return AapsSkin(
             id = id,
             label = label,
             dark = darkColors,
             // A single-look skin renders its one palette on both grounds rather than falling back to
             // the default light one, which would silently discard its identity in light mode.
-            light = light?.toColors(single ?: AapsSkins.Default.light) ?: darkColors,
+            light = light?.toColors(single ?: DefaultLightColors) ?: darkColors,
             fontFamily = fontFamily ?: SystemFont,
             singleWeightFont = font?.singleWeight ?: false,
             typeScale = font?.scale ?: 1f,

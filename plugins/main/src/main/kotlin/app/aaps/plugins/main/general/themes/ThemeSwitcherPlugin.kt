@@ -1,10 +1,13 @@
 package app.aaps.plugins.main.general.themes
 
+import android.os.Looper
+import androidx.annotation.MainThread
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
 import app.aaps.core.compose.theme.AapsAppearances
+import app.aaps.core.compose.theme.AapsSkin
 import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsSkinState
 import app.aaps.core.compose.theme.AapsUiMode
@@ -58,20 +61,25 @@ class ThemeSwitcherPlugin @Inject constructor(
             }
     }
 
-    /**
-     * Read installed skin files into the registry.
-     *
-     * Touches storage, so it belongs off the main thread — call it before [applyAppearance] at
-     * startup, and again after installing or deleting one. Never throws: a corrupt file on disk must
-     * not stop the app from drawing, and the built-in skins are always there to fall back on.
-     */
+    /** Storage read only, safe off the main thread; never throws. */
+    fun readInstalledSkins(): List<AapsSkin> = try {
+        skinStore.installed()
+    } catch (e: Exception) {
+        aapsLogger.error(LTag.UI, "Could not read installed skins: ${e.message}")
+        emptyList()
+    }
+
+    /** Main thread only. */
+    @MainThread
+    fun publishInstalledSkins(skins: List<AapsSkin>) {
+        check(Looper.myLooper() == Looper.getMainLooper()) { "Installed skins must be published on the main thread" }
+        AapsSkins.installed = skins
+    }
+
+    /** Reads and publishes, for `SkinManagerActivity` after an install or a delete. Main thread only. */
+    @MainThread
     fun reloadInstalledSkins() {
-        AapsSkins.installed = try {
-            skinStore.installed()
-        } catch (e: Exception) {
-            aapsLogger.error(LTag.UI, "Could not read installed skins: ${e.message}")
-            emptyList()
-        }
+        publishInstalledSkins(readInstalledSkins())
     }
 
     /**
@@ -85,6 +93,7 @@ class ThemeSwitcherPlugin @Inject constructor(
      *
      * @return true if the XML night mode changed, i.e. the activities have to be recreated.
      */
+    @MainThread
     fun applyAppearance(): Boolean {
         val appearance = AapsAppearances.byId(migratedAppearanceId())
         AapsSkinState.appearanceId = appearance.id
