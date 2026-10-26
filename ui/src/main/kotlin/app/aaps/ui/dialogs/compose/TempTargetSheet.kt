@@ -40,8 +40,8 @@ fun TempTargetSheet(
     var targetValid by remember { mutableStateOf(false) }
     var durationValid by remember { mutableStateOf(false) }
 
-    val request = state.request(target, duration, reason)
-    val canStart = targetValid && durationValid && request != null
+    // The entry components own the draft: an incomplete or out-of-range edit publishes no value.
+    val request = state.request(target, duration, reason)?.takeIf { targetValid && durationValid }
     val selectedPreset = state.presets.firstOrNull { it.reason == reason }
 
     SheetSurface(
@@ -51,10 +51,8 @@ fun TempTargetSheet(
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
                 PrimaryButton(
                     label = "Start temporary target",
-                    enabled = canStart,
-                    onClick = {
-                        if (targetValid && durationValid) state.request(target, duration, reason)?.let(onStart)
-                    }
+                    enabled = request != null,
+                    onClick = { request?.let(onStart) }
                 )
                 // Independent of the editor: an active target outside today's range can still be stopped.
                 if (state.hasActive)
