@@ -1513,9 +1513,6 @@ class YpsoPumpPlugin @Inject constructor(
     @Synchronized
     internal fun publishAvailabilityNotification() {
         val availability = provisioning.availability()
-        // The app-wide alarm owns connection failures only when it can actually fire. A
-        // pump-control build has no alarm, and the user may disable it, so keep the driver
-        // notification as the fallback in those cases.
         val coreAlarmCoversConnection = config.APS && preferences.get(BooleanKey.AlertPumpUnreachable)
         if (!provisioning.notificationRequired(availability, suppressConnectionCauses = coreAlarmCoversConnection)) {
             dismissAvailabilityNotification()

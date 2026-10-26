@@ -667,12 +667,6 @@ class YpsoProvisioningService internal constructor(
         verificationAttemptRequested = true
     }
 
-    /**
-     * Connection failures are left to the app-wide pump unreachable alarm when it can fire; that
-     * alarm owns the looping sound, snooze and re-alert timing. Without that coverage, for example
-     * in a pump-control build or when the user disables the setting, the driver must still publish
-     * its own connection notification.
-     */
     fun notificationRequired(
         availability: PumpSession.Availability,
         suppressConnectionCauses: Boolean

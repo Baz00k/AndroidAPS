@@ -1417,13 +1417,13 @@ class YpsoPumpPluginTest {
         whenever(provisioning.notificationRequired(any(), eq(false))).thenReturn(true)
         whenever(preferences.get(app.aaps.core.keys.BooleanKey.AlertPumpUnreachable)).thenReturn(true)
 
-        plugin.publishAvailabilityNotification() // full build with the alarm enabled: core owns it
+        plugin.publishAvailabilityNotification()
         verify(provisioning).notificationRequired(any(), eq(true))
         verify(ui, never()).addNotification(any(), any(), any())
 
         whenever(preferences.get(app.aaps.core.keys.BooleanKey.AlertPumpUnreachable)).thenReturn(false)
 
-        plugin.publishAvailabilityNotification() // alarm disabled: driver must still notify
+        plugin.publishAvailabilityNotification()
         verify(provisioning).notificationRequired(any(), eq(false))
         verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }

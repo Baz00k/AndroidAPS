@@ -101,18 +101,15 @@ class KeepAliveWorkerTest : TestBaseWithProfile() {
 
     @Test
     fun `profile mismatch keeps the unreachable alarm check alive`() = runBlocking {
-        // Arrange
         worker = createWorker()
         whenever(loop.runningMode).thenReturn(RM.Mode.OPEN_LOOP)
         whenever(profileFunction.getRequestedProfile()).thenReturn(profileSwitch)
         testPumpPlugin.isProfileSet = false
         testPumpPlugin.lastData = now - T.mins(20).msecs()
 
-        // Act: the first cycle defers the status read for profile reconciliation.
         worker.checkPump()
         verify(localAlertUtils, never()).checkPumpUnreachableAlarm(any(), any(), any())
 
-        // Assert: a later cycle still evaluates the stale pump instead of staying suppressed.
         worker.checkPump()
         verify(localAlertUtils).checkPumpUnreachableAlarm(any(), any(), any())
     }

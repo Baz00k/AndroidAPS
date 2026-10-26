@@ -201,8 +201,6 @@ class KeepAliveWorker(
         // If these cases aren't handled, false "pump unreachable" alarms can be produced.
         // Avoid this by checking that (a) readStatus was requested at least once (lastReadStatus
         // is != 0 in that case) and (b) the last read status request was not too long ago.
-        // Legitimate reasons to defer a read (profile reconciliation, a busy pump) refresh this
-        // marker below so one such cycle cannot disable the alarm for the rest of the process.
         //
         // Also, use 5:30 as the threshold for (b) above instead of 5 minutes sharp. The keepalive
         // checks come in 5 minute intervals, but due to temporal jitter, the interval between the
@@ -224,9 +222,6 @@ class KeepAliveWorker(
                     && !commandQueue.isRunning(Command.CommandType.BASAL_PROFILE)
                 )
         ) {
-            // Profile reconciliation is a legitimate reason to skip a status read this cycle.
-            // Keeping the marker fresh prevents that branch from suppressing the unreachable
-            // alarm for the rest of the process; lastConnection still decides reachability.
             lastReadStatus = now
             rxBus.send(EventProfileSwitchChanged())
         } else if (isStatusOutdated && !pump.isBusy()) {
@@ -236,8 +231,6 @@ class KeepAliveWorker(
             lastReadStatus = now
             commandQueue.readStatus(rh.gs(app.aaps.core.ui.R.string.keepalive_basal_outdated), null)
         } else if (isStatusOutdated || isBasalOutdated) {
-            // The pump is busy, so no read can be requested this cycle. Do not let that deferral
-            // age out the alarm check; a later cycle re-evaluates the stale connection.
             lastReadStatus = now
         }
     }
