@@ -1,36 +1,23 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.SectionLabel
+import app.aaps.core.compose.components.AmountStepper
 import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.NotesField
-import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsSpacing
-import app.aaps.core.compose.theme.AapsTheme
 
-/** Which glucose source the user tapped (mirrors the legacy meter/sensor/other radio group). */
 enum class CareMeter { METER, SENSOR, MANUAL }
 
-/**
- * Presentation params for the redesigned generic careportal [CareSheet]. Everything visibility-related
- * is derived by [app.aaps.ui.dialogs.CareDialog] from the [app.aaps.core.interfaces.ui.UiInteraction.EventType]
- * (same logic the legacy XML-driven dialog used).
- */
 data class CareSheetState(
     val title: String,
     val submitLabel: String,
@@ -47,7 +34,6 @@ data class CareSheetState(
     val showNotes: Boolean
 )
 
-/** Values read back by [app.aaps.ui.dialogs.CareDialog.submit] instead of the legacy binding views. */
 data class CareInputs(
     val bg: Double,
     val meter: CareMeter,
@@ -55,53 +41,57 @@ data class CareInputs(
     val notes: String
 )
 
-/**
- * Redesigned generic careportal event sheet. [onSubmit] runs the SAME `TE` construction +
- * `persistenceLayer.insertPumpTherapyEventIfNewByTimestamp` + `uel.log` + `OKDialog` confirmation path
- * as the legacy dialog; only the input source changes (Compose state → [CareInputs]).
- */
 @Composable
 fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: () -> Unit) {
-    val colors = AapsTheme.colors
-    var bg by remember { mutableStateOf(state.bgInitial) }
-    // Default matches the legacy layout (sensor radio checked by default).
-    var meter by remember { mutableStateOf(CareMeter.SENSOR) }
-    var duration by remember { mutableStateOf(0.0) }
-    var notes by remember { mutableStateOf("") }
+    var bg by rememberSaveable { mutableStateOf(state.bgInitial) }
+    var meter by rememberSaveable { mutableStateOf(CareMeter.SENSOR) }
+    var duration by rememberSaveable { mutableStateOf(0.0) }
+    var notes by rememberSaveable { mutableStateOf("") }
     var bgValid by remember { mutableStateOf(false) }
     var durationValid by remember { mutableStateOf(false) }
-    val valid = (!state.showBg || bgValid) && (!state.showDuration || durationValid)
+    var submitted by rememberSaveable { mutableStateOf(false) }
 
-    SheetSurface(title = state.title, onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            if (state.showBg) {
-                NumberField(
-                    label = "Glucose", value = bg, onValue = { bg = it },
-                    step = state.bgStep, min = state.bgMin, max = state.bgMax, decimals = state.bgDecimals, unit = state.bgUnit,
-                    modifier = Modifier.fillMaxWidth(), onValidityChange = { bgValid = it }
+    fun canSubmit() = (!state.showBg || bgValid) && (!state.showDuration || durationValid) && !submitted
+
+    fun submit() {
+        if (!canSubmit()) return
+        submitted = true
+        onSubmit(CareInputs(bg = bg, meter = meter, durationMin = duration.toInt(), notes = notes))
+    }
+
+    SheetSurface(
+        title = state.title,
+        onClose = onClose,
+        footer = { PrimaryButton(label = state.submitLabel, onClick = ::submit, enabled = canSubmit()) }
+    ) {
+        if (state.showBg) {
+            EntryCard("Glucose") {
+                AmountStepper(
+                    value = bg, onValue = { bg = it },
+                    step = state.bgStep, min = state.bgMin, max = state.bgMax,
+                    decimals = state.bgDecimals, unit = state.bgUnit, name = "of glucose",
+                    onValidityChange = { bgValid = it }
                 )
                 SectionLabel("Source")
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Choice("Meter", selected = meter == CareMeter.METER, onClick = { meter = CareMeter.METER })
-                    Choice("Sensor", selected = meter == CareMeter.SENSOR, onClick = { meter = CareMeter.SENSOR })
-                    Choice("Other", selected = meter == CareMeter.MANUAL, onClick = { meter = CareMeter.MANUAL })
+                ChoiceRow {
+                    Choice("Meter", selected = meter == CareMeter.METER, onClick = { meter = CareMeter.METER }, modifier = Modifier.weight(1f))
+                    Choice("Sensor", selected = meter == CareMeter.SENSOR, onClick = { meter = CareMeter.SENSOR }, modifier = Modifier.weight(1f))
+                    Choice("Other", selected = meter == CareMeter.MANUAL, onClick = { meter = CareMeter.MANUAL }, modifier = Modifier.weight(1f))
                 }
             }
-
-            if (state.showDuration)
-                NumberField(
-                    label = "Duration", value = duration, onValue = { duration = it },
-                    step = state.durationStep, min = 0.0, max = state.durationMax, decimals = 0, unit = "min",
-                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { durationValid = it }
-                )
-
-            if (state.showNotes) NotesField(notes, { notes = it })
-
-            PrimaryButton(
-                label = state.submitLabel,
-                enabled = valid,
-                onClick = { if (valid) onSubmit(CareInputs(bg = bg, meter = meter, durationMin = duration.toInt(), notes = notes)) }
-            )
         }
+
+        // Zero duration is a note or exercise of unknown length.
+        if (state.showDuration)
+            EntryCard("Duration") {
+                AmountStepper(
+                    value = duration, onValue = { duration = it },
+                    step = state.durationStep, min = 0.0, max = state.durationMax,
+                    decimals = 0, unit = "min", name = "of duration", integerOnly = true,
+                    onValidityChange = { durationValid = it }
+                )
+            }
+
+        if (state.showNotes) NotesField(notes, { notes = it })
     }
 }
