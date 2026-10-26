@@ -23,6 +23,8 @@ class YpsoHistoryIngestion(
     private val hasRecordedBolus: (pumpSerial: String, pumpId: Long) -> Boolean = { _, _ -> true },
     /** Start of AAPS' use of this pump; PumpSync accepts no record from before it. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
+    /** When AAPS sent the journalled dose that owns this row, or null; places a row in a DST overlap. */
+    private val bolusDispatchedAt: (pumpSerial: String, pumpId: Long) -> Long? = { _, _ -> null },
     /**
      * Resolves a provisional record created for a dispatched dose onto its pump identity. Without this
      * the terminal history row would insert a second record for the same physical bolus, because
@@ -128,9 +130,9 @@ class YpsoHistoryIngestion(
                         // evidence-backed extended-bolus reporting contract exists. Origin is never
                         // inferred from amount, recency or receipt time.
                         YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED -> {
-                            val resolved = YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved
-                                ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
-                            val timestamp = resolved.instant.toEpochMilli()
+                            val timestamp = YpsoPumpLocalTime.epochMillis(
+                                event.entry.factorySeconds, zone, near = bolusDispatchedAt(pumpSerial, event.identity.aapsPumpId),
+                            ) ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
                             // Apply the activation policy before creating a durable replay intent. Replay
                             // deliberately bypasses that cutoff so already-owned insulin survives a switch.
                             if (pumpSync.isHistoryRecordBeforeActivePump(timestamp, PumpType.YPSOPUMP, pumpSerial) &&

@@ -136,6 +136,7 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
             hasRecordedBolus = { serial, pumpId -> bolus.ownsHistoryBolus(serial, pumpId) },
             resolveProvisional = { serial, pumpId, timestamp, amount, type -> bolus.bindProvisional(serial, pumpId, timestamp, amount, type) },
+            bolusDispatchedAt = { serial, pumpId -> bolus.historyBolusDispatchedAt(serial, pumpId) },
             registeredAt = ::pumpRegisteredAt,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.

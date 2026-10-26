@@ -592,6 +592,27 @@ class YpsoBolusDeliveryTest {
     }
 
     @Test
+    fun `terminal history in the repeated hour is timed by the offset next to the dose AAPS sent`() {
+        // 02:54:33 in Warsaw on the fall-back night names 00:54:33Z and 01:54:33Z; AAPS sent this dose at the second.
+        val afterFallBack = java.time.Instant.parse("2026-10-25T01:54:33Z").toEpochMilli()
+        clock = afterFallBack + 36_000L
+        pump.stepPerRead = 20
+        var reads = 0
+        pump.onRead = { if (++reads == 3) delivery.stop {} }
+        deliver(1.0, BS.Type.SMB)
+        val seconds = java.time.temporal.ChronoUnit.SECONDS.between(java.time.LocalDateTime.of(2000, 1, 1, 0, 0), java.time.LocalDateTime.of(2026, 10, 25, 2, 54, 33))
+        val dose = YpsoHistoryEntry(seconds, 2, 40, 0, 0, 48_001L, 0)
+
+        delivery.reconcileHistory(
+            SERIAL, ZoneId.of("Europe/Warsaw"), "generation", REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true),
+        )
+
+        val attempt = attempts.single()
+        assertEquals(48_001L, attempt.pumpHistoryId)
+        assertEquals(afterFallBack, attempt.deliveryTimestamp)
+    }
+
+    @Test
     fun `provisioning reads its counter floor from the journal the module owns`() {
         assertNull(delivery.recoveryEvidence())
         deliver()
