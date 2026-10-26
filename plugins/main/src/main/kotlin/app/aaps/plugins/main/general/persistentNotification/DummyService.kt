@@ -1,6 +1,6 @@
 package app.aaps.plugins.main.general.persistentNotification
 
-import android.app.Notification
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
@@ -38,12 +38,7 @@ class DummyService : DaggerService() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            aapsLogger.debug("Starting DummyService with ID ${notificationHolder.notificationID} notification ${notificationHolder.notification}")
-            startForeground(notificationHolder.notificationID, notificationHolder.notification)
-        } catch (e: Exception) {
-            startForeground(4711, Notification())
-        }
+        startForegroundGuarded()
         disposable.add(
             rxBus
                 .toObservable(EventAppExit::class.java)
@@ -64,12 +59,26 @@ class DummyService : DaggerService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        // A sticky restart of a foreground service is exempt from the background start restriction,
+        // a refused start must not be retried.
+        return if (startForegroundGuarded()) START_STICKY else START_NOT_STICKY
+    }
+
+    /**
+     * Enters the foreground with the ongoing notification, or stops the service when Android
+     * refuses the start - an escaped exception would kill the process.
+     */
+    internal fun startForegroundGuarded(): Boolean {
         try {
             aapsLogger.debug("Starting DummyService with ID ${notificationHolder.notificationID} notification ${notificationHolder.notification}")
             startForeground(notificationHolder.notificationID, notificationHolder.notification)
+            return true
+        } catch (e: ForegroundServiceStartNotAllowedException) {
+            aapsLogger.warn(LTag.CORE, "Foreground start not allowed in background, stopping: ${e.message}")
         } catch (e: Exception) {
-            startForeground(4711, Notification())
+            aapsLogger.error(LTag.CORE, "Cannot enter foreground, stopping", e)
         }
-        return START_STICKY
+        stopSelf()
+        return false
     }
 }

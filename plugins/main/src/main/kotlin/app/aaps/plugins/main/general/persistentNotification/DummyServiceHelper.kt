@@ -1,11 +1,13 @@
 package app.aaps.plugins.main.general.persistentNotification
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
-import app.aaps.core.interfaces.notifications.NotificationHolder
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,7 +23,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class DummyServiceHelper @Inject constructor(
-    private val notificationHolder: NotificationHolder
+    private val aapsLogger: AAPSLogger
 ) {
 
     fun startService(context: Context) {
@@ -32,11 +34,8 @@ class DummyServiceHelper @Inject constructor(
 
                 val dummyService: DummyService = binder.getService()
 
-                context.startForegroundService(Intent(context, DummyService::class.java))
-
-                // This is the key: Without waiting Android Framework to call this method
-                // inside Service.onCreate(), immediately call here to post the notification.
-                dummyService.startForeground(notificationHolder.notificationID, notificationHolder.notification)
+                // The bind only creates the service; the start keeps it running after the unbind.
+                if (startForegroundService(context)) dummyService.startForegroundGuarded()
 
                 // Release the connection to prevent leaks.
                 context.unbindService(this)
@@ -53,9 +52,22 @@ class DummyServiceHelper @Inject constructor(
             // Just call startForegroundService instead since we cannot bind a service to a
             // broadcast receiver context. The service also have to call startForeground in
             // this case.
-            context.startForegroundService(Intent(context, DummyService::class.java))
+            startForegroundService(context)
         }
     }
+
+    /** Starts the service so it outlives the binding; a background refusal must not escape. */
+    private fun startForegroundService(context: Context): Boolean =
+        try {
+            context.startForegroundService(Intent(context, DummyService::class.java))
+            true
+        } catch (e: ForegroundServiceStartNotAllowedException) {
+            aapsLogger.warn(LTag.CORE, "Cannot start DummyService in background: ${e.message}")
+            false
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.CORE, "Cannot start DummyService", e)
+            false
+        }
 
     fun stopService(context: Context) {
         context.stopService(Intent(context, DummyService::class.java))
