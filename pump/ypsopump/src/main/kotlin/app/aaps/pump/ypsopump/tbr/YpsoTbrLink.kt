@@ -115,7 +115,8 @@ internal class YpsoTbrBleLink(
     private fun sha256(value: ByteArray) = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
 
     companion object {
-        private const val WRITE_CALLBACK_TIMEOUT_S = 45L
+        /** Longest a command takes from dispatch to its outcome; the pump acts on it within this time. */
+        internal const val WRITE_CALLBACK_TIMEOUT_S = 45L
         private const val STATUS_TIMEOUT_S = 15L
     }
 }

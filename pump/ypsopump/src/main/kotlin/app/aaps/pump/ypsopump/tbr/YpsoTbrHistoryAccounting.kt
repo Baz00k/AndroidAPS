@@ -7,10 +7,12 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.history.YpsoPumpModeChange
 import java.time.ZoneId
+import kotlin.math.abs
 
 /** Read-back of temporary basal records. */
 interface YpsoTbrRecordLookup {
-    data class Record(val start: Long, val duration: Long, val valid: Boolean)
+    /** [temporaryId] is set when the record began as an AAPS start. */
+    data class Record(val start: Long, val duration: Long, val valid: Boolean, val temporaryId: Long? = null)
 
     /**
      * The record with this pump ID starting at [start], or null when none exists. A record the user
@@ -39,6 +41,11 @@ interface YpsoTbrRecordLookup {
     /** PUMP_SUSPEND records from Stop rows starting exactly at [at], including removed ones. */
     fun rowSuspendsAt(pumpSerial: String, at: Long): List<Suspend>
 
+    /** A percent TBR AAPS started, recorded under its temporary ID and bound to no history row yet. */
+    data class UnboundStart(val temporaryId: Long, val start: Long, val duration: Long, val percent: Double)
+
+    /** Unbound AAPS starts beginning from [from] to [to], including removed ones. */
+    fun unboundStarts(pumpSerial: String, from: Long, to: Long): List<UnboundStart>
 }
 
 /**
@@ -88,6 +95,11 @@ class YpsoTbrHistoryAccounting(
         // seconds; without it, only the drift profile reads allow bounds it.
         val starts = rowStarts(event, zone, pumpClockOffsetMs)
         val skew = skew(pumpClockOffsetMs)
+        // A row bound to an AAPS start keeps that start's time, also once the journal has dropped it.
+        val carried = if (tbr) starts.minOrNull()?.let { lookup.byPumpId(pumpId, pumpSerial, it) } else null
+        carried?.temporaryId?.let { return syncRecord(it, pumpId, pumpSerial, carried.start, carried.duration, percent, minutes * MINUTE) }
+        // Starts the journal evicted while history stalled are known only by their records.
+        val evicted = if (tbr && carried == null) evictedStarts(percent, if (running) minutes else null, starts, pumpSerial, skew) else emptyList()
         // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
         // row is an AAPS start's own only when that start's window holds one of them and no other row of
         // this read could be the start's: another start an hour away, evicted from the journal or set on
@@ -97,16 +109,30 @@ class YpsoTbrHistoryAccounting(
         // would misplace its basal.
         if (tbr && starts.size > 1) {
             awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
-            val owner = starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }
-                .distinct().singleOrNull()
-            if (owner != null && scanRows.none { (row, offset) -> row.identity.aapsPumpId != pumpId && couldBeRowOf(owner, row, zone, offset) }) {
+            val owners = starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }.distinct()
+            val rivals = scanRows.filter { (row, _) -> row.identity.aapsPumpId != pumpId }
+            val owner = owners.singleOrNull()
+            if (owner != null && evicted.isEmpty() && rivals.none { (row, offset) -> couldBeRowOf(owner, row, zone, offset) }) {
                 return syncAttempt(owner, pumpId, minutes * MINUTE)
+            }
+            val record = evicted.singleOrNull()
+            if (owners.isEmpty() && record != null && rivals.none { (row, offset) -> couldBeRowOf(record, row, zone, offset) }) {
+                return syncRecord(record.temporaryId, pumpId, pumpSerial, record.start, record.duration, percent, minutes * MINUTE)
             }
         }
         val start = starts.singleOrNull() ?: return "TBR or pump-mode timestamp is ambiguous"
         if (tbr) {
-            bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
-                ?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            val owner = bindCandidate(pumpId, percent, if (running) minutes else null, start, pumpSerial, skew)
+            // Its own row or an evicted start's: nothing tells which, and binding either at a guess could
+            // leave the other start's row to be imported beside its record.
+            if (evicted.isNotEmpty() && (owner != null || evicted.size > 1)) {
+                return "TBR row $pumpId may belong to any of ${evicted.size + listOfNotNull(owner).size} AAPS starts"
+            }
+            owner?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            evicted.singleOrNull()?.let { record ->
+                awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
+                return syncRecord(record.temporaryId, pumpId, pumpSerial, record.start, record.duration, percent, minutes * MINUTE)
+            }
             // Without a usable clock a start's own row can fall outside the drift window, and importing
             // it would count the same TBR twice. A later read may still measure the clock; after that,
             // the start keeps its AAPS record in place of this row, and history moves on.
@@ -185,6 +211,49 @@ class YpsoTbrHistoryAccounting(
             (attempt.baselinePumpId == null || attempt.baselinePumpId < rowPumpId) &&
             journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
             rowStarts(row, zone, offset).any { attempt.windowHolds(it, skew(offset)) }
+    }
+
+    /**
+     * AAPS starts this row may be, known only by their records: the journal keeps a bounded number of
+     * attempts, and while history stalls the oldest starts are evicted before history reaches their rows.
+     * A start's record begins when its command took effect: at the pump's acknowledgement, or at dispatch
+     * when that was lost. Either way the pump began it within a command's time of that start, so its row
+     * lies within that time and [skew] of it. Records of starts still journalled are the journal's to bind.
+     */
+    private fun evictedStarts(percent: Int, requestedMinutes: Int?, rowStarts: List<Long>, serial: String, skew: Long): List<YpsoTbrRecordLookup.UnboundStart> {
+        if (rowStarts.isEmpty()) return emptyList()
+        val journalled = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
+        val span = skew + COMMAND_SPAN
+        return lookup.unboundStarts(serial, rowStarts.min() - span, rowStarts.max() + span).filter { record ->
+            record.temporaryId !in journalled && record.percent == percent.toDouble() &&
+                // A record never outlasts its request, which a running row still carries.
+                (requestedMinutes == null || record.duration <= requestedMinutes * MINUTE) &&
+                rowStarts.any { record.windowHolds(it, skew) }
+        }
+    }
+
+    private fun YpsoTbrRecordLookup.UnboundStart.windowHolds(rowStart: Long, skew: Long) = abs(rowStart - start) <= skew + COMMAND_SPAN
+
+    /** As [couldBeRowOf], for a start known only by its [record]. */
+    private fun couldBeRowOf(record: YpsoTbrRecordLookup.UnboundStart, row: YpsoHistoryEvent, zone: ZoneId, offset: Long?): Boolean {
+        val rowPumpId = row.identity.aapsPumpId
+        return row.semantics.kind in TBR_KINDS && row.entry.value1.toDouble() == record.percent &&
+            journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
+            rowStarts(row, zone, offset).any { record.windowHolds(it, skew(offset)) }
+    }
+
+    /**
+     * Binds or updates the record AAPS wrote for a start under [temporaryId] as this row's. It keeps its
+     * start and type. The pump's minutes can only shorten it: its [recorded] end is the request or a
+     * confirmed AAPS stop, and a status that saw the TBR end cut it so that IOB errs high.
+     */
+    private fun syncRecord(temporaryId: Long, pumpId: Long, serial: String, start: Long, recorded: Long, percent: Int, pumpDuration: Long): String? {
+        val duration = minOf(pumpDuration, recorded).coerceAtLeast(1L)
+        val existing = lookup.byPumpId(pumpId, serial, start)
+        if (existing != null && (!existing.valid || existing.duration == duration)) return null
+        pumpSync.syncTemporaryBasalWithTempId(start, percent.toDouble(), duration, false, temporaryId, null, pumpId, PumpType.YPSOPUMP, serial)
+        val saved = lookup.byPumpId(pumpId, serial, start) ?: return "PumpSync did not bind temporary basal $pumpId"
+        return if (saved.valid) verify(pumpId, serial, start, duration) else null
     }
 
     /** On the phone's clock: every instant the row's wall time names, corrected by [offset]. */
@@ -318,6 +387,8 @@ class YpsoTbrHistoryAccounting(
         private const val CLOCK_SKEW = 90_000L
         /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
         private const val MEASURED_SKEW = 15_000L
+        /** How long after dispatch a command can still take effect; see [YpsoTbrBleLink.WRITE_CALLBACK_TIMEOUT_S]. */
+        private const val COMMAND_SPAN = YpsoTbrBleLink.WRITE_CALLBACK_TIMEOUT_S * 1_000L
         private const val CLOCK_WAIT = "waiting for a pump clock reading"
 
         /** Whether [apply] held a row only because the pump clock could not be used for it yet. */

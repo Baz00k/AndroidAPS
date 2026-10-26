@@ -174,11 +174,18 @@ class YpsoTbrJournal(private val store: YpsoTbrAttemptStore) {
         return next
     }
 
-    /** Keeps every attempt that can still change AAPS records, plus a short diagnostic tail. */
+    /**
+     * Keeps every attempt that can still change AAPS records, plus a short diagnostic tail, within a fixed
+     * size so every commit stays small. While history stalls, starts awaiting their rows pile up; the
+     * oldest of those whose record is saved go first, since history binds their rows by that record (see
+     * [YpsoTbrHistoryAccounting]). Attempts with an open outcome or an unmatched row have no such stand-in.
+     */
     private fun retained(attempts: List<YpsoTbrAttempt>): List<YpsoTbrAttempt> {
         val recent = attempts.takeLast(RETAINED_ATTEMPTS).toSet()
         // An unmatched start keeps its row out of history, including the row's later terminal rewrite.
-        return attempts.filter { it.unresolved || it.awaitsBinding || it.unmatchedRowPumpId != null || it in recent }.takeLast(MAX_ATTEMPTS)
+        val kept = attempts.filter { it.unresolved || it.awaitsBinding || it.unmatchedRowPumpId != null || it in recent }
+        val recorded = kept.filter { it.awaitsBinding && !it.unresolved }.take((kept.size - MAX_ATTEMPTS).coerceAtLeast(0)).toSet()
+        return kept.filterNot { it in recorded }.takeLast(MAX_ATTEMPTS)
     }
 
     companion object {

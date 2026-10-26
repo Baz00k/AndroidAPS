@@ -142,7 +142,7 @@ class YpsoPumpPlugin @Inject constructor(
                 // Row times move by the clock offset measured on each read; search well before this one.
                 override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
                     tbrRecords(pumpSerial, start - 24 * 60 * 60_000L, includeInvalid = true).singleOrNull { it.ids.pumpId == pumpId }
-                        ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid) }
+                        ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid, it.ids.temporaryId) }
 
                 override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
                     .any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }
@@ -166,6 +166,13 @@ class YpsoPumpPlugin @Inject constructor(
                 override fun statusSuspendsFrom(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
                     .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }
                     .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.StatusSuspend(it, record.timestamp, record.duration) } }
+
+                override fun unboundStarts(pumpSerial: String, from: Long, to: Long) = tbrRecords(pumpSerial, from, includeInvalid = true)
+                    .filter {
+                        it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.ids.pumpId == null &&
+                            it.timestamp >= from && it.timestamp <= to
+                    }
+                    .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.UnboundStart(it, record.timestamp, record.duration, record.rate) } }
             }, registeredAt = ::pumpRegisteredAt),
         )
     }
