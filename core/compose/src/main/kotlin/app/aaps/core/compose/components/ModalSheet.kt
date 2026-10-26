@@ -140,7 +140,7 @@ fun ModalSheet(onDismissed: () -> Unit, content: @Composable (close: (after: () 
                             paneTitle = "Sheet"
                             dismiss { close {}; true }
                         }
-                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.bottomControls).union(WindowInsets.ime))
                 ) {
                     CompositionLocalProvider(
                         LocalSheetDraggable provides true,

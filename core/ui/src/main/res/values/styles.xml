@@ -422,6 +422,15 @@
     </style>
 
     <!-- The launcher theme. It sets the main window background to the launch_screen drawable -->
+    <!-- The Compose sheet keeps its controls above the navigation bar and gesture area itself, under its own surface. -->
+    <style name="ThemeOverlay.Aaps.BottomSheetDialog" parent="ThemeOverlay.MaterialComponents.DayNight.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Aaps.BottomSheet</item>
+    </style>
+
+    <style name="Widget.Aaps.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="paddingBottomSystemWindowInsets">false</item>
+    </style>
+
     <style name="AppTheme.Launcher" parent="AppTheme.NoActionBar"></style>
 
     <style name="section_header_label">

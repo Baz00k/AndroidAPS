@@ -71,6 +71,7 @@ import app.aaps.ui.activities.ProfileHelperActivity
 import app.aaps.ui.activities.StatsActivity
 import app.aaps.ui.activities.TreatmentsActivity
 import app.aaps.ui.tabs.TabPageAdapter
+import app.aaps.core.ui.activities.fitContentToSystemBars
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayoutMediator
 import com.joanzapata.iconify.Iconify
@@ -109,6 +110,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
     private var isProtectionCheckActive = false
     private lateinit var binding: ActivityMainBinding
     private var mainMenuProvider: MenuProvider? = null
+    private var pageBottomInset = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -318,6 +320,16 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
     private fun startWizard(): Boolean =
         !preferences.get(BooleanKey.GeneralSetupWizardProcessed)
 
+    override fun onPostCreate(savedInstanceState: Bundle?) {
+        super.onPostCreate(savedInstanceState)
+        // Replaces the base's fit: each page keeps clear of the bottom itself, so Home's action bar can
+        // paint under the gesture handle.
+        fitContentToSystemBars { inset ->
+            pageBottomInset = inset
+            (binding.mainPager.adapter as? TabPageAdapter)?.bottomInset = inset
+        }
+    }
+
     override fun onPostCreate(savedInstanceState: Bundle?, persistentState: PersistableBundle?) {
         super.onPostCreate(savedInstanceState, persistentState)
         actionBarDrawerToggle.syncState()
@@ -375,7 +387,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
 
     private fun setupViews() {
         // Menu
-        val pageAdapter = TabPageAdapter(this)
+        val pageAdapter = TabPageAdapter(this).also { it.bottomInset = pageBottomInset }
         binding.mainNavigationView.setNavigationItemSelectedListener { true }
         val menu = binding.mainNavigationView.menu.also { it.clear() }
         for (p in activePlugin.getPluginsList())

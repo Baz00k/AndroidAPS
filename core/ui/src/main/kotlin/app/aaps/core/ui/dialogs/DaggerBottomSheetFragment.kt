@@ -8,8 +8,17 @@ import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.view.MotionEvent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
@@ -17,7 +26,9 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.components.LocalSheetDragHandle
 import app.aaps.core.compose.components.LocalSheetDraggable
+import app.aaps.core.compose.components.bottomControls
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.ui.R
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
@@ -46,6 +57,8 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
 
     /** Where the sheet's header was last laid out; a drag may start only there. */
     private var dragHandle: LayoutCoordinates? = null
+
+    override fun getTheme(): Int = R.style.ThemeOverlay_Aaps_BottomSheetDialog
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog =
         object : BottomSheetDialog(requireContext(), theme) {
@@ -81,7 +94,17 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
                 CompositionLocalProvider(
                     LocalSheetDraggable provides isCancelable,
                     LocalSheetDragHandle provides { dragHandle = it }
-                ) { content() }
+                ) {
+                    // The sheet surface reaches the screen edge; its controls stay above the gesture area and
+                    // the keyboard, which Material's own padding (switched off in the theme) used to clear.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(AapsTheme.shape.sheet)
+                            .background(AapsTheme.colors.surface3)
+                            .windowInsetsPadding(WindowInsets.bottomControls.union(WindowInsets.ime))
+                    ) { content() }
+                }
             }
         }
     }
