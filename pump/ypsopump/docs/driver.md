@@ -10,11 +10,11 @@ Your AAPS profile must have the same rate as the pump's active program (A or B) 
 
 AAPS does not see changes you make on the pump until you read the pump again:
 
-| When | Tap |
-|---|---|
+| When                                                  | Tap                                                       |
+| ----------------------------------------------------- | --------------------------------------------------------- |
 | After setup, and after every basal change on the pump | **Read pump basal profiles** (takes one to three minutes) |
-| After you switch between A and B on the pump | **Check active pump profile** (takes a few seconds) |
-| After the phone changes time zone | **Read pump basal profiles** |
+| After you switch between A and B on the pump          | **Check active pump profile** (takes a few seconds)       |
+| After the phone changes time zone                     | **Read pump basal profiles**                              |
 
 To find these, open the YpsoPump tab, open the menu and choose **YpsoPump Preferences**. They are under **Basal configuration**. Keep the pump close to the phone while AAPS reads it.
 
@@ -104,7 +104,3 @@ Before a daylight saving time change, AAPS shows **Daylight Saving time change i
 ### Battery level
 
 The pump reports its battery in bars, so AAPS shows the battery level in steps of 20 %.
-
-### Pumpcontrol app
-
-The Pumpcontrol app has no **Pump unreachable** alarm. Instead, YpsoPump shows **YpsoPump: Can’t reach the pump. Keep it close.**
