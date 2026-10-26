@@ -118,10 +118,12 @@ class YpsoHistoryIngestion(
                     .filter { YpsoHistoryClassifier.classify(it).kind in CLOCK_CHANGES }
                     .maxOfOrNull { it.sequence }
                 val waitForClock = clocklessScans.get() < CLOCK_WAIT_SCANS
+                fun offsetFor(event: YpsoHistoryEvent) = snapshot.pumpClockOffsetMs?.takeIf {
+                    lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
+                }
+                val scanRows = events.map { it to offsetFor(it) }
                 for (event in events) {
-                    val offset = snapshot.pumpClockOffsetMs?.takeIf {
-                        lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
-                    }
+                    val offset = offsetFor(event)
                     when (event.semantics.kind) {
                         // Only immediate-bolus terminal rows are ingested as an instantaneous normal
                         // bolus. Square/combination terminal rows carry the pump-confirmed delivered
@@ -206,7 +208,7 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock, scanRows = events)?.let {
+                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock, scanRows)?.let {
                             val clockWait = app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.isClockWait(it)
                             if (clockWait) clocklessScans.incrementAndGet()
                             return YpsoHistoryIngestionResult.Blocked(it, retry = if (clockWait) YpsoHistoryIngestionResult.Retry.BOUNDED else YpsoHistoryIngestionResult.Retry.NONE)

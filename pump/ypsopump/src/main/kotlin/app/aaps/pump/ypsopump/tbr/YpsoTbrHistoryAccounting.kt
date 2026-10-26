@@ -7,7 +7,6 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.history.YpsoPumpModeChange
 import java.time.ZoneId
-import kotlin.math.abs
 
 /** Read-back of temporary basal records. */
 interface YpsoTbrRecordLookup {
@@ -61,7 +60,7 @@ class YpsoTbrHistoryAccounting(
      * [pumpClockOffsetMs] is the pump clock minus the phone clock, measured on the read that returned
      * this event, or null when it could not be measured or does not hold for this event because the
      * pump clock was set after it. [waitForClock] is true while a later read may still measure it.
-     * [scanRows] are all rows of the read that returned this event.
+     * [scanRows] are all rows of that read, each with the clock offset that holds for it.
      */
     fun apply(
         event: YpsoHistoryEvent,
@@ -69,7 +68,7 @@ class YpsoTbrHistoryAccounting(
         zone: ZoneId,
         pumpClockOffsetMs: Long? = null,
         waitForClock: Boolean = false,
-        scanRows: List<YpsoHistoryEvent> = emptyList(),
+        scanRows: List<Pair<YpsoHistoryEvent, Long?>> = emptyList(),
     ): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
@@ -87,20 +86,20 @@ class YpsoTbrHistoryAccounting(
         if (tbr && journal.unmatchedAs(pumpId) != null) return null
         // On the phone's clock. With the offset measured on this read, a row's time is exact to a few
         // seconds; without it, only the drift profile reads allow bounds it.
-        val starts = YpsoPumpLocalTime.candidates(event.entry.factorySeconds, zone).map { it - (pumpClockOffsetMs ?: 0L) }
-        val skew = if (pumpClockOffsetMs != null) MEASURED_SKEW else CLOCK_SKEW
+        val starts = rowStarts(event, zone, pumpClockOffsetMs)
+        val skew = skew(pumpClockOffsetMs)
         // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
         // row is an AAPS start's own only when that start's window holds one of them and no other row of
         // this read could be the start's: another start an hour away, evicted from the journal or set on
-        // the pump, would carry the same wall time. Status reads wait for history, so every effective
-        // start's row is in this read. The bound record is timed by AAPS. A row nothing places could be
-        // either, and importing it at a guess would misplace its basal.
+        // the pump, would carry the same wall time. AAPS sends no TBR while history is read, and a start
+        // whose outcome is still open holds the row, so a start's own row is in this read. The bound
+        // record is timed by AAPS. A row nothing places could be either, and importing it at a guess
+        // would misplace its basal.
         if (tbr && starts.size > 1) {
             awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
             val owner = starts.mapNotNull { bindCandidate(pumpId, percent, if (running) minutes else null, it, pumpSerial, skew) }
                 .distinct().singleOrNull()
-            val rivalSkew = CLOCK_SKEW + abs(pumpClockOffsetMs ?: 0L)
-            if (owner != null && scanRows.none { it.identity.aapsPumpId != pumpId && couldBeRowOf(owner, it, zone, rivalSkew) }) {
+            if (owner != null && scanRows.none { (row, offset) -> row.identity.aapsPumpId != pumpId && couldBeRowOf(owner, row, zone, offset) }) {
                 return syncAttempt(owner, pumpId, minutes * MINUTE)
             }
         }
@@ -176,15 +175,23 @@ class YpsoTbrHistoryAccounting(
         rowStart >= checkNotNull(dispatchedAt) - skew && rowStart <= (effectiveBy ?: checkNotNull(effectiveAt)) + skew
 
     /**
-     * Whether [row], a TBR no AAPS start owns yet, could be [attempt]'s own at any time its wall time
-     * names, within [skew]. Its duration is left out, so this errs towards a rival.
+     * Whether binding would take [row], a TBR no AAPS start owns yet, for [attempt]'s at any time its
+     * wall time names, read with the clock [offset] that holds for it. Its duration is left out, so this
+     * errs towards a rival.
      */
-    private fun couldBeRowOf(attempt: YpsoTbrAttempt, row: YpsoHistoryEvent, zone: ZoneId, skew: Long): Boolean {
+    private fun couldBeRowOf(attempt: YpsoTbrAttempt, row: YpsoHistoryEvent, zone: ZoneId, offset: Long?): Boolean {
         val rowPumpId = row.identity.aapsPumpId
         return row.semantics.kind in TBR_KINDS && row.entry.value1 == attempt.percent &&
+            (attempt.baselinePumpId == null || attempt.baselinePumpId < rowPumpId) &&
             journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
-            YpsoPumpLocalTime.candidates(row.entry.factorySeconds, zone).any { attempt.windowHolds(it, skew) }
+            rowStarts(row, zone, offset).any { attempt.windowHolds(it, skew(offset)) }
     }
+
+    /** On the phone's clock: every instant the row's wall time names, corrected by [offset]. */
+    private fun rowStarts(row: YpsoHistoryEvent, zone: ZoneId, offset: Long?) =
+        YpsoPumpLocalTime.candidates(row.entry.factorySeconds, zone).map { it - (offset ?: 0L) }
+
+    private fun skew(offset: Long?) = if (offset != null) MEASURED_SKEW else CLOCK_SKEW
 
     /** A start with this row's percent whose outcome status has not proven yet. */
     private fun awaitingStatus(serial: String, percent: Int, pumpId: Long): YpsoTbrAttempt? = journal.all().firstOrNull {

@@ -57,7 +57,7 @@ class YpsoPumpLocalTimeTest {
         assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 2, 29, 24), "2026-10-25T01:30:00Z"))
         assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 2, 59, 34), "2026-10-25T01:00:10Z"))
         assertEquals(-36_000L, offset(LocalDateTime.of(2026, 10, 25, 3, 29, 24), "2026-10-25T02:30:00Z"))
-        // A pump that has not sprung forward reads a skipped time an hour behind the phone.
-        assertEquals(-3_636_000L, offset(LocalDateTime.of(2026, 3, 29, 2, 29, 24), "2026-03-29T01:30:00Z"))
+        // A pump that has not sprung forward yet: its rows so far carry the offset before the gap.
+        assertEquals(-36_000L, offset(LocalDateTime.of(2026, 3, 29, 2, 4, 24), "2026-03-29T01:05:00Z"))
     }
 }
