@@ -115,6 +115,37 @@ class DetermineBasalUntrustedValueTest : TestBaseWithProfile() {
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
+    fun `overflow inside rounding aborts the run without dosing`(algorithm: Algorithm) {
+        // Finite inputs, but the BG impact of the activity is too large to round.
+        assertAbortedWithoutDosing(run(algorithm, Inputs(activity = -1e305)), "rounded value")
+    }
+
+    @ParameterizedTest
+    @EnumSource(Algorithm::class)
+    fun `aborted run cancels a running temp when the basal cannot be trusted`(algorithm: Algorithm) {
+        for (basal in listOf(0.0, -1.0, Double.NaN, Double.NEGATIVE_INFINITY)) {
+            val rT = run(algorithm, Inputs(profile = profile().copy(current_basal = basal), currentTemp = CurrentTemp(duration = 30, rate = 3.0, minutesrunning = 5)))
+
+            assertThat(rT.reason.toString()).startsWith("Aborting run: current_basal=$basal")
+            assertThat(rT.rate).isEqualTo(0.0)
+            assertThat(rT.duration).isEqualTo(0)
+            assertThat(rT.units).isNull()
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Algorithm::class)
+    fun `aborted run cancels a running temp when its rate cannot be trusted`(algorithm: Algorithm) {
+        val rT = run(algorithm, Inputs(currentTemp = CurrentTemp(duration = 30, rate = Double.NaN, minutesrunning = 5)))
+
+        assertThat(rT.reason.toString()).startsWith("Aborting run: currenttemp.rate=NaN")
+        assertThat(rT.rate).isEqualTo(0.0)
+        assertThat(rT.duration).isEqualTo(0)
+        assertThat(rT.units).isNull()
+    }
+
+    @ParameterizedTest
+    @EnumSource(Algorithm::class)
     fun `a valid run after an aborted one is unaffected`(algorithm: Algorithm) {
         val expected = run(algorithm, Inputs(), DetermineBasalSMB(profileUtil, fabricPrivacy), DetermineBasalAutoISF(profileUtil))
         run(algorithm, Inputs(profile = profile().copy(sens = Double.NaN)))
