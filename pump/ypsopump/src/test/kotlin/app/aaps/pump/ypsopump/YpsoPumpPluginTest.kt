@@ -1408,24 +1408,18 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `connection notification is suppressed only when the app alarm can fire`() {
+    fun `full build leaves connection failures to the app alarm`() {
         whenever(provisioning.installed()).thenReturn(installed)
         whenever(provisioning.availability()).thenReturn(
             PumpSession.Availability(setOf(PumpSession.AvailabilityCause.TRANSPORT))
         )
         whenever(provisioning.notificationRequired(any(), eq(true))).thenReturn(false)
         whenever(provisioning.notificationRequired(any(), eq(false))).thenReturn(true)
-        whenever(preferences.get(app.aaps.core.keys.BooleanKey.AlertPumpUnreachable)).thenReturn(true)
 
         plugin.publishAvailabilityNotification()
+
         verify(provisioning).notificationRequired(any(), eq(true))
         verify(ui, never()).addNotification(any(), any(), any())
-
-        whenever(preferences.get(app.aaps.core.keys.BooleanKey.AlertPumpUnreachable)).thenReturn(false)
-
-        plugin.publishAvailabilityNotification()
-        verify(provisioning).notificationRequired(any(), eq(false))
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_UNAVAILABLE), any(), eq(Notification.URGENT))
     }
 
     @Test

@@ -31,7 +31,6 @@ import app.aaps.core.interfaces.rx.events.EventProfileSwitchChanged
 import app.aaps.core.objects.profile.ProfileSealed
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.ui.toast.ToastUtils
-import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
@@ -1513,8 +1512,7 @@ class YpsoPumpPlugin @Inject constructor(
     @Synchronized
     internal fun publishAvailabilityNotification() {
         val availability = provisioning.availability()
-        val coreAlarmCoversConnection = config.APS && preferences.get(BooleanKey.AlertPumpUnreachable)
-        if (!provisioning.notificationRequired(availability, suppressConnectionCauses = coreAlarmCoversConnection)) {
+        if (!provisioning.notificationRequired(availability, suppressConnectionCauses = config.APS)) {
             dismissAvailabilityNotification()
             return
         }
