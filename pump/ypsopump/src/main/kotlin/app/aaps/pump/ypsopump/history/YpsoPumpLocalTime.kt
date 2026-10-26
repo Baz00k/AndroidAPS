@@ -69,9 +69,14 @@ object YpsoPumpLocalTime {
     const val NEAR_TOLERANCE_MS = 10 * 60_000L
 
     /**
-     * Pump wall clock minus [phoneMs] on the phone's own scale, or null while the pump clock reads an
-     * ambiguous or nonexistent wall time: an overlap would otherwise read an hour off.
+     * Pump clock minus the phone clock [phoneMs]. A pump reading in the repeated hour takes the offset
+     * nearest the phone, which a pump within minutes of it always is; the earlier offset alone reads an
+     * hour off once the hour repeats. A reading in a skipped hour comes from a pump that has not moved
+     * forward yet, so it is read at the phone's current offset.
      */
-    fun clockOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long, zoneId: ZoneId): Long? =
-        zoneId.rules.getValidOffsets(pumpLocal).singleOrNull()?.let { pumpLocal.toInstant(it).toEpochMilli() - phoneMs }
+    fun clockOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long, zoneId: ZoneId): Long {
+        val offsets = zoneId.rules.getValidOffsets(pumpLocal)
+            .ifEmpty { listOf(zoneId.rules.getOffset(Instant.ofEpochMilli(phoneMs))) }
+        return offsets.map { pumpLocal.toInstant(it).toEpochMilli() - phoneMs }.minBy { abs(it) }
+    }
 }

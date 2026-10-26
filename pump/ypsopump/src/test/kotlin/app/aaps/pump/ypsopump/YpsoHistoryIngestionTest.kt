@@ -166,7 +166,7 @@ class YpsoHistoryIngestionTest {
         val seen = mutableMapOf<Long, Long?>()
         var hold: String? = null
         val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
-            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any()) } doAnswer {
+            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any(), any()) } doAnswer {
                 seen[it.getArgument<app.aaps.pump.ypsopump.history.YpsoHistoryEvent>(0).identity.sequence] = it.getArgument(3)
                 hold
             }
@@ -192,7 +192,7 @@ class YpsoHistoryIngestionTest {
         val probe = OffsetProbe()
         val waits = mutableListOf<Boolean>()
         val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
-            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any()) } doAnswer {
+            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any(), any()) } doAnswer {
                 val wait = it.getArgument<Boolean>(4)
                 waits += wait
                 if (wait) "TBR row may belong to AAPS start; waiting for a pump clock reading" else null
