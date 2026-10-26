@@ -8,8 +8,20 @@ import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.view.MotionEvent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.mandatorySystemGestures
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
@@ -81,7 +93,18 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
                 CompositionLocalProvider(
                     LocalSheetDraggable provides isCancelable,
                     LocalSheetDragHandle provides { dragHandle = it }
-                ) { content() }
+                ) {
+                    // A sheet is its own window, so the activity's system-bar padding does not reach it.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(AapsTheme.shape.sheet)
+                            .background(AapsTheme.colors.surface3)
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars.union(WindowInsets.mandatorySystemGestures.only(WindowInsetsSides.Bottom))
+                            )
+                    ) { content() }
+                }
             }
         }
     }
