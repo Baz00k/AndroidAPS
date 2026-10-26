@@ -31,7 +31,7 @@ import app.aaps.ui.dialogs.compose.TempTargetSheet
 import app.aaps.ui.dialogs.compose.TempTargetSheetState
 import app.aaps.ui.dialogs.compose.TtPreset
 import app.aaps.ui.dialogs.compose.TtReason
-import app.aaps.ui.dialogs.compose.ttReason
+import app.aaps.ui.dialogs.compose.toTtReason
 import app.aaps.ui.dialogs.compose.tempTargetSheetState
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import javax.inject.Inject
@@ -82,16 +82,22 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
         fun preset(reason: TtReason, label: String, target: Double, dur: Int) =
             TtPreset(reason, label, target, dur)
 
+        val eatingSoon = preset(
+            TtReason.EATING_SOON,
+            rh.gs(app.aaps.core.ui.R.string.eatingsoon),
+            preferences.get(UnitDoubleKey.OverviewEatingSoonTarget),
+            preferences.get(IntKey.OverviewEatingSoonDuration)
+        )
         val active = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
         return tempTargetSheetState(
             units = profileFunction.getUnits(),
             presets = listOf(
-                preset(TtReason.EATING_SOON, rh.gs(app.aaps.core.ui.R.string.eatingsoon), preferences.get(UnitDoubleKey.OverviewEatingSoonTarget), preferences.get(IntKey.OverviewEatingSoonDuration)),
+                eatingSoon,
                 preset(TtReason.ACTIVITY, rh.gs(app.aaps.core.ui.R.string.activity), preferences.get(UnitDoubleKey.OverviewActivityTarget), preferences.get(IntKey.OverviewActivityDuration)),
                 preset(TtReason.HYPO, rh.gs(app.aaps.core.ui.R.string.hypo), preferences.get(UnitDoubleKey.OverviewHypoTarget), preferences.get(IntKey.OverviewHypoDuration))
             ),
-            initialTarget = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget),
-            initialDuration = preferences.get(IntKey.OverviewEatingSoonDuration),
+            initialTarget = eatingSoon.target,
+            initialDuration = eatingSoon.durationMin,
             // Presence only: a running target may be outside the upstream range and is never rewritten.
             activeTargetMgdl = active?.lowTarget
         )
@@ -110,7 +116,7 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
                 source = Sources.TTDialog,
                 note = null,
                 listValues = listOf(
-                    ValueWithUnit.TETTReason(request.reason.ttReason),
+                    ValueWithUnit.TETTReason(request.reason.toTtReason()),
                     ValueWithUnit.fromGlucoseUnit(request.target, units),
                     ValueWithUnit.Minute(request.durationMin)
                 )

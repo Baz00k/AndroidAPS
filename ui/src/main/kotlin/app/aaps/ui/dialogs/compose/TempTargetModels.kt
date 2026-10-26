@@ -8,13 +8,12 @@ import java.util.concurrent.TimeUnit
 
 enum class TtReason { EATING_SOON, ACTIVITY, HYPO, CUSTOM }
 
-val TtReason.ttReason: TT.Reason
-    get() = when (this) {
-        TtReason.EATING_SOON -> TT.Reason.EATING_SOON
-        TtReason.ACTIVITY    -> TT.Reason.ACTIVITY
-        TtReason.HYPO        -> TT.Reason.HYPOGLYCEMIA
-        TtReason.CUSTOM      -> TT.Reason.CUSTOM
-    }
+fun TtReason.toTtReason(): TT.Reason = when (this) {
+    TtReason.EATING_SOON -> TT.Reason.EATING_SOON
+    TtReason.ACTIVITY    -> TT.Reason.ACTIVITY
+    TtReason.HYPO        -> TT.Reason.HYPOGLYCEMIA
+    TtReason.CUSTOM      -> TT.Reason.CUSTOM
+}
 
 @Immutable
 data class TtPreset(
@@ -34,7 +33,7 @@ data class TempTargetRequest(
     fun toTempTarget(timestamp: Long, units: GlucoseUnit): TT = TT(
         timestamp = timestamp,
         duration = TimeUnit.MINUTES.toMillis(durationMin.toLong()),
-        reason = reason.ttReason,
+        reason = reason.toTtReason(),
         lowTarget = targetInMgdl(units),
         highTarget = targetInMgdl(units)
     )
@@ -45,17 +44,17 @@ data class TempTargetRequest(
 
 @Immutable
 data class TempTargetSheetState(
-    val presets: List<TtPreset> = emptyList(),
-    val initialTarget: Double = 0.0,     // display units
-    val initialDuration: Int = 0,
-    val unitStep: Double = 0.1,          // 0.1 mmol / 1 mgdl
-    val unitLabel: String = "mmol/L",
-    val targetMin: Double = Constants.MIN_TT_MMOL,
-    val targetMax: Double = Constants.MAX_TT_MMOL,
-    val durationStep: Int = 5,
-    val durationMax: Int = Constants.MAX_PROFILE_SWITCH_DURATION.toInt(),
-    val decimals: Int = 1,
-    val hasActive: Boolean = false
+    val presets: List<TtPreset>,
+    val initialTarget: Double,          // display units
+    val initialDuration: Int,
+    val unitStep: Double,               // 0.1 mmol / 1 mgdl
+    val unitLabel: String,
+    val targetMin: Double,
+    val targetMax: Double,
+    val durationStep: Int,
+    val durationMax: Int,
+    val decimals: Int,
+    val hasActive: Boolean
 ) {
     /** Only an in-range target with a positive duration can become a request. */
     fun request(target: Double, durationMin: Int, reason: TtReason): TempTargetRequest? =

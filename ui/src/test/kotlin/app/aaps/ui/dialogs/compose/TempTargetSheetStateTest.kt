@@ -1,6 +1,5 @@
 package app.aaps.ui.dialogs.compose
 
-import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TT
 import com.google.common.truth.Truth.assertThat
@@ -25,40 +24,41 @@ class TempTargetSheetStateTest {
         )
 
     @Test
-    fun `mgdl editor uses the upstream temporary target range`() {
-        val state = state(GlucoseUnit.MGDL)
-        assertThat(state.targetMin).isEqualTo(Constants.MIN_TT_MGDL)
-        assertThat(state.targetMax).isEqualTo(Constants.MAX_TT_MGDL)
-        assertThat(state.unitStep).isEqualTo(1.0)
-        assertThat(state.decimals).isEqualTo(0)
-    }
+    fun `editor uses the upstream bounds and duration cap in both units`() {
+        val mgdl = state(GlucoseUnit.MGDL)
+        assertThat(mgdl.unitStep).isEqualTo(1.0)
+        assertThat(mgdl.unitLabel).isEqualTo("mg/dL")
+        assertThat(mgdl.targetMin).isEqualTo(72.0)
+        assertThat(mgdl.targetMax).isEqualTo(180.0)
+        assertThat(mgdl.decimals).isEqualTo(0)
+        assertThat(mgdl.durationStep).isEqualTo(5)
+        assertThat(mgdl.durationMax).isEqualTo(10_080)
 
-    @Test
-    fun `mmol editor uses the upstream temporary target range`() {
-        val state = state(GlucoseUnit.MMOL)
-        assertThat(state.targetMin).isEqualTo(Constants.MIN_TT_MMOL)
-        assertThat(state.targetMax).isEqualTo(Constants.MAX_TT_MMOL)
-        assertThat(state.unitStep).isEqualTo(0.1)
-        assertThat(state.decimals).isEqualTo(1)
-    }
-
-    @Test
-    fun `duration range is the profile switch maximum with the existing step`() {
-        val state = state()
-        assertThat(state.durationStep).isEqualTo(5)
-        assertThat(state.durationMax).isEqualTo(Constants.MAX_PROFILE_SWITCH_DURATION.toInt())
+        val mmol = state(GlucoseUnit.MMOL)
+        assertThat(mmol.unitStep).isEqualTo(0.1)
+        assertThat(mmol.unitLabel).isEqualTo("mmol/L")
+        assertThat(mmol.targetMin).isEqualTo(4.0)
+        assertThat(mmol.targetMax).isEqualTo(10.0)
+        assertThat(mmol.decimals).isEqualTo(1)
     }
 
     @Test
     fun `only an in-range target with a positive duration becomes a request`() {
-        val state = state()
-        assertThat(state.request(72.0, 60, TtReason.CUSTOM)).isNotNull()
-        assertThat(state.request(180.0, 60, TtReason.CUSTOM)).isNotNull()
-        assertThat(state.request(71.9, 60, TtReason.CUSTOM)).isNull()
-        assertThat(state.request(180.1, 60, TtReason.CUSTOM)).isNull()
-        assertThat(state.request(101.0, 0, TtReason.CUSTOM)).isNull()
-        assertThat(state.request(101.0, state.durationMax, TtReason.CUSTOM)).isNotNull()
-        assertThat(state.request(101.0, state.durationMax + 1, TtReason.CUSTOM)).isNull()
+        val mgdl = state(GlucoseUnit.MGDL)
+        assertThat(mgdl.request(72.0, 60, TtReason.CUSTOM)).isNotNull()
+        assertThat(mgdl.request(180.0, 60, TtReason.CUSTOM)).isNotNull()
+        assertThat(mgdl.request(71.9, 60, TtReason.CUSTOM)).isNull()
+        assertThat(mgdl.request(180.1, 60, TtReason.CUSTOM)).isNull()
+
+        val mmol = state(GlucoseUnit.MMOL)
+        assertThat(mmol.request(4.0, 60, TtReason.CUSTOM)).isNotNull()
+        assertThat(mmol.request(10.0, 60, TtReason.CUSTOM)).isNotNull()
+        assertThat(mmol.request(3.9, 60, TtReason.CUSTOM)).isNull()
+        assertThat(mmol.request(10.1, 60, TtReason.CUSTOM)).isNull()
+
+        assertThat(mgdl.request(101.0, 0, TtReason.CUSTOM)).isNull()
+        assertThat(mgdl.request(101.0, mgdl.durationMax, TtReason.CUSTOM)).isNotNull()
+        assertThat(mgdl.request(101.0, mgdl.durationMax + 1, TtReason.CUSTOM)).isNull()
     }
 
     @Test
@@ -69,29 +69,17 @@ class TempTargetSheetStateTest {
     }
 
     @Test
-    fun `a confirmed request is stored in mgdl with its reason and duration`() {
-        val request = state().request(150.0, 45, TtReason.HYPO)
-        val temporaryTarget = request!!.toTempTarget(timestamp = 1_000L, units = GlucoseUnit.MGDL)
+    fun `a confirmed request stores the reason, duration and target in mgdl`() {
+        val mgdl = state(GlucoseUnit.MGDL).request(150.0, 45, TtReason.HYPO)!!.toTempTarget(timestamp = 1_000L, units = GlucoseUnit.MGDL)
+        assertThat(mgdl.timestamp).isEqualTo(1_000L)
+        assertThat(mgdl.duration).isEqualTo(TimeUnit.MINUTES.toMillis(45))
+        assertThat(mgdl.reason).isEqualTo(TT.Reason.HYPOGLYCEMIA)
+        assertThat(mgdl.lowTarget).isEqualTo(150.0)
+        assertThat(mgdl.highTarget).isEqualTo(150.0)
 
-        assertThat(temporaryTarget.timestamp).isEqualTo(1_000L)
-        assertThat(temporaryTarget.duration).isEqualTo(TimeUnit.MINUTES.toMillis(45))
-        assertThat(temporaryTarget.reason).isEqualTo(TT.Reason.HYPOGLYCEMIA)
-        assertThat(temporaryTarget.lowTarget).isEqualTo(150.0)
-        assertThat(temporaryTarget.highTarget).isEqualTo(150.0)
-    }
-
-    @Test
-    fun `an mmol target is stored in mgdl`() {
-        val request = state(GlucoseUnit.MMOL).request(5.5, 60, TtReason.EATING_SOON)
-        val temporaryTarget = request!!.toTempTarget(timestamp = 0L, units = GlucoseUnit.MMOL)
-
-        assertThat(temporaryTarget.lowTarget).isEqualTo(99.0)
-        assertThat(temporaryTarget.highTarget).isEqualTo(99.0)
-        assertThat(temporaryTarget.reason).isEqualTo(TT.Reason.EATING_SOON)
-    }
-
-    @Test
-    fun `presets keep the values configured in settings`() {
-        assertThat(state().presets).isEqualTo(presets)
+        val mmol = state(GlucoseUnit.MMOL).request(5.5, 60, TtReason.EATING_SOON)!!.toTempTarget(timestamp = 0L, units = GlucoseUnit.MMOL)
+        assertThat(mmol.lowTarget).isEqualTo(99.0)
+        assertThat(mmol.highTarget).isEqualTo(99.0)
+        assertThat(mmol.reason).isEqualTo(TT.Reason.EATING_SOON)
     }
 }
