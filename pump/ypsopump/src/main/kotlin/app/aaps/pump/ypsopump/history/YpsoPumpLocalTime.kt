@@ -72,11 +72,12 @@ object YpsoPumpLocalTime {
      * Pump clock minus the phone clock [phoneMs]. A pump reading in the repeated hour takes the offset
      * nearest the phone, which a pump within minutes of it always is; the earlier offset alone reads an
      * hour off once the hour repeats. A reading in a skipped hour comes from a pump that has not moved
-     * forward yet, so it is read at the phone's current offset.
+     * forward yet: every row it wrote before that hour has the offset before it, and rows in the hour
+     * itself have no instant at all, so it is read at the offset before the gap.
      */
     fun clockOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long, zoneId: ZoneId): Long {
         val offsets = zoneId.rules.getValidOffsets(pumpLocal)
-            .ifEmpty { listOf(zoneId.rules.getOffset(Instant.ofEpochMilli(phoneMs))) }
+            .ifEmpty { listOf(zoneId.rules.getTransition(pumpLocal).offsetBefore) }
         return offsets.map { pumpLocal.toInstant(it).toEpochMilli() - phoneMs }.minBy { abs(it) }
     }
 }

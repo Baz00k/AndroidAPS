@@ -525,12 +525,31 @@ class YpsoTbrHistoryAccountingTest {
         val first = event(55_473, 10, 200, 4, seconds = repeatedHourSeconds)
         val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 2)
 
+        val read = listOf(first to null, second to null)
         for (row in listOf(first, second)) {
-            assertNotNull(accounting.apply(row, serial, warsaw, scanRows = listOf(first, second)))
+            assertNotNull(accounting.apply(row, serial, warsaw, scanRows = read))
         }
 
         assertTrue(saved.isEmpty())
         assertNull(store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `rows the start's history baseline or measured clock excludes are no rival`() {
+        // A TBR set on the pump a minute before the first start, already behind its history baseline and
+        // read without a usable clock, so only the baseline tells it apart.
+        val manual = event(55_470, 10, 200, 1, seconds = repeatedHourSeconds - 60)
+        startedAttempt(id = "first", percent = 200, minutes = 30, at = beforeFallBack + 1_000L, baseline = 55_470L, tempId = 1L)
+        // A second start 61 minutes later, apart from the first by more than the measured skew.
+        startedAttempt(id = "second", percent = 200, minutes = 30, at = afterFallBack + 61_000L, baseline = 55_470L, tempId = 2L)
+        val first = event(55_473, 9, 200, 30, seconds = repeatedHourSeconds)
+        val second = event(55_480, 9, 200, 30, seconds = repeatedHourSeconds + 60)
+        val read = listOf(manual to null, first to 0L, second to 0L)
+
+        assertNull(accounting.apply(first, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
+        assertNull(accounting.apply(second, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
+
+        assertEquals(mapOf("first" to 55_473L, "second" to 55_480L), store.attempts.associate { it.id to it.pumpId })
     }
 
     @Test
