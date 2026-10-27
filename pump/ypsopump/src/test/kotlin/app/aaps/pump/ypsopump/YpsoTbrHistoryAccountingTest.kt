@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -38,13 +39,25 @@ class YpsoTbrHistoryAccountingTest {
 
     /** A fake database keyed by pump ID, with temp-ID binding, mirroring the PumpSync transactions. */
     private val saved = mutableMapOf<Long, Pair<Long, Long>>()
-    private val provisional = mutableMapOf<Long, Pair<Long, Long>>()
+    /** AAPS starts' records not yet bound to a row, by temporary ID; [boundTemporaryIds] once bound, by pump ID. */
+    private val provisional = mutableMapOf<Long, Provisional>()
+    private val boundTemporaryIds = mutableMapOf<Long, Long>()
     private val invalid = mutableSetOf<Long>()
+    /** Percent of each record in [saved]. */
+    private val percents = mutableMapOf<Long, Int>()
+    /** Rows PumpSync does not save. */
+    private val failing = mutableSetOf<Long>()
+    /** Runs once right after the next record lookup returns, as another thread would. */
+    private var afterLookup: (() -> Unit)? = null
+    /** PumpSync binds no record by temporary ID. */
+    private var tempIdSyncFails = false
     private var registeredAt = 0L
     private val statusSuspends = mutableListOf<YpsoTbrRecordLookup.StatusSuspend>()
-    private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : YpsoTbrRecordLookup {
+    /** Shared with status shortening, as the plugin does. */
+    private val recordLock = Any()
+    private val accounting = YpsoTbrHistoryAccounting(sync, journal, recordLock = recordLock, lookup = object : YpsoTbrRecordLookup {
         override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
-            saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid) }
+            saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid, boundTemporaryIds[pumpId]) }
         override fun suspendActiveAt(pumpSerial: String, at: Long) = suspendOpen
         override fun anyStartedBetween(pumpSerial: String, from: Long, to: Long, exceptPumpId: Long) =
             saved.any { (id, record) -> id != exceptPumpId && record.first > from && record.first < to }
@@ -55,6 +68,10 @@ class YpsoTbrHistoryAccountingTest {
         override fun rowSuspendsAt(pumpSerial: String, at: Long) = saved.entries
             .filter { it.key in suspends && it.value.first == at }
             .map { YpsoTbrRecordLookup.Suspend(it.key, null, it.value.first, it.value.second, it.key !in invalid) }
+        override fun provisionalStarts(pumpSerial: String, from: Long) = provisional
+            .filter { it.value.valid && it.value.start >= from }
+            .map { YpsoTbrRecordLookup.Provisional(it.key, it.value.start, it.value.duration, it.value.percent) }
+            .also { afterLookup?.let { work -> afterLookup = null; work() } }
     }, registeredAt = { registeredAt })
     private var suspendOpen = false
     private val suspends = mutableSetOf<Long>()
@@ -62,8 +79,23 @@ class YpsoTbrHistoryAccountingTest {
     init {
         whenever(sync.syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())).thenAnswer {
             val pumpId = it.getArgument<Long>(5)
-            if (pumpId in invalid) return@thenAnswer false
-            saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
+            if (pumpId in invalid || pumpId in failing) return@thenAnswer false
+            val start = it.getArgument<Long>(0)
+            // As the transaction does: a new record ends the valid one running when it starts, if that
+            // began earlier.
+            if (pumpId !in saved) {
+                val savedRunning = saved.entries.filter { (id, r) -> id !in invalid && r.first <= start && r.first + r.second > start }.maxByOrNull { it.value.first }
+                val provisionalRunning = provisional.entries.filter { (_, r) -> r.valid && r.start <= start && r.start + r.duration > start }.maxByOrNull { it.value.start }
+                val savedStart = savedRunning?.value?.first ?: Long.MIN_VALUE
+                val provisionalStart = provisionalRunning?.value?.start ?: Long.MIN_VALUE
+                if (provisionalStart > savedStart && provisionalStart < start) {
+                    provisionalRunning!!.setValue(provisionalRunning.value.copy(duration = start - provisionalStart))
+                } else if (savedStart >= provisionalStart && savedRunning != null && savedStart < start) {
+                    savedRunning.setValue(savedStart to start - savedStart)
+                }
+            }
+            saved[pumpId] = start to it.getArgument(2)
+            percents[pumpId] = it.getArgument<Double>(1).toInt()
             if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
             true
         }
@@ -71,13 +103,27 @@ class YpsoTbrHistoryAccountingTest {
             invalid += it.getArgument<Long>(0)
             true
         }
+        whenever(sync.invalidateTemporaryBasalWithTempId(any())).thenAnswer {
+            val tempId = it.getArgument<Long>(0)
+            val record = provisional[tempId] ?: return@thenAnswer false
+            provisional[tempId] = record.copy(valid = false)
+            record.valid
+        }
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
             val tempId = it.getArgument<Long>(4)
-            if (provisional.remove(tempId) == null) return@thenAnswer false
-            saved[it.getArgument(6)] = it.getArgument<Long>(0) to it.getArgument(2)
+            val pumpId = it.getArgument<Long>(6)
+            if (tempIdSyncFails) return@thenAnswer false
+            val unbound = provisional.remove(tempId)
+            if (unbound == null && boundTemporaryIds[pumpId] != tempId) return@thenAnswer false
+            if (unbound?.valid == false) invalid += pumpId
+            saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
+            percents[pumpId] = it.getArgument<Double>(1).toInt()
+            boundTemporaryIds[pumpId] = tempId
             true
         }
     }
+
+    private data class Provisional(val start: Long, val duration: Long, val percent: Int, val valid: Boolean = true)
 
     private val pumpStartSeconds = 843_494_510L
     private val pumpStart = LocalDateTime.of(2000, 1, 1, 0, 0).plus(pumpStartSeconds, ChronoUnit.SECONDS)
@@ -98,7 +144,7 @@ class YpsoTbrHistoryAccountingTest {
             journal.effective(id, at, at)
             journal.accounted(id)
             row?.let { journal.identified(id, it) }
-            provisional[tempId] = at to minutes * 60_000L
+            provisional[tempId] = Provisional(at, minutes * 60_000L, percent)
         }
 
     @Test
@@ -168,7 +214,9 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
         assertNull(accounting.apply(event(48_224, 10, 120, 3), serial, zone, pumpClockOffsetMs = 0L))
 
-        assertNull(saved[48_224L])
+        // The record is bound to the row it stands in for, keeping AAPS's time and end.
+        assertEquals(pumpStart + 3 * 60_000L to 15 * 60_000L, saved[48_224L])
+        assertEquals(99L, boundTemporaryIds[48_224L])
         assertEquals(48_224L, store.attempts.single().unmatchedRowPumpId)
         assertNull(store.attempts.single().pumpId)
     }
@@ -232,6 +280,44 @@ class YpsoTbrHistoryAccountingTest {
 
         assertEquals(48_224L, journal.find("a")!!.pumpId)
         assertEquals(48_226L, journal.find("b")!!.pumpId)
+    }
+
+    /** Starts made while history is stalled, each awaiting its row, an hour apart from [pumpStart] on. */
+    private fun stalledStarts(count: Int) = repeat(count) {
+        startedAttempt("stalled$it", percent = 150, minutes = 30, at = pumpStart + (it + 1) * 3_600_000L, tempId = 1_000L + it)
+    }
+
+    @Test
+    fun `a long history stall keeps the journal bounded and never evicts a start whose outcome is open`() {
+        val pending = YpsoTbrAttempt(
+            id = "pending", kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 0, durationMinutes = 30,
+            type = "NORMAL", temporaryId = 7L, baselinePumpId = 48_222L, createdAt = pumpStart,
+        )
+        journal.prepare(pending)
+        journal.dispatched("pending", pumpStart + 500L)
+        startedAttempt("unmatched", percent = 0, minutes = 30, at = pumpStart + 60 * 60_000L, tempId = 8L)
+        journal.unmatched("unmatched", 48_200L)
+
+        stalledStarts(100)
+
+        assertEquals(64, store.attempts.size)
+        assertNotNull(journal.find("pending"))
+        assertNotNull(journal.find("unmatched"))
+        assertNull(journal.find("stalled0"))
+        assertNotNull(journal.find("stalled99"))
+    }
+
+    @Test
+    fun `a row bound to its start's record before the journal recorded it binds that start when applied again`() {
+        startedAttempt()
+        // The app stopped after PumpSync bound the record and before the journal was written.
+        provisional.remove(99L)
+        saved[48_224L] = pumpStart + 2_000L to 15 * 60_000L
+        boundTemporaryIds[48_224L] = 99L
+
+        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
+
+        assertEquals(48_224L, store.attempts.single().pumpId)
     }
 
     @Test
@@ -553,6 +639,22 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `a row in the repeated hour a record already carries is no rival`() {
+        // The first row was bound to its start's record earlier in this read.
+        saved[55_473L] = afterFallBack + 1_000L to 30 * 60_000L
+        boundTemporaryIds[55_473L] = 1L
+        startedAttempt(id = "second", percent = 200, minutes = 30, at = afterFallBack + 31_000L, tempId = 2L)
+        val first = event(55_473, 10, 200, 0, seconds = repeatedHourSeconds)
+        val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 30)
+        val read = listOf(first to 0L, second to 0L)
+
+        assertNull(accounting.apply(second, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
+
+        assertEquals(afterFallBack + 31_000L to 15 * 60_000L, saved[55_480L])
+        assertEquals(55_480L, journal.find("second")!!.pumpId)
+    }
+
+    @Test
     fun `a row in the repeated hour waits while a start with its percent has no proven outcome`() {
         startedAttempt(percent = 0, minutes = 60, at = beforeFallBack + 1_000L)
         val pending = YpsoTbrAttempt(
@@ -573,5 +675,345 @@ class YpsoTbrHistoryAccountingTest {
         accounting.apply(event(48_224, 9, 110, 15), serial, zone)
 
         verify(sync).syncTemporaryBasalWithPumpId(pumpStart, 110.0, 15 * 60_000L, false, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial)
+    }
+
+    /**
+     * One ingestion pass as [app.aaps.pump.ypsopump.history.YpsoHistoryIngestion] runs it, with a
+     * measured clock: [frozen] taken before the read, then low records invalidated, the rows applied,
+     * and the other records invalidated. With [steps], the pass stops, as the app would, after that many.
+     */
+    private fun pass(
+        vararg rows: YpsoHistoryEvent,
+        frozen: List<YpsoTbrRecordLookup.Provisional> = accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L),
+        zone: ZoneId = this.zone,
+        steps: Int = Int.MAX_VALUE,
+    ): String? {
+        var left = steps
+        fun step(work: () -> String?): String? = if (left-- <= 0) "stopped" else work()
+        step { accounting.invalidateLowering(serial, frozen) }?.let { return it }
+        val read = rows.map { it to 0L }
+        rows.forEach { row -> step { accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = read) }?.let { return it } }
+        return step { accounting.invalidateRaising(serial, frozen) }
+    }
+
+    /** Net basal change of every valid TBR record, in percent-milliseconds; IOB sums records, overlaps included. */
+    private fun netBasal(): Long =
+        saved.filterKeys { it !in invalid && it !in suspends }.entries.sumOf { (percents.getValue(it.key) - 100L) * it.value.second } +
+            provisional.values.filter { it.valid }.sumOf { (it.percent - 100L) * it.duration }
+
+    /** Every TBR that counts towards insulin on board, as start to duration. */
+    private fun counted(): Set<Pair<Long, Long>> =
+        (saved.filterKeys { it !in invalid }.values + provisional.values.filter { it.valid }.map { it.start to it.duration }).toSet()
+
+    @Test
+    fun `a failed AAPS start whose record has no row is invalidated once history was read after it was saved`() {
+        // Recorded at dispatch after status took some TBR for it; the command never reached the pump.
+        provisional[1L] = Provisional(pumpStart, 30 * 60_000L, 0)
+
+        assertNull(pass())
+
+        assertTrue(counted().isEmpty())
+    }
+
+    @Test
+    fun `an AAPS start the journal evicted is imported once by its pump ID and its record invalidated`() {
+        startedAttempt("first", percent = 0, minutes = 30, tempId = 1L)
+        stalledStarts(64)
+        assertNull(journal.find("first"))
+
+        assertNull(pass(event(48_224, 10, 0, 4)))
+
+        assertEquals(pumpStart to 4 * 60_000L, saved[48_224L])
+        assertEquals(false, provisional.getValue(1L).valid)
+        assertTrue(boundTemporaryIds.isEmpty())
+        verify(sync).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), eq(48_224L), any(), any())
+        // Replaying the read writes nothing more.
+        assertNull(pass(event(48_224, 10, 0, 4)))
+        verify(sync).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), eq(48_224L), any(), any())
+    }
+
+    @Test
+    fun `a TBR set on the pump that status took for a failed AAPS start counts at its own duration`() {
+        // 10:00 AAPS asked for 200 % for 15 minutes, which never arrived; 10:10 200 % for 60 minutes was
+        // set on the pump, and status at 10:55 took it for the AAPS start.
+        provisional[1L] = Provisional(pumpStart - 10 * 60_000L, 15 * 60_000L, 200)
+
+        assertNull(pass(event(48_224, 10, 200, 60)))
+
+        assertEquals(setOf(pumpStart to 60 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a TBR set on the pump just before an AAPS start that never arrived is counted alone`() {
+        // 10:01 50 % for 120 minutes set on the pump, cancelled at 11:05; the AAPS start for 60 minutes
+        // was dispatched at 10:02 and never arrived, and status at 11:05 took the pump's TBR for it.
+        provisional[1L] = Provisional(pumpStart + 60_000L, 60 * 60_000L, 50)
+
+        assertNull(pass(event(48_224, 10, 50, 64)))
+
+        assertEquals(setOf(pumpStart to 64 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a failed AAPS start's record leaves nothing beside the TBRs the pump ran after it`() {
+        // 10:00 the AAPS start of 50 % for 120 minutes never arrived. The pump ran 200 % from 10:30 to
+        // 10:40, then 50 % from 11:00, which status took for the AAPS start.
+        provisional[1L] = Provisional(pumpStart, 120 * 60_000L, 50)
+        val high = event(48_224, 10, 200, 10, seconds = pumpStartSeconds + 30 * 60)
+        val low = event(48_226, 9, 50, 120, seconds = pumpStartSeconds + 60 * 60)
+
+        assertNull(pass(high, low))
+
+        assertEquals(setOf(pumpStart + 30 * 60_000L to 10 * 60_000L, pumpStart + 60 * 60_000L to 120 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a record the user removed stays removed and every TBR of its percent counts`() {
+        // The AAPS start of 200 % for 30 minutes at 10:00 never arrived; status took a TBR set on the
+        // pump for it, and the user removed that record. The pump ran 200 % from 10:00:02 for 20
+        // minutes and from 10:25 for 30 minutes.
+        provisional[1L] = Provisional(pumpStart, 30 * 60_000L, 200, valid = false)
+        val first = event(48_224, 10, 200, 20, seconds = pumpStartSeconds + 2)
+        val second = event(48_226, 10, 200, 30, seconds = pumpStartSeconds + 25 * 60)
+
+        assertNull(pass(first, second))
+
+        assertEquals(setOf(pumpStart + 2_000L to 20 * 60_000L, pumpStart + 25 * 60_000L to 30 * 60_000L), counted())
+        assertTrue(boundTemporaryIds.isEmpty())
+    }
+
+    @Test
+    fun `a record whose row may still arrive or is not history's to import stays`() {
+        // Journalled: its row binds it when it arrives.
+        startedAttempt("live", percent = 0, minutes = 30, tempId = 1L)
+        // From before the pump was registered, whose rows are never imported.
+        registeredAt = pumpStart - 60 * 60_000L
+        provisional[3L] = Provisional(pumpStart - 2 * 60 * 60_000L, 30 * 60_000L, 0)
+        val frozen = accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+        // Saved after the records were taken, while history was read: its row may not be in the read.
+        provisional[2L] = Provisional(pumpStart + 60 * 60_000L, 30 * 60_000L, 0)
+        val before = provisional.toMap()
+
+        assertNull(pass(frozen = frozen))
+
+        assertEquals(before, provisional)
+    }
+
+    @Test
+    fun `an evicted AAPS start's row in the repeated hour blocks like a TBR set on the pump, with IOB erring high`() {
+        for (percent in listOf(200, 0)) {
+            provisional.clear()
+            provisional[1L] = Provisional(afterFallBack + 1_000L, 30 * 60_000L, percent)
+
+            assertNotNull(pass(event(55_473, 10, percent, 4, seconds = repeatedHourSeconds), frozen = accounting.provisional(serial, afterFallBack + 3_600_000L), zone = warsaw))
+
+            assertTrue(saved.isEmpty())
+            // A raised basal stays counted; a lowered one is not, so its missing basal never lowers IOB.
+            assertEquals(percent >= 100, provisional.getValue(1L).valid)
+        }
+    }
+
+    /** Clears every record, for a fresh replay within one test. */
+    private fun clearRecords() {
+        saved.clear(); percents.clear(); provisional.clear(); boundTemporaryIds.clear(); invalid.clear(); failing.clear()
+    }
+
+    /** An evicted start's record at [percent] beside its own row, read with a later row PumpSync fails to save. */
+    private fun evictedWithFailingRow(percent: Int): Array<YpsoHistoryEvent> {
+        clearRecords()
+        provisional[1L] = Provisional(pumpStart + 60_000L, 60 * 60_000L, percent)
+        failing += 48_226L
+        // The later row is a 100 % TBR: it changes no basal, so only the first two records count.
+        return arrayOf(event(48_224, 10, percent, 60), event(48_226, 10, 100, 10, seconds = pumpStartSeconds + 70 * 60))
+    }
+
+    @Test
+    fun `a pass that blocks after importing an evicted start's row never undercounts insulin`() {
+        for (percent in listOf(0, 200)) {
+            val rows = evictedWithFailingRow(percent)
+            val truth = (percent - 100L) * 60 * 60_000L
+
+            assertNotNull(pass(*rows))
+            assertNotNull(pass(*rows))
+
+            assertTrue(netBasal() >= truth, "$percent %: ${netBasal()} < $truth")
+            assertEquals(pumpStart to 60 * 60_000L, saved[48_224L])
+        }
+    }
+
+    @Test
+    fun `a pass stopped after any step never undercounts insulin`() {
+        for (percent in listOf(0, 200)) {
+            for (steps in 0..3) {
+                clearRecords()
+                provisional[1L] = Provisional(pumpStart + 60_000L, 60 * 60_000L, percent)
+                val rows = arrayOf(event(48_224, 10, percent, 60), event(48_226, 10, 100, 10, seconds = pumpStartSeconds + 70 * 60))
+                val truth = (percent - 100L) * 60 * 60_000L
+
+                pass(*rows, steps = steps)
+                assertTrue(netBasal() >= truth, "$percent % stopped after $steps: ${netBasal()} < $truth")
+                // The app starts again and reads the same rows.
+                assertNull(pass(*rows))
+                assertEquals(truth, netBasal())
+            }
+        }
+    }
+
+    @Test
+    fun `an unmatched start's record keeps standing in for its row once the journal drops the start`() {
+        startedAttempt("unmatched", percent = 200, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        assertNull(accounting.apply(event(48_224, 10, 200, 30), serial, zone, pumpClockOffsetMs = null, waitForClock = false))
+        // Unmatched starts are kept ahead of others; enough of them push this one out.
+        repeat(64) {
+            startedAttempt("other$it", percent = 150, minutes = 30, at = pumpStart + (it + 1) * 3_600_000L, tempId = 1_000L + it)
+            journal.unmatched("other$it", 50_000L + it)
+        }
+        assertNull(journal.find("unmatched"))
+
+        assertNull(pass())
+
+        assertEquals(pumpStart + 3 * 60_000L to 30 * 60_000L, saved[48_224L])
+        assertTrue(48_224L !in invalid)
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `an unmatched start an earlier build left unbound keeps its stand-in once a new start pushes it out`() {
+        // An earlier build marked it unmatched without binding its record to the row.
+        startedAttempt("old", percent = 200, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        repeat(63) {
+            startedAttempt("other$it", percent = 150, minutes = 30, at = pumpStart + (it + 1) * 3_600_000L, tempId = 1_000L + it)
+            journal.unmatched("other$it", 50_000L + it)
+        }
+        // The repair at start-up fails and says so; the next history pass retries it before reading.
+        tempIdSyncFails = true
+        assertNotNull(accounting.keepStandIns())
+        assertTrue(boundTemporaryIds.isEmpty())
+        tempIdSyncFails = false
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+        assertEquals(1L, boundTemporaryIds[48_224L])
+
+        // A new start pushes the oldest unmatched one out of the journal.
+        startedAttempt("next", percent = 150, minutes = 30, at = pumpStart + 100 * 3_600_000L, tempId = 2_000L)
+        assertNull(journal.find("old"))
+        assertNull(pass())
+
+        assertEquals(pumpStart + 3 * 60_000L to 30 * 60_000L, saved[48_224L])
+        assertTrue(48_224L !in invalid)
+    }
+
+    /** A start that took effect but whose record AAPS has not saved yet. */
+    private fun unsavedStart(id: String, tempId: Long, at: Long) {
+        journal.prepare(
+            YpsoTbrAttempt(
+                id = id, kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 200, durationMinutes = 30,
+                type = "NORMAL", temporaryId = tempId, baselinePumpId = 48_222L, createdAt = at - 1_000L,
+            ),
+        )
+        journal.dispatched(id, at - 500L)
+        journal.effective(id, at, at)
+    }
+
+    /** The controller saves the record on a later try. */
+    private fun saveRecord(id: String, tempId: Long, at: Long) {
+        provisional[tempId] = Provisional(at, 30 * 60_000L, 200)
+        journal.accounted(id)
+    }
+
+    @Test
+    fun `a row is not passed over for a start whose record is not saved yet`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("late", 1L, at)
+        val row = event(48_224, 10, 200, 30)
+
+        assertNotNull(accounting.apply(row, serial, zone))
+        assertNull(journal.find("late")!!.unmatchedRowPumpId)
+
+        saveRecord("late", 1L, at)
+        assertNull(accounting.apply(row, serial, zone))
+
+        assertEquals(48_224L, journal.find("late")!!.unmatchedRowPumpId)
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `an earlier build's unmatched start whose record is saved later is still bound before history reads`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("old", 1L, at)
+        // An earlier build marked it unmatched before its record was saved.
+        journal.unmatched("old", 48_224L)
+        assertNull(accounting.keepStandIns())
+
+        saveRecord("old", 1L, at)
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `a record saved while the stand-in repair runs is still bound before history reads`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("old", 1L, at)
+        journal.unmatched("old", 48_224L)
+        // The controller saves the record right after the repair looked it up and found none.
+        afterLookup = { saveRecord("old", 1L, at) }
+        assertNull(accounting.keepStandIns())
+
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    /**
+     * Status shortening as the plugin does it, under the shared lock: it reads the record, runs
+     * [afterRead], and writes the shorter duration back with the pump ID it read, as
+     * SyncTemporaryBasalWithTempIdTransaction does.
+     */
+    private fun statusShorten(tempId: Long, duration: Long, afterRead: () -> Unit = {}) = synchronized(recordLock) {
+        val boundTo = boundTemporaryIds.entries.firstOrNull { it.value == tempId }?.key
+        val start = boundTo?.let { saved.getValue(it).first } ?: provisional.getValue(tempId).start
+        val percent = boundTo?.let { percents.getValue(it) } ?: provisional.getValue(tempId).percent
+        afterRead()
+        if (boundTo != null) saved[boundTo] = start to duration
+        else {
+            // Read unbound: the write clears any binding made since.
+            boundTemporaryIds.filterValues { it == tempId }.keys.forEach { saved.remove(it); percents.remove(it); boundTemporaryIds.remove(it) }
+            provisional[tempId] = Provisional(start, duration, percent)
+        }
+    }
+
+    /** Runs [work] on another thread and returns once it is blocked on a lock or has finished. */
+    private fun startAndSettle(work: () -> Unit): Thread = Thread(work).also { thread ->
+        thread.start()
+        while (thread.state != Thread.State.BLOCKED && thread.state != Thread.State.TERMINATED) Thread.yield()
+    }
+
+    @Test
+    fun `status shortening waiting on the stand-in repair keeps the binding`() {
+        startedAttempt("old", percent = 200, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        var status: Thread? = null
+        // Status reads the record right after the repair looked it up.
+        afterLookup = { status = startAndSettle { statusShorten(1L, 10 * 60_000L) } }
+
+        assertNull(accounting.keepStandIns())
+        status!!.join()
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+        assertEquals(pumpStart + 3 * 60_000L to 10 * 60_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `the stand-in repair waiting on status shortening keeps the shorter end`() {
+        startedAttempt("old", percent = 0, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        var repair: Thread? = null
+
+        statusShorten(1L, 10 * 60_000L) { repair = startAndSettle { accounting.keepStandIns() } }
+        repair!!.join()
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+        assertEquals(pumpStart + 3 * 60_000L to 10 * 60_000L, saved[48_224L])
     }
 }

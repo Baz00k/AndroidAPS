@@ -43,10 +43,12 @@ internal class YpsoTbrBleLink(
     private val bleManager: YpsoBleManager,
     private val readStatus: () -> Boolean,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Monotonic milliseconds; a wall clock change must not move the send window. */
+    private val elapsed: () -> Long = { System.nanoTime() / 1_000_000L },
 ) : YpsoTbrLink {
 
     // Keep a stable reference identity for the CAS while retaining null for "never dispatched".
-    private class DispatchTime(val value: Long)
+    private class DispatchTime(val value: Long, val elapsed: Long)
 
     override fun status(): YpsoTbrObservation? {
         if (!readStatus()) return null
@@ -69,9 +71,14 @@ internal class YpsoTbrBleLink(
             durationMinutes,
             beforeDispatch = {
                 val at = now()
+                val since = elapsed()
                 beforeDispatch(at)
-                dispatchedAt.compareAndSet(null, DispatchTime(at))
+                dispatchedAt.compareAndSet(null, DispatchTime(at, since))
             },
+            // The journalled dispatch time bounds when the pump can act on the command, which history
+            // binding relies on. Saving the journal and session can stall; a command whose frames would
+            // leave too late is not sent at all, a retry after a counter rejection included.
+            mayDispatch = { dispatchedAt.get()?.let { elapsed() - it.elapsed <= SEND_WINDOW_MS } == true },
         ) { outcome, owner ->
             delivered.set(outcome to owner)
             latch.countDown()
@@ -116,6 +123,8 @@ internal class YpsoTbrBleLink(
 
     companion object {
         private const val WRITE_CALLBACK_TIMEOUT_S = 45L
+        /** Each frame of a command is handed to GATT within this time of its journalled dispatch, or not at all. */
+        private const val SEND_WINDOW_MS = 30_000L
         private const val STATUS_TIMEOUT_S = 15L
     }
 }

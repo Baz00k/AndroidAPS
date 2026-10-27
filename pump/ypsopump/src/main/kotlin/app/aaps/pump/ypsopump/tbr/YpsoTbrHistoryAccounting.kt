@@ -10,7 +10,8 @@ import java.time.ZoneId
 
 /** Read-back of temporary basal records. */
 interface YpsoTbrRecordLookup {
-    data class Record(val start: Long, val duration: Long, val valid: Boolean)
+    /** [temporaryId] is set when the record began as an AAPS start. */
+    data class Record(val start: Long, val duration: Long, val valid: Boolean, val temporaryId: Long? = null)
 
     /**
      * The record with this pump ID starting at [start], or null when none exists. A record the user
@@ -39,13 +40,19 @@ interface YpsoTbrRecordLookup {
     /** PUMP_SUSPEND records from Stop rows starting exactly at [at], including removed ones. */
     fun rowSuspendsAt(pumpSerial: String, at: Long): List<Suspend>
 
+    /** A percent TBR record AAPS wrote for its own start under [temporaryId], bound to no history row. */
+    data class Provisional(val temporaryId: Long, val start: Long, val duration: Long, val percent: Int)
+
+    /** Valid provisional records of this pump starting at or after [from]. */
+    fun provisionalStarts(pumpSerial: String, from: Long): List<Provisional>
 }
 
 /**
  * Basal accounting from pump history (see docs/history.md). A TBR row keeps its sequence while the
  * pump rewrites it from running (type 9) to ended (type 10), so the row identity is the PumpSync pump
  * ID for the whole life of the TBR. An AAPS-started TBR is already recorded under a temporary ID; its
- * row binds to that record instead of importing a duplicate. Every write is verified by read-back and
+ * row binds to that record instead of importing a duplicate while the journal holds the start. A row
+ * nothing binds is imported by its pump ID, as the pump ran it. Every write is verified by read-back and
  * a failure blocks the history cursor, so the row is applied again on the next scan.
  */
 class YpsoTbrHistoryAccounting(
@@ -54,6 +61,9 @@ class YpsoTbrHistoryAccounting(
     private val lookup: YpsoTbrRecordLookup,
     /** AAPS accepts pump records only from this pump's registration on; older rows are not its to import. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
+    /** Held across each read-modify-write of TBR records, shared with every other writer of them. */
+    private val recordLock: Any = Any(),
+    private val log: (String) -> Unit = {},
 ) {
     /**
      * Applies one reconciled history event; returns a blocking reason or null when applied.
@@ -69,6 +79,15 @@ class YpsoTbrHistoryAccounting(
         pumpClockOffsetMs: Long? = null,
         waitForClock: Boolean = false,
         scanRows: List<Pair<YpsoHistoryEvent, Long?>> = emptyList(),
+    ): String? = synchronized(recordLock) { applyLocked(event, pumpSerial, zone, pumpClockOffsetMs, waitForClock, scanRows) }
+
+    private fun applyLocked(
+        event: YpsoHistoryEvent,
+        pumpSerial: String,
+        zone: ZoneId,
+        pumpClockOffsetMs: Long?,
+        waitForClock: Boolean,
+        scanRows: List<Pair<YpsoHistoryEvent, Long?>>,
     ): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
@@ -88,6 +107,13 @@ class YpsoTbrHistoryAccounting(
         // seconds; without it, only the drift profile reads allow bounds it.
         val starts = rowStarts(event, zone, pumpClockOffsetMs)
         val skew = skew(pumpClockOffsetMs)
+        // A row bound to an AAPS start keeps that start's time, also once the journal has dropped it.
+        val carried = if (tbr) starts.minOrNull()?.let { lookup.byPumpId(pumpId, pumpSerial, it) } else null
+        carried?.temporaryId?.let { temporaryId ->
+            // Bound before the journal recorded it, as when the app stopped in between.
+            journal.all().firstOrNull { it.awaitsBinding && it.temporaryId == temporaryId }?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            return syncRecord(temporaryId, pumpId, pumpSerial, carried.start, carried.duration, percent, minutes * MINUTE)
+        }
         // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
         // row is an AAPS start's own only when that start's window holds one of them and no other row of
         // this read could be the start's: another start an hour away, evicted from the journal or set on
@@ -116,6 +142,11 @@ class YpsoTbrHistoryAccounting(
                         (it.baselinePumpId == null || it.baselinePumpId < pumpId)
                 }?.let {
                     if (waitForClock) return "TBR row $pumpId may belong to AAPS start ${it.id}; $CLOCK_WAIT"
+                    // The record stands in for the row, so it must exist before the row is passed over.
+                    if (it.awaitsAccounting) return "TBR row $pumpId may belong to AAPS start ${it.id}, whose record is not saved yet"
+                    // Bound first: should the app stop before the journal notes it, the row binds the start.
+                    lookup.provisionalStarts(pumpSerial, checkNotNull(it.effectiveAt)).firstOrNull { record -> record.temporaryId == it.temporaryId }
+                        ?.let { record -> standIn(record, pumpId, pumpSerial)?.let { reason -> return reason } }
                     journal.unmatched(it.id, pumpId)
                     return null
                 }
@@ -153,6 +184,89 @@ class YpsoTbrHistoryAccounting(
     }
 
     /**
+     * Records of AAPS starts the journal no longer holds that no row has bound. The journal keeps a
+     * bounded number of starts and drops the oldest awaiting their rows while history stalls. Pump
+     * history then decides what ran: such a start's row, if the pump ran it, is imported by its pump ID
+     * like any row nothing binds, and its record is provisional, to be invalidated by
+     * [invalidateLowering] and [invalidateRaising] around the rows of the next read.
+     *
+     * Call this before that read starts. AAPS saves a start's record only once status saw its TBR
+     * running, so the row was in pump history by then, and the read covers it or an earlier read did.
+     * Records from before this pump's registration are left alone, as their rows are not imported, and
+     * so are records older than [LOOKBACK] at [now], which no longer count towards insulin on board.
+     * A failed [keepStandIns] is retried first.
+     */
+    fun provisional(pumpSerial: String, now: Long): List<YpsoTbrRecordLookup.Provisional> = synchronized(recordLock) {
+        keepStandIns()?.let(log)
+        val from = maxOf(registeredAt(pumpSerial), now - LOOKBACK)
+        val records = lookup.provisionalStarts(pumpSerial, from).filter { it.start >= from }
+        val journalled = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
+        records.filter { it.temporaryId !in journalled }
+    }
+
+    /** Until [keepStandIns] succeeds once; every start left unmatched since binds its record at once. */
+    @Volatile private var standInsPending = true
+
+    /**
+     * Binds the record of every unmatched start in the journal to the row it stands in for, so it stays
+     * once the journal drops the start. A build before this one left such records unbound. Call it before
+     * any TBR command can journal a start, which could push one of them out; it does the work once, and
+     * again after a failure or while an unmatched start's record is not saved yet. Returns why a record
+     * could not be bound.
+     */
+    fun keepStandIns(): String? = synchronized(recordLock) {
+        if (!standInsPending) return@synchronized null
+        // One snapshot for both: a record saved while this runs may have been missed by its lookup.
+        val starts = journal.all()
+        val failure = starts.mapNotNull { start ->
+            val row = start.unmatchedRowPumpId ?: return@mapNotNull null
+            lookup.provisionalStarts(start.pumpSerial, checkNotNull(start.effectiveAt))
+                .firstOrNull { it.temporaryId == start.temporaryId }
+                ?.let { standIn(it, row, start.pumpSerial) }
+        }.firstOrNull()
+        // A start whose record is not saved yet gets one later, which must be bound too.
+        standInsPending = failure != null || starts.any { it.unmatchedRowPumpId != null && it.awaitsAccounting }
+        failure
+    }
+
+    /**
+     * Invalidates the [records] below 100 %, before any row of the read is applied. If the pass then
+     * stops, neither such a record nor its row counts, and insulin on board errs high; counting both
+     * would understate it.
+     */
+    fun invalidateLowering(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? =
+        invalidate(pumpSerial, records.filter { it.percent < 100 })
+
+    /**
+     * Invalidates the [records] at 100 % or more, once every row of the read was applied. Until then a
+     * record counted beside its row adds insulin, so insulin on board errs high; removing it first
+     * could leave neither counted.
+     */
+    fun invalidateRaising(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? =
+        invalidate(pumpSerial, records.filter { it.percent >= 100 })
+
+    /** A record the user already removed stays removed. Returns a blocking reason when one is still valid. */
+    private fun invalidate(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? = synchronized(recordLock) {
+        if (records.isEmpty()) return@synchronized null
+        val ids = records.map { it.temporaryId }.toSet()
+        fun valid() = lookup.provisionalStarts(pumpSerial, records.minOf { it.start }).map { it.temporaryId }.filter { it in ids }
+        valid().forEach { pumpSync.invalidateTemporaryBasalWithTempId(it) }
+        valid().firstOrNull()?.let { "PumpSync did not remove provisional temporary basal $it" }
+    }
+
+    /**
+     * Binds an unmatched start's [record] to the row it stands in for, keeping its own time and end, so
+     * the stand-in lasts once the journal drops the start and is never taken for a provisional record.
+     */
+    private fun standIn(record: YpsoTbrRecordLookup.Provisional, rowPumpId: Long, serial: String): String? {
+        if (lookup.byPumpId(rowPumpId, serial, record.start) != null) return null
+        pumpSync.syncTemporaryBasalWithTempId(
+            record.start, record.percent.toDouble(), record.duration, false, record.temporaryId, null, rowPumpId, PumpType.YPSOPUMP, serial,
+        )
+        return if (lookup.byPumpId(rowPumpId, serial, record.start) != null) null else "PumpSync did not bind AAPS start's record to row $rowPumpId"
+    }
+
+    /**
      * The AAPS start whose time window this row's start falls in. The pump was proven idle right
      * before each start was sent, so its row began inside [dispatch, latest effect], widened by
      * [skew]: a few seconds when the pump clock was measured on this read, otherwise the drift that
@@ -180,11 +294,31 @@ class YpsoTbrHistoryAccounting(
      * errs towards a rival.
      */
     private fun couldBeRowOf(attempt: YpsoTbrAttempt, row: YpsoHistoryEvent, zone: ZoneId, offset: Long?): Boolean {
-        val rowPumpId = row.identity.aapsPumpId
+        val starts = rowStarts(row, zone, offset)
         return row.semantics.kind in TBR_KINDS && row.entry.value1 == attempt.percent &&
-            (attempt.baselinePumpId == null || attempt.baselinePumpId < rowPumpId) &&
-            journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
-            rowStarts(row, zone, offset).any { attempt.windowHolds(it, skew(offset)) }
+            (attempt.baselinePumpId == null || attempt.baselinePumpId < row.identity.aapsPumpId) &&
+            starts.any { attempt.windowHolds(it, skew(offset)) } && unowned(row, attempt.pumpSerial, starts)
+    }
+
+    /** No AAPS start or record has taken [row] yet: a journalled start, or a record already carrying it. */
+    private fun unowned(row: YpsoHistoryEvent, serial: String, starts: List<Long>): Boolean {
+        val rowPumpId = row.identity.aapsPumpId
+        return journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
+            starts.minOrNull()?.let { lookup.byPumpId(rowPumpId, serial, it) } == null
+    }
+
+    /**
+     * Binds or updates the record AAPS wrote for a start under [temporaryId] as this row's, starting at
+     * [start] and keeping its type. The pump's minutes can only shorten it: its [recorded] end is the request or a
+     * confirmed AAPS stop, and a status that saw the TBR end cut it so that IOB errs high.
+     */
+    private fun syncRecord(temporaryId: Long, pumpId: Long, serial: String, start: Long, recorded: Long, percent: Int, pumpDuration: Long): String? {
+        val duration = minOf(pumpDuration, recorded).coerceAtLeast(1L)
+        val existing = lookup.byPumpId(pumpId, serial, start)
+        if (existing != null && (!existing.valid || existing.duration == duration)) return null
+        pumpSync.syncTemporaryBasalWithTempId(start, percent.toDouble(), duration, false, temporaryId, null, pumpId, PumpType.YPSOPUMP, serial)
+        val saved = lookup.byPumpId(pumpId, serial, start) ?: return "PumpSync did not bind temporary basal $pumpId"
+        return if (saved.valid) verify(pumpId, serial, start, duration) else null
     }
 
     /** On the phone's clock: every instant the row's wall time names, corrected by [offset]. */
@@ -319,6 +453,8 @@ class YpsoTbrHistoryAccounting(
         /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
         private const val MEASURED_SKEW = 15_000L
         private const val CLOCK_WAIT = "waiting for a pump clock reading"
+        /** A TBR runs at most a day, and insulin on board looks back less than a day after it ends. */
+        private const val LOOKBACK = 2 * 24 * 60 * MINUTE
 
         /** Whether [apply] held a row only because the pump clock could not be used for it yet. */
         fun isClockWait(reason: String): Boolean = reason.endsWith(CLOCK_WAIT)

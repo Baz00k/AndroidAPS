@@ -25,8 +25,11 @@ internal class YpsoWriteLane(
         val session: PumpSession?
         val scheduler: YpsoLinkScheduler
 
-        /** Sends one frame of [lease]'s write; only that lease's exact frame is admitted at the GATT boundary. */
-        fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean
+        /**
+         * Sends one frame of [lease]'s write; only that lease's exact frame is admitted at the GATT boundary.
+         * [mayDispatch] is checked last, right before the frame is handed to GATT; false withholds it.
+         */
+        fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray, mayDispatch: () -> Boolean = { true }): Boolean
         fun release(lease: YpsoLinkLease)
 
         /** Retires the open session's unresolved reservation, keeping its counter as the high-water mark. */
@@ -127,6 +130,8 @@ internal class YpsoWriteLane(
         plaintext: ByteArray,
         firmware: String?,
         beforeDispatch: (PumpSession.Reservation) -> Unit = {},
+        /** Checked as each frame is handed to GATT; false withholds it, so an unsent first frame is a proven not-sent. */
+        mayDispatch: () -> Boolean = { true },
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean {
         require(owner.lease.operation == category.operation) { "${owner.lease.operation} cannot write on the $category lane" }
@@ -151,7 +156,7 @@ internal class YpsoWriteLane(
                 firmware = firmware,
                 deadlineMs = category.deadlineMs,
                 beforeDispatch = beforeDispatch,
-                dispatch = { frame -> link.writeFrame(owner.epoch, owner.lease, frame) },
+                dispatch = { frame -> link.writeFrame(owner.epoch, owner.lease, frame, mayDispatch) },
                 onOutcome = settle,
             ),
         )

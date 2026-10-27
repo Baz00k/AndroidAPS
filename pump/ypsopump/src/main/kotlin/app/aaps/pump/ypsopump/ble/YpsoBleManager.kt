@@ -1303,6 +1303,7 @@ class YpsoBleManager @Inject internal constructor(
         percent: Int,
         durationMinutes: Int,
         beforeDispatch: (PumpSession.Reservation) -> Unit,
+        mayDispatch: () -> Boolean = { true },
         onOutcome: (YpsoWriteOutcome, TbrCommandOwner?) -> Unit,
     ) {
         fun notSent(layer: YpsoWriteFailure.Layer, detail: String) = onOutcome(
@@ -1328,7 +1329,7 @@ class YpsoBleManager @Inject internal constructor(
                 link.release(lease)
                 return@enableControlNotifications notSent(YpsoWriteFailure.Layer.READINESS, "Could not prepare the pump. Please try again.")
             }
-            tbrLane.write(owner, writeId, TbrCommand(percent, durationMinutes).encode(), firmware(), beforeDispatch) { outcome ->
+            tbrLane.write(owner, writeId, TbrCommand(percent, durationMinutes).encode(), firmware(), beforeDispatch, mayDispatch) { outcome ->
                 // Only a command that still holds the link has a same-link status read to resolve it.
                 onOutcome(outcome, publicOwner.takeIf { tbrLane.category.keepsLink(outcome) })
             }
