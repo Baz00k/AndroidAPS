@@ -141,7 +141,6 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
             hasRecordedBolus = { serial, pumpId -> bolus.ownsHistoryBolus(serial, pumpId) },
             resolveProvisional = { serial, pumpId, timestamp, amount, type -> bolus.bindProvisional(serial, pumpId, timestamp, amount, type) },
-            bolusDispatchedAt = { serial, pumpId -> bolus.historyBolusDispatchedAt(serial, pumpId) },
             registeredAt = ::pumpRegisteredAt,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.
@@ -1199,16 +1198,15 @@ class YpsoPumpPlugin @Inject constructor(
     private fun ingestHistory(snapshot: YpsoHistorySnapshot, provisional: List<YpsoTbrRecordLookup.Provisional>): YpsoHistoryIngestionResult {
         logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
-        val zone = pumpState.historyZone
         val epoch = bleManager.epoch()
         val reboot = epoch?.reboot
         if (serial.isBlank() || epoch == null || reboot == null) {
             aapsLogger.warn(LTag.PUMP, "YpsoPump history ingestion blocked: pump identity or session evidence unavailable")
             return YpsoHistoryIngestionResult.Blocked("pump identity or session evidence unavailable")
         }
-        val pass = bolus.reconcileHistory(serial, zone, epoch.generation, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
+        val pass = bolus.reconcileHistory(serial, epoch.generation, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
             ?: return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
-        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot, provisional) { event -> pass.treatment(event.identity.aapsPumpId) }
+        val result = historyIngestion.ingest(serial, reboot.toLong(), snapshot, provisional) { event -> pass.treatment(event.identity.aapsPumpId) }
         if (result is YpsoHistoryIngestionResult.Blocked) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }

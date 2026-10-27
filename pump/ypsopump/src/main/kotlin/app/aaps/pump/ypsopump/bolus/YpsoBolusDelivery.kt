@@ -21,7 +21,6 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import java.io.File
-import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** The AAPS bolus records [YpsoBolusDelivery] keeps for its doses. */
@@ -483,10 +482,6 @@ internal class YpsoBolusDelivery(
     // ---- history ----
 
     /** Whether a bolus history row is already accounted: a record carries it, or a journalled dose owns it. */
-    /** When AAPS sent the journalled immediate dose that owns this history row; null when none or several claim it. */
-    fun historyBolusDispatchedAt(pumpSerial: String, pumpId: Long): Long? =
-        runCatching { journalledImmediate(journal.all(), pumpSerial, pumpId) }.getOrNull()?.dispatchedAt
-
     fun ownsHistoryBolus(pumpSerial: String, pumpId: Long): Boolean =
         records.bolus(pumpId, pumpSerial) != null || journalledImmediate(journal.all(), pumpSerial, pumpId) != null
 
@@ -495,9 +490,9 @@ internal class YpsoBolusDelivery(
      * resolves the current dose from its terminal row, and holds that row while it is still being
      * matched to its dose.
      */
-    fun reconcileHistory(pumpSerial: String, zone: ZoneId, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot): HistoryPass {
+    fun reconcileHistory(pumpSerial: String, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot): HistoryPass {
         repairJournalledAccounting(pumpSerial)
-        reconcileAttempt(pumpSerial, zone, generation, reboot, snapshot)
+        reconcileAttempt(pumpSerial, generation, reboot, snapshot)
         refreshWarning()
         // A failure before the atomic replace keeps every dose, one after it the pruned journal; ingestion goes on.
         runCatching { forgetSettled(pumpSerial) }
@@ -702,7 +697,7 @@ internal class YpsoBolusDelivery(
         }
     }
 
-    private fun reconcileAttempt(pumpSerial: String, zone: ZoneId, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot) {
+    private fun reconcileAttempt(pumpSerial: String, generation: String, reboot: Int, snapshot: YpsoHistorySnapshot) {
         val attempt = controller.currentAttempt() ?: return
         if (!attempt.awaitsReconciliation) return
         // A notified dose is linked by its exact sequence when history imports that row.
@@ -720,7 +715,7 @@ internal class YpsoBolusDelivery(
         )
         val stable = YpsoHistoryReconciler.reconcile(cursor, snapshot) as? YpsoHistoryReconciliation.Stable ?: return
         if (attempt.shape != YpsoBolusShape.IMMEDIATE) {
-            reconcileExtended(attempt, pumpSerial, zone, stable)
+            reconcileExtended(attempt, pumpSerial, YpsoPumpLocalTime.rowTimes(snapshot), stable)
             return
         }
         val status = link.status()?.let {
@@ -728,7 +723,7 @@ internal class YpsoBolusDelivery(
         }
         when (val resolution = YpsoImmediateBolusReconciler.reconcile(attempt, status, stable.stateUpdates + stable.newEventsOldestFirst)) {
             is YpsoImmediateBolusReconciliation.AttemptCompleted -> {
-                val timestamp = YpsoPumpLocalTime.epochMillis(resolution.event.entry.factorySeconds, zone, near = attempt.dispatchedAt) ?: return
+                val timestamp = YpsoPumpLocalTime.rowTimes(snapshot).at(resolution.event.entry) ?: return
                 controller.confirmTerminal(
                     resolution.amountCentiUnits,
                     timestamp,
@@ -748,10 +743,10 @@ internal class YpsoBolusDelivery(
         }
     }
 
-    private fun reconcileExtended(attempt: YpsoBolusAttempt, pumpSerial: String, zone: ZoneId, stable: YpsoHistoryReconciliation.Stable) {
+    private fun reconcileExtended(attempt: YpsoBolusAttempt, pumpSerial: String, times: YpsoPumpLocalTime.RowTimes, stable: YpsoHistoryReconciliation.Stable) {
         when (val resolution = YpsoExtendedBolusReconciler.reconcile(attempt, stable.stateUpdates + stable.newEventsOldestFirst)) {
             is YpsoExtendedBolusReconciliation.AttemptCompleted -> {
-                val historyTimestamp = YpsoPumpLocalTime.epochMillis(resolution.event.entry.factorySeconds, zone, near = attempt.dispatchedAt) ?: return
+                val historyTimestamp = times.at(resolution.event.entry) ?: return
                 val observedWindow = YpsoExtendedBolusAccounting.terminalWindow(attempt, resolution.amountCentiUnits, now())
                 val terminal = if (resolution.event.entry.eventType == 3)
                     observedWindow.copy(

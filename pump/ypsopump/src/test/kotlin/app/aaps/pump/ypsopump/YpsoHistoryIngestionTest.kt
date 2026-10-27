@@ -12,7 +12,6 @@ import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.pump.ypsopump.history.YpsoHistoryState
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateStore
 import java.time.LocalDateTime
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -40,8 +39,8 @@ class YpsoHistoryIngestionTest {
         }
         val ingestion = YpsoHistoryIngestion(store, sync)
         val running = row(100, 1, 50).copy(value2 = 15)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(running)))
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+        ingestion.ingest("10000001", 21, snapshot(listOf(running)))
+        val result = ingestion.ingest("10000001", 21,
             snapshot(listOf(running.copy(eventType = 3, value1 = 8, value2 = 0))))
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(0.08, saved.amount)
@@ -58,46 +57,15 @@ class YpsoHistoryIngestionTest {
             val bindings = mutableListOf<Pair<Long, Double>>()
             val ingestion = YpsoHistoryIngestion(store, sync) { _, id, _, delivered, _ -> bindings += id to delivered }
             val running = row(100, 19, 200)
-            ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(running)))
+            ingestion.ingest("10000001", 21, snapshot(listOf(running)))
             val terminal = running.copy(eventType = 2, value1 = amount)
             repeat(2) {
-                assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(terminal))) is YpsoHistoryIngestionResult.Applied)
+                assertTrue(ingestion.ingest("10000001", 21, snapshot(listOf(terminal))) is YpsoHistoryIngestionResult.Applied)
             }
             assertEquals(listOf(100L to amount / 100.0), bindings)
             verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(amount / 100.0), any(), eq(100L), any(), eq("10000001"))
         }
     }
-    @Test
-    fun `bolus row in the repeated hour is placed by the dose AAPS sent and stays blocked without one`() {
-        val zone = ZoneId.of("Europe/Warsaw")
-        val earlier = row(100, 2, 40).copy(
-            factorySeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 1, 59, 48)),
-        )
-        // 02:54:33 local exists at 00:54:33Z and again at 01:54:33Z.
-        val repeated = row(101, 2, 200).copy(
-            factorySeconds = ChronoUnit.SECONDS.between(LocalDateTime.of(2000, 1, 1, 0, 0), LocalDateTime.of(2026, 10, 25, 2, 54, 33)),
-        )
-        val afterFallBack = java.time.Instant.parse("2026-10-25T01:54:33Z").toEpochMilli()
-        for (dispatchedAt in listOf(null, afterFallBack + 36_000L)) {
-            val store = Store()
-            val sync: PumpSync = mock()
-            whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
-                .thenReturn(PumpSync.BolusSyncResult.INSERTED)
-            val ingestion = YpsoHistoryIngestion(store, sync, bolusDispatchedAt = { _, id -> dispatchedAt.takeIf { id == 101L } })
-            ingestion.ingest("10000001", zone, 21, snapshot(listOf(earlier)))
-
-            val result = ingestion.ingest("10000001", zone, 21, snapshot(listOf(repeated, earlier)))
-
-            if (dispatchedAt == null) {
-                assertEquals(YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous"), result)
-                assertEquals(100, store.value.cursor?.identity?.sequence)
-            } else {
-                assertTrue(result is YpsoHistoryIngestionResult.Applied)
-                verify(sync).replayConfirmedBolusWithPumpIdDetailed(eq(afterFallBack), eq(2.0), any(), eq(101L), any(), eq("10000001"))
-            }
-        }
-    }
-
     private class Store(var value: YpsoHistoryState = YpsoHistoryState()) : YpsoHistoryStateStore {
         override fun load() = value
         override fun commit(value: YpsoHistoryState) { this.value = value }
@@ -109,7 +77,7 @@ class YpsoHistoryIngestionTest {
         val sync: PumpSync = mock()
         val ingestion = YpsoHistoryIngestion(store, sync)
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 100))))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 100))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(100, store.value.cursor?.identity?.sequence)
@@ -121,7 +89,7 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val ingestion = YpsoHistoryIngestion(store, mock())
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 22, snapshot(listOf(row(100, 2, 100))))
+        val result = ingestion.ingest("10000001", 22, snapshot(listOf(row(100, 2, 100))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Blocked)
         assertNull(store.value.cursor)
@@ -154,7 +122,7 @@ class YpsoHistoryIngestionTest {
         val sync: PumpSync = mock()
         val ingestion = YpsoHistoryIngestion(store, sync)
 
-        val result = ingestion.ingest("20000002", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 100))))
+        val result = ingestion.ingest("20000002", 21, snapshot(listOf(row(101, 2, 100))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals("20000002", store.value.cursor?.identity?.pumpSerial)
@@ -163,55 +131,6 @@ class YpsoHistoryIngestionTest {
     }
 
     /** Records which clock offset each TBR row reached accounting with, and holds it on request. */
-    private class OffsetProbe {
-        val seen = mutableMapOf<Long, Long?>()
-        var hold: String? = null
-        val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
-            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any(), any()) } doAnswer {
-                seen[it.getArgument<app.aaps.pump.ypsopump.history.YpsoHistoryEvent>(0).identity.sequence] = it.getArgument(3)
-                hold
-            }
-        }
-    }
-
-    @Test
-    fun `the measured clock offset is not applied to rows older than a pump clock change`() {
-        val store = Store()
-        val probe = OffsetProbe()
-        val ingestion = YpsoHistoryIngestion(store, mock(), probe.accounting)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
-
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
-            snapshot(listOf(row(104, 9, 0), row(103, 13, 0), row(102, 10, 0), row(100, 2, 0))).copy(pumpClockOffsetMs = 5_000L))
-
-        assertEquals(mapOf(102L to null, 104L to 5_000L), probe.seen.filterKeys { it != 103L })
-    }
-
-    @Test
-    fun `a TBR row waits for a clock reading only a bounded number of scans`() {
-        val store = Store()
-        val probe = OffsetProbe()
-        val waits = mutableListOf<Boolean>()
-        val accounting: app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting = mock {
-            on { apply(any(), any(), any(), org.mockito.kotlin.anyOrNull(), any(), any()) } doAnswer {
-                val wait = it.getArgument<Boolean>(4)
-                waits += wait
-                if (wait) "TBR row may belong to AAPS start; waiting for a pump clock reading" else null
-            }
-        }
-        val ingestion = YpsoHistoryIngestion(store, mock(), accounting)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
-        val scan = snapshot(listOf(row(101, 10, 0), row(100, 2, 0)))
-
-        val results = (1..4).map { ingestion.ingest("10000001", ZoneId.of("UTC"), 21, scan) }
-
-        assertEquals(listOf(true, true, true, false), waits)
-        results.take(3).forEach { assertEquals(YpsoHistoryIngestionResult.Retry.BOUNDED, (it as YpsoHistoryIngestionResult.Blocked).retry) }
-        assertTrue(results.last() is YpsoHistoryIngestionResult.Applied)
-        assertEquals(101, store.value.cursor?.identity?.sequence)
-        assertTrue(probe.seen.isEmpty())
-    }
-
     @Test
     fun `unrecorded immediate bolus before activation is skipped without blocking newer history`() {
         val store = Store()
@@ -219,16 +138,15 @@ class YpsoHistoryIngestionTest {
         val ingestion = YpsoHistoryIngestion(store, sync, hasRecordedBolus = { _, _ -> false })
         val anchor = row(100, 2, 0)
         val oldDose = row(101, 2, 80)
-        val oldTime = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(oldDose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val oldTime = utc(oldDose)
         whenever(sync.isHistoryRecordBeforeActivePump(eq(oldTime), any(), eq("10000001"))).thenReturn(true)
         whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
             .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+        ingestion.ingest("10000001", 21, snapshot(listOf(anchor)))
         val scan = snapshot(listOf(row(102, 2, 90), oldDose, anchor))
 
         repeat(2) {
-            assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, scan) is YpsoHistoryIngestionResult.Applied)
+            assertTrue(ingestion.ingest("10000001", 21, scan) is YpsoHistoryIngestionResult.Applied)
             assertEquals(102L, store.value.cursor?.identity?.sequence)
             assertNull(store.value.pendingBolus)
         }
@@ -248,9 +166,9 @@ class YpsoHistoryIngestionTest {
             hasRecordedBolus = { serial, id -> serial == "10000001" && id == 101L },
             resolveProvisional = { _, id, _, _, _ -> bindings += id })
         val anchor = row(100, 2, 0)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+        ingestion.ingest("10000001", 21, snapshot(listOf(anchor)))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 0), anchor)))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(row(101, 2, 0), anchor)))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(listOf(101L), bindings)
@@ -279,16 +197,15 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val sync: PumpSync = mock()
         val dose = row(101, 2, 80)
-        val timestamp = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val timestamp = utc(dose)
         whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), any())).thenAnswer { it.getArgument<Long>(0) < timestamp }
         whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
             .thenReturn(PumpSync.BolusSyncResult.REJECTED)
         val ingestion = YpsoHistoryIngestion(store, sync)
         val anchor = row(100, 2, 0)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(anchor)))
+        ingestion.ingest("10000001", 21, snapshot(listOf(anchor)))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, anchor)))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(dose, anchor)))
 
         assertTrue(result is YpsoHistoryIngestionResult.Blocked)
         assertEquals(100L, store.value.cursor?.identity?.sequence)
@@ -303,9 +220,9 @@ class YpsoHistoryIngestionTest {
         whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), any(), any(), any(), eq("10000001")))
             .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 80))))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 100), row(100, 2, 80))))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(row(101, 2, 100), row(100, 2, 80))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         assertEquals(101, store.value.cursor?.identity?.sequence)
@@ -320,11 +237,10 @@ class YpsoHistoryIngestionTest {
         whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), eq(1.0), eq(BS.Type.SMB), any(), any(), eq("10000001")))
             .thenReturn(PumpSync.BolusSyncResult.UNCHANGED)
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 80))))
 
         val result = ingestion.ingest(
             "10000001",
-            ZoneId.of("UTC"),
             21,
             snapshot(listOf(row(101, 2, 100), row(100, 2, 80))),
         ) { BS.Type.SMB }
@@ -340,9 +256,9 @@ class YpsoHistoryIngestionTest {
         whenever(sync.replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any()))
             .thenReturn(PumpSync.BolusSyncResult.REJECTED)
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 80))))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 100), row(100, 2, 80))))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(row(101, 2, 100), row(100, 2, 80))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Blocked)
         assertEquals(100, store.value.cursor?.identity?.sequence)
@@ -373,14 +289,13 @@ class YpsoHistoryIngestionTest {
         val ingestion = YpsoHistoryIngestion(store, sync)
         val cursor = row(100, 2, 0)
         val oldDose = row(101, 3, 80).copy(value2 = 3)
-        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(oldDose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val start = utc(oldDose)
         // Whole-minute elapsed time is rounded down: exclude only after the entire next minute.
         whenever(sync.isHistoryRecordBeforeActivePump(eq(start + 4 * 60_000L), any(), eq("10000001"))).thenReturn(true)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(cursor)))
+        ingestion.ingest("10000001", 21, snapshot(listOf(cursor)))
         val rows = snapshot(listOf(row(102, 4, 0), oldDose, cursor))
         repeat(2) {
-            assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+            assertTrue(ingestion.ingest("10000001", 21, rows) is YpsoHistoryIngestionResult.Applied)
             assertEquals(102L, store.value.cursor?.identity?.sequence)
         }
         verify(sync, org.mockito.kotlin.never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
@@ -394,13 +309,12 @@ class YpsoHistoryIngestionTest {
             val ingestion = YpsoHistoryIngestion(store, sync)
             val cursor = row(100, 2, 0)
             val dose = row(101, 3, 80).copy(value2 = 3)
-            val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-                as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+            val start = utc(dose)
             whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer {
                 it.getArgument<Long>(0) < start + activationDelta
             }
-            ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(cursor)))
-            val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, cursor)))
+            ingestion.ingest("10000001", 21, snapshot(listOf(cursor)))
+            val result = ingestion.ingest("10000001", 21, snapshot(listOf(dose, cursor)))
             assertTrue(result is YpsoHistoryIngestionResult.Blocked)
             assertEquals(100L, store.value.cursor?.identity?.sequence)
             verify(sync).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
@@ -420,11 +334,11 @@ class YpsoHistoryIngestionTest {
             true
         }
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 80))))
 
         // Type 3 carries the delivered amount and the elapsed whole minutes of a pump-started square.
         val terminal = row(102, 3, 8).copy(value2 = 3)
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+        val result = ingestion.ingest("10000001", 21,
             snapshot(listOf(terminal, row(101, 18, 40), row(100, 2, 80))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
@@ -453,16 +367,15 @@ class YpsoHistoryIngestionTest {
         }
         // Delivered 1.00 U over 29 whole minutes (up to 30); registration came 10 minutes in.
         val dose = row(101, 3, 100).copy(value2 = 29)
-        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val start = utc(dose)
         val registered = start + 10 * 60_000L
         whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer { it.getArgument<Long>(0) < registered }
         val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { registered })
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 0))))
         val before = store.value
         val rows = snapshot(listOf(dose, row(100, 2, 0)))
 
-        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+        assertTrue(ingestion.ingest("10000001", 21, rows) is YpsoHistoryIngestionResult.Applied)
 
         // 20 of at most 30 minutes, rounded up to 0.01 U.
         assertEquals(registered, saved?.timestamp)
@@ -471,7 +384,7 @@ class YpsoHistoryIngestionTest {
 
         // A replay keeps the cut record instead of restoring the whole amount.
         store.value = before
-        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, rows) is YpsoHistoryIngestionResult.Applied)
+        assertTrue(ingestion.ingest("10000001", 21, rows) is YpsoHistoryIngestionResult.Applied)
         assertEquals(registered to 0.67, saved?.timestamp to saved?.amount)
         assertEquals(19 * 60_000L, saved?.duration)
     }
@@ -481,14 +394,13 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val sync: PumpSync = mock()
         val dose = row(101, 3, 100).copy(value2 = 29)
-        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val start = utc(dose)
         val cut = app.aaps.core.data.model.EB(timestamp = start + 10 * 60_000L, amount = 0.67, duration = 19 * 60_000L)
         whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(cut)
         val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { start + 60 * 60 * 60_000L })
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 0))))
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0))))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(dose, row(100, 2, 0))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         verify(sync, org.mockito.kotlin.never()).correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
@@ -500,16 +412,15 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val sync: PumpSync = mock()
         val dose = row(101, 3, 20).copy(value2 = 2)
-        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val start = utc(dose)
         // Recorded on the phone clock; the pump clock runs five minutes behind.
         val recorded = app.aaps.core.data.model.EB(timestamp = start + 5 * 60_000L, amount = 1.0, duration = 30 * 60_000L)
         whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(recorded)
         whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenReturn(true)
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 0))))
 
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(dose, row(100, 2, 0))))
 
         verify(sync).correctExtendedBolusWithPumpId(eq(start + 5 * 60_000L), eq(0.2), eq(2 * 60_000L), any(), any(), any(), eq("10000001"))
     }
@@ -519,14 +430,13 @@ class YpsoHistoryIngestionTest {
         val store = Store()
         val sync: PumpSync = mock()
         val dose = row(101, 3, 100).copy(value2 = 29)
-        val start = (app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.resolve(dose.factorySeconds, ZoneId.of("UTC"))
-            as app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.Resolution.Resolved).instant.toEpochMilli()
+        val start = utc(dose)
         val registered = start + 30 * 60_000L
         whenever(sync.isHistoryRecordBeforeActivePump(any(), any(), eq("10000001"))).thenAnswer { it.getArgument<Long>(0) < registered }
         val ingestion = YpsoHistoryIngestion(store, sync, registeredAt = { registered })
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 0))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 0))))
 
-        assertTrue(ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(dose, row(100, 2, 0)))) is YpsoHistoryIngestionResult.Applied)
+        assertTrue(ingestion.ingest("10000001", 21, snapshot(listOf(dose, row(100, 2, 0)))) is YpsoHistoryIngestionResult.Applied)
         verify(sync, org.mockito.kotlin.never()).syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())
     }
 
@@ -550,9 +460,9 @@ class YpsoHistoryIngestionTest {
         whenever(sync.getExtendedBolusWithPumpId(any(), any(), eq("10000001"))).thenReturn(existing)
         whenever(sync.correctExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any())).thenReturn(true)
         val ingestion = YpsoHistoryIngestion(store, sync)
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(100, 2, 80))))
+        ingestion.ingest("10000001", 21, snapshot(listOf(row(100, 2, 80))))
 
-        ingestion.ingest("10000001", ZoneId.of("UTC"), 21,
+        ingestion.ingest("10000001", 21,
             snapshot(listOf(row(102, 3, 50).copy(value2 = 15), row(100, 2, 80))))
 
         verify(sync, org.mockito.kotlin.never())
@@ -572,7 +482,7 @@ class YpsoHistoryIngestionTest {
             resolved += Triple(pumpId, amount, type)
         }
 
-        val result = ingestion.ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(101, 2, 91), row(100, 2, 100))))
+        val result = ingestion.ingest("10000001", 21, snapshot(listOf(row(101, 2, 91), row(100, 2, 100))))
 
         assertTrue(result is YpsoHistoryIngestionResult.Applied)
         // The provisional record must be linked to the pump id before the authoritative amount is
@@ -589,7 +499,7 @@ class YpsoHistoryIngestionTest {
             val serial = "10000001"
             val sync: PumpSync = mock()
             val row = row(101, 10, percent)
-            val rowStart = java.time.LocalDateTime.of(2026, 9, 18, 12, 41).atZone(ZoneId.of("UTC")).toInstant().toEpochMilli()
+            val rowStart = java.time.LocalDateTime.of(2026, 9, 18, 12, 41).toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
             var saving = false
             var imported: Long? = null
             var provisionalValid = true
@@ -620,23 +530,25 @@ class YpsoHistoryIngestionTest {
 
             // PumpSync did not save the row, so the cursor stays. A raised record stays counted; a lowered
             // one goes first, so a pass that stops never counts it beside its row.
-            assertTrue(ingestion.ingest(serial, ZoneId.of("UTC"), 21, read, provisional) is YpsoHistoryIngestionResult.Blocked)
+            assertTrue(ingestion.ingest(serial, 21, read, provisional) is YpsoHistoryIngestionResult.Blocked)
             assertEquals(percent >= 100, provisionalValid)
             assertEquals(100, store.value.cursor?.identity?.sequence)
 
             saving = true
-            assertTrue(ingestion.ingest(serial, ZoneId.of("UTC"), 21, read, provisional) is YpsoHistoryIngestionResult.Applied)
+            assertTrue(ingestion.ingest(serial, 21, read, provisional) is YpsoHistoryIngestionResult.Applied)
             assertEquals(rowStart, imported)
             assertTrue(!provisionalValid)
             assertEquals(101, store.value.cursor?.identity?.sequence)
         }
     }
 
+    private fun utc(row: YpsoHistoryEntry) = LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(row.factorySeconds).toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
+
     private fun cursor(sequence: Long): YpsoHistoryCursor =
         YpsoHistoryIngestion(Store(), mock()).let {
             val bootstrapStore = Store()
             YpsoHistoryIngestion(bootstrapStore, mock())
-                .ingest("10000001", ZoneId.of("UTC"), 21, snapshot(listOf(row(sequence, 2, 100))))
+                .ingest("10000001", 21, snapshot(listOf(row(sequence, 2, 100))))
             requireNotNull(bootstrapStore.value.cursor)
         }
 
@@ -647,6 +559,6 @@ class YpsoHistoryIngestionTest {
 
     private fun snapshot(rows: List<YpsoHistoryEntry>): YpsoHistorySnapshot {
         val indexed = rows.mapIndexed { index, row -> row.copy(index = index) }
-        return YpsoHistorySnapshot(indexed.size, indexed.size, 21, 21, indexed.firstOrNull(), indexed.firstOrNull(), indexed, true)
+        return YpsoHistorySnapshot(indexed.size, indexed.size, 21, 21, indexed.firstOrNull(), indexed.firstOrNull(), indexed, true, pumpClockOffsetMs = 0L)
     }
 }
