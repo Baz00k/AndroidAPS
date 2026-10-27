@@ -68,7 +68,14 @@ class YpsoTbrHistoryAccountingTest {
         whenever(sync.syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())).thenAnswer {
             val pumpId = it.getArgument<Long>(5)
             if (pumpId in invalid) return@thenAnswer false
-            saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
+            val start = it.getArgument<Long>(0)
+            // As the transaction does: a new record ends the one running when it starts, if that began earlier.
+            if (pumpId !in saved) {
+                saved.entries.firstOrNull { (_, r) -> r.first < start && r.first + r.second > start }?.let { e -> e.setValue(e.value.first to start - e.value.first) }
+                    ?: provisional.entries.firstOrNull { (_, r) -> r.start < start && r.start + r.duration > start }
+                        ?.let { e -> e.setValue(e.value.copy(duration = start - e.value.start)) }
+            }
+            saved[pumpId] = start to it.getArgument(2)
             if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
             true
         }
@@ -361,6 +368,61 @@ class YpsoTbrHistoryAccountingTest {
         assertEquals(pumpStart - 180_000L to 2 * 60_000L, saved[48_223L])
         assertEquals(pumpStart + 2_000L to 4 * 60_000L, saved[48_224L])
         assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
+    }
+
+    /** Every recorded TBR as a time span; these tests use one percent, so any overlap counts it twice. */
+    private fun overlaps(): Boolean {
+        val spans = (saved.values + provisional.values.map { it.start to it.duration }).sortedBy { it.first }
+        return spans.zipWithNext().any { (a, b) -> a.first + a.second > b.first }
+    }
+
+    @Test
+    fun `a TBR that ended before registration never takes the record of a start after it`() {
+        // Set on the pump for its first minute, then the pump was registered again two minutes in.
+        registeredAt = pumpStart + 120_000L
+        val manual = event(48_223, 10, 0, 1)
+        // The AAPS start right after registration, evicted: only its record is left.
+        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
+        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
+        val read = listOf(manual to null, own to null)
+
+        assertNull(accounting.apply(manual, serial, zone, scanRows = read))
+        assertNull(accounting.apply(own, serial, zone, scanRows = read))
+
+        assertNull(saved[48_223L])
+        assertEquals(pumpStart + 127_000L to 4 * 60_000L, saved[48_224L])
+        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
+        assertTrue(!overlaps())
+    }
+
+    @Test
+    fun `two rows of a read that could both be an evicted start's own block instead of counting it twice`() {
+        // Set on the pump for a minute, then the AAPS start two minutes later; without a clock both fit.
+        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
+        val manual = event(48_223, 10, 0, 1)
+        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
+        val read = listOf(manual to null, own to null)
+
+        assertNotNull(accounting.apply(manual, serial, zone, scanRows = read))
+        assertNotNull(accounting.apply(own, serial, zone, scanRows = read))
+
+        assertTrue(saved.isEmpty())
+        assertEquals(setOf(1L), provisional.keys)
+    }
+
+    @Test
+    fun `with a measured clock the same rows resolve, each to its own record`() {
+        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
+        val manual = event(48_223, 10, 0, 1)
+        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
+        val read = listOf(manual to 0L, own to 0L)
+
+        assertNull(accounting.apply(manual, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
+        assertNull(accounting.apply(own, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
+
+        assertEquals(pumpStart to 60_000L, saved[48_223L])
+        assertEquals(pumpStart + 127_000L to 4 * 60_000L, saved[48_224L])
+        assertTrue(!overlaps())
     }
 
     @Test
