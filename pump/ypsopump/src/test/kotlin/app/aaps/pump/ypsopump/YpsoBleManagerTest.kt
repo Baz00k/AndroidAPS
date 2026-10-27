@@ -595,6 +595,24 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `a TBR fragment whose send window closes while the link prepares it is never handed to GATT`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.onDescriptorWrite = { pump.ackDescriptor() }
+        var elapsed = 0L
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        manager.writeTbr("tbr", 0, 30, {}, mayDispatch = { elapsed <= 30_000L }) { outcome, _ -> outcomes += outcome }
+        assertEquals(1, pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
+
+        // The final fragment stalls inside the link, past the window, after its caller's own check would have passed.
+        pump.onProperties = { if (it == YpsoWritePolicy.TBR_START_STOP_UUID) elapsed = 60_000L }
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+
+        assertEquals(1, pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
+        assertTrue(outcomes.single() is YpsoWriteOutcome.PossiblyApplied, "$outcomes")
+    }
+
+    @Test
     fun `therapy and descriptor writes outside their operation never reach the pump`() {
         val pump = fixture.connectWithProtocol()
         pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID, YpsoWritePolicy.EVENT_INDEX_UUID)

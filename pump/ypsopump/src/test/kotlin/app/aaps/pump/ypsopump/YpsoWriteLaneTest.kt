@@ -46,7 +46,8 @@ internal class YpsoWriteLaneTest {
         var acceptFrames = true
         var onRecoverInterruptedWrite: () -> Unit = {}
 
-        override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean {
+        override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray, mayDispatch: () -> Boolean): Boolean {
+            if (!mayDispatch()) return false
             frames += value.copyOf()
             return acceptFrames
         }

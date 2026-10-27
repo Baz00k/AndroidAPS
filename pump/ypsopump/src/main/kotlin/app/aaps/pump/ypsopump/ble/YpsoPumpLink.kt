@@ -578,12 +578,14 @@ internal class YpsoPumpLink(
      * Sends one frame of [lease]'s selector or therapy write. Only the lease that owns the link may
      * write, only between queued operations, and only this exact frame is admitted at the boundary.
      */
-    override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean = synchronized(lock) {
+    override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray, mayDispatch: () -> Boolean): Boolean = synchronized(lock) {
         val operation = lease.operation
         val uuid = operation.writeUuid ?: return@synchronized false
         val purpose = operation.writePurpose ?: return@synchronized false
         if (!isCurrentLocked(epoch) || current != null || activeLease !== lease) return@synchronized false
         if (epoch.connection.properties(uuid) == null) return@synchronized false
+        // Last, so no wait above can carry a frame past its caller's deadline.
+        if (!mayDispatch()) return@synchronized false
         authorizedFrame = AuthorizedFrame(uuid, purpose, value.copyOf())
         try {
             epoch.connection.writeCharacteristic(uuid, value, purpose)
