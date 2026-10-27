@@ -191,7 +191,7 @@ class YpsoPumpPluginTest {
         verifyNoInteractions(sync)
         verify(manager, atLeastOnce()).readStatus(any())
         verify(manager, never()).startBolus(any(), any(), any(), any(), any())
-        verify(manager, never()).writeTbr(any(), any(), any(), any(), any())
+        verify(manager, never()).writeTbr(any(), any(), any(), any(), any(), any())
     }
 
     @Test

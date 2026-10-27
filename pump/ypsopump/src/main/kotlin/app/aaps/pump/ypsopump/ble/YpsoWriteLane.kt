@@ -127,6 +127,8 @@ internal class YpsoWriteLane(
         plaintext: ByteArray,
         firmware: String?,
         beforeDispatch: (PumpSession.Reservation) -> Unit = {},
+        /** Checked before each frame leaves; false withholds it, so an unsent first frame is a proven not-sent. */
+        mayDispatch: () -> Boolean = { true },
         onOutcome: (YpsoWriteOutcome) -> Unit,
     ): Boolean {
         require(owner.lease.operation == category.operation) { "${owner.lease.operation} cannot write on the $category lane" }
@@ -151,7 +153,7 @@ internal class YpsoWriteLane(
                 firmware = firmware,
                 deadlineMs = category.deadlineMs,
                 beforeDispatch = beforeDispatch,
-                dispatch = { frame -> link.writeFrame(owner.epoch, owner.lease, frame) },
+                dispatch = { frame -> mayDispatch() && link.writeFrame(owner.epoch, owner.lease, frame) },
                 onOutcome = settle,
             ),
         )

@@ -291,6 +291,16 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `a start sent at the end of its send window with its ACK lost still binds its row with a measured clock`() {
+        // Recorded at dispatch; the first frame left 29 s later and the write took the transport's full 8 s.
+        provisional[1L] = Provisional(pumpStart - 37_000L, 30 * 60_000L, 0)
+
+        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
+
+        assertEquals(pumpStart - 37_000L to 4 * 60_000L, saved[48_224L])
+    }
+
+    @Test
     fun `an evicted start's row never lengthens the end AAPS recorded`() {
         // AAPS stopped it 3.5 minutes in; the pump counts the minute it began a little earlier.
         provisional[1L] = Provisional(pumpStart + 2_000L, 210_000L, 0)

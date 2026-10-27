@@ -92,7 +92,7 @@ internal class YpsoTbrController(
         val current = checkNotNull(journal.find(attempt.id))
         when {
             current.state == YpsoTbrAttempt.State.NO_EFFECT ->
-                Result.Failed(if (current.dispatchedAt == null) Reason.COMMAND_NOT_SENT else Reason.START_REJECTED, changed.value)
+                Result.Failed(if (current.dispatchedAt == null || evidence.result is YpsoTbrWriteResult.NotSent) Reason.COMMAND_NOT_SENT else Reason.START_REJECTED, changed.value)
             current.state != YpsoTbrAttempt.State.EFFECTIVE -> Result.Failed(Reason.START_NOT_CONFIRMED, true)
             !account(current) -> Result.Failed(Reason.NOT_SAVED, true)
             evidence.after?.justStarted(request) == true -> Result.Started(request)
@@ -199,7 +199,7 @@ internal class YpsoTbrController(
                 evidence.after?.let(records::reconcileWith)
                 StopOutcome.CONFIRMED
             }
-            current.state == YpsoTbrAttempt.State.NO_EFFECT && current.dispatchedAt == null -> StopOutcome.NOT_SENT
+            current.state == YpsoTbrAttempt.State.NO_EFFECT && (current.dispatchedAt == null || evidence.result is YpsoTbrWriteResult.NotSent) -> StopOutcome.NOT_SENT
             else -> StopOutcome.UNKNOWN
         }
     }
@@ -216,7 +216,8 @@ internal class YpsoTbrController(
         val dispatchedAt = journal.find(attempt.id)?.dispatchedAt
         val after = evidence.after
         when {
-            dispatchedAt == null -> journal.noEffect(attempt.id, "command was not sent: ${evidence.result}")
+            // The transport reports not-sent only when no frame left or the pump proved the write unapplied.
+            dispatchedAt == null || evidence.result is YpsoTbrWriteResult.NotSent -> journal.noEffect(attempt.id, "command was not sent: ${evidence.result}")
             // Every measured rejection code left the pump unchanged. A rejected start is never AAPS's,
             // even if status shows matching therapy: someone else started it, and history imports it.
             attempt.kind == YpsoTbrAttempt.Kind.START && evidence.result is YpsoTbrWriteResult.Rejected ->

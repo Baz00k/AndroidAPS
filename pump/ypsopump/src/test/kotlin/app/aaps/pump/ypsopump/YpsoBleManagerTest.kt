@@ -579,6 +579,22 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `a TBR command whose journal and session saves outlast its send window leaves no frame and is not sent`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.onDescriptorWrite = { pump.ackDescriptor() }
+        var elapsed = 0L
+        val link = app.aaps.pump.ypsopump.tbr.YpsoTbrBleLink(manager, readStatus = { true }, now = { 1_000L }, elapsed = { elapsed })
+
+        // Saving the attempt stalls for 150 s, as a slow journal commit would.
+        val evidence = link.command(0, 30, effective = { true }, beforeDispatch = { elapsed += 150_000L })
+
+        assertTrue(evidence.result is app.aaps.pump.ypsopump.tbr.YpsoTbrWriteResult.NotSent, "${evidence.result}")
+        assertEquals(1_000L, evidence.dispatchedAt)
+        assertTrue(pump.writes.none { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
+    }
+
+    @Test
     fun `therapy and descriptor writes outside their operation never reach the pump`() {
         val pump = fixture.connectWithProtocol()
         pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID, YpsoWritePolicy.EVENT_INDEX_UUID)

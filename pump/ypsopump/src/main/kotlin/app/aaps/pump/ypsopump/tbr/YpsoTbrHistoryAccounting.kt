@@ -413,8 +413,8 @@ class YpsoTbrHistoryAccounting(
         private const val CLOCK_SKEW = 90_000L
         /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
         private const val MEASURED_SKEW = 15_000L
-        /** How long after dispatch a command can still take effect; see [YpsoTbrBleLink.WRITE_CALLBACK_TIMEOUT_S]. */
-        private const val COMMAND_SPAN = YpsoTbrBleLink.WRITE_CALLBACK_TIMEOUT_S * 1_000L
+        /** How long after dispatch a command can still take effect; see [YpsoTbrBleLink.COMMAND_SPAN_MS]. */
+        private const val COMMAND_SPAN = YpsoTbrBleLink.COMMAND_SPAN_MS
         private const val CLOCK_WAIT = "waiting for a pump clock reading"
 
         /** Whether [apply] held a row only because the pump clock could not be used for it yet. */
