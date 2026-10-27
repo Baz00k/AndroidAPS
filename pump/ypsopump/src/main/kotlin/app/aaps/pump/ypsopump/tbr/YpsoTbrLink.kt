@@ -125,12 +125,6 @@ internal class YpsoTbrBleLink(
         private const val WRITE_CALLBACK_TIMEOUT_S = 45L
         /** Each frame of a command is handed to GATT within this time of its journalled dispatch, or not at all. */
         private const val SEND_WINDOW_MS = 30_000L
-        /**
-         * When a command normally takes effect after its journalled dispatch time: every frame is handed
-         * to GATT within [SEND_WINDOW_MS], plus the transport's deadline as a margin for delivery. Radio
-         * delivery has no proven bound, so history binding treats this as a window, not as a proof.
-         */
-        internal const val COMMAND_SPAN_MS = SEND_WINDOW_MS + app.aaps.pump.ypsopump.ble.YpsoPumpLink.OP_TIMEOUT_MS
         private const val STATUS_TIMEOUT_S = 15L
     }
 }

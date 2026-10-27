@@ -122,6 +122,8 @@ class YpsoHistoryIngestion(
                     lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
                 }
                 val scanRows = events.map { it to offsetFor(it) }
+                // Taken before any row is applied; invalidated only once all of them were.
+                val provisional = snapshot.readStartedAt?.let { tbrAccounting?.provisionalBefore(pumpSerial, it) }.orEmpty()
                 for (event in events) {
                     val offset = offsetFor(event)
                     when (event.semantics.kind) {
@@ -215,6 +217,7 @@ class YpsoHistoryIngestion(
                         }
                     }
                 }
+                tbrAccounting?.invalidateProvisional(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                 clocklessScans.set(0)
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)

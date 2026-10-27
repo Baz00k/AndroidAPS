@@ -167,12 +167,9 @@ class YpsoPumpPlugin @Inject constructor(
                     .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }
                     .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.StatusSuspend(it, record.timestamp, record.duration) } }
 
-                override fun unboundStarts(pumpSerial: String, from: Long, to: Long) = tbrRecords(pumpSerial, from, includeInvalid = true)
-                    .filter {
-                        it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.ids.pumpId == null &&
-                            it.timestamp >= from && it.timestamp <= to
-                    }
-                    .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.UnboundStart(it, record.timestamp, record.duration, record.rate) } }
+                override fun provisionalStarts(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
+                    .filter { it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.ids.pumpId == null && it.timestamp >= from }
+                    .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.Provisional(it, record.timestamp, record.dateCreated) } }
             }, registeredAt = ::pumpRegisteredAt),
         )
     }

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
@@ -580,6 +581,51 @@ class YpsoHistoryIngestionTest {
         assertEquals(0.91, resolved.single().second)
         val order = org.mockito.kotlin.inOrder(sync)
         order.verify(sync).replayConfirmedBolusWithPumpIdDetailed(any(), eq(0.91), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `an evicted AAPS start's record is invalidated only once every row of the read was applied`() {
+        val serial = "10000001"
+        val sync: PumpSync = mock()
+        val row = row(101, 10, 0)
+        val rowStart = java.time.LocalDateTime.of(2026, 9, 18, 12, 41).atZone(ZoneId.of("UTC")).toInstant().toEpochMilli()
+        var saving = false
+        var imported: Long? = null
+        var provisionalValid = true
+        whenever(sync.syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())).thenAnswer {
+            if (saving) imported = it.getArgument(0)
+            saving
+        }
+        whenever(sync.invalidateTemporaryBasalWithTempId(any())).thenAnswer { provisionalValid = false; true }
+        val lookup = object : app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup {
+            override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
+                imported?.let { app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup.Record(it, 1L, true) }
+            override fun suspendActiveAt(pumpSerial: String, at: Long) = false
+            override fun latestSuspendBefore(pumpSerial: String, at: Long) = null
+            override fun anyStartedBetween(pumpSerial: String, from: Long, to: Long, exceptPumpId: Long) = false
+            override fun statusSuspendsFrom(pumpSerial: String, from: Long) = emptyList<app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup.StatusSuspend>()
+            override fun rowSuspendsAt(pumpSerial: String, at: Long) = emptyList<app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup.Suspend>()
+            override fun provisionalStarts(pumpSerial: String, from: Long) =
+                if (provisionalValid) listOf(app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup.Provisional(7L, rowStart + 2_000L, rowStart + 60_000L)) else emptyList()
+        }
+        val journal = app.aaps.pump.ypsopump.tbr.YpsoTbrJournal(object : app.aaps.pump.ypsopump.tbr.YpsoTbrAttemptStore {
+            override fun loadAll() = emptyList<app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt>()
+            override fun commitAll(attempts: List<app.aaps.pump.ypsopump.tbr.YpsoTbrAttempt>) = Unit
+        })
+        val store = Store(YpsoHistoryState(cursor = cursor(100)))
+        val ingestion = YpsoHistoryIngestion(store, sync, app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting(sync, journal, lookup))
+        val read = snapshot(listOf(row, row(100, 2, 100))).copy(pumpClockOffsetMs = 0L, readStartedAt = rowStart + 10 * 60_000L)
+
+        // PumpSync did not save the row: the record stays, and so does the cursor.
+        assertTrue(ingestion.ingest(serial, ZoneId.of("UTC"), 21, read) is YpsoHistoryIngestionResult.Blocked)
+        assertTrue(provisionalValid)
+        assertEquals(100, store.value.cursor?.identity?.sequence)
+
+        saving = true
+        assertTrue(ingestion.ingest(serial, ZoneId.of("UTC"), 21, read) is YpsoHistoryIngestionResult.Applied)
+        assertEquals(rowStart, imported)
+        assertTrue(!provisionalValid)
+        assertEquals(101, store.value.cursor?.identity?.sequence)
     }
 
     private fun cursor(sequence: Long): YpsoHistoryCursor =

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -57,9 +58,9 @@ class YpsoTbrHistoryAccountingTest {
         override fun rowSuspendsAt(pumpSerial: String, at: Long) = saved.entries
             .filter { it.key in suspends && it.value.first == at }
             .map { YpsoTbrRecordLookup.Suspend(it.key, null, it.value.first, it.value.second, it.key !in invalid) }
-        override fun unboundStarts(pumpSerial: String, from: Long, to: Long) = provisional
-            .filter { it.value.start in from..to }
-            .map { YpsoTbrRecordLookup.UnboundStart(it.key, it.value.start, it.value.duration, it.value.percent.toDouble()) }
+        override fun provisionalStarts(pumpSerial: String, from: Long) = provisional
+            .filter { it.value.valid && it.value.start >= from }
+            .map { YpsoTbrRecordLookup.Provisional(it.key, it.value.start, it.value.savedAt) }
     }, registeredAt = { registeredAt })
     private var suspendOpen = false
     private val suspends = mutableSetOf<Long>()
@@ -69,11 +70,18 @@ class YpsoTbrHistoryAccountingTest {
             val pumpId = it.getArgument<Long>(5)
             if (pumpId in invalid) return@thenAnswer false
             val start = it.getArgument<Long>(0)
-            // As the transaction does: a new record ends the one running when it starts, if that began earlier.
+            // As the transaction does: a new record ends the valid one running when it starts, if that
+            // began earlier. Any write stamps the record with the time it was written.
             if (pumpId !in saved) {
-                saved.entries.firstOrNull { (_, r) -> r.first < start && r.first + r.second > start }?.let { e -> e.setValue(e.value.first to start - e.value.first) }
-                    ?: provisional.entries.firstOrNull { (_, r) -> r.start < start && r.start + r.duration > start }
-                        ?.let { e -> e.setValue(e.value.copy(duration = start - e.value.start)) }
+                val savedRunning = saved.entries.filter { (id, r) -> id !in invalid && r.first <= start && r.first + r.second > start }.maxByOrNull { it.value.first }
+                val provisionalRunning = provisional.entries.filter { (_, r) -> r.valid && r.start <= start && r.start + r.duration > start }.maxByOrNull { it.value.start }
+                val savedStart = savedRunning?.value?.first ?: Long.MIN_VALUE
+                val provisionalStart = provisionalRunning?.value?.start ?: Long.MIN_VALUE
+                if (provisionalStart > savedStart && provisionalStart < start) {
+                    provisionalRunning!!.setValue(provisionalRunning.value.copy(duration = start - provisionalStart, savedAt = databaseNow))
+                } else if (savedStart >= provisionalStart && savedRunning != null && savedStart < start) {
+                    savedRunning.setValue(savedStart to start - savedStart)
+                }
             }
             saved[pumpId] = start to it.getArgument(2)
             if (it.getArgument<PumpSync.TemporaryBasalType?>(4) == PumpSync.TemporaryBasalType.PUMP_SUSPEND) suspends += pumpId
@@ -82,6 +90,12 @@ class YpsoTbrHistoryAccountingTest {
         whenever(sync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenAnswer {
             invalid += it.getArgument<Long>(0)
             true
+        }
+        whenever(sync.invalidateTemporaryBasalWithTempId(any())).thenAnswer {
+            val tempId = it.getArgument<Long>(0)
+            val record = provisional[tempId] ?: return@thenAnswer false
+            provisional[tempId] = record.copy(valid = false, savedAt = databaseNow)
+            record.valid
         }
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
             val tempId = it.getArgument<Long>(4)
@@ -95,7 +109,10 @@ class YpsoTbrHistoryAccountingTest {
         }
     }
 
-    private data class Provisional(val start: Long, val duration: Long, val percent: Int, val valid: Boolean = true)
+    private data class Provisional(val start: Long, val duration: Long, val percent: Int, val valid: Boolean = true, val savedAt: Long = 0L)
+
+    /** Phone time of database writes during a pass, later than any read in these tests. */
+    private val databaseNow = Long.MAX_VALUE
 
     private val pumpStartSeconds = 843_494_510L
     private val pumpStart = LocalDateTime.of(2000, 1, 1, 0, 0).plus(pumpStartSeconds, ChronoUnit.SECONDS)
@@ -278,39 +295,6 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a start the journal evicted during a history stall binds its row by its record`() {
-        startedAttempt("first", percent = 0, minutes = 30, tempId = 1L)
-        stalledStarts(64)
-        assertNull(journal.find("first"))
-
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(pumpStart + 2_000L to 4 * 60_000L, saved[48_224L])
-        assertTrue(provisional.keys.none { it == 1L })
-        verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
-    }
-
-    @Test
-    fun `a start sent at the end of its send window with its ACK lost still binds its row with a measured clock`() {
-        // Recorded at dispatch; the first frame left 29 s later and the write took the transport's full 8 s.
-        provisional[1L] = Provisional(pumpStart - 37_000L, 30 * 60_000L, 0)
-
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(pumpStart - 37_000L to 4 * 60_000L, saved[48_224L])
-    }
-
-    @Test
-    fun `an evicted start's row never lengthens the end AAPS recorded`() {
-        // AAPS stopped it 3.5 minutes in; the pump counts the minute it began a little earlier.
-        provisional[1L] = Provisional(pumpStart + 2_000L, 210_000L, 0)
-
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(pumpStart + 2_000L to 210_000L, saved[48_224L])
-    }
-
-    @Test
     fun `a row bound to its start's record before the journal recorded it binds that start when applied again`() {
         startedAttempt()
         // The app stopped after PumpSync bound the record and before the journal was written.
@@ -321,245 +305,6 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
 
         assertEquals(48_224L, store.attempts.single().pumpId)
-    }
-
-    @Test
-    fun `without a measured clock an evicted start's row binds within the drift profile reads allow`() {
-        provisional[1L] = Provisional(pumpStart + 100_000L, 30 * 60_000L, 0)
-
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone))
-
-        assertEquals(pumpStart + 100_000L to 4 * 60_000L, saved[48_224L])
-    }
-
-    @Test
-    fun `a running row is not taken for an evicted start that asked for a longer TBR`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 60 * 60_000L, 0)
-
-        assertNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(pumpStart to 30 * 60_000L, saved[48_224L])
-        assertEquals(setOf(1L), provisional.keys)
-    }
-
-    @Test
-    fun `an evicted start's row waits while a start with its percent has no proven outcome`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-        val pending = YpsoTbrAttempt(
-            id = "pending", kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 0, durationMinutes = 30,
-            type = "NORMAL", temporaryId = 7L, baselinePumpId = 48_222L, createdAt = pumpStart + 600_000L,
-        )
-        journal.prepare(pending)
-        journal.dispatched("pending", pumpStart + 600_500L)
-
-        assertNotNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertTrue(saved.isEmpty())
-    }
-
-    @Test
-    fun `an evicted start whose record the user removed stays removed when its row binds`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0, valid = false)
-
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(setOf(48_224L), invalid)
-        verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
-    }
-
-    @Test
-    fun `an evicted start's record is not taken for a TBR of its percent set on the pump outside its window`() {
-        startedAttempt("first", percent = 0, minutes = 30, tempId = 1L)
-        stalledStarts(64)
-        // Set on the pump three minutes earlier and cancelled after two.
-        assertNull(accounting.apply(event(48_223, 10, 0, 2, seconds = pumpStartSeconds - 180), serial, zone, pumpClockOffsetMs = 0L))
-        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertEquals(pumpStart - 180_000L to 2 * 60_000L, saved[48_223L])
-        assertEquals(pumpStart + 2_000L to 4 * 60_000L, saved[48_224L])
-        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
-    }
-
-    /** Every recorded TBR as a time span; these tests use one percent, so any overlap counts it twice. */
-    private fun overlaps(): Boolean {
-        val spans = (saved.values + provisional.values.map { it.start to it.duration }).sortedBy { it.first }
-        return spans.zipWithNext().any { (a, b) -> a.first + a.second > b.first }
-    }
-
-    @Test
-    fun `a TBR that ended before registration never takes the record of a start after it`() {
-        // Set on the pump for its first minute, then the pump was registered again two minutes in.
-        registeredAt = pumpStart + 120_000L
-        val manual = event(48_223, 10, 0, 1)
-        // The AAPS start right after registration, evicted: only its record is left.
-        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
-        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
-        val read = listOf(manual to null, own to null)
-
-        assertNull(accounting.apply(manual, serial, zone, scanRows = read))
-        assertNull(accounting.apply(own, serial, zone, scanRows = read))
-
-        assertNull(saved[48_223L])
-        assertEquals(pumpStart + 127_000L to 4 * 60_000L, saved[48_224L])
-        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
-        assertTrue(!overlaps())
-    }
-
-    @Test
-    fun `two rows of a read that could both be an evicted start's own block instead of counting it twice`() {
-        // Set on the pump for a minute, then the AAPS start two minutes later; without a clock both fit.
-        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
-        val manual = event(48_223, 10, 0, 1)
-        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
-        val read = listOf(manual to null, own to null)
-
-        assertNotNull(accounting.apply(manual, serial, zone, scanRows = read))
-        assertNotNull(accounting.apply(own, serial, zone, scanRows = read))
-
-        assertTrue(saved.isEmpty())
-        assertEquals(setOf(1L), provisional.keys)
-    }
-
-    @Test
-    fun `with a measured clock the same rows resolve, each to its own record`() {
-        provisional[1L] = Provisional(pumpStart + 127_000L, 30 * 60_000L, 0)
-        val manual = event(48_223, 10, 0, 1)
-        val own = event(48_224, 10, 0, 4, seconds = pumpStartSeconds + 125)
-        val read = listOf(manual to 0L, own to 0L)
-
-        assertNull(accounting.apply(manual, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-        assertNull(accounting.apply(own, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-
-        assertEquals(pumpStart to 60_000L, saved[48_223L])
-        assertEquals(pumpStart + 127_000L to 4 * 60_000L, saved[48_224L])
-        assertTrue(!overlaps())
-    }
-
-    @Test
-    fun `a clockless read binds an evicted start and a journalled start when only one assignment fits`() {
-        // The evicted start's record, and the next start, still journalled, two minutes later.
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-        startedAttempt("next", percent = 0, minutes = 30, at = pumpStart + 122_000L, tempId = 2L)
-        val first = event(48_224, 10, 0, 2)
-        val second = event(48_226, 9, 0, 30, seconds = pumpStartSeconds + 120)
-        val read = listOf(first to null, second to null)
-
-        // The second row fits both, the first only the record: the first is the record's.
-        assertNull(accounting.apply(first, serial, zone, scanRows = read))
-        assertNull(accounting.apply(second, serial, zone, scanRows = read))
-
-        assertEquals(pumpStart + 2_000L to 2 * 60_000L, saved[48_224L])
-        assertEquals(48_226L, journal.find("next")!!.pumpId)
-        assertTrue(!overlaps())
-    }
-
-    @Test
-    fun `two rows that each fit two evicted starts' records block, though their order would suggest a pairing`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-        provisional[2L] = Provisional(pumpStart + 20_000L, 30 * 60_000L, 0)
-        val first = event(48_224, 10, 0, 0)
-        val second = event(48_226, 10, 0, 4, seconds = pumpStartSeconds + 18)
-        val read = listOf(first to 0L, second to 0L)
-
-        assertNotNull(accounting.apply(first, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-
-        assertTrue(saved.isEmpty())
-    }
-
-    @Test
-    fun `a start that took effect after its window, with its ACK lost, binds its row after eviction at the pump's time`() {
-        // Recorded at dispatch; the pump started it a minute later, beyond the window of a measured clock.
-        provisional[1L] = Provisional(pumpStart - 60_000L, 30 * 60_000L, 0)
-        val row = event(48_224, 10, 0, 4)
-
-        assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
-
-        assertEquals(pumpStart to 4 * 60_000L, saved[48_224L])
-        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
-        assertTrue(!overlaps())
-    }
-
-    @Test
-    fun `a TBR set on the pump that status took for an evicted start which never arrived moves its record to the pump's time`() {
-        // Recorded at dispatch ten minutes earlier: the command never arrived, and the next status saw
-        // this identical TBR, set on the pump, as the start's.
-        provisional[1L] = Provisional(pumpStart - 10 * 60_000L, 30 * 60_000L, 50)
-        val row = event(48_224, 9, 50, 30)
-
-        assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
-
-        assertEquals(pumpStart to 30 * 60_000L, saved[48_224L])
-        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
-        assertTrue(!overlaps())
-
-        // Cancelled on the pump twelve minutes in: the same row, rewritten.
-        val ended = event(48_224, 10, 50, 12)
-        assertNull(accounting.apply(ended, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(ended to 0L)))
-        assertEquals(pumpStart to 12 * 60_000L, saved[48_224L])
-    }
-
-    @Test
-    fun `a row bound to a start that took effect late is not imported again over the end AAPS recorded`() {
-        // AAPS stopped it 3.5 minutes after it was recorded; the pump counts four minutes.
-        provisional[1L] = Provisional(pumpStart - 60_000L, 210_000L, 0)
-        val row = event(48_224, 10, 0, 4)
-
-        assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
-
-        assertEquals(210_000L, saved[48_224L]!!.second)
-        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
-        verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
-    }
-
-    @Test
-    fun `two rows that could each be a start that took effect late block`() {
-        provisional[1L] = Provisional(pumpStart - 60_000L, 30 * 60_000L, 0)
-        val first = event(48_224, 10, 0, 4)
-        val second = event(48_226, 10, 0, 5, seconds = pumpStartSeconds + 300)
-        val read = listOf(first to 0L, second to 0L)
-
-        assertNotNull(accounting.apply(first, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-
-        assertTrue(saved.isEmpty())
-        assertEquals(setOf(1L), provisional.keys)
-    }
-
-    @Test
-    fun `a TBR set on the pump while an evicted start ran is imported once that start's own row took its record`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-        val own = event(48_224, 10, 0, 5)
-        // Cancelled on the pump after five minutes and set again by hand at the same percent.
-        val manual = event(48_226, 10, 0, 10, seconds = pumpStartSeconds + 360)
-        val read = listOf(own to 0L, manual to 0L)
-
-        assertNull(accounting.apply(own, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-        assertNull(accounting.apply(manual, serial, zone, pumpClockOffsetMs = 0L, scanRows = read))
-
-        assertEquals(pumpStart + 2_000L to 5 * 60_000L, saved[48_224L])
-        assertEquals(pumpStart + 360_000L to 10 * 60_000L, saved[48_226L])
-        assertTrue(!overlaps())
-    }
-
-    @Test
-    fun `a row that two evicted starts' records could be stays blocked`() {
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-        provisional[2L] = Provisional(pumpStart + 40_000L, 30 * 60_000L, 0)
-
-        assertNotNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertTrue(saved.isEmpty())
-        assertEquals(setOf(1L, 2L), provisional.keys)
-    }
-
-    @Test
-    fun `a row that a journalled start and an evicted start's record could both be stays blocked`() {
-        startedAttempt("journalled", percent = 0, minutes = 30, at = pumpStart + 10_000L, tempId = 2L)
-        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
-
-        assertNotNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
-
-        assertTrue(saved.isEmpty())
-        assertNull(journal.find("journalled")!!.pumpId)
     }
 
     @Test
@@ -881,38 +626,11 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a row in the repeated hour binds the record of a start the journal evicted, also when read again`() {
-        // Only the record is left of the start before the fall-back; nothing is journalled.
-        provisional[1L] = Provisional(beforeFallBack + 1_000L, 60 * 60_000L, 0)
-        val row = event(55_473, 10, 0, 4, seconds = repeatedHourSeconds)
-        val read = listOf(row to 0L)
-
-        assertNull(accounting.apply(row, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
-        // A later row blocked the read, so this one is applied again.
-        assertNull(accounting.apply(row, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
-
-        assertEquals(beforeFallBack + 1_000L to 4 * 60_000L, saved[55_473L])
-        assertEquals(mapOf(55_473L to 1L), boundTemporaryIds)
-    }
-
-    @Test
-    fun `a row in the repeated hour is not bound to an evicted start's record another row of the read could be`() {
-        provisional[1L] = Provisional(afterFallBack + 1_000L, 30 * 60_000L, 200)
-        val first = event(55_473, 10, 200, 4, seconds = repeatedHourSeconds)
-        val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 2)
-        val read = listOf(first to null, second to null)
-
-        for (row in listOf(first, second)) assertNotNull(accounting.apply(row, serial, warsaw, scanRows = read))
-
-        assertTrue(saved.isEmpty())
-    }
-
-    @Test
     fun `a row in the repeated hour a record already carries is no rival`() {
         // The first row was bound to its start's record earlier in this read.
         saved[55_473L] = afterFallBack + 1_000L to 30 * 60_000L
         boundTemporaryIds[55_473L] = 1L
-        provisional[2L] = Provisional(afterFallBack + 31_000L, 30 * 60_000L, 200)
+        startedAttempt(id = "second", percent = 200, minutes = 30, at = afterFallBack + 31_000L, tempId = 2L)
         val first = event(55_473, 10, 200, 0, seconds = repeatedHourSeconds)
         val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 30)
         val read = listOf(first to 0L, second to 0L)
@@ -920,6 +638,7 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(second, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
 
         assertEquals(afterFallBack + 31_000L to 15 * 60_000L, saved[55_480L])
+        assertEquals(55_480L, journal.find("second")!!.pumpId)
     }
 
     @Test
@@ -943,5 +662,123 @@ class YpsoTbrHistoryAccountingTest {
         accounting.apply(event(48_224, 9, 110, 15), serial, zone)
 
         verify(sync).syncTemporaryBasalWithPumpId(pumpStart, 110.0, 15 * 60_000L, false, PumpSync.TemporaryBasalType.NORMAL, 48_224L, PumpType.YPSOPUMP, serial)
+    }
+
+    /**
+     * One ingestion pass as [app.aaps.pump.ypsopump.history.YpsoHistoryIngestion] runs it, with a
+     * measured clock: provisional records are taken before the rows, and invalidated after all of them.
+     */
+    private fun pass(readStartedAt: Long, vararg rows: YpsoHistoryEvent, zone: ZoneId = this.zone): String? {
+        val read = rows.map { it to 0L }
+        val stale = accounting.provisionalBefore(serial, readStartedAt)
+        rows.forEach { row -> accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = read)?.let { return it } }
+        return accounting.invalidateProvisional(serial, stale)
+    }
+
+    /** Every TBR that counts towards insulin on board, as start to duration. */
+    private fun counted(): Set<Pair<Long, Long>> =
+        (saved.filterKeys { it !in invalid }.values + provisional.values.filter { it.valid }.map { it.start to it.duration }).toSet()
+
+    @Test
+    fun `a failed AAPS start whose record has no row is invalidated once history was read after it was saved`() {
+        // Recorded at dispatch after status took some TBR for it; the command never reached the pump.
+        provisional[1L] = Provisional(pumpStart, 30 * 60_000L, 0, savedAt = pumpStart + 60_000L)
+
+        assertNull(pass(readStartedAt = pumpStart + 5 * 60_000L))
+
+        assertTrue(counted().isEmpty())
+    }
+
+    @Test
+    fun `an AAPS start the journal evicted is imported once by its pump ID and its record invalidated`() {
+        startedAttempt("first", percent = 0, minutes = 30, tempId = 1L)
+        stalledStarts(64)
+        assertNull(journal.find("first"))
+
+        assertNull(pass(readStartedAt = pumpStart + 10 * 60_000L, event(48_224, 10, 0, 4)))
+
+        assertEquals(pumpStart to 4 * 60_000L, saved[48_224L])
+        assertEquals(false, provisional.getValue(1L).valid)
+        assertTrue(boundTemporaryIds.isEmpty())
+        verify(sync).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), eq(48_224L), any(), any())
+        // Replaying the read writes nothing more.
+        assertNull(pass(readStartedAt = pumpStart + 15 * 60_000L, event(48_224, 10, 0, 4)))
+        verify(sync).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), eq(48_224L), any(), any())
+    }
+
+    @Test
+    fun `a TBR set on the pump that status took for a failed AAPS start counts at its own duration`() {
+        // 10:00 AAPS asked for 200 % for 15 minutes, which never arrived; 10:10 200 % for 60 minutes was
+        // set on the pump, and status at 10:55 took it for the AAPS start.
+        provisional[1L] = Provisional(pumpStart - 10 * 60_000L, 15 * 60_000L, 200, savedAt = pumpStart + 45 * 60_000L)
+
+        assertNull(pass(readStartedAt = pumpStart + 65 * 60_000L, event(48_224, 10, 200, 60)))
+
+        assertEquals(setOf(pumpStart to 60 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a TBR set on the pump just before an AAPS start that never arrived is counted alone`() {
+        // 10:01 50 % for 120 minutes set on the pump, cancelled at 11:05; the AAPS start for 60 minutes
+        // was dispatched at 10:02 and never arrived, and status at 11:05 took the pump's TBR for it.
+        provisional[1L] = Provisional(pumpStart + 60_000L, 60 * 60_000L, 50, savedAt = pumpStart + 64 * 60_000L)
+
+        assertNull(pass(readStartedAt = pumpStart + 66 * 60_000L, event(48_224, 10, 50, 64)))
+
+        assertEquals(setOf(pumpStart to 64 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a failed AAPS start's record leaves nothing beside the TBRs the pump ran after it`() {
+        // 10:00 the AAPS start of 50 % for 120 minutes never arrived. The pump ran 200 % from 10:30 to
+        // 10:40, then 50 % from 11:00, which status took for the AAPS start.
+        provisional[1L] = Provisional(pumpStart, 120 * 60_000L, 50, savedAt = pumpStart + 61 * 60_000L)
+        val high = event(48_224, 10, 200, 10, seconds = pumpStartSeconds + 30 * 60)
+        val low = event(48_226, 9, 50, 120, seconds = pumpStartSeconds + 60 * 60)
+
+        assertNull(pass(readStartedAt = pumpStart + 62 * 60_000L, high, low))
+
+        assertEquals(setOf(pumpStart + 30 * 60_000L to 10 * 60_000L, pumpStart + 60 * 60_000L to 120 * 60_000L), counted())
+    }
+
+    @Test
+    fun `a record the user removed stays removed and every TBR of its percent counts`() {
+        // The AAPS start of 200 % for 30 minutes at 10:00 never arrived; status took a TBR set on the
+        // pump for it, and the user removed that record. The pump ran 200 % from 10:00:02 for 20
+        // minutes and from 10:25 for 30 minutes.
+        provisional[1L] = Provisional(pumpStart, 30 * 60_000L, 200, valid = false)
+        val first = event(48_224, 10, 200, 20, seconds = pumpStartSeconds + 2)
+        val second = event(48_226, 10, 200, 30, seconds = pumpStartSeconds + 25 * 60)
+
+        assertNull(pass(readStartedAt = pumpStart + 60 * 60_000L, first, second))
+
+        assertEquals(setOf(pumpStart + 2_000L to 20 * 60_000L, pumpStart + 25 * 60_000L to 30 * 60_000L), counted())
+        assertTrue(boundTemporaryIds.isEmpty())
+    }
+
+    @Test
+    fun `a record whose row may still arrive or is not history's to import stays`() {
+        // Journalled: its row binds it when it arrives.
+        startedAttempt("live", percent = 0, minutes = 30, tempId = 1L)
+        // Saved once this read had begun.
+        provisional[2L] = Provisional(pumpStart + 60 * 60_000L, 30 * 60_000L, 0, savedAt = pumpStart + 3 * 60 * 60_000L)
+        // From before the pump was registered, whose rows are never imported.
+        registeredAt = pumpStart - 60 * 60_000L
+        provisional[3L] = Provisional(pumpStart - 2 * 60 * 60_000L, 30 * 60_000L, 0)
+        val before = provisional.toMap()
+
+        assertNull(pass(readStartedAt = pumpStart + 3 * 60 * 60_000L))
+
+        assertEquals(before, provisional)
+    }
+
+    @Test
+    fun `an evicted AAPS start's row in the repeated hour blocks like a TBR set on the pump and keeps its record`() {
+        provisional[1L] = Provisional(afterFallBack + 1_000L, 30 * 60_000L, 0)
+
+        assertNotNull(pass(readStartedAt = afterFallBack + 60 * 60_000L, event(55_473, 10, 0, 4, seconds = repeatedHourSeconds), zone = warsaw))
+
+        assertTrue(saved.isEmpty())
+        assertTrue(provisional.getValue(1L).valid)
     }
 }

@@ -7,7 +7,6 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryKind
 import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.history.YpsoPumpModeChange
 import java.time.ZoneId
-import kotlin.math.abs
 
 /** Read-back of temporary basal records. */
 interface YpsoTbrRecordLookup {
@@ -41,18 +40,22 @@ interface YpsoTbrRecordLookup {
     /** PUMP_SUSPEND records from Stop rows starting exactly at [at], including removed ones. */
     fun rowSuspendsAt(pumpSerial: String, at: Long): List<Suspend>
 
-    /** A percent TBR AAPS started, recorded under its temporary ID and bound to no history row yet. */
-    data class UnboundStart(val temporaryId: Long, val start: Long, val duration: Long, val percent: Double)
+    /**
+     * A percent TBR record AAPS wrote for its own start under [temporaryId], bound to no history row.
+     * [savedAt] is when the database last wrote it, so never before the record was first saved.
+     */
+    data class Provisional(val temporaryId: Long, val start: Long, val savedAt: Long)
 
-    /** Unbound AAPS starts beginning from [from] to [to], including removed ones. */
-    fun unboundStarts(pumpSerial: String, from: Long, to: Long): List<UnboundStart>
+    /** Valid provisional records of this pump starting at or after [from]. */
+    fun provisionalStarts(pumpSerial: String, from: Long): List<Provisional>
 }
 
 /**
  * Basal accounting from pump history (see docs/history.md). A TBR row keeps its sequence while the
  * pump rewrites it from running (type 9) to ended (type 10), so the row identity is the PumpSync pump
  * ID for the whole life of the TBR. An AAPS-started TBR is already recorded under a temporary ID; its
- * row binds to that record instead of importing a duplicate. Every write is verified by read-back and
+ * row binds to that record instead of importing a duplicate while the journal holds the start. A row
+ * nothing binds is imported by its pump ID, as the pump ran it. Every write is verified by read-back and
  * a failure blocks the history cursor, so the row is applied again on the next scan.
  */
 class YpsoTbrHistoryAccounting(
@@ -101,17 +104,6 @@ class YpsoTbrHistoryAccounting(
             // Bound before the journal recorded it, as when the app stopped in between.
             journal.all().firstOrNull { it.awaitsBinding && it.temporaryId == temporaryId }?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
             return syncRecord(temporaryId, pumpId, pumpSerial, carried.start, carried.duration, percent, minutes * MINUTE)
-        }
-        // Starts the journal evicted while history stalled are known only by their records. A row such a
-        // record may own is decided with every row and start it connects to; a row that ended before
-        // registration is passed over below and takes none.
-        if (tbr && carried == null && starts.isNotEmpty() && !endedBeforeRegistration(event, pumpSerial, starts)) {
-            when (val match = matchWithRecords(event, pumpSerial, zone, pumpClockOffsetMs, scanRows)) {
-                is RecordMatch.Owned -> return match.owner.attempt?.let { syncAttempt(it, pumpId, minutes * MINUTE) }
-                    ?: checkNotNull(match.owner.record).let { syncRecord(it.temporaryId, pumpId, pumpSerial, it.start, it.duration, percent, minutes * MINUTE) }
-                is RecordMatch.Blocked -> return match.reason
-                null -> Unit
-            }
         }
         // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
         // row is an AAPS start's own only when that start's window holds one of them and no other row of
@@ -169,18 +161,46 @@ class YpsoTbrHistoryAccounting(
         // A start whose outcome status has not proven yet may be this very row: importing it now would
         // record the same TBR twice. Hold until status settles it.
         awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
-        when (val late = lateStart(event, pumpSerial, zone, pumpClockOffsetMs, scanRows)) {
-            // The record moves to the pump's time of this row and stands for it; it is not imported again.
-            is RecordMatch.Owned -> return checkNotNull(late.owner.record).let { syncRecord(it.temporaryId, pumpId, pumpSerial, from, it.duration, percent, until - from) }
-            is RecordMatch.Blocked -> return late.reason
-            null -> Unit
-        }
         val duration = (until - from).coerceAtLeast(1L)
         return sync(pumpId, pumpSerial, from, duration, keepStart = true) { at ->
             pumpSync.syncTemporaryBasalWithPumpId(
                 at, percent.toDouble(), duration, false, PumpSync.TemporaryBasalType.NORMAL, pumpId, PumpType.YPSOPUMP, pumpSerial,
             )
         }
+    }
+
+    /**
+     * Records of AAPS starts the journal no longer holds that no row has bound. The journal keeps a
+     * bounded number of starts and drops the oldest awaiting their rows while history stalls. Pump
+     * history then decides what ran: such a start's row, if the pump ran it, is imported by its pump ID
+     * like any row nothing binds, and its record is provisional, invalidated by [invalidateProvisional].
+     *
+     * AAPS saves a start's record only once status saw its TBR running, so its row was in pump history
+     * by then, and a record saved before [readStartedAt] has its row, if any, in this read or an earlier
+     * one. Call this before the read's rows are applied: importing a row ends a record running at its
+     * start, which rewrites [YpsoTbrRecordLookup.Provisional.savedAt]. Records from before this pump's
+     * registration are left alone, as their rows are not imported, and so are records older than
+     * [LOOKBACK], which no longer count towards insulin on board.
+     */
+    fun provisionalBefore(pumpSerial: String, readStartedAt: Long): List<YpsoTbrRecordLookup.Provisional> {
+        val journalled = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
+        val from = maxOf(registeredAt(pumpSerial), readStartedAt - LOOKBACK)
+        return lookup.provisionalStarts(pumpSerial, from)
+            .filter { it.start >= from && it.savedAt < readStartedAt && it.temporaryId !in journalled }
+    }
+
+    /**
+     * Invalidates the [records] [provisionalBefore] returned, once every row of that read was applied:
+     * a row imported in a record's place is saved before the record goes, and the pass never ends with
+     * both counted. A record the user already removed stays removed. Returns a blocking reason when one
+     * is still valid afterwards.
+     */
+    fun invalidateProvisional(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? {
+        if (records.isEmpty()) return null
+        val ids = records.map { it.temporaryId }.toSet()
+        fun valid() = lookup.provisionalStarts(pumpSerial, records.minOf { it.start }).map { it.temporaryId }.filter { it in ids }
+        valid().forEach { pumpSync.invalidateTemporaryBasalWithTempId(it) }
+        return valid().firstOrNull()?.let { "PumpSync did not remove provisional temporary basal $it" }
     }
 
     /**
@@ -222,157 +242,6 @@ class YpsoTbrHistoryAccounting(
         val rowPumpId = row.identity.aapsPumpId
         return journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
             starts.minOrNull()?.let { lookup.byPumpId(rowPumpId, serial, it) } == null
-    }
-
-    /** A start that can own one TBR row: journalled, or known only by its [record] once the journal evicted it. */
-    private class Claimant(val attempt: YpsoTbrAttempt?, val record: YpsoTbrRecordLookup.UnboundStart?) {
-        val temporaryId: Long get() = attempt?.temporaryId ?: checkNotNull(record).temporaryId
-    }
-
-    private sealed interface RecordMatch {
-        class Owned(val owner: Claimant) : RecordMatch
-        class Blocked(val reason: String) : RecordMatch
-    }
-
-    /** A TBR row of a read with the clock offset that holds for it and every instant its wall time names. */
-    private inner class ReadRow(val event: YpsoHistoryEvent, val offset: Long?, val starts: List<Long>) {
-        val pumpId: Long get() = event.identity.aapsPumpId
-        val skew: Long get() = skew(offset)
-    }
-
-    /** The rows, journalled starts and unbound records of one percent in a read, for deciding ownership. */
-    private inner class ReadOwners(event: YpsoHistoryEvent, private val serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>) {
-        private val percent = event.entry.value1
-        private val attempts = journal.all()
-        val current = ReadRow(event, offset, rowStarts(event, zone, offset))
-        val rows: List<ReadRow> = (scanRows.filter { (row, _) -> row.identity.aapsPumpId != current.pumpId }
-            .filter { (row, _) -> row.semantics.kind in TBR_KINDS && row.entry.value1 == percent }
-            .map { (row, rowOffset) -> ReadRow(row, rowOffset, rowStarts(row, zone, rowOffset)) }
-            .filter { it.starts.isNotEmpty() } + current)
-        /** Records of starts the journal no longer holds; a journalled start's record is the journal's. */
-        val records: List<YpsoTbrRecordLookup.UnboundStart> = run {
-            val journalled = attempts.filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
-            val from = rows.minOf { it.starts.min() } - MAX_TBR - CLOCK_SKEW - COMMAND_SPAN
-            val to = rows.maxOf { it.starts.max() } + CLOCK_SKEW + COMMAND_SPAN
-            lookup.unboundStarts(serial, from, to).filter { it.temporaryId !in journalled && it.percent == percent.toDouble() }
-        }
-        private val eligible = mutableMapOf<Long, Boolean>()
-
-        /** The current row was checked by [apply]; another row counts only while no start or record took it. */
-        fun eligible(row: ReadRow): Boolean = row === current || eligible.getOrPut(row.pumpId) {
-            attempts.none { it.pumpId == row.pumpId || it.awaitsBinding && it.rowPumpId == row.pumpId || it.unmatchedRowPumpId == row.pumpId } &&
-                lookup.byPumpId(row.pumpId, serial, row.starts.min()) == null && !endedBeforeRegistration(row.event, serial, row.starts)
-        }
-
-        private fun requestHolds(row: ReadRow, record: YpsoTbrRecordLookup.UnboundStart) =
-            // A record never outlasts its request, which a running row still carries.
-            row.event.semantics.kind != YpsoHistoryKind.TEMP_BASAL_STARTED || record.duration <= row.event.entry.value2 * MINUTE
-
-        /** Starts whose window holds one of [row]'s instants: by journal evidence, or by an evicted start's record. */
-        fun claimants(row: ReadRow): List<Claimant> {
-            val running = row.event.semantics.kind == YpsoHistoryKind.TEMP_BASAL_STARTED
-            val journalled = attempts.filter {
-                it.awaitsBinding && it.rowPumpId == null && it.pumpSerial == serial && it.percent == percent &&
-                    (!running || it.durationMinutes == row.event.entry.value2) &&
-                    (it.baselinePumpId == null || it.baselinePumpId < row.pumpId) && row.starts.any { start -> it.windowHolds(start, row.skew) }
-            }.map { Claimant(it, null) }
-            // A start's record begins when its command took effect, at the pump's acknowledgement or at
-            // dispatch when that was lost; its frames reach the pump within the send window of dispatch.
-            val recorded = records.filter { record ->
-                requestHolds(row, record) && row.starts.any { abs(it - record.start) <= row.skew + COMMAND_SPAN }
-            }.map { Claimant(null, it) }
-            return journalled + recorded
-        }
-
-        /** Whether [record]'s start may have taken effect as late as [row]: any time until its recorded end. */
-        fun lateFor(row: ReadRow, record: YpsoTbrRecordLookup.UnboundStart) = requestHolds(row, record) &&
-            row.starts.any { it >= record.start - row.skew - COMMAND_SPAN && it <= record.start + record.duration + row.skew }
-    }
-
-    /**
-     * Decides the current row when an evicted start's record may own it, or may own a row connected to
-     * it through shared candidates; null when no record is involved and the journal decides alone.
-     *
-     * Rows arrive oldest first, but that does not prove which row is a start's own: a TBR set on the
-     * pump just before an AAPS start, or a row whose start the pump clock places off, can fit the same
-     * window. Every AAPS start that took effect left exactly one row, and AAPS sends no TBR while history
-     * is read, so within the connected set every start must own one row and every row one start. The
-     * row binds only when exactly one such assignment exists; otherwise it blocks.
-     */
-    private fun matchWithRecords(event: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>): RecordMatch? {
-        val read = ReadOwners(event, serial, zone, offset, scanRows)
-        if (read.records.isEmpty()) return null
-        val rows = mutableListOf(read.current)
-        val claimants = mutableMapOf<Long, Claimant>()
-        val edges = mutableMapOf<Long, Set<Long>>()
-        var next = 0
-        while (next < rows.size) {
-            val row = rows[next++]
-            val own = read.claimants(row)
-            edges[row.pumpId] = own.map { it.temporaryId }.toSet()
-            for (claimant in own) {
-                if (claimants.put(claimant.temporaryId, claimant) != null) continue
-                rows += read.rows.filter { other ->
-                    rows.none { it.pumpId == other.pumpId } && read.claimants(other).any { it.temporaryId == claimant.temporaryId } && read.eligible(other)
-                }
-            }
-        }
-        if (claimants.values.none { it.record != null }) return null
-        val pumpId = read.current.pumpId
-        awaitingStatus(serial, event.entry.value1, pumpId)?.let { return RecordMatch.Blocked(awaitingStatusReason(pumpId, it)) }
-        val assignments = if (rows.size == claimants.size && rows.size <= MAX_MATCHED_ROWS) assignments(rows.map { edges.getValue(it.pumpId) }) else emptyList()
-        val assignment = assignments.singleOrNull()
-            ?: return RecordMatch.Blocked("TBR row $pumpId and ${rows.size - 1} other rows cannot be told apart among ${claimants.size} AAPS starts")
-        return RecordMatch.Owned(claimants.getValue(assignment[0]))
-    }
-
-    /** Every way to give each row a different one of its candidates; at most two are looked for. */
-    private fun assignments(candidates: List<Set<Long>>): List<List<Long>> {
-        val found = mutableListOf<List<Long>>()
-        fun extend(chosen: List<Long>) {
-            if (found.size > 1) return
-            if (chosen.size == candidates.size) found += chosen
-            else for (candidate in candidates[chosen.size]) if (candidate !in chosen) extend(chosen + candidate)
-        }
-        extend(emptyList())
-        return found
-    }
-
-    /**
-     * A row about to be imported as a TBR set on the pump may be the TBR an evicted start's record stands
-     * for, though outside that start's window. AAPS records a start only once status saw a TBR of its
-     * percent begin after the dispatch: its own, taking effect late, or one set on the pump that status
-     * took for it, as when the command never arrived. The record keeps only the dispatch or acknowledgement
-     * time either way. If such a record of its percent ran when the row began, and no row of the read
-     * claims that record by its window, the row is the TBR status saw when it is the only such row and
-     * record; the record then moves to the row's time, as the pump ran it. Otherwise it blocks: importing
-     * the row beside the record would count the same TBR twice, and keeping the record's time would date
-     * it too early. Null when no such record ran.
-     */
-    private fun lateStart(event: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>): RecordMatch? {
-        if (event.semantics.kind !in TBR_KINDS) return null
-        val read = ReadOwners(event, serial, zone, offset, scanRows)
-        if (read.records.none { read.lateFor(read.current, it) }) return null
-        val rows = read.rows.filter { read.eligible(it) }
-        val claimed = rows.flatMap { read.claimants(it) }.mapNotNull { it.record?.temporaryId }.toSet()
-        val late = read.records.filter { it.temporaryId !in claimed && read.lateFor(read.current, it) }
-        if (late.isEmpty()) return null
-        val pumpId = read.current.pumpId
-        val record = late.singleOrNull()
-        val unclaimed = rows.filter { it !== read.current && read.claimants(it).isEmpty() }
-        if (record == null || unclaimed.any { read.lateFor(it, record) }) {
-            return RecordMatch.Blocked("TBR row $pumpId may be an AAPS start that took effect late; ${late.size} records and other rows fit")
-        }
-        return RecordMatch.Owned(Claimant(null, record))
-    }
-
-    /**
-     * A TBR row that ended before the pump was registered, at any time its wall time names. [apply]
-     * passes it over when no record carries it yet, so it can be no AAPS start's own.
-     */
-    private fun endedBeforeRegistration(row: YpsoHistoryEvent, serial: String, starts: List<Long>): Boolean {
-        val latest = starts.maxOrNull() ?: return false
-        return latest + row.entry.value2 * MINUTE <= registeredAt(serial) && lookup.byPumpId(row.identity.aapsPumpId, serial, starts.min()) == null
     }
 
     /**
@@ -520,13 +389,9 @@ class YpsoTbrHistoryAccounting(
         private const val CLOCK_SKEW = 90_000L
         /** A row time corrected by the offset measured on its read: whole seconds plus read latency. */
         private const val MEASURED_SKEW = 15_000L
-        /** How long after dispatch a command can still take effect; see [YpsoTbrBleLink.COMMAND_SPAN_MS]. */
-        private const val COMMAND_SPAN = YpsoTbrBleLink.COMMAND_SPAN_MS
         private const val CLOCK_WAIT = "waiting for a pump clock reading"
-        /** A TBR runs at most a day. */
-        private const val MAX_TBR = 24 * 60 * MINUTE
-        /** Larger sets of rows competing for starts are not searched; they block. */
-        private const val MAX_MATCHED_ROWS = 8
+        /** A TBR runs at most a day, and insulin on board looks back less than a day after it ends. */
+        private const val LOOKBACK = 2 * 24 * 60 * MINUTE
 
         /** Whether [apply] held a row only because the pump clock could not be used for it yet. */
         fun isClockWait(reason: String): Boolean = reason.endsWith(CLOCK_WAIT)
