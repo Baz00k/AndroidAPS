@@ -53,7 +53,9 @@ class YpsoTbrHistoryAccountingTest {
     private var tempIdSyncFails = false
     private var registeredAt = 0L
     private val statusSuspends = mutableListOf<YpsoTbrRecordLookup.StatusSuspend>()
-    private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : YpsoTbrRecordLookup {
+    /** Shared with status shortening, as the plugin does. */
+    private val recordLock = Any()
+    private val accounting = YpsoTbrHistoryAccounting(sync, journal, recordLock = recordLock, lookup = object : YpsoTbrRecordLookup {
         override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
             saved[pumpId]?.let { YpsoTbrRecordLookup.Record(it.first, it.second, pumpId !in invalid, boundTemporaryIds[pumpId]) }
         override fun suspendActiveAt(pumpSerial: String, at: Long) = suspendOpen
@@ -961,5 +963,57 @@ class YpsoTbrHistoryAccountingTest {
         accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
 
         assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    /**
+     * Status shortening as the plugin does it, under the shared lock: it reads the record, runs
+     * [afterRead], and writes the shorter duration back with the pump ID it read, as
+     * SyncTemporaryBasalWithTempIdTransaction does.
+     */
+    private fun statusShorten(tempId: Long, duration: Long, afterRead: () -> Unit = {}) = synchronized(recordLock) {
+        val boundTo = boundTemporaryIds.entries.firstOrNull { it.value == tempId }?.key
+        val start = boundTo?.let { saved.getValue(it).first } ?: provisional.getValue(tempId).start
+        val percent = boundTo?.let { percents.getValue(it) } ?: provisional.getValue(tempId).percent
+        afterRead()
+        if (boundTo != null) saved[boundTo] = start to duration
+        else {
+            // Read unbound: the write clears any binding made since.
+            boundTemporaryIds.filterValues { it == tempId }.keys.forEach { saved.remove(it); percents.remove(it); boundTemporaryIds.remove(it) }
+            provisional[tempId] = Provisional(start, duration, percent)
+        }
+    }
+
+    /** Runs [work] on another thread and returns once it is blocked on a lock or has finished. */
+    private fun startAndSettle(work: () -> Unit): Thread = Thread(work).also { thread ->
+        thread.start()
+        while (thread.state != Thread.State.BLOCKED && thread.state != Thread.State.TERMINATED) Thread.yield()
+    }
+
+    @Test
+    fun `status shortening waiting on the stand-in repair keeps the binding`() {
+        startedAttempt("old", percent = 200, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        var status: Thread? = null
+        // Status reads the record right after the repair looked it up.
+        afterLookup = { status = startAndSettle { statusShorten(1L, 10 * 60_000L) } }
+
+        assertNull(accounting.keepStandIns())
+        status!!.join()
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+        assertEquals(pumpStart + 3 * 60_000L to 10 * 60_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `the stand-in repair waiting on status shortening keeps the shorter end`() {
+        startedAttempt("old", percent = 0, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        var repair: Thread? = null
+
+        statusShorten(1L, 10 * 60_000L) { repair = startAndSettle { accounting.keepStandIns() } }
+        repair!!.join()
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+        assertEquals(pumpStart + 3 * 60_000L to 10 * 60_000L, saved[48_224L])
     }
 }

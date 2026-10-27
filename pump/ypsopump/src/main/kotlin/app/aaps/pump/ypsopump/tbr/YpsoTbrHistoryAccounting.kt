@@ -61,6 +61,8 @@ class YpsoTbrHistoryAccounting(
     private val lookup: YpsoTbrRecordLookup,
     /** AAPS accepts pump records only from this pump's registration on; older rows are not its to import. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
+    /** Held across each read-modify-write of TBR records, shared with every other writer of them. */
+    private val recordLock: Any = Any(),
     private val log: (String) -> Unit = {},
 ) {
     /**
@@ -77,6 +79,15 @@ class YpsoTbrHistoryAccounting(
         pumpClockOffsetMs: Long? = null,
         waitForClock: Boolean = false,
         scanRows: List<Pair<YpsoHistoryEvent, Long?>> = emptyList(),
+    ): String? = synchronized(recordLock) { applyLocked(event, pumpSerial, zone, pumpClockOffsetMs, waitForClock, scanRows) }
+
+    private fun applyLocked(
+        event: YpsoHistoryEvent,
+        pumpSerial: String,
+        zone: ZoneId,
+        pumpClockOffsetMs: Long?,
+        waitForClock: Boolean,
+        scanRows: List<Pair<YpsoHistoryEvent, Long?>>,
     ): String? {
         val kind = event.semantics.kind
         val tbr = kind in TBR_KINDS
@@ -185,12 +196,12 @@ class YpsoTbrHistoryAccounting(
      * so are records older than [LOOKBACK] at [now], which no longer count towards insulin on board.
      * A failed [keepStandIns] is retried first.
      */
-    fun provisional(pumpSerial: String, now: Long): List<YpsoTbrRecordLookup.Provisional> {
+    fun provisional(pumpSerial: String, now: Long): List<YpsoTbrRecordLookup.Provisional> = synchronized(recordLock) {
         keepStandIns()?.let(log)
         val from = maxOf(registeredAt(pumpSerial), now - LOOKBACK)
         val records = lookup.provisionalStarts(pumpSerial, from).filter { it.start >= from }
         val journalled = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
-        return records.filter { it.temporaryId !in journalled }
+        records.filter { it.temporaryId !in journalled }
     }
 
     /** Until [keepStandIns] succeeds once; every start left unmatched since binds its record at once. */
@@ -203,8 +214,8 @@ class YpsoTbrHistoryAccounting(
      * again after a failure or while an unmatched start's record is not saved yet. Returns why a record
      * could not be bound.
      */
-    fun keepStandIns(): String? {
-        if (!standInsPending) return null
+    fun keepStandIns(): String? = synchronized(recordLock) {
+        if (!standInsPending) return@synchronized null
         // One snapshot for both: a record saved while this runs may have been missed by its lookup.
         val starts = journal.all()
         val failure = starts.mapNotNull { start ->
@@ -215,7 +226,7 @@ class YpsoTbrHistoryAccounting(
         }.firstOrNull()
         // A start whose record is not saved yet gets one later, which must be bound too.
         standInsPending = failure != null || starts.any { it.unmatchedRowPumpId != null && it.awaitsAccounting }
-        return failure
+        failure
     }
 
     /**
@@ -235,12 +246,12 @@ class YpsoTbrHistoryAccounting(
         invalidate(pumpSerial, records.filter { it.percent >= 100 })
 
     /** A record the user already removed stays removed. Returns a blocking reason when one is still valid. */
-    private fun invalidate(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? {
-        if (records.isEmpty()) return null
+    private fun invalidate(pumpSerial: String, records: List<YpsoTbrRecordLookup.Provisional>): String? = synchronized(recordLock) {
+        if (records.isEmpty()) return@synchronized null
         val ids = records.map { it.temporaryId }.toSet()
         fun valid() = lookup.provisionalStarts(pumpSerial, records.minOf { it.start }).map { it.temporaryId }.filter { it in ids }
         valid().forEach { pumpSync.invalidateTemporaryBasalWithTempId(it) }
-        return valid().firstOrNull()?.let { "PumpSync did not remove provisional temporary basal $it" }
+        valid().firstOrNull()?.let { "PumpSync did not remove provisional temporary basal $it" }
     }
 
     /**
