@@ -23,8 +23,8 @@ object YpsoPumpLocalTime {
     fun pumpOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long): Long = pumpLocal.toInstant(ZoneOffset.UTC).toEpochMilli() - phoneMs
 
     /** Phone times of a read's rows, or why some have none. */
-    class RowTimes(private val offsets: Map<Long, Long>, val invalidChange: YpsoHistoryEntry?) {
-        /** When [entry] happened on the phone clock; null without a clock reading or behind an [invalidChange]. */
+    class RowTimes(private val offsets: Map<Long, Long>, val stop: YpsoHistoryEntry?) {
+        /** When [entry] happened on the phone clock; null without a clock reading or at or behind [stop]. */
         fun at(entry: YpsoHistoryEntry): Long? =
             offsets[entry.sequence]?.let { localDateTime(entry.factorySeconds).toInstant(ZoneOffset.UTC).toEpochMilli() - it }
     }
@@ -32,9 +32,10 @@ object YpsoPumpLocalTime {
     /**
      * Places every row of [snapshot] by its clock reading, chained back through the clock change rows
      * newer than the row: crossing one backwards undoes the step it made. A change row is stamped with
-     * the clock it replaced, so it belongs to the segment before it. A change row whose setting is
-     * impossible, or later than the clock the next change row of its sequence generation replaced, places
-     * nothing at or before it; it is found also without a live reading.
+     * the clock it replaced, so it belongs to the segment before it. Placing stops, also without a live
+     * reading, at a change row whose setting is impossible or later than the clock the next change row
+     * replaced, and at the newest row before a sequence reset: the pump clock restarts with a reset and
+     * writes no change row for it.
      */
     fun rowTimes(snapshot: YpsoHistorySnapshot): RowTimes {
         val offsets = HashMap<Long, Long>()
@@ -43,8 +44,7 @@ object YpsoPumpLocalTime {
         var replacedNext: LocalDateTime? = null
         var newerSequence = Long.MAX_VALUE
         for (row in snapshot.rowsNewestFirst) {
-            // A sequence reset starts a new generation: its change rows follow no clock of the one before.
-            if (row.sequence > newerSequence) replacedNext = null
+            if (row.sequence > newerSequence) return RowTimes(offsets, row)
             newerSequence = row.sequence
             YpsoHistoryClassifier.classify(row).takeIf { it.kind == YpsoHistoryKind.DATE_CHANGED || it.kind == YpsoHistoryKind.TIME_CHANGED }?.let {
                 val replaced = localDateTime(row.factorySeconds)

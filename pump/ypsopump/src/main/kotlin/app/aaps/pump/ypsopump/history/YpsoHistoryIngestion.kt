@@ -120,8 +120,8 @@ class YpsoHistoryIngestion(
                 // the cursor never passes an invalid clock change.
                 val times = YpsoPumpLocalTime.rowTimes(snapshot)
                 val unplaced = events.firstOrNull { it.semantics.kind in TIMED && times.at(it.entry) == null }
-                times.invalidChange?.takeIf { change -> unplaced != null || events.any { it.entry.sequence == change.sequence } }?.let {
-                    return YpsoHistoryIngestionResult.Blocked("pump clock change row ${it.sequence} has an impossible setting")
+                times.stop?.takeIf { stop -> unplaced != null || events.any { it.entry.sequence == stop.sequence && it.entry.eventType in 12..13 } }?.let {
+                    return YpsoHistoryIngestionResult.Blocked("history rows from ${it.sequence} back follow an invalid clock change or a sequence reset and cannot be placed")
                 }
                 if (unplaced != null) return YpsoHistoryIngestionResult.Blocked(
                     "history row ${unplaced.identity.aapsPumpId} awaits a pump clock reading", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT,

@@ -275,6 +275,21 @@ class YpsoHistoryClockSegmentTest {
     }
 
     @Test
+    fun `rows written before a sequence reset are never placed by a guess, and doses stay allowed`() {
+        val anchor = row(55_000, LocalDateTime.of(2026, 7, 1, 12, 0))
+        val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))
+        // A dose was still to be read when the pump was reset; its clock then restarted without a change row.
+        val rows = listOf(anchor, row(55_001, LocalDateTime.of(2026, 7, 1, 12, 20)), row(1, LocalDateTime.of(2026, 7, 1, 13, 0)))
+
+        val result = pump.ingestion.ingest(serial, 22, read(rows, 2.0).copy(pumpRebootBefore = 22, pumpRebootAfter = 22))
+
+        assertEquals(YpsoHistoryIngestionResult.Retry.NONE, (result as YpsoHistoryIngestionResult.Blocked).retry)
+        assertEquals(55_000L, pump.cursor())
+        assertTrue(pump.boluses.isEmpty())
+        assertNull(pump.ingestion.bolusReadiness(serial, 22))
+    }
+
+    @Test
     fun `an upgraded cursor places its backlog across a set exactly`() {
         val anchor = row(100, LocalDateTime.of(2026, 7, 5, 3, 0))
         val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))

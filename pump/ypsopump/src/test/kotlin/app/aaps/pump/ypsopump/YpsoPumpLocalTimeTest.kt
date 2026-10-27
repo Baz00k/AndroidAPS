@@ -81,7 +81,7 @@ class YpsoPumpLocalTimeTest {
         )
         val times = YpsoPumpLocalTime.rowTimes(read(rows, 3_600_000L))
 
-        assertNull(times.invalidChange)
+        assertNull(times.stop)
         assertEquals(ms("2026-10-27T18:30:00Z"), times.at(rows[0]))
         assertEquals(ms("2026-10-27T18:23:05Z"), times.at(rows[2]))
         // The time change moved the clock 2 s forward; the date changes cancel out.
@@ -93,16 +93,17 @@ class YpsoPumpLocalTimeTest {
     }
 
     @Test
-    fun `clock changes after a sequence reset are not checked against the clock before it`() {
+    fun `rows after a sequence reset are placed and rows before it are not`() {
         // Before the reset the pump was set to 2026; after it, the clock starts again at 2000 and is set to 2026.
-        val oldSet = setBack
         val afterReset = YpsoHistoryEntry(seconds(LocalDateTime.of(2000, 1, 1, 0, 1)), 12, 1, 7, 26, 1, 0)
         val dose = dose(2, LocalDateTime.of(2026, 7, 1, 0, 30))
+        val beforeReset = dose(55_478, LocalDateTime.of(2026, 10, 25, 3, 0))
 
-        val times = YpsoPumpLocalTime.rowTimes(read(listOf(dose, afterReset, oldSet), 2 * 3_600_000L))
+        val times = YpsoPumpLocalTime.rowTimes(read(listOf(dose, afterReset, beforeReset, setBack), 2 * 3_600_000L))
 
-        assertNull(times.invalidChange)
         assertEquals(ms("2026-06-30T22:30:00Z"), times.at(dose))
+        assertEquals(beforeReset, times.stop)
+        assertNull(times.at(beforeReset))
     }
 
     @Test
@@ -112,7 +113,7 @@ class YpsoPumpLocalTimeTest {
         val times = YpsoPumpLocalTime.rowTimes(read(rows, null))
 
         assertNull(times.at(rows[0]))
-        assertNull(times.invalidChange)
+        assertNull(times.stop)
     }
 
     @Test
@@ -122,14 +123,14 @@ class YpsoPumpLocalTimeTest {
         val impossible = time.copy(value1 = 25)
 
         val broken = YpsoPumpLocalTime.rowTimes(read(listOf(newer, impossible, older), 0L))
-        assertEquals(impossible, broken.invalidChange)
+        assertEquals(impossible, broken.stop)
         assertEquals(ms("2026-10-27T19:30:00Z"), broken.at(newer))
         assertNull(broken.at(older))
 
         // The date set forward to the 28th, then a change that replaced a clock still on the 27th.
         val stale = time.copy(factorySeconds = seconds(LocalDateTime.of(2026, 10, 27, 19, 25)))
         val outOfOrder = YpsoPumpLocalTime.rowTimes(read(listOf(newer, stale, dateForward, older), 0L))
-        assertEquals(dateForward, outOfOrder.invalidChange)
+        assertEquals(dateForward, outOfOrder.stop)
         assertNull(outOfOrder.at(older))
     }
 }
