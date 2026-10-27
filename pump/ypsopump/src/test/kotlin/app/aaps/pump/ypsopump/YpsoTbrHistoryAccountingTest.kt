@@ -467,16 +467,35 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
-    fun `a start whose final fragment reached the pump late, with its ACK lost, binds its row after eviction`() {
+    fun `a start that took effect after its window, with its ACK lost, binds its row after eviction at the pump's time`() {
         // Recorded at dispatch; the pump started it a minute later, beyond the window of a measured clock.
         provisional[1L] = Provisional(pumpStart - 60_000L, 30 * 60_000L, 0)
         val row = event(48_224, 10, 0, 4)
 
         assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
 
-        assertEquals(pumpStart - 60_000L to 4 * 60_000L, saved[48_224L])
+        assertEquals(pumpStart to 4 * 60_000L, saved[48_224L])
         assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
         assertTrue(!overlaps())
+    }
+
+    @Test
+    fun `a TBR set on the pump that status took for an evicted start which never arrived moves its record to the pump's time`() {
+        // Recorded at dispatch ten minutes earlier: the command never arrived, and the next status saw
+        // this identical TBR, set on the pump, as the start's.
+        provisional[1L] = Provisional(pumpStart - 10 * 60_000L, 30 * 60_000L, 50)
+        val row = event(48_224, 9, 50, 30)
+
+        assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
+
+        assertEquals(pumpStart to 30 * 60_000L, saved[48_224L])
+        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
+        assertTrue(!overlaps())
+
+        // Cancelled on the pump twelve minutes in: the same row, rewritten.
+        val ended = event(48_224, 10, 50, 12)
+        assertNull(accounting.apply(ended, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(ended to 0L)))
+        assertEquals(pumpStart to 12 * 60_000L, saved[48_224L])
     }
 
     @Test

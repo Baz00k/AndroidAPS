@@ -170,8 +170,8 @@ class YpsoTbrHistoryAccounting(
         // record the same TBR twice. Hold until status settles it.
         awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
         when (val late = lateStart(event, pumpSerial, zone, pumpClockOffsetMs, scanRows)) {
-            // The record stands for this row, as an evicted start's own row does; it is not imported again.
-            is RecordMatch.Owned -> return checkNotNull(late.owner.record).let { syncRecord(it.temporaryId, pumpId, pumpSerial, it.start, it.duration, percent, minutes * MINUTE) }
+            // The record moves to the pump's time of this row and stands for it; it is not imported again.
+            is RecordMatch.Owned -> return checkNotNull(late.owner.record).let { syncRecord(it.temporaryId, pumpId, pumpSerial, from, it.duration, percent, until - from) }
             is RecordMatch.Blocked -> return late.reason
             null -> Unit
         }
@@ -339,11 +339,15 @@ class YpsoTbrHistoryAccounting(
     }
 
     /**
-     * A row about to be imported as a TBR set on the pump may still be an AAPS start that took effect
-     * later than its window: radio delivery has no proven bound. If an evicted start's record of its
-     * percent ran when the row began, and no row of the read claims that record by its window, the row
-     * binds to it when it is the only such row and record; otherwise it blocks. Importing it would count
-     * the same TBR twice. Null when no such record ran.
+     * A row about to be imported as a TBR set on the pump may be the TBR an evicted start's record stands
+     * for, though outside that start's window. AAPS records a start only once status saw a TBR of its
+     * percent begin after the dispatch: its own, taking effect late, or one set on the pump that status
+     * took for it, as when the command never arrived. The record keeps only the dispatch or acknowledgement
+     * time either way. If such a record of its percent ran when the row began, and no row of the read
+     * claims that record by its window, the row is the TBR status saw when it is the only such row and
+     * record; the record then moves to the row's time, as the pump ran it. Otherwise it blocks: importing
+     * the row beside the record would count the same TBR twice, and keeping the record's time would date
+     * it too early. Null when no such record ran.
      */
     private fun lateStart(event: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>): RecordMatch? {
         if (event.semantics.kind !in TBR_KINDS) return null
@@ -372,8 +376,8 @@ class YpsoTbrHistoryAccounting(
     }
 
     /**
-     * Binds or updates the record AAPS wrote for a start under [temporaryId] as this row's. It keeps its
-     * start and type. The pump's minutes can only shorten it: its [recorded] end is the request or a
+     * Binds or updates the record AAPS wrote for a start under [temporaryId] as this row's, starting at
+     * [start] and keeping its type. The pump's minutes can only shorten it: its [recorded] end is the request or a
      * confirmed AAPS stop, and a status that saw the TBR end cut it so that IOB errs high.
      */
     private fun syncRecord(temporaryId: Long, pumpId: Long, serial: String, start: Long, recorded: Long, percent: Int, pumpDuration: Long): String? {
