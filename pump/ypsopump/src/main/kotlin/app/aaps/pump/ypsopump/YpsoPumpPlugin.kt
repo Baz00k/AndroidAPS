@@ -399,6 +399,8 @@ class YpsoPumpPlugin @Inject constructor(
     /** Elapsed-time clock for blocking pump reads. */
     internal var elapsedRealtime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
     private var transientHistoryFailures = 0
+    /** Text of the history alert on display, or null. */
+    private var historyAlertText: String? = null
     private val historyRecoveryActive = AtomicBoolean(false)
     private val historyRecoveryAttempt = AtomicReference<YpsoBleManager.HistoryReadAttempt?>()
     private val historyRecoveryLock = Any()
@@ -1065,7 +1067,7 @@ class YpsoPumpPlugin @Inject constructor(
                     }
                     else                          -> {
                         val result = ingestHistory(snapshot, provisional)
-                        reportHistoryRecovery(result)
+                        reportHistoryRecovery(result, snapshot)
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: $result")
                         publishTbrWarningIfNeeded()
                     }
@@ -1082,25 +1084,44 @@ class YpsoPumpPlugin @Inject constructor(
 
     /** Only a committed history result clears this warning; status reads and intentional yields do not. */
     @Synchronized
-    internal fun reportHistoryRecovery(result: YpsoHistoryIngestionResult) {
+    internal fun reportHistoryRecovery(result: YpsoHistoryIngestionResult, snapshot: YpsoHistorySnapshot? = null) {
         if (!historyRecoveryEnabled) return
         when (result) {
             is YpsoHistoryIngestionResult.Applied -> {
                 transientHistoryFailures = 0
-                uiInteraction.dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+                historyAlertText = null
+                uiInteraction.setNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE, null, Notification.NORMAL)
             }
             is YpsoHistoryIngestionResult.Blocked -> {
                 transientHistoryFailures = (transientHistoryFailures + 1).coerceAtMost(HISTORY_WARNING_RETRIES)
                 if (result.retry == YpsoHistoryIngestionResult.Retry.NONE || transientHistoryFailures >= HISTORY_WARNING_RETRIES) {
-                    // NotificationStore updates the same ID in place. No looping alarm, expiry or dismiss/add.
-                    uiInteraction.addNotification(
-                        Notification.YPSOPUMP_HISTORY_INCOMPLETE,
-                        rh.gs(R.string.ypsopump_history_incomplete_notification),
-                        Notification.NORMAL,
-                    )
+                    // Without a read, the alert keeps what the last read said about pump boluses.
+                    val text = if (snapshot == null) historyAlertText ?: rh.gs(R.string.ypsopump_history_incomplete_notification)
+                    else listOfNotNull(rh.gs(R.string.ypsopump_history_incomplete_notification), unreconciledBoluses(snapshot)).joinToString("\n")
+                    historyAlertText = text
+                    // One ordered route replaces the text in place; no looping alarm or expiry.
+                    uiInteraction.setNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE, text, Notification.NORMAL)
                 }
             }
         }
+    }
+
+    /**
+     * Bolus rows (immediate or square) of [snapshot] that history has not applied yet, including a
+     * rewrite of the cursor row, whose pump ID no record carries: IOB may not include them. Their pump
+     * wall time is shown as is, since placing it may be what failed. Null when there are none.
+     */
+    private fun unreconciledBoluses(snapshot: YpsoHistorySnapshot): String? {
+        val cursor = historyIngestion.currentCursor() ?: return null
+        val read = app.aaps.pump.ypsopump.history.YpsoHistoryReconciler.reconcile(cursor, snapshot) as? app.aaps.pump.ypsopump.history.YpsoHistoryReconciliation.Stable ?: return null
+        val serial = cursor.identity.pumpSerial
+        val missing = (read.stateUpdates + read.newEventsOldestFirst).filter { (it.entry.eventType == 2 || it.entry.eventType == 3) && it.entry.value1 > 0 }
+            .filter { bolusRecords.bolus(it.identity.aapsPumpId, serial) == null && pumpSync.getExtendedBolusWithPumpId(it.identity.aapsPumpId, PumpType.YPSOPUMP, serial) == null }
+        val latest = missing.lastOrNull()?.entry ?: return null
+        val at = java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.SHORT)
+            .format(app.aaps.pump.ypsopump.history.YpsoPumpLocalTime.localDateTime(latest.factorySeconds))
+        return if (missing.size == 1) rh.gs(R.string.ypsopump_history_bolus_not_reconciled, latest.value1 / 100.0, at)
+        else rh.gs(R.string.ypsopump_history_boluses_not_reconciled, missing.size, latest.value1 / 100.0, at)
     }
 
     private fun scheduleLowerBoundHistoryRecovery(reason: String) {
@@ -1389,7 +1410,8 @@ class YpsoPumpPlugin @Inject constructor(
     private fun stopHistoryNotifications() {
         historyRecoveryEnabled = false
         transientHistoryFailures = 0
-        uiInteraction.dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        historyAlertText = null
+        uiInteraction.setNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE, null, Notification.NORMAL)
     }
 
     /**

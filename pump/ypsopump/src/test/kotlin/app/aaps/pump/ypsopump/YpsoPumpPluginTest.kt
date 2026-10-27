@@ -493,7 +493,7 @@ class YpsoPumpPluginTest {
         clearInvocations(ui)
         plugin.getPumpStatus("manual change")
 
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         verify(manager, never()).readProfile(any())
         verify(manager, never()).readProfileConfiguration(any(), any(), any())
         verify(manager, never()).readStableHistory(any(), any(), any())
@@ -511,20 +511,20 @@ class YpsoPumpPluginTest {
         plugin.javaClass.getDeclaredMethod("scheduleHistoryRecovery", String::class.java)
             .apply { isAccessible = true }.invoke(plugin, "test")
 
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
     }
 
     @Test
     fun `history warning does not start an alarm and clears only on applied history`() {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database write rejected")) }
-        verify(ui, times(2)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui, times(2)).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         // A transient failure keeps an existing warning.
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT))
-        verify(ui, times(3)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui, times(3)).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
-        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         verifyNoMoreInteractions(ui)
     }
 
@@ -537,17 +537,17 @@ class YpsoPumpPluginTest {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT)) }
         verifyNoInteractions(ui)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT))
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
     }
 
     @Test
     fun `repeated empty reads publish warning through actual recovery path`() {
         prepareHistoryRecovery(null)
         repeat(2) { runHistoryRecovery() }
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
         runHistoryRecovery()
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
     }
 
     @Test
@@ -555,8 +555,8 @@ class YpsoPumpPluginTest {
         prepareHistoryRecovery(null)
         whenever(commandQueue.size()).thenReturn(1)
         repeat(4) { runHistoryRecovery() }
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
     }
 
     @Test
@@ -567,8 +567,8 @@ class YpsoPumpPluginTest {
             YpsoBleManager.HistoryReadAttempt().apply { requestYield() }
         }
         repeat(4) { runHistoryRecovery() }
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
-        verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
     }
 
     @Test
@@ -579,7 +579,7 @@ class YpsoPumpPluginTest {
 
         runHistoryRecovery()
 
-        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         assertTrue(File(historyDirectory, "ypsopump-history-state.json").isFile)
     }
 
@@ -601,24 +601,87 @@ class YpsoPumpPluginTest {
 
         verify(sync, never()).replayConfirmedBolusWithPumpIdDetailed(any(), any(), any(), any(), any(), any())
         verify(plugin.persistenceLayer).getBolusByPumpId(101L, PumpType.YPSOPUMP, PUMP_SERIAL)
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
         val saved = app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore(File(historyDirectory, "ypsopump-history-state.json")).load()
         assertEquals(101L, saved.cursor?.identity?.sequence)
         assertNull(saved.pendingBolus)
+    }
+
+    /**
+     * Anchors history at [cursorRow] (sequence 100), then reads [rows], newest first, below a clock change
+     * row history cannot pass, and returns the alert text. AAPS has a bolus record for each pump ID in [recorded].
+     */
+    private fun blockedRecoveryText(
+        recorded: Set<Long>, vararg rows: app.aaps.pump.ypsopump.history.YpsoHistoryEntry,
+        cursorRow: app.aaps.pump.ypsopump.history.YpsoHistoryEntry = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 100L, 0),
+    ): String {
+        prepareHistoryIdentity()
+        plugin.persistenceLayer = mock()
+        whenever(plugin.persistenceLayer.getBolusByPumpId(any(), any(), any())).thenAnswer {
+            if (it.getArgument<Long>(0) in recorded) mock<app.aaps.core.data.model.BS>() else null
+        }
+        whenever(plugin.persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(any(), any()))
+            .thenReturn(io.reactivex.rxjava3.core.Single.just(emptyList()))
+        whenever(rh.gs(R.string.ypsopump_history_incomplete_notification)).thenReturn("incomplete")
+        whenever(rh.gs(eq(R.string.ypsopump_history_bolus_not_reconciled), anyVararg())).thenAnswer { "not reconciled: " + it.arguments.drop(1).joinToString(" | ") }
+        prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, cursorRow, cursorRow, listOf(cursorRow), true, pumpClockOffsetMs = 0L))
+        runHistoryRecovery()
+        val impossible = cursorRow.copy(eventType = 13, value1 = 25, value2 = 0, sequence = 100L + rows.count { it.sequence != 100L } + 1)
+        val scan = (listOf(impossible) + rows + listOf(cursorRow).filter { row -> rows.none { it.sequence == row.sequence } })
+            .mapIndexed { index, row -> row.copy(index = index) }
+        prepareHistoryRecovery(YpsoHistorySnapshot(scan.size, scan.size, 21, 21, scan.first(), scan.first(), scan, true, pumpClockOffsetMs = 0L))
+        // An alert without bolus details is already showing.
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("earlier failure"))
+        clearInvocations(ui)
+
+        runHistoryRecovery()
+
+        val text = argumentCaptor<String>()
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), text.capture(), any())
+        // Replaced in place on one ordered route: a separate dismissal could remove the new text.
+        verify(ui, never()).dismissNotification(any())
+        return text.lastValue
+    }
+
+    private fun pumpTime(factorySeconds: Long) = java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.SHORT)
+        .format(java.time.LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(factorySeconds))
+
+    @Test
+    fun `blocked history names a bolus beyond the stop that has no record, at its pump time`() {
+        val dose = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_600L, 2, 200, 0, 0, 101L, 0)
+
+        assertEquals("incomplete\nnot reconciled: 2.0 | ${pumpTime(800_000_600L)}", blockedRecoveryText(emptySet(), dose))
+    }
+
+    @Test
+    fun `blocked history names the completed bolus of a cursor a running bolus held`() {
+        val running = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 19, 300, 0, 0, 100L, 0)
+
+        val text = blockedRecoveryText(emptySet(), running.copy(eventType = 2, value1 = 200), cursorRow = running)
+
+        assertEquals("incomplete\nnot reconciled: 2.0 | ${pumpTime(800_000_000L)}", text)
+    }
+
+    @Test
+    fun `blocked history with only recorded boluses and TBRs beyond the stop keeps the alert text`() {
+        val recordedDose = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_600L, 2, 200, 0, 0, 102L, 0)
+        val tbr = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_300L, 10, 50, 10, 0, 101L, 0)
+
+        assertEquals("incomplete", blockedRecoveryText(setOf(102L), recordedDose, tbr))
     }
 
     @Test
     fun `early ingestion identity failure also publishes the history warning`() {
         prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true))
         runHistoryRecovery()
-        verify(ui).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
     }
 
     @Test
     fun `deactivating the driver clears its warning and suppresses late recovery results`() {
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database"))
         plugin.onStop()
-        verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
         clearInvocations(ui)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("late database error"))
         verifyNoInteractions(ui)
@@ -1262,7 +1325,7 @@ class YpsoPumpPluginTest {
             worker.join(1_000L)
         }
         assertFalse(worker.isAlive)
-        verify(ui, never()).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
     }
 
     @Test

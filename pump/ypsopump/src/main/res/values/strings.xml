@@ -177,6 +177,8 @@
     <string name="ypsopump_cause_rekey">The saved pump key is wrong or expired. Enter the current key.</string>
     <string name="ypsopump_cause_identity_mismatch">A different pump answered. Check the serial number.</string>
     <string name="ypsopump_rekey_new_key_required">Enter the pump’s new key. The old one won’t work.</string>
+    <string name="ypsopump_history_bolus_not_reconciled">Bolus %1$.2f U at %2$s (pump time) is not reconciled yet; IOB may not include it.</string>
+    <string name="ypsopump_history_boluses_not_reconciled">%1$d boluses are not reconciled yet, the latest %2$.2f U at %3$s (pump time); IOB may not include them.</string>
     <string name="ypsopump_history_incomplete_notification">YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.</string>
     <string name="ypsopump_key_expiry_source_short">Key expires</string>
     <string name="ypsopump_key_expiry_estimate_short">Estimated key expiry</string>
