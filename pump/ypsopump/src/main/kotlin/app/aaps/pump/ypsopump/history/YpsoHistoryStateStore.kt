@@ -84,9 +84,8 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
         .put("type", value.type.name)
 
     private fun decode(json: JSONObject): YpsoHistoryState {
-        // Versions 3 and 4 came from test builds that also stored pump clock readings, which are no longer kept.
-        require(json.getInt("version") in 1..4)
-        require(json.keys().asSequence().toSet() - setOf("marks", "clockChanges", "clock", "notice") == setOf("version", "cursor", "pendingBolus"))
+        require(json.getInt("version") in 1..2)
+        require(json.keys().asSequence().toSet() == setOf("version", "cursor", "pendingBolus"))
         return YpsoHistoryState(
             cursor = if (json.isNull("cursor")) null else decodeCursor(json.getJSONObject("cursor")),
             pendingBolus = if (json.isNull("pendingBolus")) null else decodePending(json.getJSONObject("pendingBolus")),
