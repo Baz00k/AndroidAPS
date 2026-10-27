@@ -247,6 +247,20 @@ class YpsoHistoryClockSegmentTest {
     }
 
     @Test
+    fun `after a pump restart a history row that cannot be placed never keeps doses refused`() {
+        val anchor = row(100, LocalDateTime.of(2026, 7, 1, 12, 0))
+        val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))
+        // The pump restarted (reboot 22) and its clock cannot be read; a dose follows the cursor row.
+        val restarted = read(listOf(anchor, row(101, LocalDateTime.of(2026, 7, 1, 12, 20))), null).copy(pumpRebootBefore = 22, pumpRebootAfter = 22)
+
+        assertTrue(pump.ingestion.ingest(serial, 22, restarted) is YpsoHistoryIngestionResult.Blocked)
+
+        assertNull(pump.ingestion.bolusReadiness(serial, 22))
+        assertEquals(100L, pump.cursor())
+        assertTrue(pump.boluses.isEmpty())
+    }
+
+    @Test
     fun `an upgraded cursor places its backlog across a set exactly`() {
         val anchor = row(100, LocalDateTime.of(2026, 7, 5, 3, 0))
         val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))

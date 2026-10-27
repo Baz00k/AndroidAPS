@@ -109,6 +109,13 @@ class YpsoHistoryIngestion(
             }
             is YpsoHistoryReconciliation.Stable -> {
                 val events = reconciliation.stateUpdates + reconciliation.newEventsOldestFirst
+                // The cursor row found unchanged after a pump reboot proves its history continues: the new
+                // epoch is recorded now, so a history problem below never keeps doses refused as after a
+                // restart. A sequence reset (a new generation) is not taken as proven until it is applied.
+                val previous = reconciliation.previousCursor
+                if (previous.pumpReboot != reboot && reconciliation.newEventsOldestFirst.all { it.identity.sequenceGeneration == previous.identity.sequenceGeneration }) {
+                    store.commit(state.copy(cursor = previous.copy(pumpReboot = reboot)))
+                }
                 // Every row is placed exactly, or none is: a failed clock read is retried by the next scan, and
                 // the cursor never passes an invalid clock change.
                 val times = YpsoPumpLocalTime.rowTimes(snapshot)
