@@ -16,8 +16,8 @@ data class YpsoHistoryFingerprint internal constructor(val high: Long, val low: 
  * Strictly decoded 17-byte YpsoPump history value.
  *
  * The first field is deliberately named [factorySeconds], not timestamp. Paired target observations
- * establish pump-local wall-clock seconds since 2000-01-01; conversion to an instant still requires
- * an explicit time-zone resolution and is intentionally outside this wire decoder.
+ * establish pump-local wall-clock seconds since 2000-01-01; placing them on the phone clock
+ * ([YpsoPumpLocalTime.rowTimes]) is outside this wire decoder.
  */
 data class YpsoHistoryEntry(
     val factorySeconds: Long,

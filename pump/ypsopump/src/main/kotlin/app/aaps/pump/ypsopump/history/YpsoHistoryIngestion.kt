@@ -7,8 +7,8 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
 
 sealed interface YpsoHistoryIngestionResult {
     data class Applied(val cursor: YpsoHistoryCursor?) : YpsoHistoryIngestionResult
-    /** BOUNDED retries are owned by ingestion; NONE means the failure needs immediate attention. */
-    enum class Retry { NONE, TRANSIENT, BOUNDED }
+    /** NONE means the failure needs immediate attention; TRANSIENT ones warn only when they repeat. */
+    enum class Retry { NONE, TRANSIENT }
     data class Blocked(val reason: String, val retry: Retry = Retry.NONE) : YpsoHistoryIngestionResult
 }
 

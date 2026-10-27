@@ -1090,9 +1090,6 @@ class YpsoPumpPlugin @Inject constructor(
                 uiInteraction.dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
             }
             is YpsoHistoryIngestionResult.Blocked -> {
-                // The ingestion layer itself bounds clock retries; the next pass accounts or reports
-                // a real failure. Do not warn during that grace period or clear an existing warning.
-                if (result.retry == YpsoHistoryIngestionResult.Retry.BOUNDED) return
                 transientHistoryFailures = (transientHistoryFailures + 1).coerceAtMost(HISTORY_WARNING_RETRIES)
                 if (result.retry == YpsoHistoryIngestionResult.Retry.NONE || transientHistoryFailures >= HISTORY_WARNING_RETRIES) {
                     // NotificationStore updates the same ID in place. No looping alarm, expiry or dismiss/add.

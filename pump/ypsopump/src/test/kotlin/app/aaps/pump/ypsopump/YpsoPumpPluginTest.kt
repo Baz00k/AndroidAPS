@@ -519,8 +519,9 @@ class YpsoPumpPluginTest {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database write rejected")) }
         verify(ui, times(2)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
         verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
-        // A temporary clock wait must not clear an existing warning.
-        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
+        // A transient failure keeps an existing warning.
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT))
+        verify(ui, times(3)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
         verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
         verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
@@ -528,11 +529,7 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `bounded clock retries do not warn and successful reconciliation resets transient failures`() {
-        repeat(3) {
-            plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
-        }
-        verifyNoInteractions(ui)
+    fun `successful reconciliation resets transient failures`() {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT)) }
         verifyNoInteractions(ui)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))

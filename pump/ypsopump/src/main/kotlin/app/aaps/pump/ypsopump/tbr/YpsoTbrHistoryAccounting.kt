@@ -149,7 +149,7 @@ class YpsoTbrHistoryAccounting(
         records.filter { it.temporaryId !in journalled }
     }
 
-    /** Until [keepStandIns] succeeds once; every start left unmatched since binds its record at once. */
+    /** Until [keepStandIns] succeeds once over the unmatched starts earlier builds left. */
     @Volatile private var standInsPending = true
 
     /**
