@@ -480,6 +480,19 @@ class YpsoTbrHistoryAccountingTest {
     }
 
     @Test
+    fun `a row bound to a start that took effect late is not imported again over the end AAPS recorded`() {
+        // AAPS stopped it 3.5 minutes after it was recorded; the pump counts four minutes.
+        provisional[1L] = Provisional(pumpStart - 60_000L, 210_000L, 0)
+        val row = event(48_224, 10, 0, 4)
+
+        assertNull(accounting.apply(row, serial, zone, pumpClockOffsetMs = 0L, scanRows = listOf(row to 0L)))
+
+        assertEquals(210_000L, saved[48_224L]!!.second)
+        assertEquals(mapOf(48_224L to 1L), boundTemporaryIds)
+        verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
+    }
+
+    @Test
     fun `two rows that could each be a start that took effect late block`() {
         provisional[1L] = Provisional(pumpStart - 60_000L, 30 * 60_000L, 0)
         val first = event(48_224, 10, 0, 4)

@@ -169,7 +169,12 @@ class YpsoTbrHistoryAccounting(
         // A start whose outcome status has not proven yet may be this very row: importing it now would
         // record the same TBR twice. Hold until status settles it.
         awaitingStatus(pumpSerial, percent, pumpId)?.let { return awaitingStatusReason(pumpId, it) }
-        lateStart(event, pumpSerial, zone, pumpClockOffsetMs, scanRows)?.let { return it }
+        when (val late = lateStart(event, pumpSerial, zone, pumpClockOffsetMs, scanRows)) {
+            // The record stands for this row, as an evicted start's own row does; it is not imported again.
+            is RecordMatch.Owned -> return checkNotNull(late.owner.record).let { syncRecord(it.temporaryId, pumpId, pumpSerial, it.start, it.duration, percent, minutes * MINUTE) }
+            is RecordMatch.Blocked -> return late.reason
+            null -> Unit
+        }
         val duration = (until - from).coerceAtLeast(1L)
         return sync(pumpId, pumpSerial, from, duration, keepStart = true) { at ->
             pumpSync.syncTemporaryBasalWithPumpId(
@@ -338,9 +343,9 @@ class YpsoTbrHistoryAccounting(
      * later than its window: radio delivery has no proven bound. If an evicted start's record of its
      * percent ran when the row began, and no row of the read claims that record by its window, the row
      * binds to it when it is the only such row and record; otherwise it blocks. Importing it would count
-     * the same TBR twice.
+     * the same TBR twice. Null when no such record ran.
      */
-    private fun lateStart(event: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>): String? {
+    private fun lateStart(event: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?, scanRows: List<Pair<YpsoHistoryEvent, Long?>>): RecordMatch? {
         if (event.semantics.kind !in TBR_KINDS) return null
         val read = ReadOwners(event, serial, zone, offset, scanRows)
         if (read.records.none { read.lateFor(read.current, it) }) return null
@@ -352,9 +357,9 @@ class YpsoTbrHistoryAccounting(
         val record = late.singleOrNull()
         val unclaimed = rows.filter { it !== read.current && read.claimants(it).isEmpty() }
         if (record == null || unclaimed.any { read.lateFor(it, record) }) {
-            return "TBR row $pumpId may be an AAPS start that took effect late; ${late.size} records and other rows fit"
+            return RecordMatch.Blocked("TBR row $pumpId may be an AAPS start that took effect late; ${late.size} records and other rows fit")
         }
-        return syncRecord(record.temporaryId, pumpId, serial, record.start, record.duration, event.entry.value1, event.entry.value2 * MINUTE)
+        return RecordMatch.Owned(Claimant(null, record))
     }
 
     /**
