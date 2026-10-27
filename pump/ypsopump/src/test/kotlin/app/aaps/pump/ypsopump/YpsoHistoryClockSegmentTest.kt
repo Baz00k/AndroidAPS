@@ -232,6 +232,21 @@ class YpsoHistoryClockSegmentTest {
     }
 
     @Test
+    fun `history never moves past an invalid clock change, even with no dose to place and no clock reading`() {
+        for (pumpHours in listOf(2.0, null)) {
+            val pump = Pump()
+            val anchor = row(100, LocalDateTime.of(2026, 7, 1, 12, 0))
+            pump.ingest(read(listOf(anchor), 2.0))
+            val broken = YpsoHistoryEntry(seconds(LocalDateTime.of(2026, 7, 1, 12, 30)), 13, 25, 0, 0, 101, 0)
+
+            val result = pump.ingest(read(listOf(anchor, broken), pumpHours))
+
+            assertEquals(YpsoHistoryIngestionResult.Retry.NONE, (result as YpsoHistoryIngestionResult.Blocked).retry, "$pumpHours")
+            assertEquals(100L, pump.cursor())
+        }
+    }
+
+    @Test
     fun `an upgraded cursor places its backlog across a set exactly`() {
         val anchor = row(100, LocalDateTime.of(2026, 7, 5, 3, 0))
         val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))

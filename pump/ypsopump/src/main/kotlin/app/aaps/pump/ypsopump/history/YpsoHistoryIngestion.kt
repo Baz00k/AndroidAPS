@@ -109,14 +109,16 @@ class YpsoHistoryIngestion(
             }
             is YpsoHistoryReconciliation.Stable -> {
                 val events = reconciliation.stateUpdates + reconciliation.newEventsOldestFirst
-                // Every row is placed exactly, or none is: a failed clock read is retried by the next scan.
+                // Every row is placed exactly, or none is: a failed clock read is retried by the next scan, and
+                // the cursor never passes an invalid clock change.
                 val times = YpsoPumpLocalTime.rowTimes(snapshot)
-                events.firstOrNull { it.semantics.kind in TIMED && times.at(it.entry) == null }?.let { row ->
-                    val change = times.invalidChange ?: return YpsoHistoryIngestionResult.Blocked(
-                        "history row ${row.identity.aapsPumpId} awaits a pump clock reading", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT,
-                    )
-                    return YpsoHistoryIngestionResult.Blocked("pump clock change row ${change.sequence} has an impossible setting")
+                val unplaced = events.firstOrNull { it.semantics.kind in TIMED && times.at(it.entry) == null }
+                times.invalidChange?.takeIf { change -> unplaced != null || events.any { it.entry.sequence == change.sequence } }?.let {
+                    return YpsoHistoryIngestionResult.Blocked("pump clock change row ${it.sequence} has an impossible setting")
                 }
+                if (unplaced != null) return YpsoHistoryIngestionResult.Blocked(
+                    "history row ${unplaced.identity.aapsPumpId} awaits a pump clock reading", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT,
+                )
                 // Ordered so a pass that stops part-way leaves insulin on board erring high.
                 tbrAccounting?.invalidateLowering(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                 for (event in events) {
