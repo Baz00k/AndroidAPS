@@ -702,7 +702,6 @@ class YpsoBleManager @Inject internal constructor(
         onResult: (YpsoHistorySnapshot?) -> Unit,
     ): HistoryReadAttempt {
         require(maxRows > 0)
-        val startedAt = System.currentTimeMillis()
         val attempt = HistoryReadAttempt()
         val lease = link.acquire(YpsoLinkOperation.HISTORY) ?: run {
             attempt.tryComplete()
@@ -913,7 +912,7 @@ class YpsoBleManager @Inject internal constructor(
             readCount { countAfter ->
                 if (countAfter == 0) {
                     if (countBefore != 0) return@readCount failHistory("event count moved to empty")
-                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true, readStartedAt = startedAt))
+                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
                     return@readCount
                 }
                 select(0) { headAfter ->
@@ -929,7 +928,6 @@ class YpsoBleManager @Inject internal constructor(
                                 rows.toList(),
                                 fullCoverage = rows.size == countBefore,
                                 pumpClockOffsetMs = offset,
-                                readStartedAt = startedAt,
                             ),
                         )
                     }
@@ -1037,7 +1035,7 @@ class YpsoBleManager @Inject internal constructor(
             readCount { count ->
                 countBefore = count
                 if (count == 0) {
-                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true, readStartedAt = startedAt))
+                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
                     return@readCount
                 }
                 select(0) { head ->

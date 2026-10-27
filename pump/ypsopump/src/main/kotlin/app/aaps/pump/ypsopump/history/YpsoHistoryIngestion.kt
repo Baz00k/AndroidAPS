@@ -34,6 +34,9 @@ class YpsoHistoryIngestion(
 ) {
     fun currentCursor(): YpsoHistoryCursor? = store.load().cursor
 
+    /** Records of AAPS starts pump history decides for; take them before reading history for [ingest]. */
+    fun provisionalTbrs(pumpSerial: String, now: Long) = tbrAccounting?.provisional(pumpSerial, now).orEmpty()
+
     /**
      * Scans that reached a row needing a pump clock reading without one. Kept in memory only: a
      * restart simply grants the reading a few more scans.
@@ -85,6 +88,8 @@ class YpsoHistoryIngestion(
         zone: ZoneId,
         reboot: Long,
         snapshot: YpsoHistorySnapshot,
+        /** [provisionalTbrs] taken before [snapshot] was read. */
+        provisional: List<app.aaps.pump.ypsopump.tbr.YpsoTbrRecordLookup.Provisional> = emptyList(),
         bolusType: (YpsoHistoryEvent) -> BS.Type = { BS.Type.NORMAL },
     ): YpsoHistoryIngestionResult {
         if (!retryPending(pumpSerial)) return YpsoHistoryIngestionResult.Blocked("pending PumpSync record was rejected")
@@ -122,8 +127,8 @@ class YpsoHistoryIngestion(
                     lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
                 }
                 val scanRows = events.map { it to offsetFor(it) }
-                // Taken before any row is applied; invalidated only once all of them were.
-                val provisional = snapshot.readStartedAt?.let { tbrAccounting?.provisionalBefore(pumpSerial, it) }.orEmpty()
+                // Ordered so a pass that stops part-way leaves insulin on board erring high.
+                tbrAccounting?.invalidateLowering(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                 for (event in events) {
                     val offset = offsetFor(event)
                     when (event.semantics.kind) {
@@ -217,7 +222,7 @@ class YpsoHistoryIngestion(
                         }
                     }
                 }
-                tbrAccounting?.invalidateProvisional(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
+                tbrAccounting?.invalidateRaising(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                 clocklessScans.set(0)
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)

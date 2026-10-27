@@ -231,8 +231,6 @@ data class YpsoHistorySnapshot(
      * could not be read. Includes whole-second truncation and read latency (about ±2 s).
      */
     val pumpClockOffsetMs: Long? = null,
-    /** Phone time before the scan read anything, or null when unknown. Every row the pump wrote before it is covered. */
-    val readStartedAt: Long? = null,
 )
 
 data class YpsoHistoryAttemptCursor(

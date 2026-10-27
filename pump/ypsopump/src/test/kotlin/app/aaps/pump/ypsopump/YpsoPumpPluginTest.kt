@@ -590,6 +590,8 @@ class YpsoPumpPluginTest {
     fun `excluded old bolus advances real recovery without inserting insulin or warning`() {
         prepareHistoryIdentity()
         plugin.persistenceLayer = mock()
+        whenever(plugin.persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(any(), any()))
+            .thenReturn(io.reactivex.rxjava3.core.Single.just(emptyList()))
         val anchor = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 100L, 0)
         prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
         runHistoryRecovery()
