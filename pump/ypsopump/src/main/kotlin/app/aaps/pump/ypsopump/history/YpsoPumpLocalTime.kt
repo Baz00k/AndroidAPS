@@ -33,15 +33,19 @@ object YpsoPumpLocalTime {
      * Places every row of [snapshot] by its clock reading, chained back through the clock change rows
      * newer than the row: crossing one backwards undoes the step it made. A change row is stamped with
      * the clock it replaced, so it belongs to the segment before it. A change row whose setting is
-     * impossible, or later than the clock the next change row replaced, places nothing at or before it;
-     * it is found also without a live reading.
+     * impossible, or later than the clock the next change row of its sequence generation replaced, places
+     * nothing at or before it; it is found also without a live reading.
      */
     fun rowTimes(snapshot: YpsoHistorySnapshot): RowTimes {
         val offsets = HashMap<Long, Long>()
         val live = snapshot.pumpClockOffsetMs
         var offset = live ?: 0L
         var replacedNext: LocalDateTime? = null
+        var newerSequence = Long.MAX_VALUE
         for (row in snapshot.rowsNewestFirst) {
+            // A sequence reset starts a new generation: its change rows follow no clock of the one before.
+            if (row.sequence > newerSequence) replacedNext = null
+            newerSequence = row.sequence
             YpsoHistoryClassifier.classify(row).takeIf { it.kind == YpsoHistoryKind.DATE_CHANGED || it.kind == YpsoHistoryKind.TIME_CHANGED }?.let {
                 val replaced = localDateTime(row.factorySeconds)
                 if (it.clockSetTo == null || replacedNext?.isBefore(it.clockSetTo) == true) return RowTimes(offsets, row)

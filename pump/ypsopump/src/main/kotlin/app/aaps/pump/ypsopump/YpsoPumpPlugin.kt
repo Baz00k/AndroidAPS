@@ -321,7 +321,7 @@ class YpsoPumpPlugin @Inject constructor(
             bolusRecords,
             java.io.File(bleManager.noBackupDirectory(), "ypsopump-bolus-attempt.json"),
             ::serialNumber,
-            historyCursor = { historyIngestion.currentCursor() },
+            historyCursor = { historyIngestion.commandCursor() },
             historyReadiness = { serial, reboot -> historyIngestion.bolusReadiness(serial, reboot) },
             showWarning = ::showUnresolvedBolusWarning,
             aapsLogger = aapsLogger,

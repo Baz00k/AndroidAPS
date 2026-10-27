@@ -93,6 +93,19 @@ class YpsoPumpLocalTimeTest {
     }
 
     @Test
+    fun `clock changes after a sequence reset are not checked against the clock before it`() {
+        // Before the reset the pump was set to 2026; after it, the clock starts again at 2000 and is set to 2026.
+        val oldSet = setBack
+        val afterReset = YpsoHistoryEntry(seconds(LocalDateTime.of(2000, 1, 1, 0, 1)), 12, 1, 7, 26, 1, 0)
+        val dose = dose(2, LocalDateTime.of(2026, 7, 1, 0, 30))
+
+        val times = YpsoPumpLocalTime.rowTimes(read(listOf(dose, afterReset, oldSet), 2 * 3_600_000L))
+
+        assertNull(times.invalidChange)
+        assertEquals(ms("2026-06-30T22:30:00Z"), times.at(dose))
+    }
+
+    @Test
     fun `without a live reading no row is placed`() {
         val rows = listOf(dose(2, LocalDateTime.of(2026, 10, 27, 19, 30)), dose(1, LocalDateTime.of(2026, 10, 27, 19, 0)))
 

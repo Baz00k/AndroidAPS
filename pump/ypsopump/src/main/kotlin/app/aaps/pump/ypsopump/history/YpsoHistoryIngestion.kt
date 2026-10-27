@@ -37,10 +37,13 @@ class YpsoHistoryIngestion(
     /** See [app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.keepStandIns]. */
     fun keepTbrStandIns(): String? = tbrAccounting?.keepStandIns()
 
+    /** The cursor as doses are sent against it: on the pump reboot a stable read last proved continuous. */
+    fun commandCursor(): YpsoHistoryCursor? = store.load().let { state -> state.cursor?.let { cursor -> state.provenReboot?.let { cursor.copy(pumpReboot = it) } ?: cursor } }
+
     /** Cheap local gate for a new dose. Never performs pump I/O. */
     fun bolusReadiness(pumpSerial: String, reboot: Long): YpsoBolusMessage? {
         if (!retryPending(pumpSerial)) return YpsoBolusMessage.SAVING_PREVIOUS_DOSE
-        val cursor = store.load().cursor ?: return YpsoBolusMessage.SYNC_IN_PROGRESS
+        val cursor = commandCursor() ?: return YpsoBolusMessage.SYNC_IN_PROGRESS
         if (cursor.identity.pumpSerial != pumpSerial || cursor.pumpReboot != reboot) {
             return YpsoBolusMessage.PUMP_RESTARTED
         }
@@ -96,7 +99,7 @@ class YpsoHistoryIngestion(
             ?: YpsoHistoryReconciler.bootstrap(pumpSerial, 0, snapshot)
         when (reconciliation) {
             is YpsoHistoryReconciliation.Bootstrap -> {
-                store.commit(state.copy(cursor = reconciliation.cursor))
+                store.commit(state.copy(cursor = reconciliation.cursor, provenReboot = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
             is YpsoHistoryReconciliation.Moving -> return YpsoHistoryIngestionResult.Blocked("history moved during scan", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
@@ -109,13 +112,10 @@ class YpsoHistoryIngestion(
             }
             is YpsoHistoryReconciliation.Stable -> {
                 val events = reconciliation.stateUpdates + reconciliation.newEventsOldestFirst
-                // The cursor row found unchanged after a pump reboot proves its history continues: the new
-                // epoch is recorded now, so a history problem below never keeps doses refused as after a
-                // restart. A sequence reset (a new generation) is not taken as proven until it is applied.
-                val previous = reconciliation.previousCursor
-                if (previous.pumpReboot != reboot && reconciliation.newEventsOldestFirst.all { it.identity.sequenceGeneration == previous.identity.sequenceGeneration }) {
-                    store.commit(state.copy(cursor = previous.copy(pumpReboot = reboot)))
-                }
+                // A stable read proves the cursor's history continues into this reboot, a sequence reset
+                // included. It is recorded apart from the cursor, which keeps its reboot so the next read
+                // still recognises the reset, so a history problem below never keeps doses refused.
+                if ((state.provenReboot ?: reconciliation.previousCursor.pumpReboot) != reboot) store.commit(state.copy(provenReboot = reboot))
                 // Every row is placed exactly, or none is: a failed clock read is retried by the next scan, and
                 // the cursor never passes an invalid clock change.
                 val times = YpsoPumpLocalTime.rowTimes(snapshot)
@@ -215,7 +215,7 @@ class YpsoHistoryIngestion(
                     }
                 }
                 tbrAccounting?.invalidateRaising(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
-                store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
+                store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null, provenReboot = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
         }
