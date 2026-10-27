@@ -103,6 +103,8 @@ When the clocks go back, one hour happens twice, and the pump history does not s
 
 **YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.** means some doses from the pump may be missing in AAPS. If so, insulin on board in AAPS is wrong. Compare the pump history with the doses in AAPS before you give extra insulin.
 
+If history synchronization stays stuck for a long time, AAPS keeps only its most recent temporary basal commands. When synchronization resumes, AAPS takes the older temporary basals it set from pump history, so they show as set on the pump.
+
 ### Battery level
 
 The pump reports its battery in bars, so AAPS shows the battery level in steps of 20 %.
