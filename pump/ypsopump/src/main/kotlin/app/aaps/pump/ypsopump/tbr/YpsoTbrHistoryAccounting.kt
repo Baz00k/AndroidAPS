@@ -131,6 +131,8 @@ class YpsoTbrHistoryAccounting(
                         (it.baselinePumpId == null || it.baselinePumpId < pumpId)
                 }?.let {
                     if (waitForClock) return "TBR row $pumpId may belong to AAPS start ${it.id}; $CLOCK_WAIT"
+                    // The record stands in for the row, so it must exist before the row is passed over.
+                    if (it.awaitsAccounting) return "TBR row $pumpId may belong to AAPS start ${it.id}, whose record is not saved yet"
                     // Bound first: should the app stop before the journal notes it, the row binds the start.
                     lookup.provisionalStarts(pumpSerial, checkNotNull(it.effectiveAt)).firstOrNull { record -> record.temporaryId == it.temporaryId }
                         ?.let { record -> standIn(record, pumpId, pumpSerial)?.let { reason -> return reason } }
@@ -198,7 +200,8 @@ class YpsoTbrHistoryAccounting(
      * Binds the record of every unmatched start in the journal to the row it stands in for, so it stays
      * once the journal drops the start. A build before this one left such records unbound. Call it before
      * any TBR command can journal a start, which could push one of them out; it does the work once, and
-     * again after a failure. Returns why a record could not be bound.
+     * again after a failure or while an unmatched start's record is not saved yet. Returns why a record
+     * could not be bound.
      */
     fun keepStandIns(): String? {
         if (!standInsPending) return null
@@ -208,7 +211,8 @@ class YpsoTbrHistoryAccounting(
                 .firstOrNull { it.temporaryId == start.temporaryId }
                 ?.let { standIn(it, row, start.pumpSerial) }
         }.firstOrNull()
-        standInsPending = failure != null
+        // A start whose record is not saved yet gets one later, which must be bound too.
+        standInsPending = failure != null || journal.all().any { it.unmatchedRowPumpId != null && it.awaitsAccounting }
         return failure
     }
 

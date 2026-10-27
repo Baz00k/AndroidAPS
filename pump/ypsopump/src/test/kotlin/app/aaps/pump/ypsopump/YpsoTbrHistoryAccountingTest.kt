@@ -897,4 +897,52 @@ class YpsoTbrHistoryAccountingTest {
         assertEquals(pumpStart + 3 * 60_000L to 30 * 60_000L, saved[48_224L])
         assertTrue(48_224L !in invalid)
     }
+
+    /** A start that took effect but whose record AAPS has not saved yet. */
+    private fun unsavedStart(id: String, tempId: Long, at: Long) {
+        journal.prepare(
+            YpsoTbrAttempt(
+                id = id, kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 200, durationMinutes = 30,
+                type = "NORMAL", temporaryId = tempId, baselinePumpId = 48_222L, createdAt = at - 1_000L,
+            ),
+        )
+        journal.dispatched(id, at - 500L)
+        journal.effective(id, at, at)
+    }
+
+    /** The controller saves the record on a later try. */
+    private fun saveRecord(id: String, tempId: Long, at: Long) {
+        provisional[tempId] = Provisional(at, 30 * 60_000L, 200)
+        journal.accounted(id)
+    }
+
+    @Test
+    fun `a row is not passed over for a start whose record is not saved yet`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("late", 1L, at)
+        val row = event(48_224, 10, 200, 30)
+
+        assertNotNull(accounting.apply(row, serial, zone))
+        assertNull(journal.find("late")!!.unmatchedRowPumpId)
+
+        saveRecord("late", 1L, at)
+        assertNull(accounting.apply(row, serial, zone))
+
+        assertEquals(48_224L, journal.find("late")!!.unmatchedRowPumpId)
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `an earlier build's unmatched start whose record is saved later is still bound before history reads`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("old", 1L, at)
+        // An earlier build marked it unmatched before its record was saved.
+        journal.unmatched("old", 48_224L)
+        assertNull(accounting.keepStandIns())
+
+        saveRecord("old", 1L, at)
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
 }
