@@ -79,14 +79,16 @@ class YpsoTbrHistoryAccountingTest {
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
             val tempId = it.getArgument<Long>(4)
             val pumpId = it.getArgument<Long>(6)
-            if (provisional.remove(tempId) == null && boundTemporaryIds[pumpId] != tempId) return@thenAnswer false
+            val unbound = provisional.remove(tempId)
+            if (unbound == null && boundTemporaryIds[pumpId] != tempId) return@thenAnswer false
+            if (unbound?.valid == false) invalid += pumpId
             saved[pumpId] = it.getArgument<Long>(0) to it.getArgument(2)
             boundTemporaryIds[pumpId] = tempId
             true
         }
     }
 
-    private data class Provisional(val start: Long, val duration: Long, val percent: Int)
+    private data class Provisional(val start: Long, val duration: Long, val percent: Int, val valid: Boolean = true)
 
     private val pumpStartSeconds = 843_494_510L
     private val pumpStart = LocalDateTime.of(2000, 1, 1, 0, 0).plus(pumpStartSeconds, ChronoUnit.SECONDS)
@@ -289,6 +291,63 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
 
         assertEquals(pumpStart + 2_000L to 210_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `a row bound to its start's record before the journal recorded it binds that start when applied again`() {
+        startedAttempt()
+        // The app stopped after PumpSync bound the record and before the journal was written.
+        provisional.remove(99L)
+        saved[48_224L] = pumpStart + 2_000L to 15 * 60_000L
+        boundTemporaryIds[48_224L] = 99L
+
+        assertNull(accounting.apply(event(48_224, 9, 120, 15), serial, zone))
+
+        assertEquals(48_224L, store.attempts.single().pumpId)
+    }
+
+    @Test
+    fun `without a measured clock an evicted start's row binds within the drift profile reads allow`() {
+        provisional[1L] = Provisional(pumpStart + 100_000L, 30 * 60_000L, 0)
+
+        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone))
+
+        assertEquals(pumpStart + 100_000L to 4 * 60_000L, saved[48_224L])
+    }
+
+    @Test
+    fun `a running row is not taken for an evicted start that asked for a longer TBR`() {
+        provisional[1L] = Provisional(pumpStart + 2_000L, 60 * 60_000L, 0)
+
+        assertNull(accounting.apply(event(48_224, 9, 0, 30), serial, zone, pumpClockOffsetMs = 0L))
+
+        assertEquals(pumpStart to 30 * 60_000L, saved[48_224L])
+        assertEquals(setOf(1L), provisional.keys)
+    }
+
+    @Test
+    fun `an evicted start's row waits while a start with its percent has no proven outcome`() {
+        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0)
+        val pending = YpsoTbrAttempt(
+            id = "pending", kind = YpsoTbrAttempt.Kind.START, pumpSerial = serial, percent = 0, durationMinutes = 30,
+            type = "NORMAL", temporaryId = 7L, baselinePumpId = 48_222L, createdAt = pumpStart + 600_000L,
+        )
+        journal.prepare(pending)
+        journal.dispatched("pending", pumpStart + 600_500L)
+
+        assertNotNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
+
+        assertTrue(saved.isEmpty())
+    }
+
+    @Test
+    fun `an evicted start whose record the user removed stays removed when its row binds`() {
+        provisional[1L] = Provisional(pumpStart + 2_000L, 30 * 60_000L, 0, valid = false)
+
+        assertNull(accounting.apply(event(48_224, 10, 0, 4), serial, zone, pumpClockOffsetMs = 0L))
+
+        assertEquals(setOf(48_224L), invalid)
+        verify(sync, never()).syncTemporaryBasalWithPumpId(any(), any(), any(), any(), anyOrNull(), any(), any(), any())
     }
 
     @Test
@@ -669,6 +728,21 @@ class YpsoTbrHistoryAccountingTest {
         for (row in listOf(first, second)) assertNotNull(accounting.apply(row, serial, warsaw, scanRows = read))
 
         assertTrue(saved.isEmpty())
+    }
+
+    @Test
+    fun `a row in the repeated hour a record already carries is no rival`() {
+        // The first row was bound to its start's record earlier in this read.
+        saved[55_473L] = afterFallBack + 1_000L to 30 * 60_000L
+        boundTemporaryIds[55_473L] = 1L
+        provisional[2L] = Provisional(afterFallBack + 31_000L, 30 * 60_000L, 200)
+        val first = event(55_473, 10, 200, 0, seconds = repeatedHourSeconds)
+        val second = event(55_480, 10, 200, 15, seconds = repeatedHourSeconds + 30)
+        val read = listOf(first to 0L, second to 0L)
+
+        assertNull(accounting.apply(second, serial, warsaw, pumpClockOffsetMs = 0L, scanRows = read))
+
+        assertEquals(afterFallBack + 31_000L to 15 * 60_000L, saved[55_480L])
     }
 
     @Test

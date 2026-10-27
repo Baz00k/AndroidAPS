@@ -97,7 +97,11 @@ class YpsoTbrHistoryAccounting(
         val skew = skew(pumpClockOffsetMs)
         // A row bound to an AAPS start keeps that start's time, also once the journal has dropped it.
         val carried = if (tbr) starts.minOrNull()?.let { lookup.byPumpId(pumpId, pumpSerial, it) } else null
-        carried?.temporaryId?.let { return syncRecord(it, pumpId, pumpSerial, carried.start, carried.duration, percent, minutes * MINUTE) }
+        carried?.temporaryId?.let { temporaryId ->
+            // Bound before the journal recorded it, as when the app stopped in between.
+            journal.all().firstOrNull { it.awaitsBinding && it.temporaryId == temporaryId }?.let { return syncAttempt(it, pumpId, minutes * MINUTE) }
+            return syncRecord(temporaryId, pumpId, pumpSerial, carried.start, carried.duration, percent, minutes * MINUTE)
+        }
         // Starts the journal evicted while history stalled are known only by their records.
         val evicted = if (tbr && carried == null) evictedStarts(percent, if (running) minutes else null, starts, pumpSerial, skew) else emptyList()
         // A wall time in the repeated hour of a DST fall-back names two instants an hour apart. Such a
@@ -116,7 +120,7 @@ class YpsoTbrHistoryAccounting(
                 return syncAttempt(owner, pumpId, minutes * MINUTE)
             }
             val record = evicted.singleOrNull()
-            if (owners.isEmpty() && record != null && rivals.none { (row, offset) -> couldBeRowOf(record, row, zone, offset) }) {
+            if (owners.isEmpty() && record != null && rivals.none { (row, offset) -> couldBeRowOf(record, row, pumpSerial, zone, offset) }) {
                 return syncRecord(record.temporaryId, pumpId, pumpSerial, record.start, record.duration, percent, minutes * MINUTE)
             }
         }
@@ -206,11 +210,17 @@ class YpsoTbrHistoryAccounting(
      * errs towards a rival.
      */
     private fun couldBeRowOf(attempt: YpsoTbrAttempt, row: YpsoHistoryEvent, zone: ZoneId, offset: Long?): Boolean {
-        val rowPumpId = row.identity.aapsPumpId
+        val starts = rowStarts(row, zone, offset)
         return row.semantics.kind in TBR_KINDS && row.entry.value1 == attempt.percent &&
-            (attempt.baselinePumpId == null || attempt.baselinePumpId < rowPumpId) &&
-            journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
-            rowStarts(row, zone, offset).any { attempt.windowHolds(it, skew(offset)) }
+            (attempt.baselinePumpId == null || attempt.baselinePumpId < row.identity.aapsPumpId) &&
+            starts.any { attempt.windowHolds(it, skew(offset)) } && unowned(row, attempt.pumpSerial, starts)
+    }
+
+    /** No AAPS start or record has taken [row] yet: a journalled start, or a record already carrying it. */
+    private fun unowned(row: YpsoHistoryEvent, serial: String, starts: List<Long>): Boolean {
+        val rowPumpId = row.identity.aapsPumpId
+        return journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
+            starts.minOrNull()?.let { lookup.byPumpId(rowPumpId, serial, it) } == null
     }
 
     /**
@@ -235,11 +245,10 @@ class YpsoTbrHistoryAccounting(
     private fun YpsoTbrRecordLookup.UnboundStart.windowHolds(rowStart: Long, skew: Long) = abs(rowStart - start) <= skew + COMMAND_SPAN
 
     /** As [couldBeRowOf], for a start known only by its [record]. */
-    private fun couldBeRowOf(record: YpsoTbrRecordLookup.UnboundStart, row: YpsoHistoryEvent, zone: ZoneId, offset: Long?): Boolean {
-        val rowPumpId = row.identity.aapsPumpId
+    private fun couldBeRowOf(record: YpsoTbrRecordLookup.UnboundStart, row: YpsoHistoryEvent, serial: String, zone: ZoneId, offset: Long?): Boolean {
+        val starts = rowStarts(row, zone, offset)
         return row.semantics.kind in TBR_KINDS && row.entry.value1.toDouble() == record.percent &&
-            journal.boundTo(rowPumpId) == null && journal.identifiedAs(rowPumpId) == null && journal.unmatchedAs(rowPumpId) == null &&
-            rowStarts(row, zone, offset).any { record.windowHolds(it, skew(offset)) }
+            starts.any { record.windowHolds(it, skew(offset)) } && unowned(row, serial, starts)
     }
 
     /**
