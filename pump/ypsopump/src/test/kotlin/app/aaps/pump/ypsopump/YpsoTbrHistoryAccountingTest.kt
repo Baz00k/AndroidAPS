@@ -47,6 +47,8 @@ class YpsoTbrHistoryAccountingTest {
     private val percents = mutableMapOf<Long, Int>()
     /** Rows PumpSync does not save. */
     private val failing = mutableSetOf<Long>()
+    /** Runs once right after the next record lookup returns, as another thread would. */
+    private var afterLookup: (() -> Unit)? = null
     /** PumpSync binds no record by temporary ID. */
     private var tempIdSyncFails = false
     private var registeredAt = 0L
@@ -67,6 +69,7 @@ class YpsoTbrHistoryAccountingTest {
         override fun provisionalStarts(pumpSerial: String, from: Long) = provisional
             .filter { it.value.valid && it.value.start >= from }
             .map { YpsoTbrRecordLookup.Provisional(it.key, it.value.start, it.value.duration, it.value.percent) }
+            .also { afterLookup?.let { work -> afterLookup = null; work() } }
     }, registeredAt = { registeredAt })
     private var suspendOpen = false
     private val suspends = mutableSetOf<Long>()
@@ -941,6 +944,20 @@ class YpsoTbrHistoryAccountingTest {
         assertNull(accounting.keepStandIns())
 
         saveRecord("old", 1L, at)
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+
+        assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `a record saved while the stand-in repair runs is still bound before history reads`() {
+        val at = pumpStart + 3 * 60_000L
+        unsavedStart("old", 1L, at)
+        journal.unmatched("old", 48_224L)
+        // The controller saves the record right after the repair looked it up and found none.
+        afterLookup = { saveRecord("old", 1L, at) }
+        assertNull(accounting.keepStandIns())
+
         accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
 
         assertEquals(1L, boundTemporaryIds[48_224L])

@@ -205,14 +205,16 @@ class YpsoTbrHistoryAccounting(
      */
     fun keepStandIns(): String? {
         if (!standInsPending) return null
-        val failure = journal.all().mapNotNull { start ->
+        // One snapshot for both: a record saved while this runs may have been missed by its lookup.
+        val starts = journal.all()
+        val failure = starts.mapNotNull { start ->
             val row = start.unmatchedRowPumpId ?: return@mapNotNull null
             lookup.provisionalStarts(start.pumpSerial, checkNotNull(start.effectiveAt))
                 .firstOrNull { it.temporaryId == start.temporaryId }
                 ?.let { standIn(it, row, start.pumpSerial) }
         }.firstOrNull()
         // A start whose record is not saved yet gets one later, which must be bound too.
-        standInsPending = failure != null || journal.all().any { it.unmatchedRowPumpId != null && it.awaitsAccounting }
+        standInsPending = failure != null || starts.any { it.unmatchedRowPumpId != null && it.awaitsAccounting }
         return failure
     }
 
