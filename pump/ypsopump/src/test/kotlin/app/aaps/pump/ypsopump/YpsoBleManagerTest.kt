@@ -601,14 +601,19 @@ class YpsoBleManagerTest {
         pump.onDescriptorWrite = { pump.ackDescriptor() }
         var elapsed = 0L
         val outcomes = mutableListOf<YpsoWriteOutcome>()
-        manager.writeTbr("tbr", 0, 30, {}, mayDispatch = { elapsed <= 30_000L }) { outcome, _ -> outcomes += outcome }
-        assertEquals(1, pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
-
+        fun frames() = pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID }
         // The final fragment stalls inside the link, past the window, after its caller's own check would have passed.
-        pump.onProperties = { if (it == YpsoWritePolicy.TBR_START_STOP_UUID) elapsed = 60_000L }
+        pump.onProperties = { if (it == YpsoWritePolicy.TBR_START_STOP_UUID && frames() == 3) elapsed = 60_000L }
+        manager.writeTbr("tbr", 0, 30, {}, mayDispatch = { elapsed <= 30_000L }) { outcome, _ -> outcomes += outcome }
+        assertEquals(1, frames())
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+        assertEquals(3, frames())
+        assertTrue(outcomes.isEmpty(), "$outcomes")
+
         pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
 
-        assertEquals(1, pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
+        assertEquals(3, frames())
         assertTrue(outcomes.single() is YpsoWriteOutcome.PossiblyApplied, "$outcomes")
     }
 
