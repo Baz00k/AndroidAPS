@@ -91,7 +91,7 @@ YpsoPump notifications start with **YpsoPump:** and tell you what to do, for exa
 
 ### Pump clock and time zones
 
-AAPS reads the pump clock each time it reads pump history, and the pump history records every change of its date or time. Doses keep their right time even when the pump clock differs from the phone's, and across changes made while the phone was away. The pump never changes its clock for daylight saving time and does not follow the phone's time zone: set it by hand after a daylight saving time change or when you travel, then tap **Read pump basal profiles**. If a notification says that temporary basals set by AAPS could not be matched to pump history, check the pump clock.
+AAPS reads the pump clock each time it reads pump history, and the pump history records every change of its date or time. Doses keep their right time even when the pump clock differs from the phone's, and across changes made while the phone was away. The pump never changes its clock for daylight saving time and does not follow the phone's time zone: set it by hand after a daylight saving time change or when you travel, then tap **Read pump basal profiles**.
 
 Before a daylight saving time change, AAPS shows **Daylight Saving time change in 24h or less**. After the change, AAPS pauses the closed loop for 3 hours.
 
