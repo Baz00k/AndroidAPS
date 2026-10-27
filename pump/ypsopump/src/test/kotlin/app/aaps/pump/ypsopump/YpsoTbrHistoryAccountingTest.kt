@@ -47,6 +47,8 @@ class YpsoTbrHistoryAccountingTest {
     private val percents = mutableMapOf<Long, Int>()
     /** Rows PumpSync does not save. */
     private val failing = mutableSetOf<Long>()
+    /** PumpSync binds no record by temporary ID. */
+    private var tempIdSyncFails = false
     private var registeredAt = 0L
     private val statusSuspends = mutableListOf<YpsoTbrRecordLookup.StatusSuspend>()
     private val accounting = YpsoTbrHistoryAccounting(sync, journal, object : YpsoTbrRecordLookup {
@@ -105,6 +107,7 @@ class YpsoTbrHistoryAccountingTest {
         whenever(sync.syncTemporaryBasalWithTempId(any(), any(), any(), any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenAnswer {
             val tempId = it.getArgument<Long>(4)
             val pumpId = it.getArgument<Long>(6)
+            if (tempIdSyncFails) return@thenAnswer false
             val unbound = provisional.remove(tempId)
             if (unbound == null && boundTemporaryIds[pumpId] != tempId) return@thenAnswer false
             if (unbound?.valid == false) invalid += pumpId
@@ -867,5 +870,31 @@ class YpsoTbrHistoryAccountingTest {
         assertEquals(pumpStart + 3 * 60_000L to 30 * 60_000L, saved[48_224L])
         assertTrue(48_224L !in invalid)
         assertEquals(1L, boundTemporaryIds[48_224L])
+    }
+
+    @Test
+    fun `an unmatched start an earlier build left unbound keeps its stand-in once a new start pushes it out`() {
+        // An earlier build marked it unmatched without binding its record to the row.
+        startedAttempt("old", percent = 200, minutes = 30, at = pumpStart + 3 * 60_000L, tempId = 1L)
+        journal.unmatched("old", 48_224L)
+        repeat(63) {
+            startedAttempt("other$it", percent = 150, minutes = 30, at = pumpStart + (it + 1) * 3_600_000L, tempId = 1_000L + it)
+            journal.unmatched("other$it", 50_000L + it)
+        }
+        // The repair at start-up fails and says so; the next history pass retries it before reading.
+        tempIdSyncFails = true
+        assertNotNull(accounting.keepStandIns())
+        assertTrue(boundTemporaryIds.isEmpty())
+        tempIdSyncFails = false
+        accounting.provisional(serial, pumpStart + 3 * 60 * 60_000L)
+        assertEquals(1L, boundTemporaryIds[48_224L])
+
+        // A new start pushes the oldest unmatched one out of the journal.
+        startedAttempt("next", percent = 150, minutes = 30, at = pumpStart + 100 * 3_600_000L, tempId = 2_000L)
+        assertNull(journal.find("old"))
+        assertNull(pass())
+
+        assertEquals(pumpStart + 3 * 60_000L to 30 * 60_000L, saved[48_224L])
+        assertTrue(48_224L !in invalid)
     }
 }

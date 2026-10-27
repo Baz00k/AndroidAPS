@@ -170,10 +170,12 @@ class YpsoPumpPlugin @Inject constructor(
                 override fun provisionalStarts(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
                     .filter { it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.ids.pumpId == null && it.timestamp >= from }
                     .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.Provisional(it, record.timestamp, record.duration, Math.round(record.rate).toInt()) } }
-            }, registeredAt = ::pumpRegisteredAt),
+            }, registeredAt = ::pumpRegisteredAt, log = { aapsLogger.error(LTag.PUMP, "YpsoPump TBR stand-in: $it") }),
         )
     }
     private val tbrControllerLazy = lazy {
+        // Before the controller journals any start, which could push out an unmatched one still unbound.
+        historyIngestion.keepTbrStandIns()?.let { aapsLogger.error(LTag.PUMP, "YpsoPump TBR stand-in: $it") }
         YpsoTbrController(
             YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
             tbrJournal,

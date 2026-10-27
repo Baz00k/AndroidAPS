@@ -37,6 +37,9 @@ class YpsoHistoryIngestion(
     /** Records of AAPS starts pump history decides for; take them before reading history for [ingest]. */
     fun provisionalTbrs(pumpSerial: String, now: Long) = tbrAccounting?.provisional(pumpSerial, now).orEmpty()
 
+    /** See [app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.keepStandIns]. */
+    fun keepTbrStandIns(): String? = tbrAccounting?.keepStandIns()
+
     /**
      * Scans that reached a row needing a pump clock reading without one. Kept in memory only: a
      * restart simply grants the reading a few more scans.

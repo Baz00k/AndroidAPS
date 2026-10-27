@@ -61,6 +61,7 @@ class YpsoTbrHistoryAccounting(
     private val lookup: YpsoTbrRecordLookup,
     /** AAPS accepts pump records only from this pump's registration on; older rows are not its to import. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
+    private val log: (String) -> Unit = {},
 ) {
     /**
      * Applies one reconciled history event; returns a blocking reason or null when applied.
@@ -180,19 +181,35 @@ class YpsoTbrHistoryAccounting(
      * running, so the row was in pump history by then, and the read covers it or an earlier read did.
      * Records from before this pump's registration are left alone, as their rows are not imported, and
      * so are records older than [LOOKBACK] at [now], which no longer count towards insulin on board.
-     * The record of an unmatched start already stands in for its row; it is bound to that row first, so
-     * it stays once the journal drops the start.
+     * A failed [keepStandIns] is retried first.
      */
     fun provisional(pumpSerial: String, now: Long): List<YpsoTbrRecordLookup.Provisional> {
+        keepStandIns()?.let(log)
         val from = maxOf(registeredAt(pumpSerial), now - LOOKBACK)
         val records = lookup.provisionalStarts(pumpSerial, from).filter { it.start >= from }
-        val starts = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }
-        starts.forEach { start ->
-            val row = start.unmatchedRowPumpId ?: return@forEach
-            records.firstOrNull { it.temporaryId == start.temporaryId }?.let { standIn(it, row, pumpSerial) }
-        }
-        val journalled = starts.map { it.temporaryId }.toSet()
+        val journalled = journal.all().filter { it.kind == YpsoTbrAttempt.Kind.START }.map { it.temporaryId }.toSet()
         return records.filter { it.temporaryId !in journalled }
+    }
+
+    /** Until [keepStandIns] succeeds once; every start left unmatched since binds its record at once. */
+    @Volatile private var standInsPending = true
+
+    /**
+     * Binds the record of every unmatched start in the journal to the row it stands in for, so it stays
+     * once the journal drops the start. A build before this one left such records unbound. Call it before
+     * any TBR command can journal a start, which could push one of them out; it does the work once, and
+     * again after a failure. Returns why a record could not be bound.
+     */
+    fun keepStandIns(): String? {
+        if (!standInsPending) return null
+        val failure = journal.all().mapNotNull { start ->
+            val row = start.unmatchedRowPumpId ?: return@mapNotNull null
+            lookup.provisionalStarts(start.pumpSerial, checkNotNull(start.effectiveAt))
+                .firstOrNull { it.temporaryId == start.temporaryId }
+                ?.let { standIn(it, row, start.pumpSerial) }
+        }.firstOrNull()
+        standInsPending = failure != null
+        return failure
     }
 
     /**
