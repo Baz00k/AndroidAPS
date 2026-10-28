@@ -575,6 +575,30 @@ class YpsoBolusAttemptJournal(private val store: YpsoBolusAttemptStore) {
             )
         }
 
+    /**
+     * History row [historyPumpId] carries the fast sequence status proved for an attempt that is no
+     * longer current, so its amount is what that dose delivered. A restart can leave such a dose
+     * unresolved, and only the current attempt is reconciled against its terminal row. The current
+     * attempt is left to that reconciliation, which also weighs live status; returns null for it.
+     */
+    @Synchronized
+    fun confirmSupersededTerminal(requestId: String, deliveredCentiUnits: Int, timestamp: Long, historyPumpId: Long): YpsoBolusAttempt? {
+        if (store.load()?.requestId == requestId) return null
+        return updateRetained(requestId) {
+            require(it.shape == YpsoBolusShape.IMMEDIATE && it.pumpFastSequence != null && it.accountingPumpId == historyPumpId)
+            if (!it.awaitsReconciliation) return@updateRetained it
+            require(deliveredCentiUnits in 0..it.requestedCentiUnits)
+            it.copy(
+                outcome = if (deliveredCentiUnits == it.requestedCentiUnits) YpsoBolusOutcome.COMPLETED else YpsoBolusOutcome.CANCELLED_PARTIAL,
+                pumpHistoryId = historyPumpId,
+                confirmedCentiUnits = deliveredCentiUnits,
+                deliveryTimestamp = timestamp,
+                historyDeadline = null,
+                detail = null,
+            )
+        }
+    }
+
     /** A notified attempt that history contradicted. Its warning stays until the operator checks. */
     fun rejectNotified(requestId: String, detail: String): YpsoBolusAttempt =
         updateRetained(requestId) {

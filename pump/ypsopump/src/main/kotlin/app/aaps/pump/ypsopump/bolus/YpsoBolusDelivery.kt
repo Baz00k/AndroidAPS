@@ -474,13 +474,22 @@ internal class YpsoBolusDelivery(
         val at = now()
         // The latest dose, plus a notified dose history contradicted or never confirmed while its
         // insulin can still matter. Older unresolved doses stay in the journal for accounting only.
-        showWarning(
-            controller.currentAttempt()?.hasUnresolvedWarning == true ||
-                controller.retainedAttempts().any {
-                    it.hasUnresolvedWarning && it.notifiedFastSequence != null && at - (it.dispatchedAt ?: 0L) < NOTIFIED_WARNING_WINDOW_MS
-                },
-        )
+        val holding = (listOfNotNull(controller.currentAttempt()?.takeIf { it.hasUnresolvedWarning }) +
+            controller.retainedAttempts().filter {
+                it.hasUnresolvedWarning && it.notifiedFastSequence != null && at - (it.dispatchedAt ?: 0L) < NOTIFIED_WARNING_WINDOW_MS
+            }).distinctBy { it.requestId }
+        val ids = holding.map { it.requestId }
+        if (ids != warningHeldBy) {
+            warningHeldBy = ids
+            if (holding.isNotEmpty()) {
+                aapsLogger.warn(LTag.PUMP, "YpsoPump bolus warning held by ${holding.joinToString { "${it.requestId} (${it.detail})" }}")
+            }
+        }
+        showWarning(holding.isNotEmpty())
     }
+
+    /** Doses the warning was last logged for, so each change is logged once. */
+    private var warningHeldBy: List<String> = emptyList()
 
     // ---- history ----
 
@@ -554,7 +563,8 @@ internal class YpsoBolusDelivery(
             bindNotified(attempt, pumpSerial, pumpId, timestamp, Math.round(amount * 100).toInt())
             return
         }
-        if (Math.round(amount * 100) > attempt.requestedCentiUnits) {
+        val centiUnits = Math.round(amount * 100).toInt()
+        if (centiUnits > attempt.requestedCentiUnits) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history row $pumpId exceeds bolus request ${attempt.requestId}; not merged")
             return
         }
@@ -565,6 +575,19 @@ internal class YpsoBolusDelivery(
             ),
             type,
         )
+        if (attempt.awaitsReconciliation) {
+            confirmSuperseded(attempt, centiUnits, timestamp, pumpId)
+            refreshWarning()
+        }
+    }
+
+    /**
+     * Confirms a status-proven dose that stopped being current before history confirmed it, for
+     * example after a restart marked it unresolved. The current dose is left to [reconcileAttempt].
+     */
+    private fun confirmSuperseded(attempt: YpsoBolusAttempt, centiUnits: Int, timestamp: Long, pumpId: Long) {
+        runCatching { controller.confirmSupersededTerminal(attempt.requestId, centiUnits, timestamp, pumpId) }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump bolus ${attempt.requestId} not confirmed: ${it.message}") }
     }
 
     /**
@@ -622,8 +645,11 @@ internal class YpsoBolusDelivery(
                     ?.let { Math.round(it.amount * 100) > attempt.requestedCentiUnits } == true) continue
             if (attempt.shape == YpsoBolusShape.IMMEDIATE) {
                 val temporaryId = provisionalTemporaryId(attempt)
-                val provisional = saved.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
                 val imported = saved.singleOrNull { it.ids.pumpId == id } ?: continue
+                // Only history import gives an immediate bolus record its pump ID, so this is the
+                // terminal row, imported before a superseded dose could be confirmed at import.
+                if (attempt.awaitsReconciliation) confirmSuperseded(attempt, Math.round(imported.amount * 100).toInt(), imported.timestamp, id)
+                val provisional = saved.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
                 if (provisional.id == imported.id) continue
                 // The imported amount is already pump-confirmed. This transaction atomically merges
                 // both records even if their timestamps predate the current driver activation.
