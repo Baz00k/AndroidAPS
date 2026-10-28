@@ -59,6 +59,10 @@ class YpsoBleManager @Inject internal constructor(
 ) {
     internal fun noBackupDirectory(): java.io.File = context.noBackupFilesDir
 
+    /** Phone wall and monotonic clocks, replaceable in tests. */
+    internal var wallClock: () -> Long = System::currentTimeMillis
+    internal var elapsedClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+
     val connectionState: ConnectionState get() = link.connectionState
     val isConnected: Boolean get() = link.isConnected
 
@@ -123,6 +127,8 @@ class YpsoBleManager @Inject internal constructor(
     companion object {
         private const val EXPECTED_PROFILE_SELECTOR_FRAME_COUNT = 4
         private val SUPPORTED_CONTROL_SERVICE_VERSION = "1.3\u0000".toByteArray(Charsets.US_ASCII)
+        /** Wall time may run this far from monotonic time over one pump clock read without a phone clock step. */
+        private const val PHONE_CLOCK_STEP_MS = 1_000L
     }
 
     // ---- configuration and connection ----
@@ -886,37 +892,44 @@ class YpsoBleManager @Inject internal constructor(
             }
         }
         /**
-         * Pump clock offset from two plain reads (no selector write). A date change between the
-         * reads, or any read failure, leaves the offset unknown rather than failing the scan.
+         * The pump clock offset from two plain reads (no selector write). A date change between the reads, a phone clock that stepped while they ran, or any read failure
+         * leaves the offset unknown rather than failing the scan.
          */
-        fun readPumpClockOffset(done: (Long?) -> Unit) {
+        fun readPumpClock(done: (offset: Long?) -> Unit) {
             if (!attempt.isActive) return done(null)
+            // A link without the clock characteristics would fail the scan's remaining reads.
+            if (epoch.connection.properties(CHAR_SYSTEM_DATE) == null || epoch.connection.properties(CHAR_SYSTEM_TIME) == null) return done(null)
             fun plain(uuid: UUID, next: (ByteArray?) -> Unit) =
                 link.readFrames(epoch, uuid, onFailure = { next(null) }) { frames ->
                     next(runCatching { link.decrypt(epoch, frames) }.getOrNull())
                 }
             plain(CHAR_SYSTEM_DATE) { date ->
-                val before = System.currentTimeMillis()
+                val before = wallClock()
+                val elapsedBefore = elapsedClock()
                 plain(CHAR_SYSTEM_TIME) { time ->
-                    val after = System.currentTimeMillis()
+                    val after = wallClock()
+                    val elapsedAfter = elapsedClock()
                     val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
-                    val offset = local?.let { YpsoPumpLocalTime.clockOffsetMs(it, (before + after) / 2, pumpState.historyZone) }
                     // The time is read after the date; near midnight the pair may straddle two days.
                     val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
-                    done(offset?.takeIf { !nearMidnight })
+                    // Wall time that moved unlike monotonic time means the phone clock was set meanwhile.
+                    val stepped = kotlin.math.abs((after - before) - (elapsedAfter - elapsedBefore)) > PHONE_CLOCK_STEP_MS
+                    done(local?.let { YpsoPumpLocalTime.pumpOffsetMs(it, (before + after) / 2) }?.takeIf { !nearMidnight && !stepped })
                 }
             }
         }
         fun finishScan() {
             if (yieldAtSafeBoundary()) return
-            readCount { countAfter ->
-                if (countAfter == 0) {
-                    if (countBefore != 0) return@readCount failHistory("event count moved to empty")
-                    finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
-                    return@readCount
-                }
-                select(0) { headAfter ->
-                    readPumpClockOffset { offset ->
+            // The pump clock is read before the final count and head check, inside the window that check
+            // proves no row was written in: no clock change row follows the reading.
+            readPumpClock { offset ->
+                readCount { countAfter ->
+                    if (countAfter == 0) {
+                        if (countBefore != 0) return@readCount failHistory("event count moved to empty")
+                        finish(YpsoHistorySnapshot(0, 0, reboot.toLong(), reboot.toLong(), null, null, emptyList(), true))
+                        return@readCount
+                    }
+                    select(0) { headAfter ->
                         finish(
                             YpsoHistorySnapshot(
                                 countBefore,

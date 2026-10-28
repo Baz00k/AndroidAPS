@@ -1,5 +1,9 @@
 package app.aaps.pump.ypsopump.history
 
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+
 /**
  * Event meanings for target firmware V05.00.52. Type identity is target-paired for the numbers this
  * evidence session exercised; every remaining number is admitted because two published third-party
@@ -85,6 +89,8 @@ data class YpsoHistorySemantics(
     /** Explicit alarm code for the ALARM kind; alarm-row value fields are unclaimed. */
     val alarm: YpsoAlarm? = null,
     val commandOriginAttributable: Boolean = false,
+    /** The pump wall clock a date or time change set, or null when its values are impossible. */
+    val clockSetTo: LocalDateTime? = null,
 )
 
 /**
@@ -123,8 +129,15 @@ object YpsoHistoryClassifier {
                 percent = entry.value1,
                 elapsedDurationMinutes = entry.value2,
             )
-            12 -> YpsoHistorySemantics(YpsoHistoryKind.DATE_CHANGED)
-            13 -> YpsoHistorySemantics(YpsoHistoryKind.TIME_CHANGED)
+            // Paired on the target: a change row is stamped with the clock it replaced and carries the
+            // new setting. A date change keeps the time of day: value 1 = day, 2 = month, 3 = year - 2000.
+            12 -> YpsoHistorySemantics(YpsoHistoryKind.DATE_CHANGED, clockSetTo = clockSet(entry) {
+                LocalDate.of(2000 + entry.value3.also { require(it in 0..99) }, entry.value2, entry.value1).atTime(it.toLocalTime())
+            })
+            // A time change keeps the date: values 1-3 = hour, minute, second.
+            13 -> YpsoHistorySemantics(YpsoHistoryKind.TIME_CHANGED, clockSetTo = clockSet(entry) {
+                it.toLocalDate().atTime(LocalTime.of(entry.value1, entry.value2, entry.value3))
+            })
             14 -> when (entry.value1) {
                 3 -> YpsoHistorySemantics(YpsoHistoryKind.PUMP_MODE_CHANGED, modeChange = YpsoPumpModeChange.STOPPED)
                 10 -> YpsoHistorySemantics(YpsoHistoryKind.PUMP_MODE_CHANGED, modeChange = YpsoPumpModeChange.RESUMED)
@@ -169,6 +182,9 @@ object YpsoHistoryClassifier {
     /** Centi-unit bolus convention shared by the paired target rows and both references. */
     private fun bolus(kind: YpsoHistoryKind, entry: YpsoHistoryEntry) =
         YpsoHistorySemantics(kind, amountUnits = entry.value1 / 100.0)
+
+    private fun clockSet(entry: YpsoHistoryEntry, setTo: (replaced: LocalDateTime) -> LocalDateTime) =
+        runCatching { setTo(YpsoPumpLocalTime.localDateTime(entry.factorySeconds)) }.getOrNull()
 
     private fun alarm(code: YpsoAlarm) = YpsoHistorySemantics(YpsoHistoryKind.ALARM, alarm = code)
 }
@@ -227,8 +243,9 @@ data class YpsoHistorySnapshot(
     /** True only when every row represented by the count was read under the snapshot contract. */
     val fullCoverage: Boolean,
     /**
-     * Pump clock minus phone clock in milliseconds, measured on the scan's link, or null when it
-     * could not be read. Includes whole-second truncation and read latency (about ±2 s).
+     * The pump's wall clock read as if it were UTC, minus the phone clock, in milliseconds, measured on
+     * the scan's link ([YpsoPumpLocalTime.pumpOffsetMs]), or null when it could not be read. Includes
+     * whole-second truncation and read latency (about ±2 s).
      */
     val pumpClockOffsetMs: Long? = null,
 )

@@ -180,13 +180,16 @@ class YpsoBleManagerAcquisitionTest {
         var staleValueIndex: Int? = null
         var rowReads = 0
         var beforeRow: () -> Unit = {}
+        /** The pump's wall clock, and what happens on the pump while it is read. */
+        var clock: LocalDateTime = LocalDateTime.of(2026, 7, 1, 12, 0, 30)
+        var onClockRead: () -> Unit = {}
 
         /** Journal reservation phase at every dispatch: a transport-ACK commit is visible before the read-back read. */
         val phases = mutableListOf<PumpSession.Phase?>()
 
         init {
             fixture.pump.configure = { connection ->
-                connection.expose(EVENT_INDEX_UUID, CHAR_EVENT_VALUE, CHAR_EVENT_COUNT, properties = FakeYpsoPump.READ)
+                connection.expose(EVENT_INDEX_UUID, CHAR_EVENT_VALUE, CHAR_EVENT_COUNT, CHAR_SYSTEM_DATE, CHAR_SYSTEM_TIME, properties = FakeYpsoPump.READ)
                 connection.onDescriptorWrite = { pending.add { connection.ackDescriptor() } }
                 connection.onWrite = { uuid, _ ->
                     recordPhase()
@@ -215,6 +218,8 @@ class YpsoBleManagerAcquisitionTest {
             val body = when (uuid) {
                 CHAR_EVENT_COUNT -> YpsoGlb.encode(rows.size)
                 EVENT_INDEX_UUID -> YpsoGlb.encode(selected)
+                CHAR_SYSTEM_DATE -> byteArrayOf((clock.year and 255).toByte(), (clock.year shr 8).toByte(), clock.monthValue.toByte(), clock.dayOfMonth.toByte())
+                CHAR_SYSTEM_TIME -> byteArrayOf(clock.hour.toByte(), clock.minute.toByte(), clock.second.toByte()).also { onClockRead() }
                 CHAR_EVENT_VALUE -> {
                     rowReads++
                     beforeRow()
@@ -371,6 +376,42 @@ class YpsoBleManagerAcquisitionTest {
         pump.manager.readStableHistory(null, 3000, results::add)
         pump.drain()
         assertEquals(pump.rows, results.last()!!.rowsNewestFirst)
+    }
+
+    @Test
+    fun `the pump clock is read inside the window the final head check closes`() {
+        val pump = HistoryPump()
+        var appended = false
+        // The pump writes a row while its clock is being read.
+        pump.onClockRead = { if (!appended) pump.append().also { appended = true } }
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+
+        pump.manager.readStableHistory(null, 3000, results::add)
+        pump.drain()
+
+        val snapshot = results.single()!!
+        assertTrue(snapshot.countBefore != snapshot.countAfter || snapshot.headBefore?.sequence != snapshot.headAfter?.sequence)
+    }
+
+    @Test
+    fun `a pump clock reading is unrounded and dropped when the phone clock steps`() {
+        for (step in listOf(0L, 3_600_000L)) {
+            val pump = HistoryPump()
+            // Two seconds pass between the samples; with a step, the phone clock also jumps an hour.
+            var walls = 0
+            var elapsed = 0
+            pump.manager.wallClock = { 1_782_907_200_000L + if (walls++ == 0) 0L else 2_000L + step }
+            pump.manager.elapsedClock = { if (elapsed++ == 0) 50_000L else 52_000L }
+            val results = mutableListOf<YpsoHistorySnapshot?>()
+
+            pump.manager.readStableHistory(null, 3000, results::add)
+            pump.drain()
+
+            val snapshot = results.single()!!
+            val readAt = 1_782_907_200_000L + (2_000L + step) / 2
+            val pumpWall = LocalDateTime.of(2026, 7, 1, 12, 0, 30).toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
+            assertEquals(if (step == 0L) pumpWall - readAt else null, snapshot.pumpClockOffsetMs)
+        }
     }
 
     @Test

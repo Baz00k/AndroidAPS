@@ -519,8 +519,9 @@ class YpsoPumpPluginTest {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database write rejected")) }
         verify(ui, times(2)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
         verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
-        // A temporary clock wait must not clear an existing warning.
-        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
+        // A transient failure keeps an existing warning.
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT))
+        verify(ui, times(3)).addNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), any(), eq(Notification.NORMAL))
         verify(ui, never()).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
         verify(ui).dismissNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE)
@@ -528,11 +529,7 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `bounded clock retries do not warn and successful reconciliation resets transient failures`() {
-        repeat(3) {
-            plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("clock", YpsoHistoryIngestionResult.Retry.BOUNDED))
-        }
-        verifyNoInteractions(ui)
+    fun `successful reconciliation resets transient failures`() {
         repeat(2) { plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("moving", YpsoHistoryIngestionResult.Retry.TRANSIENT)) }
         verifyNoInteractions(ui)
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Applied(null))
@@ -593,11 +590,11 @@ class YpsoPumpPluginTest {
         whenever(plugin.persistenceLayer.getTemporaryBasalsStartingFromTimeIncludingInvalid(any(), any()))
             .thenReturn(io.reactivex.rxjava3.core.Single.just(emptyList()))
         val anchor = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 100L, 0)
-        prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
+        prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true, pumpClockOffsetMs = 0L))
         runHistoryRecovery()
         val dose = anchor.copy(eventType = 2, value1 = 80, sequence = 101L)
         whenever(sync.isHistoryRecordBeforeActivePump(any(), eq(PumpType.YPSOPUMP), eq(PUMP_SERIAL))).thenReturn(true)
-        prepareHistoryRecovery(YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true))
+        prepareHistoryRecovery(YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true, pumpClockOffsetMs = 0L))
         clearInvocations(ui)
 
         runHistoryRecovery()

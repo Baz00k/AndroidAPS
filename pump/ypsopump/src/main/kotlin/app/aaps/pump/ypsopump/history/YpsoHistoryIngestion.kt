@@ -4,12 +4,11 @@ import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
-import java.time.ZoneId
 
 sealed interface YpsoHistoryIngestionResult {
     data class Applied(val cursor: YpsoHistoryCursor?) : YpsoHistoryIngestionResult
-    /** BOUNDED retries are owned by ingestion; NONE means the failure needs immediate attention. */
-    enum class Retry { NONE, TRANSIENT, BOUNDED }
+    /** NONE means the failure needs immediate attention; TRANSIENT ones warn only when they repeat. */
+    enum class Retry { NONE, TRANSIENT }
     data class Blocked(val reason: String, val retry: Retry = Retry.NONE) : YpsoHistoryIngestionResult
 }
 
@@ -23,8 +22,6 @@ class YpsoHistoryIngestion(
     private val hasRecordedBolus: (pumpSerial: String, pumpId: Long) -> Boolean = { _, _ -> true },
     /** Start of AAPS' use of this pump; PumpSync accepts no record from before it. */
     private val registeredAt: (pumpSerial: String) -> Long = { 0L },
-    /** When AAPS sent the journalled dose that owns this row, or null; places a row in a DST overlap. */
-    private val bolusDispatchedAt: (pumpSerial: String, pumpId: Long) -> Long? = { _, _ -> null },
     /**
      * Resolves a provisional record created for a dispatched dose onto its pump identity. Without this
      * the terminal history row would insert a second record for the same physical bolus, because
@@ -40,11 +37,6 @@ class YpsoHistoryIngestion(
     /** See [app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.keepStandIns]. */
     fun keepTbrStandIns(): String? = tbrAccounting?.keepStandIns()
 
-    /**
-     * Scans that reached a row needing a pump clock reading without one. Kept in memory only: a
-     * restart simply grants the reading a few more scans.
-     */
-    private val clocklessScans = java.util.concurrent.atomic.AtomicInteger(0)
     /** Cheap local gate for a new dose. Never performs pump I/O. */
     fun bolusReadiness(pumpSerial: String, reboot: Long): YpsoBolusMessage? {
         if (!retryPending(pumpSerial)) return YpsoBolusMessage.SAVING_PREVIOUS_DOSE
@@ -88,7 +80,6 @@ class YpsoHistoryIngestion(
 
     fun ingest(
         pumpSerial: String,
-        zone: ZoneId,
         reboot: Long,
         snapshot: YpsoHistorySnapshot,
         /** [provisionalTbrs] taken before [snapshot] was read. */
@@ -118,22 +109,20 @@ class YpsoHistoryIngestion(
             }
             is YpsoHistoryReconciliation.Stable -> {
                 val events = reconciliation.stateUpdates + reconciliation.newEventsOldestFirst
-                // The offset was measured at the end of this read. It holds for a row only if the pump
-                // clock was not set between that row and the read: a date/time change row after it in
-                // the pump's own order (sequence) ends its validity. The clock rows in this scan cover
-                // everything newer than the cursor; an in-place update (stateUpdates) is older than all.
-                val lastClockChange = snapshot.rowsNewestFirst
-                    .filter { YpsoHistoryClassifier.classify(it).kind in CLOCK_CHANGES }
-                    .maxOfOrNull { it.sequence }
-                val waitForClock = clocklessScans.get() < CLOCK_WAIT_SCANS
-                fun offsetFor(event: YpsoHistoryEvent) = snapshot.pumpClockOffsetMs?.takeIf {
-                    lastClockChange == null || event.identity.sequence >= lastClockChange && event !in reconciliation.stateUpdates
+                // Every row is placed exactly, or none is: a failed clock read is retried by the next scan, and
+                // the cursor never passes an invalid clock change.
+                val times = YpsoPumpLocalTime.rowTimes(snapshot)
+                val unplaced = events.firstOrNull { it.semantics.kind in TIMED && times.at(it.entry) == null }
+                times.stop?.takeIf { stop -> unplaced != null || events.any { it.entry.sequence == stop.sequence && it.entry.eventType in 12..13 } }?.let {
+                    return YpsoHistoryIngestionResult.Blocked("history rows from ${it.sequence} back follow an invalid clock change or a sequence reset and cannot be placed")
                 }
-                val scanRows = events.map { it to offsetFor(it) }
+                if (unplaced != null) return YpsoHistoryIngestionResult.Blocked(
+                    "history row ${unplaced.identity.aapsPumpId} awaits a pump clock reading", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT,
+                )
                 // Ordered so a pass that stops part-way leaves insulin on board erring high.
                 tbrAccounting?.invalidateLowering(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                 for (event in events) {
-                    val offset = offsetFor(event)
+                    val at = times.at(event.entry)
                     when (event.semantics.kind) {
                         // Only immediate-bolus terminal rows are ingested as an instantaneous normal
                         // bolus. Square/combination terminal rows carry the pump-confirmed delivered
@@ -142,9 +131,7 @@ class YpsoHistoryIngestion(
                         // evidence-backed extended-bolus reporting contract exists. Origin is never
                         // inferred from amount, recency or receipt time.
                         YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED -> {
-                            val timestamp = YpsoPumpLocalTime.epochMillis(
-                                event.entry.factorySeconds, zone, near = bolusDispatchedAt(pumpSerial, event.identity.aapsPumpId),
-                            ) ?: return YpsoHistoryIngestionResult.Blocked("bolus timestamp is ambiguous")
+                            val timestamp = checkNotNull(at)
                             // Apply the activation policy before creating a durable replay intent. Replay
                             // deliberately bypasses that cutoff so already-owned insulin survives a switch.
                             if (pumpSync.isHistoryRecordBeforeActivePump(timestamp, PumpType.YPSOPUMP, pumpSerial) &&
@@ -170,8 +157,7 @@ class YpsoHistoryIngestion(
                             val existing = pumpSync.getExtendedBolusWithPumpId(id, PumpType.YPSOPUMP, pumpSerial)
                             val amount = requireNotNull(event.semantics.amountUnits)
                             val registered = registeredAt(pumpSerial)
-                            val rowStart = (YpsoPumpLocalTime.resolve(event.entry.factorySeconds, zone) as? YpsoPumpLocalTime.Resolution.Resolved)
-                                ?.instant?.toEpochMilli()
+                            val rowStart = at
                             // A record this path cut at a registration (below) is already this row's
                             // part after it. It is recognized by its own values, not by the current
                             // registration, which a later pump re-registration moves.
@@ -197,7 +183,7 @@ class YpsoHistoryIngestion(
                                 // the delivery window is evidence-backed rather than assumed.
                                 // Combination rows stay out of scope: their immediate part is not
                                 // separable here without risking double accounting.
-                                val start = rowStart ?: return YpsoHistoryIngestionResult.Blocked("extended bolus timestamp is ambiguous")
+                                val start = checkNotNull(rowStart)
                                 // PumpSync intentionally excludes history predating activation. A
                                 // terminal row wholly in that excluded period is not a retryable DB
                                 // failure: retrying it pins the cursor and rescans the same ring forever.
@@ -218,15 +204,10 @@ class YpsoHistoryIngestion(
                         YpsoHistoryKind.BASAL_PROFILE_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_A_CHANGED,
                         YpsoHistoryKind.BASAL_PROFILE_B_CHANGED -> Unit
-                        else -> tbrAccounting?.apply(event, pumpSerial, zone, offset, waitForClock, scanRows)?.let {
-                            val clockWait = app.aaps.pump.ypsopump.tbr.YpsoTbrHistoryAccounting.isClockWait(it)
-                            if (clockWait) clocklessScans.incrementAndGet()
-                            return YpsoHistoryIngestionResult.Blocked(it, retry = if (clockWait) YpsoHistoryIngestionResult.Retry.BOUNDED else YpsoHistoryIngestionResult.Retry.NONE)
-                        }
+                        else -> at?.let { tbrAccounting?.apply(event, pumpSerial, it) }?.let { return YpsoHistoryIngestionResult.Blocked(it) }
                     }
                 }
                 tbrAccounting?.invalidateRaising(pumpSerial, provisional)?.let { return YpsoHistoryIngestionResult.Blocked(it) }
-                clocklessScans.set(0)
                 store.commit(store.load().copy(cursor = reconciliation.cursor, pendingBolus = null))
                 return YpsoHistoryIngestionResult.Applied(reconciliation.cursor)
             }
@@ -234,8 +215,11 @@ class YpsoHistoryIngestion(
     }
 
     companion object {
-        private val CLOCK_CHANGES = setOf(YpsoHistoryKind.DATE_CHANGED, YpsoHistoryKind.TIME_CHANGED)
-        /** Scans a TBR row waits for a pump clock reading before its AAPS start is left unmatched. */
-        private const val CLOCK_WAIT_SCANS = 3
+        /** Rows whose time is used: doses, temporary basals and pump stops. */
+        private val TIMED = setOf(
+            YpsoHistoryKind.IMMEDIATE_BOLUS_COMPLETED_UNATTRIBUTED, YpsoHistoryKind.DELAYED_BOLUS_COMPLETED,
+            YpsoHistoryKind.TEMP_BASAL_STARTED, YpsoHistoryKind.TEMP_BASAL_COMPLETED, YpsoHistoryKind.TEMP_BASAL_CANCELLED,
+            YpsoHistoryKind.TEMP_BASAL_TERMINAL_UNRESOLVED, YpsoHistoryKind.PUMP_MODE_CHANGED,
+        )
     }
 }

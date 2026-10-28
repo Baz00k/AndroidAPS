@@ -45,7 +45,6 @@ import org.mockito.kotlin.whenever
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.time.ZoneId
 
 class YpsoBolusDeliveryTest {
     @TempDir lateinit var directory: File
@@ -280,7 +279,6 @@ class YpsoBolusDeliveryTest {
         YpsoHistoryIngestion(
             historyState, pumpSync,
             hasRecordedBolus = { serial, pumpId -> delivery.ownsHistoryBolus(serial, pumpId) },
-            bolusDispatchedAt = { serial, pumpId -> delivery.historyBolusDispatchedAt(serial, pumpId) },
             resolveProvisional = { serial, pumpId, timestamp, amount, type -> delivery.bindProvisional(serial, pumpId, timestamp, amount, type) },
         )
     }
@@ -552,7 +550,7 @@ class YpsoBolusDeliveryTest {
             ids = IDs(pumpId = 48_316L, pumpType = PumpType.YPSOPUMP, pumpSerial = SERIAL))
 
         delivery.bindProvisional(SERIAL, 48_316L, 1_500L, 0.4, BS.Type.NORMAL)
-        delivery.reconcileHistory(SERIAL, ZoneId.of("UTC"), "generation", REBOOT, YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true))
+        delivery.reconcileHistory(SERIAL, "generation", REBOOT, YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true, pumpClockOffsetMs = 0L))
 
         assertTrue(attempts.all { it.outcome == YpsoBolusOutcome.AWAITING_HISTORY })
         assertNull(records.boluses.single().ids.temporaryId)
@@ -581,7 +579,7 @@ class YpsoBolusDeliveryTest {
         val dose = YpsoHistoryEntry(800_000_100L, 2, 40, 0, 0, 48_001L, 0)
 
         val pass = delivery.reconcileHistory(
-            SERIAL, ZoneId.of("UTC"), "generation", REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true),
+            SERIAL, "generation", REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true, pumpClockOffsetMs = 0L),
         )
 
         val attempt = attempts.single()
@@ -590,27 +588,6 @@ class YpsoBolusDeliveryTest {
         assertEquals(48_001L, attempt.pumpHistoryId)
         assertEquals(BS.Type.SMB, (pass as YpsoBolusDelivery.HistoryPass.Proceed).treatment(48_001L))
         assertEquals(BS.Type.NORMAL, pass.treatment(48_002L))
-    }
-
-    @Test
-    fun `terminal history in the repeated hour is timed by the offset next to the dose AAPS sent`() {
-        // 02:54:33 in Warsaw on the fall-back night names 00:54:33Z and 01:54:33Z; AAPS sent this dose at the second.
-        val afterFallBack = java.time.Instant.parse("2026-10-25T01:54:33Z").toEpochMilli()
-        clock = afterFallBack + 36_000L
-        pump.stepPerRead = 20
-        var reads = 0
-        pump.onRead = { if (++reads == 3) delivery.stop {} }
-        deliver(1.0, BS.Type.SMB)
-        val seconds = java.time.temporal.ChronoUnit.SECONDS.between(java.time.LocalDateTime.of(2000, 1, 1, 0, 0), java.time.LocalDateTime.of(2026, 10, 25, 2, 54, 33))
-        val dose = YpsoHistoryEntry(seconds, 2, 40, 0, 0, 48_001L, 0)
-
-        delivery.reconcileHistory(
-            SERIAL, ZoneId.of("Europe/Warsaw"), "generation", REBOOT, YpsoHistorySnapshot(2, 2, 21, 21, dose, dose, listOf(dose, anchor.copy(index = 1)), true),
-        )
-
-        val attempt = attempts.single()
-        assertEquals(48_001L, attempt.pumpHistoryId)
-        assertEquals(afterFallBack, attempt.deliveryTimestamp)
     }
 
     @Test
@@ -786,14 +763,14 @@ class YpsoBolusDeliveryTest {
     /** One history pass as the plugin runs it: the module reconciles the scan, then ingestion takes its new rows. */
     private fun historyPass(rowsNewestFirst: List<YpsoHistoryEntry>) {
         val (snapshot, pass) = reconcile(rowsNewestFirst)
-        val result = ingestion.ingest(SERIAL, ZoneId.of("UTC"), REBOOT.toLong(), snapshot) { pass.treatment(it.identity.aapsPumpId) }
+        val result = ingestion.ingest(SERIAL, REBOOT.toLong(), snapshot) { pass.treatment(it.identity.aapsPumpId) }
         assertTrue(result is YpsoHistoryIngestionResult.Applied, result.toString())
     }
 
     private fun reconcile(rowsNewestFirst: List<YpsoHistoryEntry>): Pair<YpsoHistorySnapshot, YpsoBolusDelivery.HistoryPass.Proceed> {
         val scan = (rowsNewestFirst + anchor).mapIndexed { index, row -> row.copy(index = index) }
-        val snapshot = YpsoHistorySnapshot(scan.size, scan.size, 21, 21, scan.first(), scan.first(), scan, true)
-        return snapshot to delivery.reconcileHistory(SERIAL, ZoneId.of("UTC"), "generation", REBOOT, snapshot) as YpsoBolusDelivery.HistoryPass.Proceed
+        val snapshot = YpsoHistorySnapshot(scan.size, scan.size, 21, 21, scan.first(), scan.first(), scan, true, pumpClockOffsetMs = 0L)
+        return snapshot to delivery.reconcileHistory(SERIAL, "generation", REBOOT, snapshot) as YpsoBolusDelivery.HistoryPass.Proceed
     }
 
     private fun cursorAt(row: YpsoHistoryEntry) = YpsoHistoryCursor(YpsoEventIdentity(SERIAL, 0, row.sequence), row.fingerprint(), REBOOT.toLong())
