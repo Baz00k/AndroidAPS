@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -182,6 +183,34 @@ class SessionEvidenceRetentionTest {
         assertEquals(retained, store.saved.records.single().writeEvidence)
         session.finish(token, tx)
         assertEquals(retained, PumpSession(store).also { it.open("pump", key) }.snapshot()!!.writeEvidence)
+    }
+
+    @Test
+    fun `repeated observations of one unresolved write stay bounded and still allow the reboot transition`() {
+        val store = store((0 until 100).map(::therapyEvidence))
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val tx = session.begin(token)
+        session.reserve(token, tx, PumpSession.WriteIntent("pending-bolus", bolus, "THERAPY_COMMAND", "ab".repeat(32)))
+        session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+        session.finish(token, tx)
+        repeat(100) { i ->
+            session.recordUnresolvedWriteEvidence(token, tx, "%064x".format(i), "status did not yet establish delivery")
+        }
+        val current = store.saved.records.single().writeEvidence.filter { it.reservationId == tx }
+        assertEquals((68 until 100).map { "%064x".format(it) }, current.map { it.evidenceHash })
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.saved.records.single().reservation!!.phase)
+
+        val restarted = PumpSession(store)
+        val reopened = restarted.open("pump", key)
+        assertThrows(IllegalStateException::class.java) { restarted.reserve(reopened, restarted.begin(reopened)) }
+        restarted.quiesce()
+        val again = restarted.open("pump", key)
+        val read = restarted.begin(again)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            restarted.accept(again, read, SessionCrypto.Message(byteArrayOf(1), 9, 1), allowObservedReboot = true)
+        }
+        assertEquals(9, store.saved.records.single().reboot)
     }
 
     @Test

@@ -951,14 +951,16 @@ class PumpSession(private val store: Store) {
 
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
-        private enum class EvidenceKind { OPEN, SELECTOR, THERAPY, OTHER }
+        private enum class EvidenceKind { CURRENT, OPEN, SELECTOR, THERAPY, OTHER }
 
         /**
          * Replay protection uses durable counters and the current reservation; bolus/TBR delivery,
-         * retries and treatment accounting use separate journals. Current-reservation proofs are
-         * always kept. Every other proof keeps only the newest [EVIDENCE_TAIL] of its kind; an
-         * unresolved proof counts as open until a later pump-consumed counter supersedes it, so
-         * resolved history cannot evict it, and history scans cannot evict therapy proofs.
+         * retries and treatment accounting use separate journals. Every proof keeps only the newest
+         * [EVIDENCE_TAIL] of its kind. An unresolved current reservation is its own kind, so its newest
+         * proof remains for the reboot transition; once verified, its proofs stay pinned and can no
+         * longer grow. Another unresolved proof is open until
+         * a later pump-consumed counter supersedes it, so resolved history cannot evict it, and
+         * history scans cannot evict therapy proofs.
          * Validate before trimming so corrupt evidence cannot disappear.
          */
         private fun compactCompletedEvidence(state: State): State = state.copy(records = state.records.map { record ->
@@ -966,7 +968,9 @@ class PumpSession(private val store: Store) {
             val kept = IntArray(EvidenceKind.entries.size)
             var superseded = false
             val retained = record.writeEvidence.asReversed().filter { evidence ->
+                val current = evidence.reservationId == record.reservation?.id
                 val kind = when {
+                    current && record.reservation?.phase != Phase.VERIFIED -> EvidenceKind.CURRENT
                     evidence.resolution == null && !superseded -> EvidenceKind.OPEN
                     evidence.candidate != WriteCandidate.STANDARD -> EvidenceKind.OTHER
                     isReadSelector(evidence.characteristic, evidence.purpose) -> EvidenceKind.SELECTOR
@@ -976,7 +980,7 @@ class PumpSession(private val store: Store) {
                 }
                 if (evidence.resolution == WriteResolution.ACCEPTED || evidence.resolution == WriteResolution.REJECTED_COUNTER_CONSUMED)
                     superseded = true
-                ++kept[kind.ordinal] <= EVIDENCE_TAIL || evidence.reservationId == record.reservation?.id
+                ++kept[kind.ordinal] <= EVIDENCE_TAIL || current && kind != EvidenceKind.CURRENT
             }.asReversed()
             if (retained.size == record.writeEvidence.size) record else record.copy(writeEvidence = retained)
         })
