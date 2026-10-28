@@ -1149,22 +1149,59 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `a configuration read rejected on the pump clock says which way and how far to set it`() {
+    fun `a configuration read rejected on the pump clock tells the user which way and how far to set it`() {
         connectedForConfigurationRead()
+        whenever(rh.gs(R.string.ypsopump_profile_read_incomplete)).thenReturn("incomplete")
+        whenever(rh.gs(eq(R.string.ypsopump_clock_offset_seconds), anyVararg())).thenAnswer { "${it.arguments[1]} s" }
         whenever(rh.gs(eq(R.string.ypsopump_clock_offset_minutes), anyVararg())).thenAnswer { "${it.arguments[1]} min ${it.arguments[2]} s" }
         whenever(rh.gs(eq(R.string.ypsopump_profile_read_clock_behind), anyVararg())).thenAnswer { "behind by ${it.arguments[1]}" }
+        whenever(rh.gs(eq(R.string.ypsopump_profile_read_clock_ahead), anyVararg())).thenAnswer { "ahead by ${it.arguments[1]}" }
+
+        assertEquals(YpsoPumpPlugin.ConfigurationReadResult("behind by 59 s", true), queuedProfileReadRejectedOnClock(-59))
+        assertEquals(YpsoPumpPlugin.ConfigurationReadResult("ahead by 1 min 0 s", true), queuedProfileReadRejectedOnClock(60))
+        assertEquals(YpsoPumpPlugin.ConfigurationReadResult("behind by 60 min 38 s", true), queuedProfileReadRejectedOnClock(-3_638))
+        assertFalse(plugin.configurationReadSucceeded)
+    }
+
+    @Test
+    fun `a later read that fails before the transfer does not repeat an earlier clock message`() {
+        connectedForConfigurationRead()
+        whenever(rh.gs(R.string.ypsopump_profile_read_incomplete)).thenReturn("incomplete")
+        whenever(rh.gs(eq(R.string.ypsopump_profile_read_clock_ahead), anyVararg())).thenReturn("clock ahead")
+        whenever(rh.gs(eq(R.string.ypsopump_clock_offset_seconds), anyVararg())).thenReturn("40 s")
+        assertEquals("clock ahead", queuedProfileReadRejectedOnClock(40).message)
+        whenever(manager.readStatus(any())).thenAnswer {
+            it.getArgument<(Boolean) -> Unit>(0)(false)
+            YpsoBleManager.StatusReadAttempt()
+        }
+
+        assertEquals(YpsoPumpPlugin.ConfigurationReadResult("incomplete", true), queuedProfileRead())
+    }
+
+    /** Runs one queued profile read whose transfer the pump clock rejects, and returns what the user is told. */
+    private fun queuedProfileReadRejectedOnClock(pumpAheadSeconds: Long): YpsoPumpPlugin.ConfigurationReadResult {
         whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
             val attempt = YpsoBleManager.ProfileReadAttempt()
-            attempt.pumpClockAhead = java.time.Duration.ofSeconds(-3_638)
+            attempt.pumpClockAhead = java.time.Duration.ofSeconds(pumpAheadSeconds)
             it.getArgument<(Boolean) -> Unit>(2)(false)
             attempt
         }
+        return queuedProfileRead()
+    }
 
-        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
-
-        assertEquals("behind by 60 min 38 s", state.profileReadMessage)
-        assertFalse(plugin.configurationReadSucceeded)
-        assertTrue(plugin.configurationReadNeedsWarning())
+    private fun queuedProfileRead(): YpsoPumpPlugin.ConfigurationReadResult {
+        var callback: Callback? = null
+        whenever(commandQueue.readStatus(any(), any())).thenAnswer {
+            callback = it.getArgument<Callback>(1)
+            true
+        }
+        val results = mutableListOf<YpsoPumpPlugin.ConfigurationReadResult>()
+        assertTrue(plugin.queueConfigurationRead(YpsoPumpPlugin.PROFILE_READ_REASON, results::add))
+        val command = configurationCommand(YpsoPumpPlugin.PROFILE_READ_REASON, checkNotNull(callback))
+        whenever(commandQueue.performing()).thenReturn(command)
+        command.execute()
+        whenever(commandQueue.performing()).thenReturn(null)
+        return results.single()
     }
 
     @Test

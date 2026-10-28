@@ -62,14 +62,15 @@ class YpsoProfileReadbackTest {
     }
 
     @Test
-    fun `a hand-set pump clock a few minutes off still yields evidence`() {
+    fun `a hand-set pump clock up to five minutes off still yields evidence`() {
         // The pump clock is set by hand to the minute and drifts; 40 s off failed every read in practice.
         assertNotNull(finish(acquisition(),at=instant.plusSeconds(40)))
-        assertNotNull(finish(acquisition(),at=instant.minusSeconds(4 * 60 + 59)))
+        assertNotNull(finish(acquisition(),at=instant.minusSeconds(5 * 60)))
+        assertNotNull(finish(acquisition(),at=instant.plusSeconds(5 * 60)))
     }
 
     @Test
-    fun `a pump clock past the limit is rejected with its offset`() {
+    fun `a pump clock past five minutes is rejected with its signed offset`() {
         val behind = result(acquisition(),at=instant.plusSeconds(5 * 60 + 1)) as YpsoProfileReadback.Result.Rejected
         assertEquals(Duration.ofSeconds(-301), behind.pumpClockAhead)
         val ahead = result(acquisition(),at=instant.minusSeconds(3_638)) as YpsoProfileReadback.Result.Rejected
@@ -77,10 +78,41 @@ class YpsoProfileReadbackTest {
     }
 
     @Test
-    fun `other rejections name their condition without blaming the clock`() {
-        val changed = result(acquisition(),active=10) as YpsoProfileReadback.Result.Rejected
-        assertEquals("active program changed", changed.reason)
-        assertNull(changed.pumpClockAhead)
+    fun `every other rejection names its own condition and does not blame the clock`() {
+        // The clock is 40 s off in every case, so a rejection carrying an offset would misdirect the user.
+        val drifted = instant.plusSeconds(40)
+        fun rejected(
+            read: YpsoProfileReadback = acquisition(), generation: String = "generation", reboot: Int = 21,
+            finishedElapsedMs: Long = 2000, active: Int = 3, clock: LocalDateTime = local,
+            maxClockSkew: Duration = Duration.ofMinutes(5), eventCount: Int = 3000,
+        ) = read.finish(generation, reboot, "connection", finishedElapsedMs, YpsoGlb.encode(active), clock, drifted, zone, 60_000, maxClockSkew, eventCount)
+            as YpsoProfileReadback.Result.Rejected
+
+        val incomplete = YpsoProfileReadback("generation",21,"connection",1000,YpsoBasalSchedule.Program.A).also { it.add(14, YpsoGlb.encode(50)) }
+        val invalidRate = YpsoProfileReadback("generation",21,"connection",1000,YpsoBasalSchedule.Program.A).also {
+            (14..61).forEach { id -> it.add(id, YpsoGlb.encode(if (id == 20) 4_001 else 50)) }
+        }
+        val reasons = listOf(
+            rejected(eventCount = -1),
+            rejected(generation = "other"),
+            rejected(reboot = 22),
+            rejected(finishedElapsedMs = 61_001),
+            rejected(finishedElapsedMs = 999),
+            rejected(maxClockSkew = Duration.ZERO),
+            rejected(active = 10),
+            rejected(read = incomplete),
+            rejected(clock = LocalDateTime.of(2026,3,29,2,30)),
+            rejected(read = invalidRate),
+        )
+        assertTrue(reasons.all { it.pumpClockAhead == null })
+        assertEquals(
+            listOf(
+                "event count is negative", "pump session changed", "pump session changed", "acquisition took too long",
+                "acquisition took too long", "clock tolerance is not positive", "active program changed", "1 of 48 rows read",
+                "pump time 2026-03-29T02:30 is ambiguous or skipped in Europe/Warsaw", "profile A has an invalid rate",
+            ),
+            reasons.map { it.reason },
+        )
     }
 
     @Test

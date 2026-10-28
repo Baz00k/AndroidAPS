@@ -590,17 +590,14 @@ class YpsoPumpPlugin @Inject constructor(
             ?.callback as? ConfigurationReadCallback
         getPumpStatusNow(reason)
         if (callback?.reason == reason) {
-            val message = if (configurationReadSucceeded) pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
-            else rh.gs(R.string.ypsopump_profile_read_incomplete)
+            // getPumpStatusNow writes this read's message on every path, so a failure keeps its cause.
+            val message = pumpState.profileReadMessage.ifBlank { rh.gs(R.string.ypsopump_profile_read_incomplete) }
             callback.outcome = ConfigurationReadResult(message, configurationReadNeedsWarning())
         }
     }
 
     @Volatile internal var configurationReadSucceeded = false
         private set
-    /** How far the pump clock was ahead of the phone when the last configuration read failed on it. */
-    @Volatile private var profileReadClockAhead: java.time.Duration? = null
-
     /** The pump clock is set by hand, so a read rejected on it must say which way and how far to set it. */
     private fun clockOffMessage(pumpAhead: java.time.Duration): String {
         val seconds = pumpAhead.abs().seconds
@@ -636,12 +633,13 @@ class YpsoPumpPlugin @Inject constructor(
         val statusRead = readStatusBlocking()
         if (statusRead) reconcileTbrWithStatus()
         if (configurationRead) {
-            val success = statusRead && bleManager.canReadProfile && readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON)
+            val read = if (statusRead && bleManager.canReadProfile) readProfileBlocking(activeOnly = reason == ACTIVE_PROGRAM_REASON) else null
+            val success = read?.success == true
             configurationReadSucceeded = success
             // Compare before publishing the message, so the result names the consequence of the read
             // rather than only that the transfer finished.
             if (!success || !acceptPendingProfileSwitch()) reconcileProfileWithLoop()
-            val clockAhead = profileReadClockAhead
+            val clockAhead = read?.pumpClockAhead
             pumpState.profileReadMessage = when {
                 !success && clockAhead != null                                          -> clockOffMessage(clockAhead)
                 !success                                                                -> rh.gs(R.string.ypsopump_profile_read_incomplete)
@@ -964,27 +962,26 @@ class YpsoPumpPlugin @Inject constructor(
      * acquisition. Yield only to queued boluses so routine TBRs and profile retries cannot repeatedly
      * restart the read. TBR cancellation and zero-TBR requests also wait under this policy.
      */
-    private fun readProfileBlocking(timeoutMs: Long = PROFILE_READ_TIMEOUT_MS, activeOnly: Boolean = false): Boolean {
-        profileReadClockAhead = null
+    private fun readProfileBlocking(timeoutMs: Long = PROFILE_READ_TIMEOUT_MS, activeOnly: Boolean = false): ProfileRead {
         val read = YpsoBlockingRead<Boolean>(elapsedRealtime)
         val attempt = bleManager.readProfileConfiguration(
             activeOnly,
             { commandQueue.bolusInQueue() || commandQueue.extendedBolusInQueue() },
             read::complete,
         )
-        if (read.await(timeoutMs)) {
-            profileReadClockAhead = attempt.pumpClockAhead
-            return read.value == true
-        }
-        if (!attempt.cancel()) {
+        if (!read.await(timeoutMs)) {
+            if (attempt.cancel()) {
+                aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
+                bleManager.disconnect()
+                return ProfileRead(false, null)
+            }
             read.awaitCompletion()
-            profileReadClockAhead = attempt.pumpClockAhead
-            return read.value == true
         }
-        aapsLogger.error(LTag.PUMP, "YpsoPump profile read timed out after ${timeoutMs}ms")
-        bleManager.disconnect()
-        return false
+        return ProfileRead(read.value == true, attempt.pumpClockAhead)
     }
+
+    /** [pumpClockAhead] is set when the read failed only on the pump clock. */
+    private class ProfileRead(val success: Boolean, val pumpClockAhead: java.time.Duration?)
 
     private fun readHistoryBlocking(
         timeoutMs: Long = 120_000,
