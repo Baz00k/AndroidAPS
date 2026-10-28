@@ -579,6 +579,45 @@ class YpsoBleManagerTest {
     }
 
     @Test
+    fun `a TBR command whose journal and session saves outlast its send window leaves no frame and is not sent`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.onDescriptorWrite = { pump.ackDescriptor() }
+        var elapsed = 0L
+        val link = app.aaps.pump.ypsopump.tbr.YpsoTbrBleLink(manager, readStatus = { true }, now = { 1_000L }, elapsed = { elapsed })
+
+        // Saving the attempt stalls for 150 s, as a slow journal commit would.
+        val evidence = link.command(0, 30, effective = { true }, beforeDispatch = { elapsed += 150_000L })
+
+        assertTrue(evidence.result is app.aaps.pump.ypsopump.tbr.YpsoTbrWriteResult.NotSent, "${evidence.result}")
+        assertEquals(1_000L, evidence.dispatchedAt)
+        assertTrue(pump.writes.none { it.first == YpsoWritePolicy.TBR_START_STOP_UUID })
+    }
+
+    @Test
+    fun `a TBR fragment whose send window closes while the link prepares it is never handed to GATT`() {
+        val pump = fixture.connectWithProtocol()
+        pump.expose(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.onDescriptorWrite = { pump.ackDescriptor() }
+        var elapsed = 0L
+        val outcomes = mutableListOf<YpsoWriteOutcome>()
+        fun frames() = pump.writes.count { it.first == YpsoWritePolicy.TBR_START_STOP_UUID }
+        // The final fragment stalls inside the link, past the window, after its caller's own check would have passed.
+        pump.onProperties = { if (it == YpsoWritePolicy.TBR_START_STOP_UUID && frames() == 3) elapsed = 60_000L }
+        manager.writeTbr("tbr", 0, 30, {}, mayDispatch = { elapsed <= 30_000L }) { outcome, _ -> outcomes += outcome }
+        assertEquals(1, frames())
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+        assertEquals(3, frames())
+        assertTrue(outcomes.isEmpty(), "$outcomes")
+
+        pump.ackWrite(YpsoWritePolicy.TBR_START_STOP_UUID)
+
+        assertEquals(3, frames())
+        assertTrue(outcomes.single() is YpsoWriteOutcome.PossiblyApplied, "$outcomes")
+    }
+
+    @Test
     fun `therapy and descriptor writes outside their operation never reach the pump`() {
         val pump = fixture.connectWithProtocol()
         pump.expose(YpsoWritePolicy.BOLUS_START_STOP_UUID, YpsoWritePolicy.TBR_START_STOP_UUID, YpsoWritePolicy.EVENT_INDEX_UUID)

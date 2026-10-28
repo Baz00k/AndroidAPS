@@ -31,6 +31,7 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import app.aaps.pump.ypsopump.history.YpsoHistoryCursor
 import app.aaps.pump.ypsopump.history.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
 import app.aaps.pump.ypsopump.tbr.YpsoTbrObservation
 import java.time.Duration
@@ -899,11 +900,7 @@ class YpsoBleManager @Inject internal constructor(
                 plain(CHAR_SYSTEM_TIME) { time ->
                     val after = System.currentTimeMillis()
                     val local = if (date != null && time != null) YpsoProfileReadback.decodeClock(date, time) else null
-                    val offset = local?.let {
-                        val phone = (before + after) / 2
-                        val pumpAsPhoneLocal = it.atZone(pumpState.historyZone).toInstant().toEpochMilli()
-                        pumpAsPhoneLocal - phone
-                    }
+                    val offset = local?.let { YpsoPumpLocalTime.clockOffsetMs(it, (before + after) / 2, pumpState.historyZone) }
                     // The time is read after the date; near midnight the pair may straddle two days.
                     val nearMidnight = local != null && (local.toLocalTime().toSecondOfDay() < 10 || local.toLocalTime().toSecondOfDay() > 86_390)
                     done(offset?.takeIf { !nearMidnight })
@@ -1306,6 +1303,7 @@ class YpsoBleManager @Inject internal constructor(
         percent: Int,
         durationMinutes: Int,
         beforeDispatch: (PumpSession.Reservation) -> Unit,
+        mayDispatch: () -> Boolean = { true },
         onOutcome: (YpsoWriteOutcome, TbrCommandOwner?) -> Unit,
     ) {
         fun notSent(layer: YpsoWriteFailure.Layer, detail: String) = onOutcome(
@@ -1331,7 +1329,7 @@ class YpsoBleManager @Inject internal constructor(
                 link.release(lease)
                 return@enableControlNotifications notSent(YpsoWriteFailure.Layer.READINESS, "Could not prepare the pump. Please try again.")
             }
-            tbrLane.write(owner, writeId, TbrCommand(percent, durationMinutes).encode(), firmware(), beforeDispatch) { outcome ->
+            tbrLane.write(owner, writeId, TbrCommand(percent, durationMinutes).encode(), firmware(), beforeDispatch, mayDispatch) { outcome ->
                 // Only a command that still holds the link has a same-link status read to resolve it.
                 onOutcome(outcome, publicOwner.takeIf { tbrLane.category.keepsLink(outcome) })
             }

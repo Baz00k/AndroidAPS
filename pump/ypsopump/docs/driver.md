@@ -97,9 +97,13 @@ When you move to another time zone, set the pump clock to the new local time. Th
 
 Before a daylight saving time change, AAPS shows **Daylight Saving time change in 24h or less**. After the change, AAPS pauses the closed loop for 3 hours.
 
+When the clocks go back, one hour happens twice, and the pump history does not say which time it means. AAPS places the doses it sent itself. Avoid setting a temporary basal or stopping the pump on the pump itself during that hour: AAPS cannot place it, and pump history stops synchronizing.
+
 ### History incomplete
 
 **YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.** means some doses from the pump may be missing in AAPS. If so, insulin on board in AAPS is wrong. Compare the pump history with the doses in AAPS before you give extra insulin.
+
+If history synchronization stays stuck for a long time, AAPS keeps only its most recent temporary basal commands. When synchronization resumes, AAPS takes the older temporary basals it set from pump history, so they show as set on the pump.
 
 ### Battery level
 

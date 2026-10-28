@@ -90,7 +90,9 @@ internal class FakeYpsoPump : YpsoGattAdapter {
         var onRead: (UUID) -> Unit = {}
         var onDescriptorWrite: () -> Unit = {}
 
-        override fun properties(uuid: UUID): Int? = characteristics[uuid]
+        /** Runs when the link looks up a characteristic, as it does just before handing a frame to GATT. */
+        var onProperties: (UUID) -> Unit = {}
+        override fun properties(uuid: UUID): Int? = characteristics[uuid].also { onProperties(uuid) }
         override fun customCharacteristics(): Map<UUID, List<UUID>> = emptyMap()
         override fun discoverServices(): Boolean = discoverServices.invoke()
 

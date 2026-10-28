@@ -32,6 +32,8 @@ class YpsoTbrControllerTest {
         var counterRetries = 0
         var sendStart = true
         var onCommand: (Int) -> Unit = {}
+        /** The transport withheld every frame after the attempt was journalled as dispatched. */
+        var withheldAfterDispatch = false
 
         override fun status(): YpsoTbrObservation? = if (readable) observe() else null
 
@@ -44,6 +46,10 @@ class YpsoTbrControllerTest {
             beforeDispatch: (Long) -> Unit,
         ): YpsoTbrCommandEvidence {
             if (durationMinutes > 0 && !sendStart) return YpsoTbrCommandEvidence(YpsoTbrWriteResult.NotSent("link"), null, null, null)
+            if (withheldAfterDispatch) {
+                beforeDispatch(clock)
+                return YpsoTbrCommandEvidence(YpsoTbrWriteResult.NotSent("first frame was not dispatched"), null, clock, null)
+            }
             val dispatchedAt = clock
             repeat(if (durationMinutes > 0) counterRetries + 1 else 1) { beforeDispatch(clock); clock += 100 }
             commands += percent to durationMinutes
@@ -173,6 +179,18 @@ class YpsoTbrControllerTest {
 
         assertTrue(result is Result.Started)
         assertEquals(1_000_000L, records.runningAt(clock)!!.start)
+    }
+
+    @Test
+    fun `a start the transport withheld after it was journalled fails as not sent and leaves nothing open`() {
+        val pump = Pump().apply { withheldAfterDispatch = true }
+        val controller = controller(pump)
+
+        assertEquals(Result.Failed(YpsoTbrController.Reason.COMMAND_NOT_SENT, false), controller.start(YpsoTbrRequest(0, 30), "NORMAL"))
+
+        assertEquals(YpsoTbrAttempt.State.NO_EFFECT, starts.single().state)
+        assertFalse(controller.hasUnresolved())
+        assertTrue(records.byTempId.isEmpty())
     }
 
     @Test

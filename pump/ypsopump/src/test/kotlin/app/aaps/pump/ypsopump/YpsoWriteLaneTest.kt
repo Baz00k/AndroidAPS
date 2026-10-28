@@ -46,7 +46,8 @@ internal class YpsoWriteLaneTest {
         var acceptFrames = true
         var onRecoverInterruptedWrite: () -> Unit = {}
 
-        override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray): Boolean {
+        override fun writeFrame(epoch: YpsoConnectionEpoch, lease: YpsoLinkLease, value: ByteArray, mayDispatch: () -> Boolean): Boolean {
+            if (!mayDispatch()) return false
             frames += value.copyOf()
             return acceptFrames
         }
@@ -110,7 +111,7 @@ internal class YpsoWriteLaneTest {
             writeId: String = "write",
             plaintext: ByteArray = this.plaintext,
             beforeDispatch: (PumpSession.Reservation) -> Unit = {},
-        ) = lane.write(owner, writeId, plaintext, "V05.00.52", beforeDispatch, outcomes::add)
+        ) = lane.write(owner, writeId, plaintext, "V05.00.52", beforeDispatch, onOutcome = outcomes::add)
 
         fun callback(owner: YpsoWriteLane.Owner, status: Int = 0) = lane.onCharacteristicWrite(owner.epoch.connection, status)
 
@@ -185,6 +186,19 @@ internal class YpsoWriteLaneTest {
 
         assertTrue(pump.outcomes.single() is YpsoWriteOutcome.NotSent, "${pump.outcomes}")
         assertEquals(category.selector, pump.holds(owner))
+        assertTrue(pump.lane.isIdle())
+    }
+
+    @Test
+    fun `a TBR write its caller holds back at dispatch writes no frame, reports not sent and gives the link back`() {
+        val pump = Pump(Category.TBR)
+        val owner = pump.owner()
+
+        pump.lane.write(owner, "write", pump.plaintext, "V05.00.52", mayDispatch = { false }, onOutcome = pump.outcomes::add)
+
+        assertTrue(pump.outcomes.single() is YpsoWriteOutcome.NotSent, "${pump.outcomes}")
+        assertTrue(pump.link.frames.isEmpty())
+        assertFalse(pump.holds(owner))
         assertTrue(pump.lane.isIdle())
     }
 

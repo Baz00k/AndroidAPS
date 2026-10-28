@@ -127,6 +127,11 @@ class YpsoPumpPlugin @Inject constructor(
     private var publishedProfileMismatch: String? = null
     /** Last published unresolved-bolus warning state, or null before the first publication. */
     @Volatile private var publishedUnresolvedBolusWarning: Boolean? = null
+    /**
+     * Held across every read-modify-write of this driver's TBR records, here and in history accounting,
+     * so one never writes back what another just changed. No pump I/O runs under it.
+     */
+    private val tbrRecordLock = Any()
     private val tbrJournal by lazy {
         YpsoTbrJournal(YpsoTbrAttemptFileStore(java.io.File(bleManager.noBackupDirectory(), "ypsopump-tbr-attempts.json")))
     }
@@ -136,12 +141,13 @@ class YpsoPumpPlugin @Inject constructor(
             pumpSync,
             hasRecordedBolus = { serial, pumpId -> bolus.ownsHistoryBolus(serial, pumpId) },
             resolveProvisional = { serial, pumpId, timestamp, amount, type -> bolus.bindProvisional(serial, pumpId, timestamp, amount, type) },
+            bolusDispatchedAt = { serial, pumpId -> bolus.historyBolusDispatchedAt(serial, pumpId) },
             registeredAt = ::pumpRegisteredAt,
             tbrAccounting = YpsoTbrHistoryAccounting(pumpSync, tbrJournal, object : YpsoTbrRecordLookup {
                 // Row times move by the clock offset measured on each read; search well before this one.
                 override fun byPumpId(pumpId: Long, pumpSerial: String, start: Long) =
                     tbrRecords(pumpSerial, start - 24 * 60 * 60_000L, includeInvalid = true).singleOrNull { it.ids.pumpId == pumpId }
-                        ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid) }
+                        ?.let { YpsoTbrRecordLookup.Record(it.timestamp, it.duration, it.isValid, it.ids.temporaryId) }
 
                 override fun suspendActiveAt(pumpSerial: String, at: Long) = activeTbrRecords(pumpSerial, at)
                     .any { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND }
@@ -165,10 +171,16 @@ class YpsoPumpPlugin @Inject constructor(
                 override fun statusSuspendsFrom(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
                     .filter { it.type == app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && it.ids.pumpId == null && it.timestamp >= from }
                     .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.StatusSuspend(it, record.timestamp, record.duration) } }
-            }, registeredAt = ::pumpRegisteredAt),
+
+                override fun provisionalStarts(pumpSerial: String, from: Long) = tbrRecords(pumpSerial, from)
+                    .filter { it.type != app.aaps.core.data.model.TB.Type.PUMP_SUSPEND && !it.isAbsolute && it.ids.pumpId == null && it.timestamp >= from }
+                    .mapNotNull { record -> record.ids.temporaryId?.let { YpsoTbrRecordLookup.Provisional(it, record.timestamp, record.duration, Math.round(record.rate).toInt()) } }
+            }, registeredAt = ::pumpRegisteredAt, recordLock = tbrRecordLock, log = { aapsLogger.error(LTag.PUMP, "YpsoPump TBR stand-in: $it") }),
         )
     }
     private val tbrControllerLazy = lazy {
+        // Before the controller journals any start, which could push out an unmatched one still unbound.
+        historyIngestion.keepTbrStandIns()?.let { aapsLogger.error(LTag.PUMP, "YpsoPump TBR stand-in: $it") }
         YpsoTbrController(
             YpsoTbrBleLink(bleManager, readStatus = { readTherapyStatus() == TherapyStatusReadiness.READY }),
             tbrJournal,
@@ -212,23 +224,23 @@ class YpsoPumpPlugin @Inject constructor(
             tbrRecords(attempt.pumpSerial, attempt.effectiveAt ?: attempt.createdAt, includeInvalid)
                 .singleOrNull { it.ids.temporaryId == attempt.temporaryId || attempt.pumpId != null && it.ids.pumpId == attempt.pumpId }
 
-        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved {
+        override fun saveStart(attempt: YpsoTbrAttempt, timestamp: Long): YpsoTbrRecords.Saved = synchronized(tbrRecordLock) {
             val existing = find(attempt, includeInvalid = true)
-            if (existing != null && !existing.isValid) return YpsoTbrRecords.Saved.DELETED
+            if (existing != null && !existing.isValid) return@synchronized YpsoTbrRecords.Saved.DELETED
             if (existing == null) {
                 pumpSync.addTemporaryBasalWithTempId(
                     timestamp, attempt.percent.toDouble(), attempt.durationMinutes * 60_000L, false,
                     attempt.temporaryId, PumpSync.TemporaryBasalType.valueOf(attempt.type), PumpType.YPSOPUMP, attempt.pumpSerial,
                 )
             }
-            val saved = find(attempt) ?: return YpsoTbrRecords.Saved.NOT_SAVED
-            return if (saved.timestamp == timestamp && !saved.isAbsolute && saved.rate == attempt.percent.toDouble())
+            val saved = find(attempt) ?: return@synchronized YpsoTbrRecords.Saved.NOT_SAVED
+            if (saved.timestamp == timestamp && !saved.isAbsolute && saved.rate == attempt.percent.toDouble())
                 YpsoTbrRecords.Saved.SAVED else YpsoTbrRecords.Saved.NOT_SAVED
         }
 
-        override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean {
-            val saved = find(attempt) ?: return false
-            return shorten(saved, end)
+        override fun shortenStart(attempt: YpsoTbrAttempt, end: Long): Boolean = synchronized(tbrRecordLock) {
+            val saved = find(attempt) ?: return@synchronized false
+            shorten(saved, end)
         }
 
         /** Duration-only update; never an end-event identity, which would freeze the record. */
@@ -256,7 +268,9 @@ class YpsoPumpPlugin @Inject constructor(
          * (below 100 % or a stop) ends when it was last seen, a high TBR ends at this observation.
          * Pump history later moves the end to the pump's own time.
          */
-        override fun reconcileWith(observation: YpsoTbrObservation) {
+        override fun reconcileWith(observation: YpsoTbrObservation) = synchronized(tbrRecordLock) { reconcileLocked(observation) }
+
+        private fun reconcileLocked(observation: YpsoTbrObservation) {
             val serial = serialNumber().takeIf(String::isNotBlank) ?: return
             val at = observation.observedAt
             var allEnded = true
@@ -1032,6 +1046,8 @@ class YpsoPumpPlugin @Inject constructor(
                 // discarded whole, so background recovery always reads the full ring.
                 val maxRows = if (cursor == null) 1 else HISTORY_RECOVERY_MAX_ROWS
                 var timedOut = false
+                // Before the read, so every row of these records' starts is in it or behind the cursor.
+                val provisional = serialNumber().takeIf { it.isNotBlank() }?.let { historyIngestion.provisionalTbrs(it, System.currentTimeMillis()) }.orEmpty()
                 val snapshot = readHistoryBlocking(
                     timeoutMs = HISTORY_RECOVERY_TIMEOUT_MS,
                     maxRows = maxRows,
@@ -1049,7 +1065,7 @@ class YpsoPumpPlugin @Inject constructor(
                         reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("no usable history", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT))
                     }
                     else                          -> {
-                        val result = ingestHistory(snapshot)
+                        val result = ingestHistory(snapshot, provisional)
                         reportHistoryRecovery(result)
                         aapsLogger.debug(LTag.PUMP, "YpsoPump history recovery after $reason ingested: $result")
                         publishTbrWarningIfNeeded()
@@ -1180,7 +1196,7 @@ class YpsoPumpPlugin @Inject constructor(
         return !historyRecoveryActive.get()
     }
 
-    private fun ingestHistory(snapshot: YpsoHistorySnapshot): YpsoHistoryIngestionResult {
+    private fun ingestHistory(snapshot: YpsoHistorySnapshot, provisional: List<YpsoTbrRecordLookup.Provisional>): YpsoHistoryIngestionResult {
         logHistorySnapshotShape(snapshot)
         val serial = serialNumber()
         val zone = pumpState.historyZone
@@ -1192,7 +1208,7 @@ class YpsoPumpPlugin @Inject constructor(
         }
         val pass = bolus.reconcileHistory(serial, zone, epoch.generation, reboot, snapshot) as? YpsoBolusDelivery.HistoryPass.Proceed
             ?: return YpsoHistoryIngestionResult.Blocked("terminal bolus event is awaiting identity reconciliation", retry = YpsoHistoryIngestionResult.Retry.TRANSIENT)
-        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot) { event -> pass.treatment(event.identity.aapsPumpId) }
+        val result = historyIngestion.ingest(serial, zone, reboot.toLong(), snapshot, provisional) { event -> pass.treatment(event.identity.aapsPumpId) }
         if (result is YpsoHistoryIngestionResult.Blocked) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history ingestion blocked: ${result.reason}")
         }
