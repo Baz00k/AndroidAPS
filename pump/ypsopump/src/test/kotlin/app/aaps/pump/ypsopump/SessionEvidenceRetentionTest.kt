@@ -1,6 +1,7 @@
 package app.aaps.pump.ypsopump
 
 import app.aaps.pump.ypsopump.crypto.PumpSession
+import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -92,22 +93,49 @@ class SessionEvidenceRetentionTest {
     }
 
     @Test
-    fun `therapy uncertain rejected and qualified evidence are not discarded with selector audit`() {
-        val protected = listOf(
-            evidence(0).copy(purpose = "BOLUS"),
-            evidence(1).copy(purpose = "TBR"),
-            evidence(2).copy(resolution = null),
-            evidence(3).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED),
-            evidence(4).copy(candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR),
-            evidence(5).copy(characteristic = "another-characteristic"),
+    fun `every kind of proof is bounded so a long paired pump keeps a small journal`() {
+        val kinds = listOf<(Int) -> PumpSession.WriteEvidence>(
+            { evidence(it).copy(resolution = null) },
+            { evidence(it).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED) },
+            { therapyEvidence(it).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_CONSUMED) },
+            { evidence(it).copy(candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR) },
+            { evidence(it).copy(characteristic = "another-characteristic") },
+            { therapyEvidence(it).copy(purpose = "BOLUS") },
+            ::therapyEvidence,
+            ::evidence,
         )
-        val history = (10 until 1010).map(::evidence)
-        val store = store(protected + history)
+        val history = (0 until 5000).map { kinds[it % kinds.size](it) }
+        val store = store(history)
         val session = PumpSession(store)
         session.open("pump", key)
-        assertEquals(protected + history.takeLast(32), session.snapshot()!!.writeEvidence)
         session.setAvailability(PumpSession.Availability())
-        assertEquals(protected + history.takeLast(32), store.saved.records.single().writeEvidence)
+        val retained = store.saved.records.single().writeEvidence
+        assertTrue(retained.size <= 4 * 32, "Retained ${retained.size} proofs")
+        assertEquals(history.last(), retained.last())
+        assertEquals(20_000L, store.saved.records.single().write)
+    }
+
+    @Test
+    fun `an unresolved proof stays until a later consumed counter supersedes it`() {
+        val open = evidence(0).copy(resolution = null)
+        val rejected = (1..1000).map { evidence(it).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED) }
+        val store = store(listOf(open) + rejected)
+        PumpSession(store).also { it.open("pump", key) }.setAvailability(PumpSession.Availability())
+        assertEquals(listOf(open) + rejected.takeLast(32), store.saved.records.single().writeEvidence)
+
+        val accepted = (1001..1032).map(::evidence)
+        store.saved = store(listOf(open) + rejected + accepted).saved
+        PumpSession(store).also { it.open("pump", key) }.setAvailability(PumpSession.Availability())
+        assertEquals(accepted, store.saved.records.single().writeEvidence.filter { it.resolution == PumpSession.WriteResolution.ACCEPTED })
+        assertTrue(store.saved.records.single().writeEvidence.none { it.resolution == null })
+    }
+
+    @Test
+    fun `open unresolved proofs are bounded too`() {
+        val open = (0 until 1000).map { evidence(it).copy(resolution = null) }
+        val store = store(open)
+        PumpSession(store).also { it.open("pump", key) }.setAvailability(PumpSession.Availability())
+        assertEquals(open.takeLast(32), store.saved.records.single().writeEvidence)
     }
 
     @Test
@@ -158,19 +186,38 @@ class SessionEvidenceRetentionTest {
     }
 
     @Test
-    fun `accepted therapy tail never removes uncertainty rejection unknown commands or current proof`() {
+    fun `repeated observations of one unresolved write stay bounded and still allow the reboot transition`() {
+        val store = store((0 until 100).map(::therapyEvidence))
+        val session = PumpSession(store)
+        val token = session.open("pump", key)
+        val tx = session.begin(token)
+        session.reserve(token, tx, PumpSession.WriteIntent("pending-bolus", bolus, "THERAPY_COMMAND", "ab".repeat(32)))
+        session.advance(token, tx, PumpSession.Phase.POSSIBLY_SENT)
+        session.finish(token, tx)
+        repeat(100) { i ->
+            session.recordUnresolvedWriteEvidence(token, tx, "%064x".format(i), "status did not yet establish delivery")
+        }
+        val current = store.saved.records.single().writeEvidence.filter { it.reservationId == tx }
+        assertEquals((68 until 100).map { "%064x".format(it) }, current.map { it.evidenceHash })
+        assertEquals(PumpSession.Phase.POSSIBLY_SENT, store.saved.records.single().reservation!!.phase)
+
+        val restarted = PumpSession(store)
+        val reopened = restarted.open("pump", key)
+        assertThrows(IllegalStateException::class.java) { restarted.reserve(reopened, restarted.begin(reopened)) }
+        restarted.quiesce()
+        val again = restarted.open("pump", key)
+        val read = restarted.begin(again)
+        assertThrows(PumpSession.RebootAdoptedException::class.java) {
+            restarted.accept(again, read, SessionCrypto.Message(byteArrayOf(1), 9, 1), allowObservedReboot = true)
+        }
+        assertEquals(9, store.saved.records.single().reboot)
+    }
+
+    @Test
+    fun `an old current therapy proof remains pinned behind a full therapy tail`() {
         val currentProof = therapyEvidence(0)
-        val protected = listOf(
-            currentProof,
-            therapyEvidence(1).copy(resolution = null),
-            therapyEvidence(2).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_CONSUMED),
-            therapyEvidence(3).copy(resolution = PumpSession.WriteResolution.REJECTED_COUNTER_NOT_CONSUMED),
-            evidence(4).copy(candidate = PumpSession.WriteCandidate.LOWER_BOUND_HISTORY_RECOVERY_SELECTOR),
-            therapyEvidence(5).copy(characteristic = "another-characteristic"),
-            therapyEvidence(6).copy(purpose = "BOLUS"),
-        )
         val history = (10 until 1010).map(::therapyEvidence)
-        val store = store(protected + history)
+        val store = store(listOf(currentProof) + history)
         val record = store.saved.records.single()
         store.saved = store.saved.copy(records = listOf(record.copy(
             write = currentProof.counter,
@@ -179,9 +226,9 @@ class SessionEvidenceRetentionTest {
         )))
         val session = PumpSession(store)
         session.open("pump", key)
-        assertEquals(protected + history.takeLast(32), session.snapshot()!!.writeEvidence)
+        assertEquals(listOf(currentProof) + history.takeLast(32), session.snapshot()!!.writeEvidence)
         session.setAvailability(PumpSession.Availability())
-        assertEquals(protected + history.takeLast(32), store.saved.records.single().writeEvidence)
+        assertEquals(listOf(currentProof) + history.takeLast(32), store.saved.records.single().writeEvidence)
     }
 
     @Test
@@ -217,7 +264,7 @@ class SessionEvidenceRetentionTest {
     }
 
     @Test
-    fun `later acceptance can age out but prior unresolved therapy evidence survives restart`() {
+    fun `an unresolved therapy proof ages out once its acceptance and later proofs supersede it`() {
         val store = store(emptyList())
         val session = PumpSession(store)
         val token = session.open("pump", key)
@@ -240,9 +287,9 @@ class SessionEvidenceRetentionTest {
         }
 
         val retained = session.snapshot()!!.writeEvidence
-        assertEquals(33, retained.size)
-        assertEquals(unresolved, retained.first())
-        assertTrue(retained.none { it.reservationId == first && it.resolution == PumpSession.WriteResolution.ACCEPTED })
+        assertEquals(32, retained.size)
+        assertTrue(retained.none { it.reservationId == first })
+        assertTrue(unresolved !in retained)
         val restarted = PumpSession(store)
         restarted.open("pump", key)
         assertEquals(retained, restarted.snapshot()!!.writeEvidence)
