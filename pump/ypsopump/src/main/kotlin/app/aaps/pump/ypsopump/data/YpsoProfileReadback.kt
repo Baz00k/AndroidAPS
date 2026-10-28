@@ -60,20 +60,30 @@ internal class YpsoProfileReadback(
         maxAcquisitionMs: Long,
         maxClockSkew: Duration,
         eventCount: Int,
-    ): VerifiedReadback? {
-        if (invalidated || eventCount < 0) return null
+    ): Result {
+        if (invalidated) return Result.Rejected("acquisition was invalidated")
+        if (eventCount < 0) return Result.Rejected("event count is negative")
         invalidated = true
-        if (generation != sessionGeneration || currentReboot != reboot || currentConnectionId != connectionId) return null
-        if (maxAcquisitionMs <= 0 || finishedElapsedMs - startedElapsedMs !in 0..maxAcquisitionMs) return null
-        if (maxClockSkew.isNegative || maxClockSkew.isZero) return null
-        if (YpsoBasalSchedule.Program.decode(activeAfterBody) != activeBefore || rows.size != 48) return null
+        if (generation != sessionGeneration || currentReboot != reboot || currentConnectionId != connectionId) return Result.Rejected("pump session changed")
+        if (maxAcquisitionMs <= 0 || finishedElapsedMs - startedElapsedMs !in 0..maxAcquisitionMs) return Result.Rejected("acquisition took too long")
+        if (maxClockSkew.isNegative || maxClockSkew.isZero) return Result.Rejected("clock tolerance is not positive")
+        if (YpsoBasalSchedule.Program.decode(activeAfterBody) != activeBefore) return Result.Rejected("active program changed")
+        if (rows.size != 48) return Result.Rejected("${rows.size} of 48 rows read")
         val offsets = zone.rules.getValidOffsets(pumpLocalTime)
-        if (offsets.size != 1) return null
-        val pumpInstant = pumpLocalTime.toInstant(offsets.single())
-        if (Duration.between(pumpInstant, observedAt).abs() > maxClockSkew) return null
-        val a = YpsoBasalSchedule.decode((14..37).map { rows[it] ?: return null }) ?: return null
-        val b = YpsoBasalSchedule.decode((38..61).map { rows[it] ?: return null }) ?: return null
-        return VerifiedReadback(sessionGeneration, reboot, connectionId, activeBefore, a, b, finishedElapsedMs, zone, eventCount, observedAt)
+        if (offsets.size != 1) return Result.Rejected("pump time $pumpLocalTime is ambiguous or skipped in $zone")
+        val pumpAhead = Duration.between(observedAt, pumpLocalTime.toInstant(offsets.single()))
+        if (pumpAhead.abs() > maxClockSkew) return Result.Rejected("pump clock is ${pumpAhead.seconds} s off the phone, limit ${maxClockSkew.seconds} s", pumpAhead)
+        val a = YpsoBasalSchedule.decode((14..37).map { rows[it] ?: return Result.Rejected("profile A row $it missing") })
+            ?: return Result.Rejected("profile A has an invalid rate")
+        val b = YpsoBasalSchedule.decode((38..61).map { rows[it] ?: return Result.Rejected("profile B row $it missing") })
+            ?: return Result.Rejected("profile B has an invalid rate")
+        return Result.Verified(VerifiedReadback(sessionGeneration, reboot, connectionId, activeBefore, a, b, finishedElapsedMs, zone, eventCount, observedAt))
+    }
+
+    sealed interface Result {
+        class Verified(val readback: VerifiedReadback) : Result
+        /** [reason] names the failed condition; [pumpClockAhead] is set when the pump clock caused it. */
+        class Rejected(val reason: String, val pumpClockAhead: Duration? = null) : Result
     }
 
     class VerifiedReadback internal constructor(

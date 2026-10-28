@@ -13,6 +13,10 @@
     <string name="ypsopump_profile_read_at">Basal profiles last read</string>
     <string name="ypsopump_profile_read_complete">Completed</string>
     <string name="ypsopump_profile_read_incomplete">Not completed; previous schedules retained</string>
+    <string name="ypsopump_profile_read_clock_ahead">Not completed: the pump clock is %1$s ahead of the phone. Set the pump time to match the phone, then read again. Previous schedules retained.</string>
+    <string name="ypsopump_profile_read_clock_behind">Not completed: the pump clock is %1$s behind the phone. Set the pump time to match the phone, then read again. Previous schedules retained.</string>
+    <string name="ypsopump_clock_offset_seconds">%1$d\u00A0s</string>
+    <string name="ypsopump_clock_offset_minutes">%1$d\u00A0min %2$d\u00A0s</string>
     <string name="ypsopump_name">YpsoPump</string>
     <string name="ypsopump_name_short">Ypso</string>
     <string name="ypsopump_description">YpsoPump status, bolus, extended bolus and temporary basal delivery.</string>

@@ -129,6 +129,12 @@ class YpsoBleManager @Inject internal constructor(
         private val SUPPORTED_CONTROL_SERVICE_VERSION = "1.3\u0000".toByteArray(Charsets.US_ASCII)
         /** Wall time may run this far from monotonic time over one pump clock read without a phone clock step. */
         private const val PHONE_CLOCK_STEP_MS = 1_000L
+        /**
+         * The pump clock is set by hand to the minute and drifts, so it is never exactly on the phone.
+         * Off by this much, an hourly rate change happens at most five minutes away from where AAPS
+         * places it; an unset DST or zone change (an hour or more) is still rejected.
+         */
+        internal val MAX_PROFILE_CLOCK_SKEW: Duration = Duration.ofMinutes(5)
     }
 
     // ---- configuration and connection ----
@@ -236,6 +242,9 @@ class YpsoBleManager @Inject internal constructor(
         internal val isActive: Boolean get() = active.get()
         internal var onCancel: () -> Unit = {}
         internal fun tryComplete(): Boolean = active.compareAndSet(true, false)
+        /** Set when the read failed only because the pump clock was too far off the phone. */
+        @Volatile var pumpClockAhead: Duration? = null
+            internal set
         fun cancel(): Boolean {
             if (!active.compareAndSet(true, false)) return false
             onCancel()
@@ -554,7 +563,7 @@ class YpsoBleManager @Inject internal constructor(
         fun finish(date: ByteArray, time: ByteArray, activeAfter: ByteArray, eventCountAfter: Int) {
             if (eventCountAfter != eventCountBefore) return failProfile("event count changed during profile acquisition")
             val local = YpsoProfileReadback.decodeClock(date, time) ?: return failProfile("pump clock is malformed")
-            val evidence = readback?.finish(
+            val result = readback?.finish(
                 epoch.generation,
                 reboot,
                 connectionId,
@@ -564,9 +573,14 @@ class YpsoBleManager @Inject internal constructor(
                 Instant.now(),
                 ZoneId.systemDefault(),
                 maxAcquisitionMs = 5 * 60 * 1000L,
-                maxClockSkew = Duration.ofSeconds(30),
+                maxClockSkew = MAX_PROFILE_CLOCK_SKEW,
                 eventCount = checkNotNull(eventCountBefore),
-            ) ?: return failProfile("coherence validation failed")
+            ) ?: return failProfile("no acquisition to validate")
+            if (result is YpsoProfileReadback.Result.Rejected) {
+                attempt.pumpClockAhead = result.pumpClockAhead
+                return failProfile("coherence validation failed: ${result.reason}")
+            }
+            val evidence = (result as YpsoProfileReadback.Result.Verified).readback
             if (publish(evidence, "publication") != true) return
             aapsLogger.info(LTag.PUMP, "YpsoPump coherent profile accepted: program=${evidence.activeProgram}, eventCount=${evidence.eventCount}, elapsedMs=${evidence.acquiredElapsedMs - startedElapsed}")
             onDone(true)

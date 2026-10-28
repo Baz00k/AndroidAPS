@@ -114,6 +114,23 @@ class YpsoBleManagerAcquisitionTest {
     }
 
     @Test
+    fun `a hand-set pump clock minutes off the phone still yields profile evidence`() {
+        assertNull(acquireProfile(pumpClockAheadSeconds = -4 * 60).pumpClockAhead)
+    }
+
+    @Test
+    fun `a pump clock past the limit fails the read and reports how far ahead it is`() {
+        val pumpAhead = checkNotNull(acquireProfile(pumpClockAheadSeconds = 6 * 60, expectedSuccess = false).pumpClockAhead)
+        // The pump clock has whole seconds, so it reads up to a second behind the phone sample.
+        assertTrue(pumpAhead.seconds in 6 * 60 - 2L..6 * 60L, "pump ahead by $pumpAhead")
+    }
+
+    @Test
+    fun `a read failing on something other than the clock reports no clock offset`() {
+        assertNull(acquireProfile(finalCount = 3002, expectedSuccess = false).pumpClockAhead)
+    }
+
+    @Test
     fun `production acquisition rejects malformed selector identity without reading its value`() {
         acquireProfile(malformedIdentity = true)
     }
@@ -560,8 +577,8 @@ class YpsoBleManagerAcquisitionTest {
     private fun acquireProfile(
         finalCount: Int = 3000, malformedIdentity: Boolean = false, cancelAfterFirstRow: Boolean = false,
         yieldAfterFirstRow: Boolean = false, activeOnly: Boolean = false, expectedSuccess: Boolean = true,
-        cachedZone: ZoneId = ZoneId.systemDefault(),
-    ) {
+        cachedZone: ZoneId = ZoneId.systemDefault(), pumpClockAheadSeconds: Long = 0,
+    ): YpsoBleManager.ProfileReadAttempt {
         val fixture = YpsoPumpFixture(initial = established())
         val manager = fixture.manager
         val pumpState = fixture.pumpState
@@ -597,7 +614,7 @@ class YpsoBleManagerAcquisitionTest {
             assertFalse(CHAR_SETTING_VALUE in connection.reads)
             // Unreconciled, so it keeps blocking later writes; the transport ACK itself is not journalled.
             assertEquals(PumpSession.Phase.POSSIBLY_SENT, fixture.session.snapshot()!!.reservation!!.phase)
-            return
+            return attempt
         }
         selected(1, if (activeOnly) 10 else 3)
         if (activeOnly) {
@@ -605,7 +622,7 @@ class YpsoBleManagerAcquisitionTest {
             if (!expectedSuccess) {
                 assertEquals(listOf(false), results)
                 assertFalse(pumpState.hasFreshProfileEvidence)
-                return
+                return attempt
             }
             assertEquals(listOf(true), results)
             assertEquals("B", pumpState.lastReadProgram)
@@ -613,7 +630,7 @@ class YpsoBleManagerAcquisitionTest {
             assertTrue(pumpState.profileEvidence!!.profileB === previous.profileB)
             assertTrue(pumpState.profileEvidence!!.observedAt >= previous.observedAt)
             assertEquals(4281, manager.writeCounter)
-            return
+            return attempt
         }
         for (id in 14..61) {
             if (yieldAfterFirstRow && id == 14) yielding = true
@@ -631,7 +648,7 @@ class YpsoBleManagerAcquisitionTest {
                 assertEquals(listOf(false), results)
                 assertEquals(4282L, fixture.state.records.single().write)
                 assertFalse(pumpState.hasFreshProfileEvidence)
-                return
+                return attempt
             }
             selected(id, if (id < 38) 50 else 35)
             if (yieldAfterFirstRow) {
@@ -639,12 +656,12 @@ class YpsoBleManagerAcquisitionTest {
                 assertTrue(pumpState.profileEvidence === previous)
                 assertEquals(4282, manager.writeCounter)
                 assertEquals(PumpSession.Phase.VERIFIED, fixture.session.snapshot()!!.reservation!!.phase)
-                return
+                return attempt
             }
             assertFalse(pumpState.hasFreshProfileEvidence)
         }
         selected(1, 3)
-        val now = LocalDateTime.now()
+        val now = LocalDateTime.now().plusSeconds(pumpClockAheadSeconds)
         respond(CHAR_SYSTEM_DATE, byteArrayOf((now.year and 255).toByte(), (now.year shr 8).toByte(), now.monthValue.toByte(), now.dayOfMonth.toByte()))
         respond(CHAR_SYSTEM_TIME, byteArrayOf(now.hour.toByte(), now.minute.toByte(), now.second.toByte()))
         respond(CHAR_EVENT_COUNT, YpsoGlb.encode(finalCount))
@@ -655,6 +672,7 @@ class YpsoBleManagerAcquisitionTest {
         // Selectors resolve from POSSIBLY_SENT by identity read-back: no Keystore-rotating ACK commit.
         assertTrue(PumpSession.Phase.POSSIBLY_SENT in phases)
         assertFalse(PumpSession.Phase.ACKED in phases)
+        return attempt
     }
 
     private fun cachedProfile(fixture: YpsoPumpFixture, zone: ZoneId): YpsoProfileReadback.VerifiedReadback {

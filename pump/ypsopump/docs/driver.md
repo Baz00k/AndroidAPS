@@ -18,7 +18,7 @@ AAPS does not see changes you make on the pump until you read the pump again:
 
 To find these, open the YpsoPump tab, open the menu and choose **YpsoPump Preferences**. They are under **Basal configuration**. Keep the pump close to the phone while AAPS reads it.
 
-When the read is done, AAPS tells you whether the pump matches. For example, it shows **Pump profile A matches the active AAPS profile.** If you see **Not completed; previous schedules retained**, try again. If **Check active pump profile** does not complete, use **Read pump basal profiles** instead.
+When the read is done, AAPS tells you whether the pump matches. For example, it shows **Pump profile A matches the active AAPS profile.** If you see **Not completed; previous schedules retained**, try again. The pump clock must be within five minutes of the phone, because AAPS reads the pump's hourly rates by the phone's time. If it is not, the message says how far ahead or behind the pump is; set the pump time to match the phone, then read again. AAPS does not check the pump clock while it loops. For as long as the pump clock is off, each basal rate change on the pump happens that much earlier or later than AAPS expects, so a temporary basal set near the change runs against the other rate. Keep the pump time close to the phone, and set it promptly after a DST change. If **Check active pump profile** does not complete, use **Read pump basal profiles** instead.
 
 ### When the pump and AAPS do not match
 
