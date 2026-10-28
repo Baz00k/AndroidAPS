@@ -601,6 +601,34 @@ class YpsoBolusDeliveryTest {
     }
 
     @Test
+    fun `history confirms a dose a restart left unresolved after a later dose became current`() {
+        assertTrue(deliver(0.5, BS.Type.SMB) is Result.Delivered)
+        // The app restarts before history confirmed the dose, past its observation window.
+        clock += 120_000L
+        delivery.expireStale()
+        delivery.refreshWarning()
+        assertEquals(YpsoBolusOutcome.UNRESOLVED, attempts.single().outcome)
+        assertEquals(true, warnings.last())
+        assertTrue(deliver(0.5, BS.Type.SMB) is Result.Delivered)
+        val rows = listOf(
+            YpsoHistoryEntry(800_000_400L, 2, 50, 0, 0, 48_002L, 0),
+            YpsoHistoryEntry(800_000_100L, 2, 50, 0, 0, 48_001L, 0),
+        )
+
+        historyPass(rows)
+
+        val first = attempts.first()
+        assertEquals(YpsoBolusOutcome.COMPLETED, first.outcome)
+        assertEquals(50, first.confirmedCentiUnits)
+        assertEquals(48_001L, first.pumpHistoryId)
+        assertEquals(false, warnings.last())
+        assertEquals(listOf(48_001L, 48_002L), records.boluses.map { it.ids.pumpId })
+        // Once settled it leaves the journal like any confirmed dose.
+        historyPass(rows)
+        assertEquals(48_002L, attempts.single().pumpHistoryId)
+    }
+
+    @Test
     fun `provisioning reads its counter floor from the journal the module owns`() {
         assertNull(delivery.recoveryEvidence())
         deliver()

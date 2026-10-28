@@ -474,13 +474,22 @@ internal class YpsoBolusDelivery(
         val at = now()
         // The latest dose, plus a notified dose history contradicted or never confirmed while its
         // insulin can still matter. Older unresolved doses stay in the journal for accounting only.
-        showWarning(
-            controller.currentAttempt()?.hasUnresolvedWarning == true ||
-                controller.retainedAttempts().any {
-                    it.hasUnresolvedWarning && it.notifiedFastSequence != null && at - (it.dispatchedAt ?: 0L) < NOTIFIED_WARNING_WINDOW_MS
-                },
-        )
+        val holding = (listOfNotNull(controller.currentAttempt()?.takeIf { it.hasUnresolvedWarning }) +
+            controller.retainedAttempts().filter {
+                it.hasUnresolvedWarning && it.notifiedFastSequence != null && at - (it.dispatchedAt ?: 0L) < NOTIFIED_WARNING_WINDOW_MS
+            }).distinctBy { it.requestId }
+        val ids = holding.map { it.requestId }
+        if (ids != warningHeldBy) {
+            warningHeldBy = ids
+            if (holding.isNotEmpty()) {
+                aapsLogger.warn(LTag.PUMP, "YpsoPump bolus warning held by ${holding.joinToString { "${it.requestId} (${it.detail})" }}")
+            }
+        }
+        showWarning(holding.isNotEmpty())
     }
+
+    /** Doses the warning was last logged for, so each change is logged once. */
+    private var warningHeldBy: List<String> = emptyList()
 
     // ---- history ----
 
@@ -554,7 +563,8 @@ internal class YpsoBolusDelivery(
             bindNotified(attempt, pumpSerial, pumpId, timestamp, Math.round(amount * 100).toInt())
             return
         }
-        if (Math.round(amount * 100) > attempt.requestedCentiUnits) {
+        val centiUnits = Math.round(amount * 100).toInt()
+        if (centiUnits > attempt.requestedCentiUnits) {
             aapsLogger.error(LTag.PUMP, "YpsoPump history row $pumpId exceeds bolus request ${attempt.requestId}; not merged")
             return
         }
@@ -565,6 +575,11 @@ internal class YpsoBolusDelivery(
             ),
             type,
         )
+        if (attempt.awaitsReconciliation) {
+            runCatching { controller.confirmSupersededTerminal(attempt.requestId, centiUnits, timestamp, pumpId) }
+                .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump bolus ${attempt.requestId} not confirmed: ${it.message}") }
+            refreshWarning()
+        }
     }
 
     /**

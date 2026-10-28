@@ -80,6 +80,8 @@ internal class YpsoImmediateBolusController(
     fun retainedAttempts(): List<YpsoBolusAttempt> = journal.all()
     fun confirmNotifiedTerminal(requestId: String, deliveredCentiUnits: Int, timestamp: Long, historyPumpId: Long): YpsoBolusAttempt =
         journal.confirmNotifiedTerminal(requestId, deliveredCentiUnits, timestamp, historyPumpId)
+    fun confirmSupersededTerminal(requestId: String, deliveredCentiUnits: Int, timestamp: Long, historyPumpId: Long): YpsoBolusAttempt? =
+        journal.confirmSupersededTerminal(requestId, deliveredCentiUnits, timestamp, historyPumpId)
     fun rejectNotified(requestId: String, detail: String): YpsoBolusAttempt = journal.rejectNotified(requestId, detail)
     fun expireAwaitingHistory(): List<YpsoBolusAttempt> = journal.expireAwaitingHistory(now())
     val cancellationRequested: Boolean get() = stopRequested.get()
