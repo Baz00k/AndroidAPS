@@ -31,7 +31,10 @@ internal interface YpsoBolusRecords {
     /** Merges the record under [bolus]'s temporary ID with its pump ID, carrying [bolus]'s amount and time. */
     fun syncWithTemporaryId(bolus: BS, type: BS.Type)
 
-    /** Like [syncWithTemporaryId] for an inferred link: refuses when either record was removed. */
+    /**
+     * Like [syncWithTemporaryId] for an inferred link: refuses to merge two records when either was
+     * removed. A removed provisional record with no pump record yet takes the pump ID and stays removed.
+     */
     fun bindNotified(bolus: BS, type: BS.Type): PersistenceLayer.TempIdBinding
 
     fun bolus(pumpId: Long, pumpSerial: String): BS?
@@ -566,9 +569,10 @@ internal class YpsoBolusDelivery(
 
     /**
      * Merges a dose whose only link to its history row is the sequence the pump notified for it. The
-     * link is inferred, not proven, so the merge refuses when either record was removed: carrying a
+     * link is inferred, not proven, so merging two records refuses when either was removed: carrying a
      * removal across an inferred link could erase another dose. What is refused keeps both records,
-     * counting insulin high, and shows the warning.
+     * counting insulin high, and shows the warning. A provisional record the user removed before its
+     * row was imported takes the row's pump ID and stays removed, so the import cannot reinstate it.
      */
     private fun bindNotified(attempt: YpsoBolusAttempt, pumpSerial: String, pumpId: Long, timestamp: Long, centiUnits: Int) {
         if (centiUnits > attempt.requestedCentiUnits) {
@@ -585,8 +589,9 @@ internal class YpsoBolusDelivery(
             treatment,
         )
         when (binding) {
-            // The dose is confirmed only once one valid record carries the row: the merged one, or the
-            // imported row alone when the provisional record was never written (process death).
+            // The dose is confirmed only once one record carries the row: the merged one (still removed
+            // if the user removed it), or the imported row alone when the provisional record was never
+            // written (process death).
             PersistenceLayer.TempIdBinding.NO_RECORD -> Unit
             PersistenceLayer.TempIdBinding.BOUND,
             PersistenceLayer.TempIdBinding.PUMP_RECORD_ONLY ->

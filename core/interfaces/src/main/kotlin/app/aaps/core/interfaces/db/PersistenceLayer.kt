@@ -177,9 +177,10 @@ interface PersistenceLayer {
     enum class TempIdBinding { BOUND, PUMP_RECORD_ONLY, NO_RECORD, REFUSED }
 
     /**
-     * Like [syncPumpBolusWithTempId], for a link a driver inferred rather than proved: binds nothing
-     * if either record was removed, or the pump record already belongs to another temporary id.
-     * The check and the update are one transaction.
+     * Like [syncPumpBolusWithTempId], for a link a driver inferred rather than proved: merges nothing
+     * if either of two separate records was removed, or the pump record already belongs to another
+     * temporary id. A removed temporary-id record with no pump record yet takes the pump id and stays
+     * removed. The check and the update are one transaction.
      */
     fun bindPumpBolusToTempIdIfValid(bolus: BS, type: BS.Type?): Single<TempIdBinding>
 

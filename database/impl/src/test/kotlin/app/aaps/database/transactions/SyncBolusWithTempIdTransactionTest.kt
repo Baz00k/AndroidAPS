@@ -141,6 +141,27 @@ class SyncBolusWithTempIdTransactionTest {
     }
 
     @Test
+    fun `an inferred link binds its row to a removed provisional record so history replay cannot reinstate it`() {
+        val provisional = createBolus(500L, null, 0.2, 1000L).also { it.id = 1; it.isValid = false }
+        val rows = mutableListOf(provisional)
+        whenever(bolusDao.findByPumpTempIds(500L, InterfaceIDs.PumpType.DANA_I, "ABC123"))
+            .thenAnswer { rows.singleOrNull { it.interfaceIDs.temporaryId == 500L } }
+        whenever(bolusDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123"))
+            .thenAnswer { rows.singleOrNull { it.interfaceIDs.pumpId == 100L } }
+        whenever(bolusDao.insertNewEntry(any())).thenAnswer { rows += it.getArgument<Bolus>(0); 2L }
+
+        val bound = SyncBolusWithTempIdTransaction(createBolus(500L, 100L, 0.2, 1000L), null, requireValid = true)
+            .also { it.database = database }.run()
+        SyncPumpBolusTransaction(createBolus(500L, 100L, 0.2, 1000L).also { it.interfaceIDs.temporaryId = null }, null)
+            .also { it.database = database }.run()
+
+        assertThat(bound.refused).isFalse()
+        assertThat(bound.found).isTrue()
+        assertThat(rows.single().interfaceIDs.pumpId).isEqualTo(100L)
+        assertThat(rows.filter { it.isValid }).isEmpty()
+    }
+
+    @Test
     fun `an inferred link merges two valid records into one and reports a missing provisional record`() {
         val provisional = createBolus(500L, null, 0.4, 1000L).also { it.id = 1 }
         val imported = createBolus(900L, 100L, 0.4, 1000L).also { it.id = 2; it.interfaceIDs.temporaryId = null }
