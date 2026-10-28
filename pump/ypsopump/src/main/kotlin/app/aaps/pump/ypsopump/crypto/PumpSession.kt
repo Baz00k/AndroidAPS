@@ -951,34 +951,37 @@ class PumpSession(private val store: Store) {
 
         fun fingerprint(key: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(key).joinToString("") { "%02x".format(it) }
 
+        private enum class EvidenceKind { OPEN, SELECTOR, THERAPY, OTHER }
+
         /**
          * Replay protection uses durable counters and the current reservation; bolus/TBR delivery,
-         * retries and treatment accounting use separate journals. The accepted-proof tails are
-         * diagnostic only, kept separate so history scans cannot evict recent therapy proofs.
-         * Uncertain/rejected writes, unknown commands, lower-bound recovery probes and
-         * current-reservation proofs must remain. Validate before trimming so corrupt evidence
-         * cannot disappear.
+         * retries and treatment accounting use separate journals. Current-reservation proofs are
+         * always kept. Every other proof keeps only the newest [EVIDENCE_TAIL] of its kind; an
+         * unresolved proof counts as open until a later pump-consumed counter supersedes it, so
+         * resolved history cannot evict it, and history scans cannot evict therapy proofs.
+         * Validate before trimming so corrupt evidence cannot disappear.
          */
         private fun compactCompletedEvidence(state: State): State = state.copy(records = state.records.map { record ->
-            if (record.writeEvidence.size <= COMPLETED_EVIDENCE_LIMIT) return@map record
-            var selectors = 0
-            var therapy = 0
+            if (record.writeEvidence.size <= EVIDENCE_TAIL) return@map record
+            val kept = IntArray(EvidenceKind.entries.size)
+            var superseded = false
             val retained = record.writeEvidence.asReversed().filter { evidence ->
-                val completed = evidence.candidate == WriteCandidate.STANDARD && evidence.resolution == WriteResolution.ACCEPTED
-                val withinTail = when {
-                    completed && isReadSelector(evidence.characteristic, evidence.purpose) ->
-                        ++selectors <= COMPLETED_EVIDENCE_LIMIT
-                    completed && evidence.purpose == "THERAPY_COMMAND" &&
-                        evidence.characteristic.lowercase() in THERAPY_COMMAND_CHARACTERISTICS ->
-                        ++therapy <= COMPLETED_EVIDENCE_LIMIT
-                    else -> true
+                val kind = when {
+                    evidence.resolution == null && !superseded -> EvidenceKind.OPEN
+                    evidence.candidate != WriteCandidate.STANDARD -> EvidenceKind.OTHER
+                    isReadSelector(evidence.characteristic, evidence.purpose) -> EvidenceKind.SELECTOR
+                    evidence.purpose == "THERAPY_COMMAND" &&
+                        evidence.characteristic.lowercase() in THERAPY_COMMAND_CHARACTERISTICS -> EvidenceKind.THERAPY
+                    else -> EvidenceKind.OTHER
                 }
-                withinTail || evidence.reservationId == record.reservation?.id
+                if (evidence.resolution == WriteResolution.ACCEPTED || evidence.resolution == WriteResolution.REJECTED_COUNTER_CONSUMED)
+                    superseded = true
+                ++kept[kind.ordinal] <= EVIDENCE_TAIL || evidence.reservationId == record.reservation?.id
             }.asReversed()
             if (retained.size == record.writeEvidence.size) record else record.copy(writeEvidence = retained)
         })
 
-        private const val COMPLETED_EVIDENCE_LIMIT = 32
+        private const val EVIDENCE_TAIL = 32
 
         fun validate(state: State) {
             val duplicateKeys = state.records.groupBy { it.keyId }.filterValues { it.size > 1 }
