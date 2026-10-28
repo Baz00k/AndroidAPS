@@ -608,28 +608,6 @@ class YpsoPumpPluginTest {
     }
 
     @Test
-    fun `after a pump restart with history blocked, doses are sent against the proven reboot`() {
-        prepareHistoryIdentity()
-        val anchor = app.aaps.pump.ypsopump.history.YpsoHistoryEntry(800_000_000L, 4, 0, 0, 0, 100L, 0)
-        prepareHistoryRecovery(YpsoHistorySnapshot(1, 1, 21, 21, anchor, anchor, listOf(anchor), true, pumpClockOffsetMs = 0L))
-        runHistoryRecovery()
-        // The pump restarted as reboot 22 and its clock cannot be read, so the new dose row waits.
-        whenever(manager.epoch()).thenReturn(app.aaps.pump.ypsopump.ble.YpsoConnectionEpoch(
-            mock(), PumpSession.Token("generation", "connection"), "key", null, sequence = 2, reboot = 22,
-        ))
-        val dose = anchor.copy(eventType = 2, value1 = 80, sequence = 101L)
-        prepareHistoryRecovery(YpsoHistorySnapshot(2, 2, 22, 22, dose, dose, listOf(dose, anchor.copy(index = 1)), true))
-        runHistoryRecovery()
-
-        // The cursor the bolus controller checks a dose against, as the plugin wires it.
-        val delivery = plugin.javaClass.getDeclaredField("bolusLazy").apply { isAccessible = true }.get(plugin) as Lazy<*>
-        val historyCursor = delivery.value!!.javaClass.getDeclaredField("historyCursor").apply { isAccessible = true }
-            .get(delivery.value) as () -> app.aaps.pump.ypsopump.history.YpsoHistoryCursor?
-        assertEquals(22L, historyCursor()?.pumpReboot)
-        assertEquals(100L, historyCursor()?.identity?.sequence)
-    }
-
-    @Test
     fun `early ingestion identity failure also publishes the history warning`() {
         prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true))
         runHistoryRecovery()

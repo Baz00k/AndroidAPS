@@ -27,21 +27,11 @@ class YpsoHistoryStateStoreTest {
                 YpsoMutableHistoryState(identity, row.fingerprint(), row.stateFingerprint(), 150, 15),
             ),
             YpsoPendingBolusSync("10000001", (3L shl 32) or 51, 1_700_000_000_000, 100, 51, BS.Type.SMB),
-            provenReboot = 22,
         )
 
         YpsoHistoryStateFileStore(file).commit(expected)
 
         assertEquals(expected, YpsoHistoryStateFileStore(file).load())
-    }
-
-    @Test
-    fun `a state from before proven reboots loads, one from a test build does not`() {
-        val file = Files.createTempDirectory("ypso-history").resolve("state.json").toFile()
-        file.writeText("""{"version":2,"cursor":null,"pendingBolus":null}""")
-        assertEquals(YpsoHistoryState(), YpsoHistoryStateFileStore(file).load())
-        file.writeText("""{"version":4,"cursor":null,"pendingBolus":null,"clock":null,"notice":null}""")
-        assertThrows(IllegalArgumentException::class.java) { YpsoHistoryStateFileStore(file).load() }
     }
 
     @Test

@@ -247,35 +247,7 @@ class YpsoHistoryClockSegmentTest {
     }
 
     @Test
-    fun `after a pump restart a history row that cannot be placed never keeps doses refused`() {
-        val anchor = row(55_000, LocalDateTime.of(2026, 7, 1, 12, 0))
-        val dose = LocalDateTime.of(2026, 7, 1, 12, 20)
-        val impossible = YpsoHistoryEntry(seconds(LocalDateTime.of(2026, 7, 1, 12, 10)), 13, 25, 0, 0, 0, 0)
-        // Restarted as reboot 22, continuing its sequence or starting it again; the clock is unread or a change is invalid.
-        for ((rows, pumpHours) in listOf(
-            listOf(anchor, row(55_001, dose)) to null,
-            listOf(anchor, row(1, dose)) to null,
-            listOf(anchor, impossible.copy(sequence = 1), row(2, dose)) to 2.0,
-        )) {
-            val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))
-            val restarted = read(rows, pumpHours).copy(pumpRebootBefore = 22, pumpRebootAfter = 22)
-
-            assertTrue(pump.ingestion.ingest(serial, 22, restarted) is YpsoHistoryIngestionResult.Blocked)
-
-            assertNull(pump.ingestion.bolusReadiness(serial, 22), "$rows")
-            assertEquals(22L, pump.ingestion.commandCursor()?.pumpReboot)
-            // The cursor keeps its reboot, so the next read still recognises a sequence reset.
-            assertEquals(21L, pump.store.value.cursor?.pumpReboot)
-            assertTrue(pump.boluses.isEmpty())
-            if (pumpHours == null) {
-                assertTrue(pump.ingestion.ingest(serial, 22, restarted.copy(pumpClockOffsetMs = 0L)) is YpsoHistoryIngestionResult.Applied)
-                assertEquals(ms("2026-07-01T12:20:00Z"), pump.boluses.values.single().single())
-            }
-        }
-    }
-
-    @Test
-    fun `rows written before a sequence reset are never placed by a guess, and doses stay allowed`() {
+    fun `rows written before a sequence reset are never placed by a guess`() {
         val anchor = row(55_000, LocalDateTime.of(2026, 7, 1, 12, 0))
         val pump = Pump(Store(YpsoHistoryState(cursor = cursorAt(anchor))))
         // A dose was still to be read when the pump was reset; its clock then restarted without a change row.
@@ -286,7 +258,6 @@ class YpsoHistoryClockSegmentTest {
         assertEquals(YpsoHistoryIngestionResult.Retry.NONE, (result as YpsoHistoryIngestionResult.Blocked).retry)
         assertEquals(55_000L, pump.cursor())
         assertTrue(pump.boluses.isEmpty())
-        assertNull(pump.ingestion.bolusReadiness(serial, 22))
     }
 
     @Test

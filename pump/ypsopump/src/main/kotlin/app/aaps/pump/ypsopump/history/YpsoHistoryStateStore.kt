@@ -22,11 +22,6 @@ data class YpsoPendingBolusSync(
 data class YpsoHistoryState(
     val cursor: YpsoHistoryCursor? = null,
     val pendingBolus: YpsoPendingBolusSync? = null,
-    /**
-     * The pump reboot a stable read last proved the cursor's history continues into, when newer than the
-     * cursor's own. Doses are sent against it; the cursor keeps its reboot until its rows are applied.
-     */
-    val provenReboot: Long? = null,
 )
 
 interface YpsoHistoryStateStore {
@@ -56,10 +51,9 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
     }
 
     private fun encode(value: YpsoHistoryState): JSONObject = JSONObject()
-        .put("version", 5)
+        .put("version", 2)
         .put("cursor", value.cursor?.let(::encodeCursor) ?: JSONObject.NULL)
         .put("pendingBolus", value.pendingBolus?.let(::encodePending) ?: JSONObject.NULL)
-        .put("provenReboot", value.provenReboot ?: JSONObject.NULL)
 
     private fun encodeCursor(value: YpsoHistoryCursor): JSONObject = JSONObject()
         .put("serial", value.identity.pumpSerial)
@@ -90,14 +84,11 @@ class YpsoHistoryStateFileStore(private val file: File) : YpsoHistoryStateStore 
         .put("type", value.type.name)
 
     private fun decode(json: JSONObject): YpsoHistoryState {
-        // Versions 3 and 4 were test builds only and are not read.
-        val version = json.getInt("version")
-        require(version in 1..2 || version == 5)
-        require(json.keys().asSequence().toSet() == setOf("version", "cursor", "pendingBolus") + if (version == 5) setOf("provenReboot") else emptySet())
+        require(json.getInt("version") in 1..2)
+        require(json.keys().asSequence().toSet() == setOf("version", "cursor", "pendingBolus"))
         return YpsoHistoryState(
             cursor = if (json.isNull("cursor")) null else decodeCursor(json.getJSONObject("cursor")),
             pendingBolus = if (json.isNull("pendingBolus")) null else decodePending(json.getJSONObject("pendingBolus")),
-            provenReboot = if (version < 5 || json.isNull("provenReboot")) null else json.getLong("provenReboot"),
         )
     }
 
