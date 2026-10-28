@@ -314,6 +314,23 @@ class YpsoBleManagerAcquisitionTest {
     }
 
     @Test
+    fun `resumed scans over many terminal TBR rows still reach the cursor`() {
+        val pump = HistoryPump()
+        pump.rows = (140L downTo 101L).mapIndexed { index, sequence -> YpsoHistoryEntry(1000 + sequence, 10, 100, 30, 0, sequence, index) }
+        val oldest = pump.rows.last()
+        val cursor = YpsoHistoryCursor(YpsoEventIdentity("test-pump", 0, oldest.sequence), oldest.fingerprint(), 8)
+        val results = mutableListOf<YpsoHistorySnapshot?>()
+        for (leg in 0 until 10) {
+            val before = pump.rowReads
+            val attempt = pump.manager.readStableHistory(cursor, 3000, results::add)
+            pump.beforeRow = { if (pump.rowReads - before >= 15) attempt.requestYield() }
+            pump.drain()
+            if (results.lastOrNull() != null) break
+        }
+        assertEquals(pump.rows, requireNotNull(results.lastOrNull()) { "every resume restarted the refresh of cached terminal rows" }.rowsNewestFirst)
+    }
+
+    @Test
     fun `a TBR row read in this scan is not read a second time`() {
         val pump = HistoryPump()
         pump.rows = pump.rows.mapIndexed { index, row -> if (index in 1..3) row.copy(eventType = 9, value2 = 30) else row }
