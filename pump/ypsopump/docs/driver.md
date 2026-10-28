@@ -101,6 +101,8 @@ If AAPS cannot read the pump clock, pump history waits until the next read that 
 
 **YpsoPump history synchronization incomplete. Insulin accounting may be incomplete. Check pump history and AAPS records.** means some doses from the pump may be missing in AAPS. If so, insulin on board in AAPS is wrong. Compare the pump history with the doses in AAPS before you give extra insulin.
 
+If AAPS already read boluses from pump history that it could not reconcile yet, the alert adds a line such as **Bolus 2.00 U at 14:05 (pump time) is not reconciled yet; IOB may not include it.** With several, it gives their count and the latest. This can include a bolus AAPS sent itself, which may already count in IOB. The time is as the pump clock showed it, which may differ from the phone's. Check these boluses against the treatments in AAPS before you give extra insulin.
+
 If history synchronization stays stuck for a long time, AAPS keeps only its most recent temporary basal commands. When synchronization resumes, AAPS takes the older temporary basals it set from pump history, so they show as set on the pump.
 
 ### Battery level
