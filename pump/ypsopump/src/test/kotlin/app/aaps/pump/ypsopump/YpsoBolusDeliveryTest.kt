@@ -32,6 +32,7 @@ import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
 import app.aaps.pump.ypsopump.history.YpsoHistoryState
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateStore
+import app.aaps.pump.ypsopump.history.YpsoPendingBolusSync
 import app.aaps.shared.tests.AAPSLoggerTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -204,7 +205,8 @@ class YpsoBolusDeliveryTest {
         override fun bindNotified(bolus: BS, type: BS.Type): TempIdBinding {
             val provisional = boluses.singleOrNull { it.ids.temporaryId == bolus.ids.temporaryId }
             val imported = boluses.singleOrNull { it.ids.pumpId == bolus.ids.pumpId && it.ids.temporaryId == null }
-            if (provisional?.isValid == false || imported?.isValid == false) return TempIdBinding.REFUSED
+            if (provisional != null && imported != null && (!provisional.isValid || !imported.isValid)) return TempIdBinding.REFUSED
+            if (provisional == null && imported?.isValid == false) return TempIdBinding.REFUSED
             return when {
                 provisional != null -> {
                     boluses.remove(imported)
@@ -494,7 +496,7 @@ class YpsoBolusDeliveryTest {
     }
 
     @Test
-    fun `a notified dose is never merged onto a larger row or across a removed record`() {
+    fun `a notified dose is never merged onto a larger row`() {
         pump.endsBeforeStatus = true
         deliver(0.4)
 
@@ -503,15 +505,23 @@ class YpsoBolusDeliveryTest {
         assertNull(records.boluses.single().ids.pumpId)
         assertEquals(YpsoBolusOutcome.UNRESOLVED, attempts.single().outcome)
         assertEquals(true, warnings.last())
+    }
 
-        pump.fast = Block()
-        deliver(0.4)
-        val provisional = records.boluses.last()
-        records.boluses[records.boluses.lastIndex] = provisional.copy(isValid = false)
-        delivery.bindProvisional(SERIAL, 48_002L, clock, 0.4, BS.Type.NORMAL)
+    @Test
+    fun `history import keeps a notified dose the user removed removed`() {
+        pump.endsBeforeStatus = true
+        deliver(0.2, BS.Type.SMB)
+        records.boluses[0] = records.boluses[0].copy(isValid = false)
 
-        assertNull(records.boluses.last().ids.pumpId)
-        assertEquals(YpsoBolusOutcome.UNRESOLVED, attempts.last().outcome)
+        historyState.value = historyState.value.copy(
+            pendingBolus = YpsoPendingBolusSync(SERIAL, 48_001L, clock, 20, 1L, BS.Type.SMB),
+        )
+        assertTrue(ingestion.retryPending(SERIAL))
+
+        val record = records.boluses.single()
+        assertEquals(48_001L, record.ids.pumpId)
+        assertFalse(record.isValid)
+        assertEquals(YpsoBolusOutcome.COMPLETED, attempts.single().outcome)
     }
 
     @Test

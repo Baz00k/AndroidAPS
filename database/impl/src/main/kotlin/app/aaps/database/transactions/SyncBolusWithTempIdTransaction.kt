@@ -5,10 +5,11 @@ import app.aaps.database.entities.Bolus
 /**
  * Creates or updates the Bolus from pump synchronization
  *
- * @param requireValid for a link the driver only inferred rather than proved: bind nothing when either
- * record was removed or the pump record already carries another temporary id, since a removal is only
- * meaningful to carry over between two records known to be the same dose. [TransactionResult.refused]
- * reports it.
+ * @param requireValid for a link the driver only inferred rather than proved: merge nothing when either
+ * of two separate records was removed or the pump record already carries another temporary id, since a
+ * removal is only meaningful to carry over between two records known to be the same dose.
+ * [TransactionResult.refused] reports it. A removed record with no pump record yet still takes the pump
+ * id and stays removed, so the pump row cannot later be inserted as a new valid record.
  */
 class SyncBolusWithTempIdTransaction(
     private val bolus: Bolus,
@@ -37,8 +38,8 @@ class SyncBolusWithTempIdTransaction(
             val imported = bolus.interfaceIDs.pumpId?.let {
                 database.bolusDao.findByPumpIds(it, bolus.interfaceIDs.pumpType!!, bolus.interfaceIDs.pumpSerial!!)
             }
-            if (requireValid && (!current.isValid || imported != null && imported.id != current.id &&
-                    (!imported.isValid || imported.interfaceIDs.temporaryId != null && imported.interfaceIDs.temporaryId != bolus.interfaceIDs.temporaryId))) {
+            if (requireValid && imported != null && imported.id != current.id && (!current.isValid || !imported.isValid ||
+                    imported.interfaceIDs.temporaryId != null && imported.interfaceIDs.temporaryId != bolus.interfaceIDs.temporaryId)) {
                 result.refused = true
                 return result
             }
