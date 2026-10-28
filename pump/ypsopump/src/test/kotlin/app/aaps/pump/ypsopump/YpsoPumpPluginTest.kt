@@ -1149,6 +1149,25 @@ class YpsoPumpPluginTest {
     }
 
     @Test
+    fun `a configuration read rejected on the pump clock says which way and how far to set it`() {
+        connectedForConfigurationRead()
+        whenever(rh.gs(eq(R.string.ypsopump_clock_offset_minutes), anyVararg())).thenAnswer { "${it.arguments[1]} min ${it.arguments[2]} s" }
+        whenever(rh.gs(eq(R.string.ypsopump_profile_read_clock_behind), anyVararg())).thenAnswer { "behind by ${it.arguments[1]}" }
+        whenever(manager.readProfileConfiguration(any(), any(), any())).thenAnswer {
+            val attempt = YpsoBleManager.ProfileReadAttempt()
+            attempt.pumpClockAhead = java.time.Duration.ofSeconds(-3_638)
+            it.getArgument<(Boolean) -> Unit>(2)(false)
+            attempt
+        }
+
+        plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)
+
+        assertEquals("behind by 60 min 38 s", state.profileReadMessage)
+        assertFalse(plugin.configurationReadSucceeded)
+        assertTrue(plugin.configurationReadNeedsWarning())
+    }
+
+    @Test
     fun `completed matching configuration reads have success styling`() {
         connectedForConfigurationRead()
         plugin.getPumpStatus(YpsoPumpPlugin.PROFILE_READ_REASON)

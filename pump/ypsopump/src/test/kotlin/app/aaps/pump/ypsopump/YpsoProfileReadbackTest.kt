@@ -1,5 +1,6 @@
 package app.aaps.pump.ypsopump
 
+import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.comm.YpsoGlb
 import app.aaps.pump.ypsopump.data.YpsoBasalSchedule
 import app.aaps.pump.ypsopump.data.YpsoProfileReadback
@@ -17,8 +18,10 @@ class YpsoProfileReadbackTest {
     private fun acquisition(a: Int = 50, b: Int = 35) = YpsoProfileReadback("generation",21,"connection",1000,YpsoBasalSchedule.Program.A).also {
         (14..61).forEach { id -> assertTrue(it.add(id,YpsoGlb.encode(if (id < 38) a else b))) }
     }
+    private fun result(read: YpsoProfileReadback, active: Int = 3, connection: String = "connection", clock: LocalDateTime = local, at: Instant = instant) =
+        read.finish("generation",21,connection,2000,YpsoGlb.encode(active),clock,at,zone,60_000,YpsoBleManager.MAX_PROFILE_CLOCK_SKEW,3000)
     private fun finish(read: YpsoProfileReadback, active: Int = 3, connection: String = "connection", clock: LocalDateTime = local, at: Instant = instant) =
-        read.finish("generation",21,connection,2000,YpsoGlb.encode(active),clock,at,zone,60_000,Duration.ofSeconds(30),3000)
+        (result(read, active, connection, clock, at) as? YpsoProfileReadback.Result.Verified)?.readback
 
     @Test
     fun `target clock bytes decode and malformed calendar dates fail`() {
@@ -55,7 +58,29 @@ class YpsoProfileReadbackTest {
     fun `DST gap overlap and clock jump reject evidence`() {
         assertNull(finish(acquisition(),clock=LocalDateTime.of(2026,3,29,2,30)))
         assertNull(finish(acquisition(),clock=LocalDateTime.of(2026,10,25,2,30)))
-        assertNull(finish(acquisition(),at=instant.plusSeconds(31)))
+        assertNull(finish(acquisition(),at=instant.plusSeconds(3_600)))
+    }
+
+    @Test
+    fun `a hand-set pump clock a few minutes off still yields evidence`() {
+        // The pump clock is set by hand to the minute and drifts; 40 s off failed every read in practice.
+        assertNotNull(finish(acquisition(),at=instant.plusSeconds(40)))
+        assertNotNull(finish(acquisition(),at=instant.minusSeconds(4 * 60 + 59)))
+    }
+
+    @Test
+    fun `a pump clock past the limit is rejected with its offset`() {
+        val behind = result(acquisition(),at=instant.plusSeconds(5 * 60 + 1)) as YpsoProfileReadback.Result.Rejected
+        assertEquals(Duration.ofSeconds(-301), behind.pumpClockAhead)
+        val ahead = result(acquisition(),at=instant.minusSeconds(3_638)) as YpsoProfileReadback.Result.Rejected
+        assertEquals(Duration.ofSeconds(3_638), ahead.pumpClockAhead)
+    }
+
+    @Test
+    fun `other rejections name their condition without blaming the clock`() {
+        val changed = result(acquisition(),active=10) as YpsoProfileReadback.Result.Rejected
+        assertEquals("active program changed", changed.reason)
+        assertNull(changed.pumpClockAhead)
     }
 
     @Test
@@ -75,12 +100,11 @@ class YpsoProfileReadbackTest {
             val local = LocalDateTime.of(2026, 9, 16, 12, 0)
             val read = YpsoProfileReadback("generation", 21, "connection", 1000, active)
             (14..61).forEach { id -> check(read.add(id, YpsoGlb.encode(if (id < 38) a else b))) }
-            return checkNotNull(
-                read.finish(
-                    "generation", 21, "connection", 2000, YpsoGlb.encode(active.wireValue), local,
-                    local.atZone(zone).toInstant(), zone, 60_000, Duration.ofSeconds(30), 3000,
-                ),
+            val result = read.finish(
+                "generation", 21, "connection", 2000, YpsoGlb.encode(active.wireValue), local,
+                local.atZone(zone).toInstant(), zone, 60_000, Duration.ofSeconds(30), 3000,
             )
+            return (result as YpsoProfileReadback.Result.Verified).readback
         }
     }
 }
