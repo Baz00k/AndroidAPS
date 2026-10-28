@@ -968,7 +968,7 @@ class YpsoBleManager @Inject internal constructor(
         // session commits each one costs.
         fun refreshMutableRows(position: Int = 0) {
             if (yieldAtSafeBoundary()) return
-            val next = (position until rows.size).firstOrNull { it in reusedPositions && rows[it].eventType in setOf(1, 9, 10, 17, 19, 27) }
+            val next = (position until rows.size).firstOrNull { it in reusedPositions && rows[it].eventType in setOf(1, 9, 17, 19, 27) }
                 ?: return finishScan()
             select(next) { fresh ->
                 if (fresh.sequence != rows[next].sequence || fresh.factorySeconds != rows[next].factorySeconds) {
