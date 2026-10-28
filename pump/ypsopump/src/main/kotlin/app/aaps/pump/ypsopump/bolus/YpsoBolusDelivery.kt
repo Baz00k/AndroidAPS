@@ -576,10 +576,18 @@ internal class YpsoBolusDelivery(
             type,
         )
         if (attempt.awaitsReconciliation) {
-            runCatching { controller.confirmSupersededTerminal(attempt.requestId, centiUnits, timestamp, pumpId) }
-                .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump bolus ${attempt.requestId} not confirmed: ${it.message}") }
+            confirmSuperseded(attempt, centiUnits, timestamp, pumpId)
             refreshWarning()
         }
+    }
+
+    /**
+     * Confirms a status-proven dose that stopped being current before history confirmed it, for
+     * example after a restart marked it unresolved. The current dose is left to [reconcileAttempt].
+     */
+    private fun confirmSuperseded(attempt: YpsoBolusAttempt, centiUnits: Int, timestamp: Long, pumpId: Long) {
+        runCatching { controller.confirmSupersededTerminal(attempt.requestId, centiUnits, timestamp, pumpId) }
+            .onFailure { aapsLogger.warn(LTag.PUMP, "YpsoPump bolus ${attempt.requestId} not confirmed: ${it.message}") }
     }
 
     /**
@@ -637,8 +645,11 @@ internal class YpsoBolusDelivery(
                     ?.let { Math.round(it.amount * 100) > attempt.requestedCentiUnits } == true) continue
             if (attempt.shape == YpsoBolusShape.IMMEDIATE) {
                 val temporaryId = provisionalTemporaryId(attempt)
-                val provisional = saved.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
                 val imported = saved.singleOrNull { it.ids.pumpId == id } ?: continue
+                // Only history import gives an immediate bolus record its pump ID, so this is the
+                // terminal row, imported before a superseded dose could be confirmed at import.
+                if (attempt.awaitsReconciliation) confirmSuperseded(attempt, Math.round(imported.amount * 100).toInt(), imported.timestamp, id)
+                val provisional = saved.singleOrNull { it.ids.temporaryId == temporaryId } ?: continue
                 if (provisional.id == imported.id) continue
                 // The imported amount is already pump-confirmed. This transaction atomically merges
                 // both records even if their timestamps predate the current driver activation.

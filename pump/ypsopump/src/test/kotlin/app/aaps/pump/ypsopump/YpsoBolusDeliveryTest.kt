@@ -629,6 +629,25 @@ class YpsoBolusDeliveryTest {
     }
 
     @Test
+    fun `a superseded dose left unresolved after its row was imported is confirmed by repair`() {
+        seed(confirmedAttempt("stuck", 48_317L).copy(
+            outcome = YpsoBolusOutcome.UNRESOLVED, pumpHistoryId = null, confirmedCentiUnits = null, deliveryTimestamp = null,
+        ))
+        imported("stuck", 48_317L)
+        seed(confirmedAttempt("current", 48_401L, counter = 9))
+        imported("current", 48_401L)
+        historyState.value = YpsoHistoryState(cursorAt(YpsoHistoryEntry(800_000_100L, 2, 40, 0, 0, 48_401L, 0)))
+        delivery.refreshWarning()
+        assertEquals(true, warnings.last())
+
+        reconcile(emptyList())
+
+        // Confirmed, so the warning clears and the settled dose leaves the journal.
+        assertEquals(false, warnings.last())
+        assertEquals(listOf("current"), attempts.map { it.requestId })
+    }
+
+    @Test
     fun `provisioning reads its counter floor from the journal the module owns`() {
         assertNull(delivery.recoveryEvidence())
         deliver()
