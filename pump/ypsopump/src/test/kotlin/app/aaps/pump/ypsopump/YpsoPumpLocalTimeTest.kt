@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 class YpsoPumpLocalTimeTest {
@@ -39,6 +40,43 @@ class YpsoPumpLocalTimeTest {
     fun `a pump clock offset is the pump wall time read as UTC minus the phone clock`() {
         // A pump on CEST, 36 s behind the phone, read at 12:00Z.
         assertEquals(2 * 3_600_000L - 36_000L, YpsoPumpLocalTime.pumpOffsetMs(LocalDateTime.of(2026, 9, 15, 13, 59, 24), ms("2026-09-15T12:00:00Z")))
+    }
+
+    /** How far a pump showing [pumpWall] at the phone instant [utc] is ahead of a phone in [zone]. */
+    private fun ahead(pumpWall: LocalDateTime, utc: String, zone: String = "Europe/Warsaw") =
+        YpsoPumpLocalTime.pumpAheadOfPhone(YpsoPumpLocalTime.pumpOffsetMs(pumpWall, ms(utc)), ms(utc), ZoneId.of(zone))
+
+    @Test
+    fun `the pump clock is compared with the wall clock the phone shows in its zone`() {
+        // 12:00Z is 14:00 CEST on the phone.
+        assertEquals(Duration.ofSeconds(-36), ahead(LocalDateTime.of(2026, 9, 15, 13, 59, 24), "2026-09-15T12:00:00Z"))
+        assertEquals(Duration.ofSeconds(3_638), ahead(LocalDateTime.of(2026, 9, 15, 15, 0, 38), "2026-09-15T12:00:00Z"))
+        // 12:00Z is 13:00 CET in winter.
+        assertEquals(Duration.ZERO, ahead(LocalDateTime.of(2026, 12, 15, 13, 0), "2026-12-15T12:00:00Z"))
+    }
+
+    @Test
+    fun `a pump correctly set for another zone reads as that zone's difference`() {
+        // A pump set to London time, 13:00 BST, while the phone is in Warsaw at 14:00 CEST.
+        assertEquals(Duration.ofHours(-1), ahead(LocalDateTime.of(2026, 9, 15, 13, 0), "2026-09-15T12:00:00Z"))
+        // The same pump read by a phone in London matches.
+        assertEquals(Duration.ZERO, ahead(LocalDateTime.of(2026, 9, 15, 13, 0), "2026-09-15T12:00:00Z", "Europe/London"))
+    }
+
+    @Test
+    fun `a pump left on summer time after the autumn change is an hour ahead, including in the repeated hour`() {
+        // 2026-10-25 in Warsaw: 03:00 CEST becomes 02:00 CET at 01:00Z.
+        assertEquals(Duration.ZERO, ahead(LocalDateTime.of(2026, 10, 25, 2, 30), "2026-10-25T00:30:00Z"))
+        // 01:30Z is 02:30 CET on the phone, a wall time that occurs twice; the pump stayed on CEST.
+        assertEquals(Duration.ofHours(1), ahead(LocalDateTime.of(2026, 10, 25, 3, 30), "2026-10-25T01:30:00Z"))
+        assertEquals(Duration.ofHours(1), ahead(LocalDateTime.of(2026, 10, 25, 13, 0, 38), "2026-10-25T11:00:38Z"))
+    }
+
+    @Test
+    fun `a pump left on winter time after the spring change is an hour behind, including at a skipped wall time`() {
+        // 2026-03-29 in Warsaw: 02:00 CET becomes 03:00 CEST at 01:00Z; the pump shows 02:30, which the phone skipped.
+        assertEquals(Duration.ofHours(-1), ahead(LocalDateTime.of(2026, 3, 29, 2, 30), "2026-03-29T01:30:00Z"))
+        assertEquals(Duration.ZERO, ahead(LocalDateTime.of(2026, 3, 29, 1, 30), "2026-03-29T00:30:00Z"))
     }
 
     @Test

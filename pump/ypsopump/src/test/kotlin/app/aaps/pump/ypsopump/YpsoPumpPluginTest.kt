@@ -677,6 +677,170 @@ class YpsoPumpPluginTest {
         verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), eq(Notification.NORMAL))
     }
 
+    /** Clock alert texts as the user reads them, from the real string formats. */
+    private fun clockAlertTexts() {
+        state.currentZone = { ZoneId.of("UTC") }
+        whenever(rh.gs(eq(R.string.ypsopump_clock_offset_seconds), anyVararg())).thenAnswer { "${it.arguments[1]} s" }
+        whenever(rh.gs(eq(R.string.ypsopump_clock_offset_minutes), anyVararg())).thenAnswer { "${it.arguments[1]} min ${it.arguments[2]} s" }
+        whenever(rh.gs(eq(R.string.ypsopump_clock_off_notification_ahead), anyVararg())).thenAnswer { "pump ${it.arguments[1]} ahead" }
+        whenever(rh.gs(eq(R.string.ypsopump_clock_off_notification_behind), anyVararg())).thenAnswer { "pump ${it.arguments[1]} behind" }
+    }
+
+    /** Every clock alert change, in order: its text, or null for a removal. */
+    private fun clockAlerts(): List<String?> {
+        val texts = argumentCaptor<String>()
+        verify(ui, atLeast(0)).setNotification(eq(Notification.YPSOPUMP_CLOCK_OFF), texts.capture(), any())
+        return texts.allValues
+    }
+
+    private fun clock(offsetMs: Long?) = plugin.reportPumpClock(offsetMs, System.currentTimeMillis())
+
+    @Test
+    fun `a pump clock more than five minutes off raises an ordinary alert saying which way and how far`() {
+        clockAlertTexts()
+        clock(300_000)
+        clock(-300_000)
+        assertEquals(emptyList<String?>(), clockAlerts())
+        clock(300_001)
+        assertEquals(listOf<String?>("pump 5 min 0 s ahead"), clockAlerts())
+        verify(ui).setNotification(Notification.YPSOPUMP_CLOCK_OFF, "pump 5 min 0 s ahead", Notification.NORMAL)
+    }
+
+    @Test
+    fun `a pump clock behind the phone says behind`() {
+        clockAlertTexts()
+        clock(-300_001)
+        clock(-3_638_000)
+        assertEquals(listOf<String?>("pump 5 min 0 s behind", "pump 60 min 38 s behind"), clockAlerts())
+    }
+
+    @Test
+    fun `the alert compares with the phone's wall clock, so a pump on another zone or DST is an hour off`() {
+        clockAlertTexts()
+        state.currentZone = { ZoneId.of("+02:00") }
+        // A pump showing the phone's local time reads as two hours ahead of UTC: no alert.
+        clock(7_200_000)
+        assertEquals(emptyList<String?>(), clockAlerts())
+        // A pump still on +03:00 is an hour ahead of this phone.
+        clock(10_838_000)
+        assertEquals(listOf<String?>("pump 60 min 38 s ahead"), clockAlerts())
+        // One set to UTC is two hours behind.
+        clock(0)
+        assertEquals(listOf<String?>("pump 60 min 38 s ahead", "pump 120 min 0 s behind"), clockAlerts())
+    }
+
+    @Test
+    fun `the alert clears only once the pump clock is within four minutes`() {
+        clockAlertTexts()
+        clock(-330_000)
+        clock(-280_000)
+        assertEquals(listOf<String?>("pump 5 min 30 s behind"), clockAlerts())
+        // Still shown, and a minute closer, so the text follows.
+        clock(-240_001)
+        assertEquals(listOf<String?>("pump 5 min 30 s behind", "pump 4 min 0 s behind"), clockAlerts())
+        clock(-240_000)
+        assertEquals(listOf("pump 5 min 30 s behind", "pump 4 min 0 s behind", null), clockAlerts())
+        verify(ui).setNotification(Notification.YPSOPUMP_CLOCK_OFF, null, Notification.NORMAL)
+        // Without an alert, the four-to-five-minute band raises nothing.
+        clock(299_000)
+        clock(240_001)
+        assertEquals(listOf("pump 5 min 30 s behind", "pump 4 min 0 s behind", null), clockAlerts())
+    }
+
+    @Test
+    fun `measurement jitter around either threshold does not flap the alert`() {
+        clockAlertTexts()
+        listOf(299_000L, 301_000L, 299_000L, 302_000L, 300_000L).forEach(::clock)
+        assertEquals(listOf<String?>("pump 5 min 1 s ahead"), clockAlerts())
+        // Drifting a minute closer updates the text once; jitter near four minutes then clears it once.
+        listOf(241_000L, 240_500L, 242_000L, 239_000L, 241_000L, 299_500L, 239_500L).forEach(::clock)
+        assertEquals(listOf("pump 5 min 1 s ahead", "pump 4 min 1 s ahead", null), clockAlerts())
+    }
+
+    @Test
+    fun `the alert text follows the offset only once it moves a minute from the one shown`() {
+        clockAlertTexts()
+        clock(3_600_000)
+        clock(3_659_999)
+        clock(3_540_001)
+        assertEquals(listOf<String?>("pump 60 min 0 s ahead"), clockAlerts())
+        clock(3_660_000)
+        clock(3_601_000)
+        clock(3_601_000 - 60_000)
+        assertEquals(listOf<String?>("pump 60 min 0 s ahead", "pump 61 min 0 s ahead", "pump 59 min 1 s ahead"), clockAlerts())
+    }
+
+    @Test
+    fun `a scan that could not read the clock leaves the alert as it is`() {
+        clockAlertTexts()
+        clock(null)
+        assertEquals(emptyList<String?>(), clockAlerts())
+        clock(400_000)
+        clock(null)
+        assertEquals(listOf<String?>("pump 6 min 40 s ahead"), clockAlerts())
+        clock(0)
+        clock(null)
+        assertEquals(listOf("pump 6 min 40 s ahead", null), clockAlerts())
+    }
+
+    @Test
+    fun `a history scan raises the clock alert and still commits history without touching therapy`() {
+        clockAlertTexts()
+        prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true, pumpClockOffsetMs = 3_638_000))
+        prepareHistoryIdentity()
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("previous failure"))
+        clearInvocations(ui)
+
+        runHistoryRecovery()
+
+        assertEquals(listOf<String?>("pump 60 min 38 s ahead"), clockAlerts())
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
+        assertTrue(File(historyDirectory, "ypsopump-history-state.json").isFile)
+        verify(commandQueue, never()).tempBasalPercent(any(), any(), any(), any(), any(), anyOrNull())
+        verify(commandQueue, never()).tempBasalAbsolute(any(), any(), any(), any(), any(), anyOrNull())
+        verify(commandQueue, never()).cancelTempBasal(any(), any(), anyOrNull())
+        verify(commandQueue, never()).bolus(any(), anyOrNull())
+        verify(manager, never()).disconnect(any())
+    }
+
+    @Test
+    fun `a failing clock alert does not fail the history pass it follows`() {
+        clockAlertTexts()
+        whenever(rh.gs(eq(R.string.ypsopump_clock_off_notification_ahead), anyVararg())).thenThrow(IllegalStateException("resources"))
+        prepareHistoryRecovery(YpsoHistorySnapshot(0, 0, 21, 21, null, null, emptyList(), true, pumpClockOffsetMs = 3_638_000))
+        prepareHistoryIdentity()
+        plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("previous failure"))
+        clearInvocations(ui)
+
+        runHistoryRecovery()
+
+        verify(ui).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNull(), any())
+        verify(ui, never()).setNotification(eq(Notification.YPSOPUMP_HISTORY_INCOMPLETE), isNotNull(), any())
+    }
+
+    @Test
+    fun `deactivating the driver removes the clock alert and a late scan cannot raise it again`() {
+        clockAlertTexts()
+        clock(400_000)
+        plugin.onStop()
+        assertEquals(listOf("pump 6 min 40 s ahead", null), clockAlerts())
+        clock(500_000)
+        assertEquals(listOf("pump 6 min 40 s ahead", null), clockAlerts())
+    }
+
+    @Test
+    fun `starting the driver removes a clock alert left from before and the next scan measures again`() {
+        clockAlertTexts()
+        whenever(manager.noBackupDirectory()).thenReturn(historyDirectory)
+        clock(400_000)
+        try {
+            plugin.onStart()
+            assertEquals(listOf("pump 6 min 40 s ahead", null), clockAlerts())
+            clock(400_000)
+            assertEquals(listOf("pump 6 min 40 s ahead", null, "pump 6 min 40 s ahead"), clockAlerts())
+        } finally { plugin.onStop() }
+    }
+
     @Test
     fun `deactivating the driver clears its warning and suppresses late recovery results`() {
         plugin.reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("database"))
