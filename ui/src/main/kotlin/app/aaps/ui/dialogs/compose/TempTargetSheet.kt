@@ -1,121 +1,126 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.SectionLabel
-import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.DangerButton
+import app.aaps.core.compose.components.EntryCard
+import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.components.Stepper
+import app.aaps.core.compose.components.formatNumeric
+import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import java.util.Locale
 
 /**
- * Redesigned Temp target sheet (handoff Section 3): "pick an intent" preset cards + Target/Duration
- * steppers. [onStart] runs the SAME confirmation + persistence path as the legacy dialog.
+ * Redesigned Temp target sheet (handoff Section 3): "pick an intent" preset choices + Target/Duration
+ * entries. [onStart] runs the SAME confirmation + persistence path as the legacy dialog.
  */
 @Composable
 fun TempTargetSheet(
     state: TempTargetSheetState,
-    onStart: (target: Double, durationMin: Int, reason: TtReason) -> Unit,
+    onStart: (TempTargetRequest) -> Unit,
     onCancelActive: () -> Unit,
     onClose: () -> Unit
 ) {
     val colors = AapsTheme.colors
-    var target by remember { mutableStateOf(state.initialTarget) }
-    var duration by remember { mutableStateOf(state.initialDuration) }
-    var reason by remember { mutableStateOf(TtReason.CUSTOM) }
+    var target by rememberSaveable { mutableStateOf(state.initialTarget) }
+    var duration by rememberSaveable { mutableIntStateOf(state.initialDuration) }
+    var reason by rememberSaveable { mutableStateOf(TtReason.CUSTOM) }
+    var targetValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
 
-    fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${state.decimals}f", v)
+    // The entry components own the draft: an incomplete or out-of-range edit publishes no value.
+    val request = state.request(target, duration, reason)?.takeIf { targetValid && durationValid }
+    val selectedPreset = state.presets.firstOrNull { it.reason == reason }
 
-    SheetSurface(title = "Temporary target", onClose = onClose) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            SectionLabel("Pick an intent")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.presets.forEach { p ->
-                    val selected = reason == p.reason
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .clip(AapsTheme.shape.card)
-                            .background(if (selected) colors.accentTintStrong else colors.surface2)
-                            .clickable {
-                                target = p.target; duration = p.durationMin; reason = p.reason
-                            }
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(p.label, style = AapsTheme.type.listTitle, color = if (selected) colors.accentOnLight else colors.textPrimary)
-                        Text(p.targetText, style = AapsTheme.type.caption, color = colors.textSecondary)
-                        Text(p.durationText, style = AapsTheme.type.caption, color = colors.textTertiary)
-                    }
-                }
-            }
-
-            SectionLabel("Adjust")
-            AapsCard(Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Stepper(
-                        value = "${fmt(target)} ${state.unitLabel}",
-                        caption = "target",
-                        onMinus = { target = (target - state.unitStep).coerceAtLeast(state.targetMin); reason = TtReason.CUSTOM },
-                        onPlus = { target = (target + state.unitStep).coerceAtMost(state.targetMax); reason = TtReason.CUSTOM }
-                    )
-                    Stepper(
-                        value = "$duration min",
-                        caption = "duration",
-                        onMinus = { duration = (duration - state.durationStep).coerceAtLeast(0) },
-                        onPlus = { duration += state.durationStep }
-                    )
-                }
-            }
-
-            val enabled = target > 0.0 && duration > 0
-            Text(
-                "Start temporary target",
-                style = AapsTheme.type.title,
-                color = if (enabled) colors.onAccent else colors.textTertiary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(AapsTheme.shape.button)
-                    .background(if (enabled) colors.accent else colors.controlFill)
-                    .then(if (enabled) Modifier.clickable { onStart(target, duration, reason) } else Modifier)
-                    .padding(vertical = 14.dp)
-            )
-            if (state.hasActive)
-                Text(
-                    "Cancel current temporary target",
-                    style = AapsTheme.type.body,
-                    color = colors.low,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AapsTheme.shape.pill)
-                        .clickable(onClick = onCancelActive)
-                        .padding(vertical = 10.dp)
+    SheetSurface(
+        title = "Temporary target",
+        onClose = onClose,
+        footer = {
+            Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
+                PrimaryButton(
+                    label = "Start temporary target",
+                    enabled = request != null,
+                    onClick = { request?.let(onStart) }
                 )
+                // Independent of the editor: an active target outside today's range can still be stopped.
+                if (state.hasActive)
+                    DangerButton(label = "Cancel current temporary target", onClick = onCancelActive)
+            }
+        }
+    ) {
+        EntryCard("Intent") {
+            ChoiceRow {
+                state.presets.forEach { preset ->
+                    Choice(
+                        label = preset.label,
+                        selected = reason == preset.reason,
+                        onClick = {
+                            target = preset.target
+                            duration = preset.durationMin
+                            reason = preset.reason
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Choice(
+                    label = "Manual",
+                    selected = reason == TtReason.CUSTOM,
+                    onClick = { reason = TtReason.CUSTOM },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            selectedPreset?.let { preset ->
+                Text(
+                    "${formatNumeric(preset.target, state.decimals)} ${state.unitLabel} · ${preset.durationMin} min",
+                    style = AapsTheme.type.caption,
+                    color = colors.textSecondary
+                )
+            }
+        }
+        EntryCard("Target") {
+            AmountStepper(
+                value = target,
+                onValue = {
+                    target = it
+                    reason = TtReason.CUSTOM
+                },
+                step = state.unitStep,
+                min = state.targetMin,
+                max = state.targetMax,
+                decimals = state.decimals,
+                unit = state.unitLabel,
+                name = "of target",
+                onValidityChange = { targetValid = it }
+            )
+        }
+        EntryCard("Duration") {
+            AmountStepper(
+                value = duration.toDouble(),
+                onValue = {
+                    duration = it.toInt()
+                    reason = TtReason.CUSTOM
+                },
+                step = state.durationStep.toDouble(),
+                min = 0.0,
+                max = state.durationMax.toDouble(),
+                decimals = 0,
+                unit = "min",
+                name = "of duration",
+                integerOnly = true,
+                onValidityChange = { durationValid = it }
+            )
         }
     }
 }
