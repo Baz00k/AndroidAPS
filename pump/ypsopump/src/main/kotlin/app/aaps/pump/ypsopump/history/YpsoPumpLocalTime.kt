@@ -1,7 +1,9 @@
 package app.aaps.pump.ypsopump.history
 
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.ZoneOffset
 
 /**
@@ -21,6 +23,15 @@ object YpsoPumpLocalTime {
      * offset of whatever the pump clock was set to, plus its drift.
      */
     fun pumpOffsetMs(pumpLocal: LocalDateTime, phoneMs: Long): Long = pumpLocal.toInstant(ZoneOffset.UTC).toEpochMilli() - phoneMs
+
+    /**
+     * How far the pump's wall clock is ahead of the phone's wall clock in [zone] at [phoneMs], from a
+     * [pumpOffsetMs] reading; negative when it is behind. A pump still on the other side of a DST change
+     * reads an hour off. Wall clocks are compared, as the user sees them, so a pump time that is
+     * skipped or repeated in [zone] needs no special case.
+     */
+    fun pumpAheadOfPhone(pumpOffsetMs: Long, phoneMs: Long, zone: ZoneId): Duration =
+        Duration.ofMillis(pumpOffsetMs).minusSeconds(zone.rules.getOffset(Instant.ofEpochMilli(phoneMs)).totalSeconds.toLong())
 
     /** Phone times of a read's rows, or why some have none. */
     class RowTimes(private val offsets: Map<Long, Long>, val stop: YpsoHistoryEntry?) {

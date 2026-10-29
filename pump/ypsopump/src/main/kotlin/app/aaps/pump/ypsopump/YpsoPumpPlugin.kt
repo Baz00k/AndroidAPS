@@ -45,6 +45,7 @@ import app.aaps.pump.ypsopump.bolus.YpsoBolusRecords
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestion
 import app.aaps.pump.ypsopump.history.YpsoHistoryIngestionResult
 import app.aaps.pump.ypsopump.history.YpsoHistorySnapshot
+import app.aaps.pump.ypsopump.history.YpsoPumpLocalTime
 import app.aaps.pump.ypsopump.bolus.YpsoBolusMessage
 import app.aaps.pump.ypsopump.history.YpsoHistoryStateFileStore
 import app.aaps.pump.ypsopump.provisioning.YpsoProvisioningService
@@ -125,6 +126,8 @@ class YpsoPumpPlugin @Inject constructor(
     private var availabilityNotificationSynchronized = false
     /** Last published mismatch text, or null when no mismatch is currently published. */
     private var publishedProfileMismatch: String? = null
+    /** Pump clock offset the clock alert shows, or null while it shows none. */
+    private var publishedClockOffset: java.time.Duration? = null
     /** Last published unresolved-bolus warning state, or null before the first publication. */
     @Volatile private var publishedUnresolvedBolusWarning: Boolean? = null
     /**
@@ -599,11 +602,13 @@ class YpsoPumpPlugin @Inject constructor(
     @Volatile internal var configurationReadSucceeded = false
         private set
     /** The pump clock is set by hand, so a read rejected on it must say which way and how far to set it. */
-    private fun clockOffMessage(pumpAhead: java.time.Duration): String {
+    private fun clockOffMessage(pumpAhead: java.time.Duration): String =
+        rh.gs(if (pumpAhead.isNegative) R.string.ypsopump_profile_read_clock_behind else R.string.ypsopump_profile_read_clock_ahead, clockOffset(pumpAhead))
+
+    private fun clockOffset(pumpAhead: java.time.Duration): String {
         val seconds = pumpAhead.abs().seconds
-        val offset = if (seconds < 60) rh.gs(R.string.ypsopump_clock_offset_seconds, seconds)
+        return if (seconds < 60) rh.gs(R.string.ypsopump_clock_offset_seconds, seconds)
         else rh.gs(R.string.ypsopump_clock_offset_minutes, seconds / 60, seconds % 60)
-        return rh.gs(if (pumpAhead.isNegative) R.string.ypsopump_profile_read_clock_behind else R.string.ypsopump_profile_read_clock_ahead, offset)
     }
     internal fun configurationReadNeedsWarning(): Boolean =
         !configurationReadSucceeded ||
@@ -1086,6 +1091,9 @@ class YpsoPumpPlugin @Inject constructor(
                         publishTbrWarningIfNeeded()
                     }
                 }
+                // After accounting, and on its own: the alert must not cost or fail a history pass.
+                if (snapshot != null) runCatching { reportPumpClock(snapshot.pumpClockOffsetMs, System.currentTimeMillis()) }
+                    .onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump clock alert failed: ${it.javaClass.simpleName}") }
             } catch (exception: RuntimeException) {
                 aapsLogger.error(LTag.PUMP, "YpsoPump history recovery failed after $reason: ${exception.message}")
                 reportHistoryRecovery(YpsoHistoryIngestionResult.Blocked("history recovery exception"))
@@ -1094,6 +1102,30 @@ class YpsoPumpPlugin @Inject constructor(
                 if (idleDisconnectDeferredToHistory.getAndSet(false)) releaseIdleConnection("history recovery")
             }
         }
+    }
+
+    /**
+     * Alerts while the pump clock, as a history scan measured it at [phoneMs], is more than
+     * [YpsoBleManager.MAX_PROFILE_CLOCK_SKEW] off the phone, until a scan measures it within
+     * [CLOCK_ALERT_CLEAR]: the gap keeps measurement jitter (about 2 s) from flapping it. A scan without
+     * a reading changes nothing. The text is replaced only once the offset has moved [CLOCK_ALERT_STEP]
+     * from the one shown, so jitter and slow drift do not re-raise it. Information only: nothing in
+     * therapy reads this alert.
+     */
+    @Synchronized
+    internal fun reportPumpClock(pumpOffsetMs: Long?, phoneMs: Long) {
+        if (!historyRecoveryEnabled || pumpOffsetMs == null) return
+        val pumpAhead = YpsoPumpLocalTime.pumpAheadOfPhone(pumpOffsetMs, phoneMs, pumpState.currentZone())
+        val shown = publishedClockOffset
+        val off = pumpAhead.abs() > YpsoBleManager.MAX_PROFILE_CLOCK_SKEW || (shown != null && pumpAhead.abs() > CLOCK_ALERT_CLEAR)
+        if (!off && shown == null) return
+        if (off && shown != null && pumpAhead.minus(shown).abs() < CLOCK_ALERT_STEP) return
+        publishedClockOffset = pumpAhead.takeIf { off }
+        val text = if (off) rh.gs(
+            if (pumpAhead.isNegative) R.string.ypsopump_clock_off_notification_behind else R.string.ypsopump_clock_off_notification_ahead,
+            clockOffset(pumpAhead),
+        ) else null
+        uiInteraction.setNotification(Notification.YPSOPUMP_CLOCK_OFF, text, Notification.NORMAL)
     }
 
     /** Only a committed history result clears this warning; status reads and intentional yields do not. */
@@ -1404,6 +1436,9 @@ class YpsoPumpPlugin @Inject constructor(
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNCERTAIN))
         rxBus.send(EventDismissNotification(Notification.YPSOPUMP_TBR_UNMATCHED))
         publishTbrWarningIfNeeded()
+        // An alert from an earlier process may still be showing; the next history scan measures again.
+        synchronized(this) { publishedClockOffset = null }
+        uiInteraction.setNotification(Notification.YPSOPUMP_CLOCK_OFF, null, Notification.NORMAL)
         appLifecycle.addVisibilityListener(visibilityListener)
         onAppVisibilityChanged(appLifecycle.uiVisible)
     }
@@ -1426,6 +1461,8 @@ class YpsoPumpPlugin @Inject constructor(
         transientHistoryFailures = 0
         historyAlertText = null
         uiInteraction.setNotification(Notification.YPSOPUMP_HISTORY_INCOMPLETE, null, Notification.NORMAL)
+        publishedClockOffset = null
+        uiInteraction.setNotification(Notification.YPSOPUMP_CLOCK_OFF, null, Notification.NORMAL)
     }
 
     /**
@@ -1665,6 +1702,11 @@ class YpsoPumpPlugin @Inject constructor(
 
         /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */
         private const val RESERVOIR_EMPTY_UNITS = 0.0
+
+        /** The clock alert clears this close to the phone, below the [YpsoBleManager.MAX_PROFILE_CLOCK_SKEW] that raises it. */
+        private val CLOCK_ALERT_CLEAR: java.time.Duration = java.time.Duration.ofMinutes(4)
+        /** The clock alert text follows the offset in steps of this, far above the measurement jitter. */
+        private val CLOCK_ALERT_STEP: java.time.Duration = java.time.Duration.ofMinutes(1)
 
     }
 }
