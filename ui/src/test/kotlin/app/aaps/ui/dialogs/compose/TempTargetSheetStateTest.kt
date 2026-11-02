@@ -4,6 +4,7 @@ import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TT
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class TempTargetSheetStateTest {
@@ -81,5 +82,13 @@ class TempTargetSheetStateTest {
         assertThat(mmol.lowTarget).isEqualTo(99.0)
         assertThat(mmol.highTarget).isEqualTo(99.0)
         assertThat(mmol.reason).isEqualTo(TT.Reason.EATING_SOON)
+    }
+
+    @Test
+    fun `the confirmed target keeps the precision it will store`() {
+        assertThat(TempTargetRequest(5.55, 60, TtReason.CUSTOM).targetText(GlucoseUnit.MMOL, Locale.US))
+            .isEqualTo("5.55 mmol/L")
+        assertThat(TempTargetRequest(100.5, 60, TtReason.CUSTOM).targetText(GlucoseUnit.MGDL, Locale.US))
+            .isEqualTo("100.5 mg/dL")
     }
 }

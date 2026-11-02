@@ -1,10 +1,15 @@
 package app.aaps.ui.dialogs.compose
 
 import androidx.compose.runtime.Immutable
+import app.aaps.core.compose.components.formatNumeric
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TT
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+private val GlucoseUnit.targetDecimals: Int get() = if (this == GlucoseUnit.MMOL) 1 else 0
+private val GlucoseUnit.targetUnitLabel: String get() = if (this == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
 
 enum class TtReason { EATING_SOON, ACTIVITY, HYPO, CUSTOM }
 
@@ -30,6 +35,10 @@ data class TempTargetRequest(
     val durationMin: Int,
     val reason: TtReason
 ) {
+    /** The target as typed, at the precision that will be stored rather than a rounded display value. */
+    fun targetText(units: GlucoseUnit, locale: Locale = Locale.getDefault()): String =
+        formatNumeric(target, units.targetDecimals, locale) + " " + units.targetUnitLabel
+
     fun toTempTarget(timestamp: Long, units: GlucoseUnit): TT = TT(
         timestamp = timestamp,
         duration = TimeUnit.MINUTES.toMillis(durationMin.toLong()),
@@ -81,12 +90,12 @@ fun tempTargetSheetState(
         initialTarget = initialTarget,
         initialDuration = initialDuration,
         unitStep = if (mmol) 0.1 else 1.0,
-        unitLabel = if (mmol) "mmol/L" else "mg/dL",
+        unitLabel = units.targetUnitLabel,
         targetMin = if (mmol) Constants.MIN_TT_MMOL else Constants.MIN_TT_MGDL,
         targetMax = if (mmol) Constants.MAX_TT_MMOL else Constants.MAX_TT_MGDL,
         durationStep = 5,
         durationMax = Constants.MAX_PROFILE_SWITCH_DURATION.toInt(),
-        decimals = if (mmol) 1 else 0,
+        decimals = units.targetDecimals,
         hasActive = activeTargetMgdl != null
     )
 }

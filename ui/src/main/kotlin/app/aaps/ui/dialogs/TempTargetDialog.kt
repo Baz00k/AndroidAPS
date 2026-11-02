@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -14,7 +13,6 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.profile.ProfileFunction
-import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
@@ -49,7 +47,6 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var profileFunction: ProfileFunction
-    @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var protectionCheck: ProtectionCheck
@@ -75,8 +72,6 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
         super.onDestroyView()
         disposable.clear()
     }
-
-    private val mmol get() = profileFunction.getUnits() == GlucoseUnit.MMOL
 
     private fun buildState(): TempTargetSheetState {
         fun preset(reason: TtReason, label: String, target: Double, dur: Int) =
@@ -106,8 +101,7 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
     private fun start(request: TempTargetRequest) {
         val activity = activity ?: return
         val units = profileFunction.getUnits()
-        val unitLabel = if (mmol) "mmol/L" else "mg/dL"
-        val summary = rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + profileUtil.stringInCurrentUnitsDetect(request.target) + " " + unitLabel +
+        val summary = rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + request.targetText(units) +
             "\n" + rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, request.durationMin)
         OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.temporary_target), summary, {
             disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(

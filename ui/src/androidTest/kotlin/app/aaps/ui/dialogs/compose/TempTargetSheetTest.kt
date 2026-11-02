@@ -62,6 +62,42 @@ class TempTargetSheetTest {
     }
 
     @Test
+    fun `editing a preset value makes the request custom`() {
+        val requests = show()
+
+        compose.onNodeWithText("Eating soon").performClick()
+        compose.onAllNodes(hasSetTextAction())[0].performTextReplacement("120")
+        compose.onNodeWithText("Start temporary target").assertIsEnabled().performClick()
+
+        compose.onNodeWithText("Eating soon").performClick()
+        compose.onAllNodes(hasSetTextAction())[1].performTextReplacement("30")
+        compose.onNodeWithText("Start temporary target").assertIsEnabled().performClick()
+
+        compose.runOnIdle {
+            assertThat(requests).containsExactly(
+                TempTargetRequest(target = 120.0, durationMin = 45, reason = TtReason.CUSTOM),
+                TempTargetRequest(target = 90.0, durationMin = 30, reason = TtReason.CUSTOM)
+            ).inOrder()
+        }
+    }
+
+    @Test
+    fun `reselecting a preset replaces an invalid duration draft`() {
+        val requests = show()
+
+        compose.onNodeWithText("Eating soon").performClick()
+        compose.onAllNodes(hasSetTextAction())[1].performTextReplacement("")
+        compose.onNodeWithText("Start temporary target").assertIsNotEnabled()
+
+        compose.onNodeWithText("Eating soon").performClick()
+        compose.onNodeWithText("Start temporary target").assertIsEnabled().performClick()
+
+        compose.runOnIdle {
+            assertThat(requests).containsExactly(TempTargetRequest(target = 90.0, durationMin = 45, reason = TtReason.EATING_SOON))
+        }
+    }
+
+    @Test
     fun `an active target can still be cancelled while the editor is out of range`() {
         var cancelled = false
         val state = tempTargetSheetState(
@@ -73,7 +109,7 @@ class TempTargetSheetTest {
         )
         show(state) { cancelled = true }
 
-        // A target left from before this range narrowed is shown as it is, never clamped to 180.
+        // The editor keeps 200 as typed instead of clamping it to the range, so Start stays off.
         compose.onAllNodes(hasSetTextAction())[0].performTextReplacement("200")
         compose.onNodeWithText("Start temporary target").assertIsNotEnabled()
         compose.onNodeWithText("Cancel current temporary target").assertIsEnabled().performClick()

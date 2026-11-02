@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,8 @@ fun TempTargetSheet(
     var reason by rememberSaveable { mutableStateOf(TtReason.CUSTOM) }
     var targetValid by remember { mutableStateOf(false) }
     var durationValid by remember { mutableStateOf(false) }
+    // Reselecting a preset must replace an invalid draft too; the entries only follow a changed value.
+    var presetRevision by rememberSaveable { mutableIntStateOf(0) }
 
     // The entry components own the draft: an incomplete or out-of-range edit publishes no value.
     val request = state.request(target, duration, reason)?.takeIf { targetValid && durationValid }
@@ -70,6 +73,7 @@ fun TempTargetSheet(
                             target = preset.target
                             duration = preset.durationMin
                             reason = preset.reason
+                            presetRevision++
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -89,38 +93,40 @@ fun TempTargetSheet(
                 )
             }
         }
-        EntryCard("Target") {
-            AmountStepper(
-                value = target,
-                onValue = {
-                    target = it
-                    reason = TtReason.CUSTOM
-                },
-                step = state.unitStep,
-                min = state.targetMin,
-                max = state.targetMax,
-                decimals = state.decimals,
-                unit = state.unitLabel,
-                name = "of target",
-                onValidityChange = { targetValid = it }
-            )
-        }
-        EntryCard("Duration") {
-            AmountStepper(
-                value = duration.toDouble(),
-                onValue = {
-                    duration = it.toInt()
-                    reason = TtReason.CUSTOM
-                },
-                step = state.durationStep.toDouble(),
-                min = 0.0,
-                max = state.durationMax.toDouble(),
-                decimals = 0,
-                unit = "min",
-                name = "of duration",
-                integerOnly = true,
-                onValidityChange = { durationValid = it }
-            )
+        key(presetRevision) {
+            EntryCard("Target") {
+                AmountStepper(
+                    value = target,
+                    onValue = {
+                        target = it
+                        reason = TtReason.CUSTOM
+                    },
+                    step = state.unitStep,
+                    min = state.targetMin,
+                    max = state.targetMax,
+                    decimals = state.decimals,
+                    unit = state.unitLabel,
+                    name = "of target",
+                    onValidityChange = { targetValid = it }
+                )
+            }
+            EntryCard("Duration") {
+                AmountStepper(
+                    value = duration.toDouble(),
+                    onValue = {
+                        duration = it.toInt()
+                        reason = TtReason.CUSTOM
+                    },
+                    step = state.durationStep.toDouble(),
+                    min = 0.0,
+                    max = state.durationMax.toDouble(),
+                    decimals = 0,
+                    unit = "min",
+                    name = "of duration",
+                    integerOnly = true,
+                    onValidityChange = { durationValid = it }
+                )
+            }
         }
     }
 }
