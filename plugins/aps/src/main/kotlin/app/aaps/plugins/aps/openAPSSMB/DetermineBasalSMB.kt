@@ -12,6 +12,12 @@ import app.aaps.core.interfaces.aps.Predictions
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
+import app.aaps.plugins.aps.openAPS.UntrustedValueException
+import app.aaps.plugins.aps.openAPS.requireFinite
+import app.aaps.plugins.aps.openAPS.requirePositive
+import app.aaps.plugins.aps.openAPS.requireWithin
+import app.aaps.plugins.aps.openAPS.safeFallback
+import app.aaps.plugins.aps.openAPS.smbLowTemp
 import java.text.DecimalFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -38,14 +44,15 @@ class DetermineBasalSMB @Inject constructor(
 
     // Rounds value to 'digits' decimal places
     // different for negative numbers fun round(value: Double, digits: Int): Double = BigDecimal(value).setScale(digits, RoundingMode.HALF_EVEN).toDouble()
+    // Math.round saturates ±Infinity and out-of-range values to a large finite number, so such a value ends the run instead.
     fun round(value: Double, digits: Int): Double {
-        if (value.isNaN()) return Double.NaN
+        value.requireFinite("rounded value")
         val scale = 10.0.pow(digits.toDouble())
-        return Math.round(value * scale) / scale
+        return Math.round((value * scale).requireWithin(Long.MAX_VALUE.toDouble(), "rounded value * $scale")) / scale
     }
 
     fun Double.withoutZeros(): String = DecimalFormat("0.##").format(this)
-    fun round(value: Double): Int = value.roundToInt()
+    fun round(value: Double): Int = value.requireWithin(Int.MAX_VALUE.toDouble(), "rounded value").roundToInt()
 
     // we expect BG to rise or fall at the rate of BGI,
     // adjusted by the rate at which BG would need to rise /
@@ -155,6 +162,73 @@ class DetermineBasalSMB @Inject constructor(
     ): RT {
         consoleError.clear()
         consoleLog.clear()
+        return try {
+            requireValidInputs(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, dynIsfMode)
+            calculate(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, microBolusAllowed, currentTime, flatBGsDetected, dynIsfMode).also { requireValidResult(it) }
+        } catch (e: UntrustedValueException) {
+            consoleError.add("Aborting run: ${e.message} at ${e.stackTrace.take(3).joinToString(" < ") { "${it.fileName}:${it.lineNumber}" }}")
+            val rT = RT(algorithm = APSResult.Algorithm.SMB, runningDynamicIsf = dynIsfMode, timestamp = currentTime, consoleLog = consoleLog, consoleError = consoleError)
+            rT.reason.append("Aborting run: ${e.message}")
+            safeFallback(rT, currenttemp, round_basal(profile.current_basal), currentTime)
+        }
+    }
+
+    private fun requireValidInputs(
+        glucose_status: GlucoseStatus, currenttemp: CurrentTemp, iob_data_array: Array<IobTotal>, profile: OapsProfile, autosens_data: AutosensResult, meal_data: MealData,
+        dynIsfMode: Boolean
+    ) {
+        glucose_status.glucose.requireFinite("bg")
+        glucose_status.noise.requireFinite("noise")
+        glucose_status.delta.requireFinite("delta")
+        glucose_status.shortAvgDelta.requireFinite("shortAvgDelta")
+        glucose_status.longAvgDelta.requireFinite("longAvgDelta")
+        currenttemp.rate.requireFinite("currenttemp.rate")
+        iob_data_array.forEach {
+            it.iob.requireFinite("iob")
+            it.activity.requireFinite("activity")
+            it.iobWithZeroTemp?.iob?.requireFinite("iobWithZeroTemp.iob")
+            it.iobWithZeroTemp?.activity?.requireFinite("iobWithZeroTemp.activity")
+        }
+        meal_data.carbs.requireFinite("carbs")
+        meal_data.mealCOB.requireFinite("mealCOB")
+        meal_data.slopeFromMaxDeviation.requireFinite("slopeFromMaxDeviation")
+        meal_data.slopeFromMinDeviation.requireFinite("slopeFromMinDeviation")
+        profile.min_bg.requireFinite("min_bg")
+        profile.max_bg.requireFinite("max_bg")
+        profile.max_iob.requireFinite("max_iob")
+        profile.max_basal.requireFinite("max_basal")
+        profile.max_daily_basal.requireFinite("max_daily_basal")
+        profile.max_daily_safety_multiplier.requireFinite("max_daily_safety_multiplier")
+        profile.current_basal_safety_multiplier.requireFinite("current_basal_safety_multiplier")
+        profile.autosens_max.requireFinite("autosens_max")
+        profile.sens.requirePositive("sens")
+        profile.carb_ratio.requirePositive("carb_ratio")
+        profile.current_basal.requirePositive("current_basal")
+        profile.bolus_increment.requirePositive("bolus_increment")
+        autosens_data.ratio.requirePositive("autosens ratio")
+        if (dynIsfMode) {
+            profile.variable_sens.requirePositive("variable_sens")
+            profile.TDD.requirePositive("TDD")
+            profile.insulinDivisor.toDouble().requirePositive("insulinDivisor")
+        }
+    }
+
+    private fun requireValidResult(rT: RT) {
+        rT.bg?.requireFinite("result bg")
+        rT.eventualBG?.requireFinite("eventualBG")
+        rT.targetBG?.requireFinite("targetBG")
+        rT.insulinReq?.requireFinite("insulinReq")
+        rT.sensitivityRatio?.requireFinite("sensitivityRatio")
+        rT.COB?.requireFinite("COB")
+        rT.IOB?.requireFinite("IOB")
+        rT.rate?.requireFinite("rate")
+        rT.units?.requireFinite("units")
+    }
+
+    private fun calculate(
+        glucose_status: GlucoseStatus, currenttemp: CurrentTemp, iob_data_array: Array<IobTotal>, profile: OapsProfile, autosens_data: AutosensResult, meal_data: MealData,
+        microBolusAllowed: Boolean, currentTime: Long, flatBGsDetected: Boolean, dynIsfMode: Boolean
+    ): RT {
         var rT = RT(
             algorithm = APSResult.Algorithm.SMB,
             runningDynamicIsf = dynIsfMode,
@@ -192,22 +266,7 @@ class DetermineBasalSMB @Inject constructor(
             rT.reason.append("Error: CGM data is unchanged for the past ~45m")
         }
         if (bg <= 10 || bg == 38.0 || noise >= 3 || minAgo > 12 || minAgo < -5 || (bg > 60 && flatBGsDetected)) {
-            if (currenttemp.rate > basal) { // high temp is running
-                rT.reason.append(". Replacing high temp basal of ${currenttemp.rate} with neutral temp of $basal")
-                rT.deliverAt = deliverAt
-                rT.duration = 30
-                rT.rate = basal
-                return rT
-            } else if (currenttemp.rate == 0.0 && currenttemp.duration > 30) { //shorten long zero temps to 30m
-                rT.reason.append(". Shortening " + currenttemp.duration + "m long zero temp to 30m. ")
-                rT.deliverAt = deliverAt
-                rT.duration = 30
-                rT.rate = 0.0
-                return rT
-            } else { //do nothing.
-                rT.reason.append(". Temp ${currenttemp.rate} <= current basal ${round(basal, 2)}U/hr; doing nothing. ")
-                return rT
-            }
+            return safeFallback(rT, currenttemp, basal, deliverAt)
         }
 
         // TODO eliminate
@@ -472,9 +531,7 @@ class DetermineBasalSMB @Inject constructor(
         // area of the /\ triangle is the same as a remainingCIpeak-height rectangle out to remainingCATime/2
         // remainingCIpeak (mg/dL/5m) = remainingCarbs (g) * CSF (mg/dL/g) * 5 (m/5m) * 1h/60m / (remainingCATime/2) (h)
         val remainingCIpeak = remainingCarbs * csf * 5 / 60 / (remainingCATime / 2)
-        if (remainingCIpeak.isNaN()) {
-            throw Exception("remainingCarbs=$remainingCarbs remainingCATime=$remainingCATime profile.remainingCarbsCap=${profile.remainingCarbsCap} csf=$csf")
-        }
+        remainingCIpeak.requireFinite("remainingCIpeak")
         //console.error(profile.min_5m_carbimpact,ci,totalCI,totalCA,remainingCarbs,remainingCI,remainingCATime);
 
         // calculate peak deviation in last hour, and slope from that to current deviation
@@ -557,9 +614,6 @@ class DetermineBasalSMB @Inject constructor(
             // and ending at remainingCATime h (remainingCATime*12 * 5m intervals)
             val intervals = Math.min(COBpredBGs.size.toDouble(), ((remainingCATime * 12) - COBpredBGs.size))
             val remainingCI = Math.max(0.0, intervals / (remainingCATime / 2 * 12) * remainingCIpeak)
-            if (remainingCI.isNaN()) {
-                throw Exception("remainingCI=$remainingCI intervals=$intervals remainingCIpeak=$remainingCIpeak")
-            }
             remainingCItotal += predCI + remainingCI
             remainingCIs.add(round(remainingCI))
             predCIs.add(round(predCI))
@@ -581,6 +635,12 @@ class DetermineBasalSMB @Inject constructor(
             }
             UAMpredBG = UAMpredBGs[UAMpredBGs.size - 1] + predUAMBGI + min(0.0, predDev) + predUCI
             //console.error(predBGI, predCI, predUCI);
+            // A NaN prediction would slip past every "<" comparison below, so it ends the run instead.
+            IOBpredBG.requireFinite("IOBpredBG")
+            ZTpredBG.requireFinite("ZTpredBG")
+            COBpredBG?.requireFinite("COBpredBG")
+            aCOBpredBG?.requireFinite("aCOBpredBG")
+            UAMpredBG?.requireFinite("UAMpredBG")
             // truncate all BG predictions at 4 hours
             if (IOBpredBGs.size < 48) IOBpredBGs.add(IOBpredBG)
             if (COBpredBGs.size < 48) COBpredBGs.add(COBpredBG)
@@ -695,7 +755,9 @@ class DetermineBasalSMB @Inject constructor(
             }
         }
 
-        val fractionCarbsLeft = meal_data.mealCOB / meal_data.carbs
+        // meal_data.carbs counts only entries inside the absorption window, while mealCOB comes from autosens,
+        // so carbs can be 0 with COB left. Weight that as no carbs left, which keeps avgPredBG on UAM.
+        val fractionCarbsLeft = if (meal_data.carbs > 0.0) meal_data.mealCOB / meal_data.carbs else 0.0
         // if we have COB and UAM is enabled, average both
         if (minUAMPredBG < 999 && minCOBPredBG < 999) {
             // weight COBpredBG vs. UAMpredBG based on how many carbs remain as COB
@@ -1073,18 +1135,9 @@ class DetermineBasalSMB @Inject constructor(
                     durationReq = 0
                 }
 
-                var smbLowTempReq = 0.0
-                if (durationReq <= 0) {
-                    durationReq = 0
-                    // don't set an SMB zero temp longer than 60 minutes
-                } else if (durationReq >= 30) {
-                    durationReq = round(durationReq / 30.0) * 30
-                    durationReq = min(60, max(0, durationReq))
-                } else {
-                    // if SMB durationReq is less than 30m, set a nonzero low temp
-                    smbLowTempReq = round(basal * durationReq / 30.0, 2)
-                    durationReq = 30
-                }
+                val (lowTempDuration, lowTempRate) = smbLowTemp(durationReq, basal)
+                durationReq = lowTempDuration
+                val smbLowTempReq = round(lowTempRate, 2)
                 rT.reason.append(" insulinReq $insulinReq")
                 if (microBolus >= maxBolus) {
                     rT.reason.append("; maxBolus $maxBolus")
