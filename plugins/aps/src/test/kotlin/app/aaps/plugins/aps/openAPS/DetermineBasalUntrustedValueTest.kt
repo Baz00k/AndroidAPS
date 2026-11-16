@@ -67,10 +67,13 @@ class DetermineBasalUntrustedValueTest : TestBaseWithProfile() {
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
-    fun `COB left after its carbs leave the window does not abort the run`(algorithm: Algorithm) {
+    fun `COB left after its carbs leave the window does not abort the run or lift the low guard`(algorithm: Algorithm) {
+        fun minGuardBG(rT: RT) = Regex("minGuardBG ([^,]+)").find(rT.reason)!!.groupValues[1]
         val rT = run(algorithm, Inputs(meal = MealData(carbs = 0.0, mealCOB = 20.0, slopeFromMinDeviation = 999.0)))
+        val withoutCob = run(algorithm, Inputs(meal = MealData(carbs = 0.0, mealCOB = 0.0, slopeFromMinDeviation = 999.0)))
 
         assertThat(rT.reason.toString()).doesNotContain("Aborting")
+        assertThat(minGuardBG(rT)).isEqualTo(minGuardBG(withoutCob))
     }
 
     @ParameterizedTest(name = "{0} {1}")
