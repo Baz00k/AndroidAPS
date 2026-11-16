@@ -32,7 +32,8 @@ class TempBasalActionsTest {
     private val dateUtil: DateUtil = mock()
     private val uel: UserEntryLogger = mock()
     private val activity: FragmentActivity = mock()
-    private val dialogs = mutableListOf<Pair<String, Pair<Runnable, Runnable>>>()
+    private class Dialog(val message: String, val ok: Runnable, val cancel: Runnable)
+    private val dialogs = mutableListOf<Dialog>()
     private lateinit var actions: TempBasalActions
 
     @BeforeEach fun setUp() {
@@ -42,7 +43,7 @@ class TempBasalActionsTest {
         whenever(rh.gs(app.aaps.core.ui.R.string.formatPercent, 50.0)).thenReturn("50%")
         whenever(rh.gs(R.string.confirm_cancel_temp_basal, "50%")).thenReturn("Stop the active temp basal of 50%?")
         actions = TempBasalActions(rh, processed, commandQueue, dateUtil, uel, mock()).also {
-            it.confirm = { _, _, message, ok, cancel -> dialogs += message to (ok to cancel) }
+            it.confirm = { _, _, message, ok, cancel -> dialogs += Dialog(message, ok, cancel) }
         }
     }
 
@@ -54,10 +55,10 @@ class TempBasalActionsTest {
         actions.confirmCancel(activity, Sources.Actions, guard)
         actions.confirmCancel(activity, Sources.Actions, guard)
 
-        assertThat(dialogs.map { it.first }).containsExactly("Stop the active temp basal of 50%?")
+        assertThat(dialogs.map { it.message }).containsExactly("Stop the active temp basal of 50%?")
         verify(commandQueue, never()).cancelTempBasal(any(), any(), anyOrNull())
 
-        dialogs.single().second.first.run()
+        dialogs.single().ok.run()
 
         verify(uel).log(Action.CANCEL_TEMP_BASAL, Sources.Actions)
         verify(commandQueue).cancelTempBasal(eq(true), eq(false), anyOrNull())
@@ -69,7 +70,7 @@ class TempBasalActionsTest {
         val guard = TempBasalActions.CancelGuard()
 
         actions.confirmCancel(activity, Sources.Actions, guard)
-        dialogs.single().second.second.run()
+        dialogs.single().cancel.run()
         actions.confirmCancel(activity, Sources.Actions, guard)
 
         assertThat(dialogs).hasSize(2)
@@ -81,7 +82,7 @@ class TempBasalActionsTest {
         whenever(processed.getTempBasalIncludingConvertedExtended(now)).thenReturn(tb, null)
 
         actions.confirmCancel(activity, Sources.Actions, TempBasalActions.CancelGuard())
-        dialogs.single().second.first.run()
+        dialogs.single().ok.run()
 
         verifyNoInteractions(uel)
         verify(commandQueue, never()).cancelTempBasal(any(), any(), anyOrNull())
