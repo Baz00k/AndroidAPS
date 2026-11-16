@@ -7,7 +7,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import app.aaps.core.data.model.GlucoseUnit
-import app.aaps.core.data.model.TT
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -27,13 +26,14 @@ import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.ui.R
+import app.aaps.ui.dialogs.compose.TempTargetRequest
 import app.aaps.ui.dialogs.compose.TempTargetSheet
 import app.aaps.ui.dialogs.compose.TempTargetSheetState
 import app.aaps.ui.dialogs.compose.TtPreset
 import app.aaps.ui.dialogs.compose.TtReason
 import io.reactivex.rxjava3.disposables.CompositeDisposable
-import java.util.Locale
-import java.util.concurrent.TimeUnit
+import java.math.BigDecimal
+import java.math.RoundingMode
 import javax.inject.Inject
 
 /**
@@ -76,64 +76,43 @@ class TempTargetDialog : DaggerBottomSheetFragment() {
         disposable.clear()
     }
 
-    private val mmol get() = profileFunction.getUnits() == GlucoseUnit.MMOL
-
     private fun buildState(): TempTargetSheetState {
-        val decimals = if (mmol) 1 else 0
-        fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${decimals}f", v)
-        fun preset(reason: TtReason, label: String, target: Double, dur: Int) =
-            TtPreset(reason, label, target, dur, "${fmt(target)} ${if (mmol) "mmol/L" else "mg/dL"}", "$dur min")
+        val units = profileFunction.getUnits()
+        val decimals = if (units == GlucoseUnit.MMOL) 1 else 0
+        // Rounded to what the entry shows, so a preset is recorded exactly as displayed.
+        fun preset(reason: TtReason, target: UnitDoubleKey, duration: IntKey) =
+            TtPreset(reason, BigDecimal.valueOf(preferences.get(target)).setScale(decimals, RoundingMode.HALF_UP).toDouble(), preferences.get(duration))
 
         return TempTargetSheetState(
+            units = units,
             presets = listOf(
-                preset(TtReason.EATING_SOON, rh.gs(app.aaps.core.ui.R.string.eatingsoon), preferences.get(UnitDoubleKey.OverviewEatingSoonTarget), preferences.get(IntKey.OverviewEatingSoonDuration)),
-                preset(TtReason.ACTIVITY, rh.gs(app.aaps.core.ui.R.string.activity), preferences.get(UnitDoubleKey.OverviewActivityTarget), preferences.get(IntKey.OverviewActivityDuration)),
-                preset(TtReason.HYPO, rh.gs(app.aaps.core.ui.R.string.hypo), preferences.get(UnitDoubleKey.OverviewHypoTarget), preferences.get(IntKey.OverviewHypoDuration))
+                preset(TtReason.EATING_SOON, UnitDoubleKey.OverviewEatingSoonTarget, IntKey.OverviewEatingSoonDuration),
+                preset(TtReason.ACTIVITY, UnitDoubleKey.OverviewActivityTarget, IntKey.OverviewActivityDuration),
+                preset(TtReason.HYPO, UnitDoubleKey.OverviewHypoTarget, IntKey.OverviewHypoDuration)
             ),
-            initialTarget = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget),
-            initialDuration = preferences.get(IntKey.OverviewEatingSoonDuration),
-            unitStep = if (mmol) 0.1 else 1.0,
-            unitLabel = if (mmol) "mmol/L" else "mg/dL",
-            targetMin = if (mmol) 4.0 else 72.0,
-            targetMax = if (mmol) 15.0 else 270.0,
-            durationStep = 5,
-            decimals = decimals,
             hasActive = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now()) != null
         )
     }
 
-    private fun start(target: Double, durationMin: Int, reason: TtReason) {
-        if (target <= 0.0 || durationMin <= 0) return
+    private fun start(request: TempTargetRequest) {
         val activity = activity ?: return
-        val units = profileFunction.getUnits()
-        val unitLabel = if (mmol) "mmol/L" else "mg/dL"
-        val summary = rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + profileUtil.stringInCurrentUnitsDetect(target) + " " + unitLabel +
-            "\n" + rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationMin)
+        if (!request.isValid) return
+        val unitLabel = if (request.units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
+        val summary = rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + profileUtil.stringInCurrentUnitsDetect(request.target) + " " + unitLabel +
+            "\n" + rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, request.durationMin)
         OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.temporary_target), summary, {
-            val ttReason = when (reason) {
-                TtReason.EATING_SOON -> TT.Reason.EATING_SOON
-                TtReason.ACTIVITY    -> TT.Reason.ACTIVITY
-                TtReason.HYPO        -> TT.Reason.HYPOGLYCEMIA
-                TtReason.CUSTOM      -> TT.Reason.CUSTOM
-            }
             disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
-                TT(
-                    timestamp = dateUtil.now(),
-                    duration = TimeUnit.MINUTES.toMillis(durationMin.toLong()),
-                    reason = ttReason,
-                    lowTarget = profileUtil.convertToMgdl(target, units),
-                    highTarget = profileUtil.convertToMgdl(target, units)
-                ),
+                request.toRecord(dateUtil.now()),
                 action = Action.TT,
                 source = Sources.TTDialog,
                 note = null,
                 listValues = listOf(
-                    ValueWithUnit.TETTReason(ttReason),
-                    ValueWithUnit.fromGlucoseUnit(target, units),
-                    ValueWithUnit.Minute(durationMin)
+                    ValueWithUnit.TETTReason(request.reason.record),
+                    ValueWithUnit.fromGlucoseUnit(request.target, request.units),
+                    ValueWithUnit.Minute(request.durationMin)
                 )
             ).subscribe()
-            if (durationMin == 10) preferences.put(BooleanNonKey.ObjectivesTempTargetUsed, true)
+            if (request.durationMin == 10) preferences.put(BooleanNonKey.ObjectivesTempTargetUsed, true)
         })
         dismiss()
     }
