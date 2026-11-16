@@ -157,6 +157,67 @@ class TherapyEntrySheetsTest {
         compose.runOnIdle { assertThat(sent).containsExactly(5.5) }
     }
 
+    @Test
+    fun tempBasalKeepsEachModesValueAndSubmitsAZeroRateOnce() {
+        val submissions = mutableListOf<TempBasalInputs>()
+        compose.setContent { AapsTheme { TempBasalSheet(tempBasalState(), submissions::add) {} } }
+        val rate = compose.onNodeWithContentDescription("of basal rate")
+        rate.assertTextEquals("100")
+
+        compose.onNodeWithContentDescription("Add 10 % of basal rate").performClick()
+        compose.onNodeWithText("Absolute").performClick()
+        rate.assertTextEquals("0.80")
+        compose.onNodeWithContentDescription("Add 0.05 U/h of basal rate").performClick()
+        rate.assertTextEquals("0.85")
+        compose.onNodeWithText("Percent").performClick()
+        rate.assertTextEquals("110")
+
+        rate.performTextReplacement("0")
+        tapTwice("Set temp basal")
+
+        compose.runOnIdle { assertThat(submissions).containsExactly(TempBasalInputs(isPercent = true, value = 0.0, durationMin = 30)) }
+    }
+
+    @Test
+    fun tempBasalNeverSubmitsAPreviousRateOrDurationBelowOneStep() {
+        val submissions = mutableListOf<TempBasalInputs>()
+        compose.setContent { AapsTheme { TempBasalSheet(tempBasalState(), submissions::add) {} } }
+        compose.onNodeWithContentDescription("Subtract 30 min of duration").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("of duration").performTextReplacement("0")
+        compose.onNodeWithText("Set temp basal").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("of duration").performTextReplacement("720")
+        compose.onNodeWithContentDescription("Add 30 min of duration").assertIsNotEnabled()
+
+        compose.onNodeWithText("Absolute").performClick()
+        compose.onNodeWithContentDescription("of basal rate").performTextReplacement("0.")
+        compose.onNodeWithText("Set temp basal").assertIsNotEnabled().performClick()
+        compose.onNodeWithContentDescription("of basal rate").performTextReplacement("2.5")
+        compose.onNodeWithText("Set temp basal").assertIsEnabled().performClick()
+
+        compose.runOnIdle { assertThat(submissions).containsExactly(TempBasalInputs(isPercent = false, value = 2.5, durationMin = 720)) }
+    }
+
+    @Test
+    fun extendedBolusStartsAtOneStepAndNeedsPositiveInsulinAndDuration() {
+        val submissions = mutableListOf<ExtendedBolusInputs>()
+        compose.setContent {
+            AapsTheme { ExtendedBolusSheet(ExtendedBolusSheetState(maxInsulin = 5.0, insulinStep = 0.05, insulinDecimals = 2, durationStep = 30.0, maxDuration = 720.0), submissions::add) {} }
+        }
+        compose.onNodeWithContentDescription("of insulin").assertTextEquals("0.05")
+        compose.onNodeWithContentDescription("of duration").assertTextEquals("30")
+
+        compose.onNodeWithContentDescription("Subtract 0.05 U of insulin").performClick()
+        compose.onNodeWithText("Set extended bolus").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Add 0.05 U of insulin").performClick()
+        compose.onNodeWithContentDescription("Add 0.05 U of insulin").performClick()
+        compose.onNodeWithContentDescription("Subtract 30 min of duration").performClick()
+        compose.onNodeWithText("Set extended bolus").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("of duration").performTextReplacement("90")
+        tapTwice("Set extended bolus")
+
+        compose.runOnIdle { assertThat(submissions).containsExactly(ExtendedBolusInputs(insulin = 0.1, durationMin = 90)) }
+    }
+
     /** Both taps in one batch: the latch, not a recomposed disabled button, must reject the second. */
     private fun tapTwice(label: String) {
         val bounds = compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
@@ -181,5 +242,21 @@ class TherapyEntrySheetsTest {
         durationMax = 1440.0,
         durationStep = 10.0,
         showNotes = false
+    )
+
+    private fun tempBasalState() = TempBasalSheetState(
+        percentAllowed = true,
+        absoluteAllowed = true,
+        defaultIsPercent = true,
+        percentDefault = 100.0,
+        percentMax = 200.0,
+        percentStep = 10.0,
+        absoluteDefault = 0.8,
+        absoluteMax = 10.0,
+        absoluteStep = 0.05,
+        absoluteDecimals = 2,
+        durationDefault = 30.0,
+        durationMax = 720.0,
+        durationStep = 30.0
     )
 }

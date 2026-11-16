@@ -1,26 +1,22 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import app.aaps.core.compose.components.NumberField
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsSpacing
 
 /**
- * Presentation params for the redesigned Temp Basal sheet. The pump determines which modes are
- * allowed (percent / absolute); the SegmentedControl is only shown when BOTH are allowed. Each mode
- * carries its own default / min / max / step so the rate field re-parameterises on toggle.
+ * The pump decides which modes are allowed (percent / absolute); the mode switch is shown only when
+ * both are. Each mode keeps its own value, limits and step.
  */
 data class TempBasalSheetState(
     val percentAllowed: Boolean,
@@ -44,52 +40,62 @@ data class TempBasalInputs(
     val durationMin: Int
 )
 
-/**
- * Redesigned Temp Basal sheet. [onSubmit] runs the SAME constraint + `OKDialog` confirmation +
- * `commandQueue.tempBasalPercent` / `tempBasalAbsolute` path as the legacy dialog.
- */
 @Composable
 fun TempBasalSheet(state: TempBasalSheetState, onSubmit: (TempBasalInputs) -> Unit, onClose: () -> Unit) {
-    val showToggle = state.percentAllowed && state.absoluteAllowed
-    var isPercent by remember { mutableStateOf(state.defaultIsPercent) }
-    var percent by remember { mutableStateOf(state.percentDefault) }
-    var absolute by remember { mutableStateOf(state.absoluteDefault) }
-    var duration by remember { mutableStateOf(state.durationDefault) }
-    var rateValid by remember { mutableStateOf(false) }
+    var isPercent by rememberSaveable { mutableStateOf(state.defaultIsPercent) }
+    var percent by rememberSaveable { mutableStateOf(state.percentDefault) }
+    var absolute by rememberSaveable { mutableStateOf(state.absoluteDefault) }
+    var duration by rememberSaveable { mutableStateOf(state.durationDefault) }
+    // Per mode, so a switch never enables submission on the other mode's validity.
+    var percentValid by remember { mutableStateOf(false) }
+    var absoluteValid by remember { mutableStateOf(false) }
     var durationValid by remember { mutableStateOf(false) }
+    var submitted by rememberSaveable { mutableStateOf(false) }
 
-    SheetSurface(title = "Temp basal", onClose = onClose) {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-            if (showToggle) {
-                SegmentedControl(
-                    options = listOf("Percent", "Absolute"),
-                    selectedIndex = if (isPercent) 0 else 1,
-                    onSelect = { isPercent = it == 0 },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            if (isPercent) {
-                NumberField(
-                    label = "Rate", value = percent, onValue = { percent = it },
-                    step = state.percentStep, min = 0.0, max = state.percentMax, decimals = 0, unit = "%",
-                    modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { rateValid = it }
-                )
-            } else {
-                NumberField(
-                    label = "Rate", value = absolute, onValue = { absolute = it },
-                    step = state.absoluteStep, min = 0.0, max = state.absoluteMax, decimals = state.absoluteDecimals, unit = "U/h",
-                    modifier = Modifier.fillMaxWidth(), onValidityChange = { rateValid = it }
-                )
-            }
-            NumberField(
-                label = "Duration", value = duration, onValue = { duration = it },
-                step = state.durationStep, min = state.durationStep, max = state.durationMax, decimals = 0, unit = "min",
-                modifier = Modifier.fillMaxWidth(), integerOnly = true, onValidityChange = { durationValid = it }
+    // Read state when invoked: a same-frame second tap must still see the latch.
+    fun canSubmit() = (if (isPercent) percentValid else absoluteValid) && durationValid && !submitted
+
+    fun submit() {
+        if (!canSubmit()) return
+        submitted = true
+        onSubmit(TempBasalInputs(isPercent, if (isPercent) percent else absolute, duration.toInt()))
+    }
+
+    SheetSurface(
+        title = "Temp basal",
+        onClose = onClose,
+        footer = { PrimaryButton("Set temp basal", onClick = ::submit, enabled = canSubmit()) }
+    ) {
+        if (state.percentAllowed && state.absoluteAllowed)
+            SegmentedControl(
+                options = listOf("Percent", "Absolute"),
+                selectedIndex = if (isPercent) 0 else 1,
+                onSelect = { isPercent = it == 0 },
+                modifier = Modifier.fillMaxWidth(),
+                fillWidth = true
             )
-            PrimaryButton(
-                label = "Set temp basal",
-                enabled = rateValid && durationValid,
-                onClick = { if (rateValid && durationValid) onSubmit(TempBasalInputs(isPercent, if (isPercent) percent else absolute, duration.toInt())) }
+        EntryCard("Rate") {
+            if (isPercent)
+                AmountStepper(
+                    value = percent, onValue = { percent = it },
+                    step = state.percentStep, min = 0.0, max = state.percentMax,
+                    decimals = 0, unit = "%", name = "of basal rate", integerOnly = true,
+                    onValidityChange = { percentValid = it }
+                )
+            else
+                AmountStepper(
+                    value = absolute, onValue = { absolute = it },
+                    step = state.absoluteStep, min = 0.0, max = state.absoluteMax,
+                    decimals = state.absoluteDecimals, unit = "U/h", name = "of basal rate",
+                    onValidityChange = { absoluteValid = it }
+                )
+        }
+        EntryCard("Duration") {
+            AmountStepper(
+                value = duration, onValue = { duration = it },
+                step = state.durationStep, min = state.durationStep, max = state.durationMax,
+                decimals = 0, unit = "min", name = "of duration", integerOnly = true,
+                onValidityChange = { durationValid = it }
             )
         }
     }
