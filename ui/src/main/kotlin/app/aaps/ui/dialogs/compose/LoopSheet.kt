@@ -53,11 +53,11 @@ fun LoopSheet(
                 ListCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.selectableGroup()) {
                         state.modes.forEach { m ->
-                            // The current mode stays at full strength but does nothing when pressed again.
+                            // The current mode stays at full strength but pressing it again does nothing.
                             RadioRow(
                                 title = m.title,
                                 selected = m.selected,
-                                onClick = { if (m.actionable) onAction(m.id) },
+                                onClick = { if (m.enabled && !m.selected) onAction(m.id) },
                                 enabled = m.enabled || m.selected
                             )
                         }

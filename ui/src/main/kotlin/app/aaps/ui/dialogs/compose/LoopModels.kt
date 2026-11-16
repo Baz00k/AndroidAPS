@@ -17,10 +17,7 @@ data class LoopModeOption(
     val title: String,
     val enabled: Boolean,
     val selected: Boolean
-) {
-
-    val actionable: Boolean get() = enabled && !selected
-}
+)
 
 /** Display state for the redesigned Loop control sheet. Built by LoopDialog from the Loop plugin. */
 @Immutable
