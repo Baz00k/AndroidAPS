@@ -129,7 +129,7 @@ class UiInteractionImpl @Inject constructor(
     }
 
     override fun runFillDialog(fragmentManager: FragmentManager) {
-        FillDialog(fragmentManager)
+        FillDialog()
             .show(fragmentManager, "FillDialog")
     }
 
