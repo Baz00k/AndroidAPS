@@ -47,10 +47,7 @@ object TempTargetLimits {
     fun targetMax(units: GlucoseUnit) = if (units == GlucoseUnit.MMOL) Constants.MAX_TT_MMOL else Constants.MAX_TT_MGDL
 }
 
-/**
- * The sheet opens on the first preset (Eating soon). A running target is only offered for
- * cancelling: whatever its value, it never seeds or bounds the draft.
- */
+/** A running target is only offered for cancelling; it never seeds or bounds the draft. */
 @Immutable
 data class TempTargetSheetState(
     val units: GlucoseUnit,
