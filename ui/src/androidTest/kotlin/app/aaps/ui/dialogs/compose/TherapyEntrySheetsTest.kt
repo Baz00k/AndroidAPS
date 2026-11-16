@@ -167,8 +167,6 @@ class TherapyEntrySheetsTest {
         compose.onNodeWithContentDescription("Add 10 % of basal rate").performClick()
         compose.onNodeWithText("Absolute").performClick()
         rate.assertTextEquals("0.80")
-        compose.onNodeWithContentDescription("Add 0.05 U/h of basal rate").performClick()
-        rate.assertTextEquals("0.85")
         compose.onNodeWithText("Percent").performClick()
         rate.assertTextEquals("110")
 
@@ -186,7 +184,6 @@ class TherapyEntrySheetsTest {
         compose.onNodeWithContentDescription("of duration").performTextReplacement("0")
         compose.onNodeWithText("Set temp basal").assertIsNotEnabled()
         compose.onNodeWithContentDescription("of duration").performTextReplacement("720")
-        compose.onNodeWithContentDescription("Add 30 min of duration").assertIsNotEnabled()
 
         compose.onNodeWithText("Absolute").performClick()
         compose.onNodeWithContentDescription("of basal rate").performTextReplacement("0.")

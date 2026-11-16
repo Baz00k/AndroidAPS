@@ -98,22 +98,18 @@ class TempBasalDialog : DaggerBottomSheetFragment() {
     private fun submit(inputs: TempBasalInputs) {
         // The sheet latches on submit; close it rather than leave a dead sheet behind.
         val profile = profileFunction.getProfile() ?: return dismiss()
-        val request = tempBasalRequest(
+        val (isPercentPump, percent, absolute, durationInMinutes, constrained) = tempBasalRequest(
             inputs,
             constrainPercent = { constraintChecker.applyBasalPercentConstraints(ConstraintObject(it, aapsLogger), profile).value() },
             constrainAbsolute = { constraintChecker.applyBasalConstraints(ConstraintObject(it, aapsLogger), profile).value() }
         )
-        val percent = request.percent
-        val absolute = request.absolute
-        val durationInMinutes = request.durationMin
-        val isPercentPump = request.isPercent
         val actions: LinkedList<String> = LinkedList()
         actions.add(
             rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": " +
                 if (isPercentPump) "$percent%" else rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, absolute)
         )
         actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
-        if (request.constrained)
+        if (constrained)
             actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         activity?.let { activity ->
             OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.tempbasal_label), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
