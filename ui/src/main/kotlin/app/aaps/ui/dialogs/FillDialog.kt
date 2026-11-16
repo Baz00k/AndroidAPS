@@ -100,11 +100,12 @@ class FillDialog : DaggerBottomSheetFragment() {
         val eventTime = fillRecordTime(dateUtil.now(), inputs.changedAt)
 
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
+        val dose = decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
         if (insulinAfterConstraints > 0) {
             actions.add(rh.gs(R.string.fill_warning))
             actions.add("")
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
+                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + dose
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.insulinButtonColor)
             )
             if (abs(insulinAfterConstraints - insulin) > 0.01)
@@ -131,10 +132,7 @@ class FillDialog : DaggerBottomSheetFragment() {
             activity?.let { activity ->
                 // Only a prime needs a delivery-ready pump; a record-only change is allowed without one.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (insulinAfterConstraints > 0) { t2, m, r ->
-                        val action = "Prime " + decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
-                        pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r, action = action) }
-                    }
+                    if (insulinAfterConstraints > 0) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r, action = "Prime $dose") } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 confirm(rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (insulinAfterConstraints > 0) {
