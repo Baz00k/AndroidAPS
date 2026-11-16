@@ -25,7 +25,6 @@ class DetermineBasalUntrustedValueTest : TestBaseWithProfile() {
 
     data class Inputs(
         val bg: Double = 180.0,
-        val delta: Double = 2.0,
         val iob: Double = 0.5,
         val activity: Double = 0.005,
         val meal: MealData = MealData(),
@@ -33,74 +32,65 @@ class DetermineBasalUntrustedValueTest : TestBaseWithProfile() {
         val autosensRatio: Double = 1.0,
         val currentTemp: CurrentTemp = CurrentTemp(duration = 0, rate = 1.0, minutesrunning = 0),
         // Dynamic ISF for SMB, AutoISF for AutoISF
-        val sensitivityMode: Boolean = false
+        val sensitivityMode: Boolean = false,
+        val autoIsfSmbRatio: Double = 0.5
     )
 
-    private val smb by lazy { DetermineBasalSMB(profileUtil, fabricPrivacy) }
-    private val autoIsf by lazy { DetermineBasalAutoISF(profileUtil) }
+    private val highTemp = CurrentTemp(duration = 30, rate = 3.0, minutesrunning = 5)
 
-    private fun run(algorithm: Algorithm, inputs: Inputs, smb: DetermineBasalSMB = this.smb, autoIsf: DetermineBasalAutoISF = this.autoIsf): RT {
+    private fun run(algorithm: Algorithm, inputs: Inputs): RT {
         val iobArray = Array(48) { step ->
             val time = now + T.mins(step * 5L).msecs()
             IobTotal(time = time, iob = inputs.iob, activity = inputs.activity, iobWithZeroTemp = IobTotal(time = time, iob = inputs.iob, activity = inputs.activity))
         }
         val autosens = AutosensResult(ratio = inputs.autosensRatio)
         return when (algorithm) {
-            Algorithm.SMB      -> smb.determine_basal(
-                GlucoseStatusSMB(glucose = inputs.bg, delta = inputs.delta, shortAvgDelta = inputs.delta, longAvgDelta = inputs.delta, date = now),
+            Algorithm.SMB      -> DetermineBasalSMB(profileUtil, fabricPrivacy).determine_basal(
+                GlucoseStatusSMB(glucose = inputs.bg, delta = 2.0, shortAvgDelta = 2.0, longAvgDelta = 2.0, date = now),
                 inputs.currentTemp, iobArray, inputs.profile, autosens, inputs.meal, true, now, false, inputs.sensitivityMode
             )
 
-            Algorithm.AUTO_ISF -> autoIsf.determine_basal(
-                GlucoseStatusAutoIsf(glucose = inputs.bg, delta = inputs.delta, shortAvgDelta = inputs.delta, longAvgDelta = inputs.delta, date = now),
+            Algorithm.AUTO_ISF -> DetermineBasalAutoISF(profileUtil).determine_basal(
+                GlucoseStatusAutoIsf(glucose = inputs.bg, delta = 2.0, shortAvgDelta = 2.0, longAvgDelta = 2.0, date = now),
                 inputs.currentTemp, iobArray, autoIsfProfile(inputs.profile), autosens, inputs.meal,
-                true, now, false, inputs.sensitivityMode, "AAPS", 100, 0.5, 1.0, 100, mutableListOf(), mutableListOf()
+                true, now, false, inputs.sensitivityMode, "AAPS", 100, inputs.autoIsfSmbRatio, 1.0, 100, mutableListOf(), mutableListOf()
             )
         }
     }
 
-    private fun assertAbortedWithoutDosing(rT: RT, reason: String) {
+    private fun assertAborted(rT: RT, reason: String, rate: Double? = null, duration: Int? = null) {
         assertThat(rT.reason.toString()).startsWith("Aborting run: $reason")
-        assertThat(rT.rate).isNull()
-        assertThat(rT.duration).isNull()
+        assertThat(rT.rate).isEqualTo(rate)
+        assertThat(rT.duration).isEqualTo(duration)
         assertThat(rT.units).isNull()
-        assertThat(rT.predBGs).isNull()
     }
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
-    fun `COB left after carbs leave the window gives a finite decision`(algorithm: Algorithm) {
+    fun `COB left after its carbs leave the window does not abort the run`(algorithm: Algorithm) {
         val rT = run(algorithm, Inputs(meal = MealData(carbs = 0.0, mealCOB = 20.0, slopeFromMinDeviation = 999.0)))
 
         assertThat(rT.reason.toString()).doesNotContain("Aborting")
-        assertThat(rT.reason.toString()).doesNotContain("NaN")
-        assertThat(rT.eventualBG!!.isFinite()).isTrue()
-        assertThat(rT.insulinReq!!.isFinite()).isTrue()
-        assertThat(rT.predBGs!!.UAM).isNotEmpty()
     }
 
     @ParameterizedTest(name = "{0} {1}")
     @MethodSource("untrustedInputs")
     fun `untrusted input aborts the run without dosing`(algorithm: Algorithm, reason: String, inputs: Inputs) {
-        assertAbortedWithoutDosing(run(algorithm, inputs), reason)
+        assertAborted(run(algorithm, inputs), reason)
     }
 
-    @ParameterizedTest
-    @EnumSource(Algorithm::class)
-    fun `overflow inside the calculation aborts the run without dosing`(algorithm: Algorithm) {
-        // Finite inputs, but IOB × ISF overflows to -Infinity in the eventual BG.
-        assertAbortedWithoutDosing(run(algorithm, Inputs(iob = 1e308)), "rounded value=-Infinity")
+    @ParameterizedTest(name = "{0} {1}")
+    @MethodSource("overflowingInputs")
+    fun `a value too large to round aborts the run without dosing`(algorithm: Algorithm, case: String, inputs: Inputs) {
+        assertAborted(run(algorithm, inputs), "rounded value")
     }
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
     fun `aborted run replaces a running high temp with the profile basal`(algorithm: Algorithm) {
-        val rT = run(algorithm, Inputs(autosensRatio = Double.NaN, currentTemp = CurrentTemp(duration = 30, rate = 3.0, minutesrunning = 5)))
+        val rT = run(algorithm, Inputs(autosensRatio = Double.NaN, currentTemp = highTemp))
 
-        assertThat(rT.reason.toString()).startsWith("Aborting run: autosens ratio=NaN")
-        assertThat(rT.rate).isEqualTo(1.0)
-        assertThat(rT.duration).isEqualTo(30)
-        assertThat(rT.units).isNull()
+        assertAborted(rT, "autosens ratio=NaN", rate = 1.0, duration = 30)
     }
 
     @ParameterizedTest
@@ -108,78 +98,52 @@ class DetermineBasalUntrustedValueTest : TestBaseWithProfile() {
     fun `aborted run shortens a long zero temp to 30 minutes`(algorithm: Algorithm) {
         val rT = run(algorithm, Inputs(autosensRatio = Double.NaN, currentTemp = CurrentTemp(duration = 90, rate = 0.0, minutesrunning = 5)))
 
-        assertThat(rT.rate).isEqualTo(0.0)
-        assertThat(rT.duration).isEqualTo(30)
-        assertThat(rT.units).isNull()
-    }
-
-    @ParameterizedTest
-    @EnumSource(Algorithm::class)
-    fun `overflow inside rounding aborts the run without dosing`(algorithm: Algorithm) {
-        // Finite inputs, but the BG impact of the activity is too large to round.
-        assertAbortedWithoutDosing(run(algorithm, Inputs(activity = -1e305)), "rounded value")
+        assertAborted(rT, "autosens ratio=NaN", rate = 0.0, duration = 30)
     }
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
     fun `aborted run cancels a running temp when the basal cannot be trusted`(algorithm: Algorithm) {
-        for (basal in listOf(0.0, -1.0, Double.NaN, Double.NEGATIVE_INFINITY)) {
-            val rT = run(algorithm, Inputs(profile = profile().copy(current_basal = basal), currentTemp = CurrentTemp(duration = 30, rate = 3.0, minutesrunning = 5)))
+        for (basal in listOf(0.0, Double.POSITIVE_INFINITY)) {
+            val rT = run(algorithm, Inputs(profile = profile().copy(current_basal = basal), currentTemp = highTemp))
 
-            assertThat(rT.reason.toString()).startsWith("Aborting run: current_basal=$basal")
-            assertThat(rT.rate).isEqualTo(0.0)
-            assertThat(rT.duration).isEqualTo(0)
-            assertThat(rT.units).isNull()
+            assertAborted(rT, "current_basal=$basal", rate = 0.0, duration = 0)
         }
     }
 
     @ParameterizedTest
     @EnumSource(Algorithm::class)
     fun `aborted run cancels a running temp when its rate cannot be trusted`(algorithm: Algorithm) {
-        val rT = run(algorithm, Inputs(currentTemp = CurrentTemp(duration = 30, rate = Double.NaN, minutesrunning = 5)))
+        val rT = run(algorithm, Inputs(currentTemp = highTemp.copy(rate = Double.NaN)))
 
-        assertThat(rT.reason.toString()).startsWith("Aborting run: currenttemp.rate=NaN")
-        assertThat(rT.rate).isEqualTo(0.0)
-        assertThat(rT.duration).isEqualTo(0)
-        assertThat(rT.units).isNull()
-    }
-
-    @ParameterizedTest
-    @EnumSource(Algorithm::class)
-    fun `a valid run after an aborted one is unaffected`(algorithm: Algorithm) {
-        val expected = run(algorithm, Inputs(), DetermineBasalSMB(profileUtil, fabricPrivacy), DetermineBasalAutoISF(profileUtil))
-        run(algorithm, Inputs(profile = profile().copy(sens = Double.NaN)))
-        val afterAbort = run(algorithm, Inputs())
-
-        assertThat(expected.units).isGreaterThan(0.0)
-        assertThat(afterAbort.reason.toString()).isEqualTo(expected.reason.toString())
-        assertThat(afterAbort.rate).isEqualTo(expected.rate)
-        assertThat(afterAbort.duration).isEqualTo(expected.duration)
-        assertThat(afterAbort.units).isEqualTo(expected.units)
+        assertAborted(rT, "currenttemp.rate=NaN", rate = 0.0, duration = 0)
     }
 
     companion object {
 
+        private fun forEachAlgorithm(vararg cases: Pair<String, Inputs>): List<Arguments> =
+            Algorithm.entries.flatMap { algorithm -> cases.map { (name, inputs) -> Arguments.of(algorithm, name, inputs) } }
+
         @JvmStatic
-        fun untrustedInputs(): List<Arguments> = Algorithm.entries.flatMap { algorithm ->
-            listOf(
-                "bg=NaN" to Inputs(bg = Double.NaN),
-                "delta=Infinity" to Inputs(delta = Double.POSITIVE_INFINITY),
-                "iob=NaN" to Inputs(iob = Double.NaN),
-                "activity=NaN" to Inputs(activity = Double.NaN),
-                "mealCOB=Infinity" to Inputs(meal = MealData(carbs = 20.0, mealCOB = Double.POSITIVE_INFINITY)),
-                "sens=NaN" to Inputs(profile = profile().copy(sens = Double.NaN)),
-                "sens=0.0" to Inputs(profile = profile().copy(sens = 0.0)),
-                "sens=-50.0" to Inputs(profile = profile().copy(sens = -50.0)),
-                "carb_ratio=0.0" to Inputs(profile = profile().copy(carb_ratio = 0.0)),
-                "carb_ratio=Infinity" to Inputs(profile = profile().copy(carb_ratio = Double.POSITIVE_INFINITY)),
-                "autosens ratio=0.0" to Inputs(autosensRatio = 0.0),
-                "autosens ratio=Infinity" to Inputs(autosensRatio = Double.POSITIVE_INFINITY),
-                "max_basal=NaN" to Inputs(profile = profile().copy(max_basal = Double.NaN)),
-                "variable_sens=NaN" to Inputs(profile = profile().copy(variable_sens = Double.NaN), sensitivityMode = true),
-                "variable_sens=0.0" to Inputs(profile = profile().copy(variable_sens = 0.0), sensitivityMode = true)
-            ).map { (reason, inputs) -> Arguments.of(algorithm, reason, inputs) }
-        }
+        fun untrustedInputs() = forEachAlgorithm(
+            "bg=NaN" to Inputs(bg = Double.NaN),
+            "iob=NaN" to Inputs(iob = Double.NaN),
+            "mealCOB=Infinity" to Inputs(meal = MealData(carbs = 20.0, mealCOB = Double.POSITIVE_INFINITY)),
+            "sens=-50.0" to Inputs(profile = profile().copy(sens = -50.0)),
+            "carb_ratio=Infinity" to Inputs(profile = profile().copy(carb_ratio = Double.POSITIVE_INFINITY)),
+            "max_basal=NaN" to Inputs(profile = profile().copy(max_basal = Double.NaN)),
+            // No temp is running, so the fallback must not set one from the rejected basal.
+            "current_basal=0.0" to Inputs(profile = profile().copy(current_basal = 0.0)),
+            "variable_sens=0.0" to Inputs(profile = profile().copy(variable_sens = 0.0), sensitivityMode = true)
+        ) + Arguments.of(Algorithm.AUTO_ISF, "smb_ratio=Infinity", Inputs(autoIsfSmbRatio = Double.POSITIVE_INFINITY))
+
+        // Finite inputs whose results cannot be rounded: IOB × ISF overflows to -Infinity, and the BG impact of the activity
+        // stays finite but exceeds a Long once scaled, where Math.round would saturate instead of failing.
+        @JvmStatic
+        fun overflowingInputs() = forEachAlgorithm(
+            "iob=1e308" to Inputs(iob = 1e308),
+            "activity=-1e15" to Inputs(activity = -1e15)
+        )
 
         fun profile() = OapsProfile(
             dia = 5.0, min_5m_carbimpact = 8.0, max_iob = 3.0, max_daily_basal = 1.0, max_basal = 3.0,

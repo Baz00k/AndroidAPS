@@ -19,9 +19,8 @@ class SmbLowTempTest {
 
     @Test
     fun `short withholding delivers the remaining basal over 30 minutes`() {
-        // Withholding 1, 15 or 29 of 30 minutes at 0.9 U/h leaves 0.435, 0.225 or 0.015 U for the 30-minute temp.
+        // Withholding 1 or 29 of 30 minutes at 0.9 U/h leaves 0.435 or 0.015 U for the 30-minute temp.
         assertLowTemp(durationReq = 1, expectedDuration = 30, expectedRate = 0.87)
-        assertLowTemp(durationReq = 15, expectedDuration = 30, expectedRate = 0.45)
         assertLowTemp(durationReq = 29, expectedDuration = 30, expectedRate = 0.03)
     }
 

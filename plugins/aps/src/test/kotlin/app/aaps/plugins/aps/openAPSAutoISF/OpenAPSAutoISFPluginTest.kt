@@ -3,6 +3,7 @@ package app.aaps.plugins.aps.openAPSAutoISF
 import app.aaps.core.data.aps.SMBDefaults
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.time.T
+import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.aps.AutosensData
 import app.aaps.core.interfaces.aps.AutosensResult
 import app.aaps.core.interfaces.aps.GlucoseStatusAutoIsf
@@ -205,13 +206,22 @@ class OpenAPSAutoISFPluginTest : TestBaseWithProfile() {
     @Test
     fun `an infinite sensitivity stays out of the average ISF`() {
         val profile = ProfileSealed.EPS(effectiveProfileSwitch, activePlugin)
+        val glucoseStatus = GlucoseStatusAutoIsf(glucose = 100.0, date = now)
         val autosensData: AutosensData = mock { on { autosensResult } doReturn AutosensResult(ratio = 0.0) }
+        val storedAt = dateUtil.now()
+        val stored: APSResult = mock {
+            on { date } doReturn storedAt
+            on { this.glucoseStatus } doReturn glucoseStatus
+            on { variableSens } doReturn Double.POSITIVE_INFINITY
+        }
+        whenever(persistenceLayer.getApsResults(any(), any())).thenReturn(listOf(stored))
         whenever(profileFunction.getProfile(any<Long>())).thenReturn(profile)
-        whenever(glucoseStatusProvider.glucoseStatusData).thenReturn(GlucoseStatusAutoIsf(glucose = 100.0, date = now))
+        whenever(glucoseStatusProvider.glucoseStatusData).thenReturn(glucoseStatus)
         whenever(constraintChecker.isAutosensModeEnabled()).thenReturn(ConstraintObject(true, aapsLogger))
         whenever(iobCobCalculator.getLastAutosensDataWithWaitForCalculationFinish(any())).thenReturn(autosensData)
 
         assertThat(openAPSAutoISFPlugin.autoISF(profile)).isPositiveInfinity()
+        openAPSAutoISFPlugin.onStart()
         openAPSAutoISFPlugin.getIsfMgdl(profile, "test")
         assertThat(openAPSAutoISFPlugin.getAverageIsfMgdl(dateUtil.now() + T.hours(1).msecs(), "test")).isNull()
     }
