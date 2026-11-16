@@ -12,7 +12,10 @@ import app.aaps.core.interfaces.aps.Predictions
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.plugins.aps.openAPS.UntrustedValueException
+import app.aaps.plugins.aps.openAPS.abortRun
 import app.aaps.plugins.aps.openAPS.requireFinite
+import app.aaps.plugins.aps.openAPS.requireFiniteResult
+import app.aaps.plugins.aps.openAPS.requireFiniteState
 import app.aaps.plugins.aps.openAPS.requirePositive
 import app.aaps.plugins.aps.openAPS.requireWithin
 import app.aaps.plugins.aps.openAPS.safeFallback
@@ -162,12 +165,10 @@ class DetermineBasalAutoISF @Inject constructor(
         consoleLog.clear()
         return try {
             requireValidInputs(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, autoIsfMode, smb_ratio, smb_max_range_extension)
-            calculate(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, microBolusAllowed, currentTime, flatBGsDetected, autoIsfMode, loop_wanted_smb, profile_percentage, smb_ratio, smb_max_range_extension, iob_threshold_percent, auto_isf_consoleError, auto_isf_consoleLog).also { requireValidResult(it) }
+            calculate(glucose_status, currenttemp, iob_data_array, profile, autosens_data, meal_data, microBolusAllowed, currentTime, flatBGsDetected, autoIsfMode, loop_wanted_smb, profile_percentage, smb_ratio, smb_max_range_extension, iob_threshold_percent, auto_isf_consoleError, auto_isf_consoleLog).also { it.requireFiniteResult() }
         } catch (e: UntrustedValueException) {
-            consoleError.add("Aborting run: ${e.message} at ${e.stackTrace.take(3).joinToString(" < ") { "${it.fileName}:${it.lineNumber}" }}")
             val rT = RT(algorithm = APSResult.Algorithm.AUTO_ISF, runningDynamicIsf = autoIsfMode, timestamp = currentTime, consoleLog = consoleLog, consoleError = consoleError)
-            rT.reason.append("Aborting run: ${e.message}")
-            safeFallback(rT, currenttemp, round_basal(profile.current_basal), currentTime)
+            abortRun(rT, e, currenttemp, round_basal(profile.current_basal), currentTime)
         }
     }
 
@@ -175,22 +176,7 @@ class DetermineBasalAutoISF @Inject constructor(
         glucose_status: GlucoseStatus, currenttemp: CurrentTemp, iob_data_array: Array<IobTotal>, profile: OapsProfileAutoIsf, autosens_data: AutosensResult, meal_data: MealData,
         autoIsfMode: Boolean, smb_ratio: Double, smb_max_range_extension: Double
     ) {
-        glucose_status.glucose.requireFinite("bg")
-        glucose_status.noise.requireFinite("noise")
-        glucose_status.delta.requireFinite("delta")
-        glucose_status.shortAvgDelta.requireFinite("shortAvgDelta")
-        glucose_status.longAvgDelta.requireFinite("longAvgDelta")
-        currenttemp.rate.requireFinite("currenttemp.rate")
-        iob_data_array.forEach {
-            it.iob.requireFinite("iob")
-            it.activity.requireFinite("activity")
-            it.iobWithZeroTemp?.iob?.requireFinite("iobWithZeroTemp.iob")
-            it.iobWithZeroTemp?.activity?.requireFinite("iobWithZeroTemp.activity")
-        }
-        meal_data.carbs.requireFinite("carbs")
-        meal_data.mealCOB.requireFinite("mealCOB")
-        meal_data.slopeFromMaxDeviation.requireFinite("slopeFromMaxDeviation")
-        meal_data.slopeFromMinDeviation.requireFinite("slopeFromMinDeviation")
+        requireFiniteState(glucose_status, currenttemp, iob_data_array, meal_data)
         profile.min_bg.requireFinite("min_bg")
         profile.max_bg.requireFinite("max_bg")
         profile.max_iob.requireFinite("max_iob")
@@ -207,18 +193,6 @@ class DetermineBasalAutoISF @Inject constructor(
         if (autoIsfMode) profile.variable_sens.requirePositive("variable_sens")
         smb_ratio.requireFinite("smb_ratio")
         smb_max_range_extension.requireFinite("smb_max_range_extension")
-    }
-
-    private fun requireValidResult(rT: RT) {
-        rT.bg?.requireFinite("result bg")
-        rT.eventualBG?.requireFinite("eventualBG")
-        rT.targetBG?.requireFinite("targetBG")
-        rT.insulinReq?.requireFinite("insulinReq")
-        rT.sensitivityRatio?.requireFinite("sensitivityRatio")
-        rT.COB?.requireFinite("COB")
-        rT.IOB?.requireFinite("IOB")
-        rT.rate?.requireFinite("rate")
-        rT.units?.requireFinite("units")
     }
 
     private fun calculate(
