@@ -14,7 +14,6 @@ data class HomeActions(
     val onCancelExtendedBolus: () -> Unit = {},
     val onCalibration: () -> Unit = {},
     val onLoop: () -> Unit = {},
-    val onBasal: () -> Unit = {},
     val onDeleteCarb: (entry: HomeUiState.CarbEntry) -> Unit = {}, // undo a recent carb entry (COB sheet)
     val onDeleteInsulin: (entry: HomeUiState.InsulinEntry) -> Unit = {}, // undo a recent bolus (IOB sheet)
     val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
