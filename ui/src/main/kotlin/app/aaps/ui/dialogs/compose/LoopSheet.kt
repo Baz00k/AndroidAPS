@@ -1,39 +1,26 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.PrimaryButton
-import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.ActionChip
-import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.Dot
+import app.aaps.core.compose.components.EntryCard
+import app.aaps.core.compose.components.ListCard
+import app.aaps.core.compose.components.ListRow
+import app.aaps.core.compose.components.PrimaryButton
+import app.aaps.core.compose.components.RadioRow
+import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.color
 
 /**
- * Redesigned Loop control sheet (handoff Section 3). Presents the current status, a mode radio list
- * (Closed / LGS / Open / Disabled), and Suspend / Disconnect chips. Every choice calls back through
- * [onAction] which runs the SAME confirmation + `loop.handleRunningModeChange` path as before.
+ * Loop control sheet: current status, the mode list, and suspend / disconnect durations. Every choice
+ * calls back through [onAction], which confirms and runs `loop.handleRunningModeChange`.
  */
 @Composable
 fun LoopSheet(
@@ -41,87 +28,62 @@ fun LoopSheet(
     onAction: (LoopActionId) -> Unit,
     onClose: () -> Unit
 ) {
-    val colors = AapsTheme.colors
-    SheetSurface(title = "Loop control", onClose = onClose) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // status
-            AapsCard(Modifier.fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Dot(state.statusTone?.color() ?: colors.inRange, glow = state.looping, size = 10.dp)
-                    Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                        Text(state.statusLabel, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                        if (state.algoLine.isNotBlank()) Text(state.algoLine, style = AapsTheme.type.caption, color = colors.textTertiary)
-                        if (state.enactedLine.isNotBlank()) Text(state.enactedLine, style = AapsTheme.type.caption, color = colors.textTertiary)
-                        if (state.reasons.isNotBlank()) Text(state.reasons, style = AapsTheme.type.caption, color = colors.textTertiary)
-                    }
-                }
-            }
-
-            // mode radio list
-            if (state.modes.isNotEmpty()) {
-                SectionLabel("Mode")
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column {
-                        state.modes.forEach { m -> ModeRow(m, colors, onAction) }
-                    }
-                }
-            }
-
-            // suspend
-            if (state.suspendVisible) {
-                SectionLabel("Suspend loop")
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ActionChip("1h", { onAction(LoopActionId.SUSPEND_1H) }, Modifier.weight(1f))
-                        ActionChip("2h", { onAction(LoopActionId.SUSPEND_2H) }, Modifier.weight(1f))
-                        ActionChip("3h", { onAction(LoopActionId.SUSPEND_3H) }, Modifier.weight(1f))
-                        ActionChip("10h", { onAction(LoopActionId.SUSPEND_10H) }, Modifier.weight(1f))
-                    }
-                }
-            }
-            if (state.resumeVisible) PrimaryButton("Resume loop", onClick = { onAction(LoopActionId.RESUME) })
-
-            // disconnect
-            if (state.disconnectVisible) {
-                SectionLabel("Disconnect pump")
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.disconnect15m) ActionChip("15m", { onAction(LoopActionId.DISCONNECT_15M) }, Modifier.weight(1f))
-                        if (state.disconnect30m) ActionChip("30m", { onAction(LoopActionId.DISCONNECT_30M) }, Modifier.weight(1f))
-                        ActionChip("1h", { onAction(LoopActionId.DISCONNECT_1H) }, Modifier.weight(1f))
-                        ActionChip("2h", { onAction(LoopActionId.DISCONNECT_2H) }, Modifier.weight(1f))
-                        ActionChip("3h", { onAction(LoopActionId.DISCONNECT_3H) }, Modifier.weight(1f))
-                    }
-                }
-            }
-            if (state.reconnectVisible) PrimaryButton("Reconnect pump", onClick = { onAction(LoopActionId.RECONNECT) })
-        }
+    val footerAction = when {
+        state.resumeVisible    -> "Resume loop" to LoopActionId.RESUME
+        state.reconnectVisible -> "Reconnect pump" to LoopActionId.RECONNECT
+        else                   -> null
     }
-}
-
-@Composable
-private fun ModeRow(m: LoopModeOption, colors: app.aaps.core.compose.theme.AapsColors, onAction: (LoopActionId) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.cardSmall)
-            .then(if (m.enabled && !m.selected) Modifier.clickable { onAction(m.id) } else Modifier)
-            .padding(vertical = 12.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
+    SheetSurface(
+        title = "Loop control",
+        onClose = onClose,
+        scrollContent = true,
+        footer = footerAction?.let { (label, id) -> { PrimaryButton(label, onClick = { onAction(id) }, modifier = Modifier.fillMaxWidth()) } }
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(m.title, style = AapsTheme.type.listTitle, color = if (m.enabled || m.selected) colors.textPrimary else colors.textTertiary)
-            if (m.sub.isNotBlank()) Text(m.sub, style = AapsTheme.type.caption, color = colors.textTertiary)
+        ListCard(Modifier.fillMaxWidth()) {
+            ListRow(
+                title = state.statusLabel,
+                sub = listOf(state.algoLine, state.reasons).filter { it.isNotBlank() }.joinToString("\n"),
+                leading = { Dot(state.statusTone?.color() ?: AapsTheme.colors.inRange, glow = state.looping) }
+            )
         }
-        if (m.selected)
-            Box(Modifier.size(24.dp).clip(CircleShape).background(colors.accent), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.Check, contentDescription = "selected", tint = colors.onAccent, modifier = Modifier.size(16.dp))
+
+        if (state.modes.isNotEmpty())
+            Column {
+                SectionLabel("Mode")
+                ListCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.selectableGroup()) {
+                        state.modes.forEach { m ->
+                            // The current mode stays at full strength but does nothing when pressed again.
+                            RadioRow(
+                                title = m.title,
+                                selected = m.selected,
+                                onClick = { if (m.actionable) onAction(m.id) },
+                                enabled = m.enabled || m.selected
+                            )
+                        }
+                    }
+                }
             }
-        else
-            Box(Modifier.size(20.dp).clip(CircleShape).background(colors.controlFill))
+
+        if (state.suspendVisible)
+            EntryCard("Suspend loop") {
+                ChoiceRow {
+                    ActionChip("1h", { onAction(LoopActionId.SUSPEND_1H) }, Modifier.weight(1f))
+                    ActionChip("2h", { onAction(LoopActionId.SUSPEND_2H) }, Modifier.weight(1f))
+                    ActionChip("3h", { onAction(LoopActionId.SUSPEND_3H) }, Modifier.weight(1f))
+                    ActionChip("10h", { onAction(LoopActionId.SUSPEND_10H) }, Modifier.weight(1f))
+                }
+            }
+
+        if (state.disconnectVisible)
+            EntryCard("Disconnect pump") {
+                ChoiceRow {
+                    if (state.disconnect15m) ActionChip("15m", { onAction(LoopActionId.DISCONNECT_15M) }, Modifier.weight(1f))
+                    if (state.disconnect30m) ActionChip("30m", { onAction(LoopActionId.DISCONNECT_30M) }, Modifier.weight(1f))
+                    ActionChip("1h", { onAction(LoopActionId.DISCONNECT_1H) }, Modifier.weight(1f))
+                    ActionChip("2h", { onAction(LoopActionId.DISCONNECT_2H) }, Modifier.weight(1f))
+                    ActionChip("3h", { onAction(LoopActionId.DISCONNECT_3H) }, Modifier.weight(1f))
+                }
+            }
     }
 }
-
