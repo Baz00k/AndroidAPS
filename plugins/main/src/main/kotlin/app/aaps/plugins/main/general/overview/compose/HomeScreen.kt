@@ -387,7 +387,6 @@ private fun InsulinUndoSheet(
     }
 }
 
-/** What the BASAL figure is made of: the profile rate and any temp basal or extended bolus over it. */
 @Composable
 private fun BasalSheet(detail: BasalDetail, onDismissed: () -> Unit) = ModalSheet(onDismissed) { close ->
     SheetSurface(title = "Basal", onClose = { close {} }, scrollContent = true) {
@@ -413,7 +412,6 @@ private fun RunningCard(label: String, running: BasalDetail.Running) {
 @Composable
 private fun ValueRow(label: String, value: String) =
     ListRow(label) { Text(value, style = AapsTheme.type.listTitle, color = AapsTheme.colors.textPrimary) }
-
 
 /**
  * The treatment bar: the primary actions the user keeps on Home, with the Calculator as the widest,

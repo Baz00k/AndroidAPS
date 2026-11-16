@@ -21,7 +21,7 @@ import app.aaps.core.compose.theme.AapsTheme
 /**
  * Consistent list-row grammar from the handoff: leading icon → title + sub → trailing content
  * (value / chevron / switch). Trailing is a slot so callers can drop a value Text, a [Chevron],
- * or a Switch. A disabled row is dimmed and announced as disabled.
+ * or a Switch.
  */
 @Composable
 fun ListRow(
