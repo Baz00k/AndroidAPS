@@ -42,13 +42,13 @@ val LocalSheetDraggable = staticCompositionLocalOf { false }
 
 /**
  * Set by a host that drags the sheet by its header only, so scrolling a form never throws it away.
- * [SheetSurface] hands it the header (grabber and title row) to hit-test a touch against.
+ * [SheetSurface] reports the header's drag regions by key: the grabber and the title, never its buttons.
  */
-val LocalSheetDragHandle = staticCompositionLocalOf<((LayoutCoordinates) -> Unit)?> { null }
+val LocalSheetDragHandle = staticCompositionLocalOf<((region: String, LayoutCoordinates) -> Unit)?> { null }
 
 /**
  * Set by a Compose host ([ModalSheet]) to the drag gesture that moves the sheet. [SheetSurface] puts
- * it on the header only, so nothing below the header can move the sheet.
+ * it on the grabber and the title only, so nothing else can move the sheet.
  */
 val LocalSheetHeaderDrag = compositionLocalOf<Modifier> { Modifier }
 
@@ -59,7 +59,7 @@ val LocalSheetHeaderDrag = compositionLocalOf<Modifier> { Modifier }
  * dialog instead, which cannot be dragged and so shows no grabber.
  *
  * The title row is the same on every sheet: [onBack] (a step back within the sheet) leads, [onClose]
- * trails. Together with the grabber it is the sheet's handle.
+ * trails. The grabber and the title are the sheet's handle; the buttons are not.
  *
  * With [scrollContent] the sheet owns the scrolling: [content] scrolls between the header and the
  * [footer], the sheet's action, which stays on screen however long the content grows. The content
@@ -88,14 +88,11 @@ fun SheetSurface(
             .background(colors.surface3)
             .padding(bottom = 12.dp)
     ) {
-        val dragHandle = LocalSheetDragHandle.current
-        Column(
-            (if (dragHandle != null) Modifier.onGloballyPositioned(dragHandle) else Modifier)
-                .then(LocalSheetHeaderDrag.current)
-        ) {
+        Column {
             if (LocalSheetDraggable.current)
                 Box(
                     Modifier
+                        .dragRegion("grabber")
                         .padding(top = 8.dp)
                         .fillMaxWidth(),
                     contentAlignment = Alignment.Center
@@ -119,7 +116,9 @@ fun SheetSurface(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (onBack != null) SheetIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-                Text(title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Box(Modifier.weight(1f).heightIn(min = 48.dp).dragRegion("title"), contentAlignment = Alignment.CenterStart) {
+                    Text(title, style = AapsTheme.type.title, color = colors.textPrimary)
+                }
                 if (onClose != null) SheetIconButton(Icons.Rounded.Close, "Close", onClose)
             }
         }
@@ -171,4 +170,11 @@ private fun SheetSurfacePreview() = PreviewSurface {
             repeat(8) { Text("Row ${it + 1}", style = AapsTheme.type.body, color = AapsTheme.colors.textPrimary) }
         }
     }
+}
+
+/** Where the host may start a drag of the sheet. */
+@Composable
+private fun Modifier.dragRegion(key: String): Modifier {
+    val report = LocalSheetDragHandle.current
+    return (if (report != null) onGloballyPositioned { report(key, it) } else this).then(LocalSheetHeaderDrag.current)
 }
