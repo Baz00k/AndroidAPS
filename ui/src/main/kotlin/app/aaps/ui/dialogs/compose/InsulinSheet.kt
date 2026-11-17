@@ -12,15 +12,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.style.TextAlign
+import android.text.format.DateFormat
+import java.util.Date
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AmountStepper
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
+import app.aaps.core.compose.components.EntryTime
+import app.aaps.core.compose.components.ListCard
+import app.aaps.core.compose.components.ListRow
 import app.aaps.core.compose.components.NotesField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
-import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.TimeStepper
 import app.aaps.core.compose.components.rememberNow
 import app.aaps.core.compose.components.formatNumeric
@@ -49,16 +57,22 @@ data class InsulinInputs(
 )
 
 /**
- * The single manual insulin screen, laid out like Carbs and the Calculator. Deliver asks the pump for
- * a bolus now; Log records a dose given another way (pen, a missed pump record) at the time it was
- * given, without touching the pump.
+ * The single manual insulin screen, laid out like Carbs and the Calculator: inputs, then Review. Deliver
+ * asks the pump for a bolus now; Log records a dose given another way (pen, a missed pump record) at the
+ * time it was given, without touching the pump. [review] builds what Review shows, after constraints;
+ * [onCommit] commits only that, and calls back with the current review when it no longer holds.
  */
 @Composable
-fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Boolean, onClose: () -> Unit) {
+fun InsulinSheet(
+    state: InsulinSheetState,
+    review: (InsulinInputs) -> InsulinReview,
+    onCommit: (inputs: InsulinInputs, reviewed: InsulinReview, onChanged: (InsulinReview) -> Unit) -> Unit,
+    onClose: () -> Unit
+) {
     val colors = AapsTheme.colors
+    val haptics = LocalHapticFeedback.current
     var amount by rememberSaveable { mutableStateOf(0.0) }
     var amountValid by remember { mutableStateOf(false) }
-    var submitted by rememberSaveable { mutableStateOf(false) }
     var intent by rememberSaveable { mutableStateOf(if (state.deliveryUnavailable != null) InsulinIntent.LOG else InsulinIntent.DELIVER) }
     // The picked time is a moment, not a distance from whenever the form is finally submitted; the
     // distance shown is derived from it.
@@ -67,61 +81,101 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Boolean,
     val offset = at?.let { ((it - now) / 60_000.0).roundToInt() } ?: 0
     var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
     var notes by rememberSaveable { mutableStateOf("") }
+    // Inputs survive recreation; Review does not, so a restored screen always needs a fresh review.
+    var opened by remember { mutableStateOf<InsulinReview?>(null) }
+    var reviewed by remember { mutableStateOf<InsulinReview?>(null) }
 
     fun fmt(v: Double) = formatNumeric(v, state.decimals)
+    fun inputs() = InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else "")
 
-    val verb = if (intent == InsulinIntent.LOG) "Log" else "Deliver"
-    SheetSurface(
+    ReviewStepSheet(
         title = "Insulin",
+        reviewing = reviewed != null,
+        onBack = { reviewed = null; opened = null },
         onClose = onClose,
         footer = {
-            PrimaryButton(
-                label = when {
-                    amount > 0.0                -> "$verb ${fmt(amount)} U"
-                    target != TargetPreset.NONE -> "Set target"
-                    else                        -> verb
-                },
-                enabled = amountValid && !submitted && (amount > 0.0 || target != TargetPreset.NONE),
-                onClick = {
-                    if (amountValid && !submitted) {
-                        submitted = true
-                        // False means the host rejected before starting confirmation or any action.
-                        // Only that safe rejection permits another request; accepted requests stay latched.
-                        if (!onSubmit(InsulinInputs(amount, intent, at, target, if (state.showNotes) notes else ""))) submitted = false
+            val r = reviewed
+            if (r == null)
+                PrimaryButton(
+                    label = "Review",
+                    enabled = amountValid && (amount > 0.0 || target != TargetPreset.NONE),
+                    onClick = {
+                        if (amountValid) review(inputs()).let { opened = it; reviewed = it }
+                    }
+                )
+            else {
+                // Not sent: the dose moved under the review. Show the new one instead.
+                val commit = {
+                    onCommit(inputs(), r) {
+                        reviewed = it
+                        haptics.performHapticFeedback(HapticFeedbackType.Reject)
                     }
                 }
-            )
-        }
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            SegmentedControl(
-                options = listOf("Deliver", "Log"),
-                selectedIndex = intent.ordinal,
-                onSelect = { intent = InsulinIntent.entries[it] },
-                modifier = Modifier.fillMaxWidth(),
-                fillWidth = true,
-                disabled = if (state.deliveryUnavailable != null) setOf(InsulinIntent.DELIVER.ordinal) else emptySet(),
-                disabledReason = state.deliveryUnavailable?.label
-            )
-            state.deliveryUnavailable?.let {
-                Text(it.label, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp))
-            }
-        }
-        EntryCard("Insulin") {
-            AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin", onValidityChange = { amountValid = it })
-            ChoiceRow {
-                state.quickIncrements.forEach { inc ->
-                    ActionChip((if (inc > 0) "+" else "") + fmt(inc) + " U", modifier = Modifier.weight(1f), enabled = amountValid && (if (inc > 0) amount < state.maxInsulin else amount > 0.0), onClick = {
-                        if (amountValid) NumericSpec(0.0, state.maxInsulin, kotlin.math.abs(inc), state.decimals).increment(amount, inc > 0)?.let { amount = it }
-                    })
+                when (r.commit) {
+                    InsulinReview.Commit.DELIVER -> ReviewCommitButton("Deliver ${units(r.insulin)}", delivers = true, confirms = r, onCommit = commit)
+                    InsulinReview.Commit.LOG     -> ReviewCommitButton("Log ${units(r.insulin)}", delivers = false, confirms = r, onCommit = commit)
+                    InsulinReview.Commit.TARGET  -> ReviewCommitButton("Start target", delivers = false, confirms = r, onCommit = commit)
+                    InsulinReview.Commit.NONE    -> PrimaryButton("Nothing to confirm", onClick = {}, enabled = false)
                 }
             }
         }
-        if (intent == InsulinIntent.LOG)
-            EntryCard("When") {
-                TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, atMs = at)
+    ) { onReview ->
+        val r = reviewed
+        if (onReview && r != null) InsulinReviewContent(r, opened ?: r, if (at == null) "Now" else "${clockTime(at!!)} · ${EntryTime.relative(offset)}", inputs().notes)
+        else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SegmentedControl(
+                    options = listOf("Deliver", "Log"),
+                    selectedIndex = intent.ordinal,
+                    onSelect = { intent = InsulinIntent.entries[it] },
+                    modifier = Modifier.fillMaxWidth(),
+                    fillWidth = true,
+                    disabled = if (state.deliveryUnavailable != null) setOf(InsulinIntent.DELIVER.ordinal) else emptySet(),
+                    disabledReason = state.deliveryUnavailable?.label
+                )
+                state.deliveryUnavailable?.let {
+                    Text(it.label, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(start = 12.dp))
+                }
             }
-        TargetPresetCard(state.targets, target) { target = it }
-        if (state.showNotes) NotesField(notes, { notes = it })
+            EntryCard("Insulin") {
+                AmountStepper(amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", name = "of insulin", onValidityChange = { amountValid = it })
+                ChoiceRow {
+                    state.quickIncrements.forEach { inc ->
+                        ActionChip((if (inc > 0) "+" else "") + fmt(inc) + " U", modifier = Modifier.weight(1f), enabled = amountValid && (if (inc > 0) amount < state.maxInsulin else amount > 0.0), onClick = {
+                            if (amountValid) NumericSpec(0.0, state.maxInsulin, kotlin.math.abs(inc), state.decimals).increment(amount, inc > 0)?.let { amount = it }
+                        })
+                    }
+                }
+            }
+            if (intent == InsulinIntent.LOG)
+                EntryCard("When") {
+                    TimeStepper(offset, { at = if (it == 0) null else System.currentTimeMillis() + it * 60_000L }, -InsulinEntryPolicy.MAX_LOG_AGE_MIN, 0, atMs = at)
+                }
+            TargetPresetCard(state.targets, target) { target = it }
+            if (state.showNotes) NotesField(notes, { notes = it })
+        }
     }
 }
+
+/** Exactly what the commit does: the dose after constraints, and what goes with it. */
+@Composable
+private fun InsulinReviewContent(review: InsulinReview, opened: InsulinReview, given: String, notes: String) {
+    if (review.requested > 0.0)
+        ReviewAmount(units(review.insulin), previous = units(opened.insulin).takeIf { opened.insulin != review.insulin }) {
+            if (review.limited)
+                Text(
+                    "Requested ${units(review.requested)}; limited to ${units(review.insulin)}",
+                    style = AapsTheme.type.body, color = AapsTheme.colors.high, textAlign = TextAlign.Center
+                )
+        }
+    val logs = review.commit == InsulinReview.Commit.LOG
+    if (logs || review.target != null || notes.isNotEmpty())
+        ListCard {
+            if (logs) ListRow("Given", sub = given)
+            review.target?.let { ListRow("${it.preset.label} target", sub = it.summary) }
+            if (notes.isNotEmpty()) ListRow("Notes", sub = notes)
+        }
+}
+
+@Composable
+private fun clockTime(ms: Long): String = DateFormat.getTimeFormat(LocalContext.current).format(Date(ms))

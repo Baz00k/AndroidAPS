@@ -57,7 +57,7 @@ class TargetPresets @Inject constructor(
     }
 
     /** A preset with its values fixed: what the confirmation shows is exactly what is stored. */
-    data class Resolved(val reason: TT.Reason, val targetMgdl: Double, val durationMin: Int, val summary: String)
+    data class Resolved(val preset: TargetPreset, val reason: TT.Reason, val targetMgdl: Double, val durationMin: Int, val summary: String)
 
     /** "90 mg/dL · 45 min" */
     private fun summary(preset: TargetPreset): String {
@@ -72,7 +72,7 @@ class TargetPresets @Inject constructor(
 
     fun resolve(preset: TargetPreset): Resolved? =
         if (preset == TargetPreset.NONE) null
-        else Resolved(reason(preset), profileUtil.convertToMgdl(target(preset), profileUtil.units), durationMin(preset), summary(preset))
+        else Resolved(preset, reason(preset), profileUtil.convertToMgdl(target(preset), profileUtil.units), durationMin(preset), summary(preset))
 
     /** The line this target adds to a confirmation. */
     fun confirmationLine(context: Context?, target: Resolved): String =
