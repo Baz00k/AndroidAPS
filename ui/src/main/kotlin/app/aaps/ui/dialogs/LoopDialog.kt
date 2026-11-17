@@ -26,6 +26,7 @@ import app.aaps.core.ui.dialogs.DaggerBottomSheetFragment
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.ui.R
+import app.aaps.ui.dialogs.compose.LoopActionGate
 import app.aaps.ui.dialogs.compose.LoopActionId
 import app.aaps.ui.dialogs.compose.LoopModeOption
 import app.aaps.ui.dialogs.compose.LoopSheet
@@ -52,6 +53,7 @@ class LoopDialog : DaggerBottomSheetFragment() {
 
     private var queryingProtection = false
     private var showOkCancel: Boolean = true
+    private val actionGate = LoopActionGate(::onAction)
 
 
     override fun onSaveInstanceState(savedInstanceState: Bundle) {
@@ -64,7 +66,7 @@ class LoopDialog : DaggerBottomSheetFragment() {
         isCancelable = true
 
         return sheetContent {
-            LoopSheet(state = buildState(), onAction = ::onAction, onClose = { dismiss() })
+            LoopSheet(state = buildState(), onAction = actionGate::offer, onClose = { dismiss() })
         }
     }
 
@@ -77,14 +79,14 @@ class LoopDialog : DaggerBottomSheetFragment() {
         val pump = activePlugin.activePump.pumpDescription
 
         val modes = buildList {
-            fun opt(id: LoopActionId, rm: RM.Mode, title: String, sub: String) {
+            fun opt(id: LoopActionId, rm: RM.Mode, title: String) {
                 if (allowed.contains(rm) || mode == rm)
-                    add(LoopModeOption(id, title, sub, enabled = allowed.contains(rm), selected = mode == rm))
+                    add(LoopModeOption(id, title, enabled = allowed.contains(rm), selected = mode == rm))
             }
-            opt(LoopActionId.CLOSED, RM.Mode.CLOSED_LOOP, rh.gs(app.aaps.core.ui.R.string.closedloop), "Full automation")
-            opt(LoopActionId.LGS, RM.Mode.CLOSED_LOOP_LGS, "LGS only", "Suspend on low only")
-            opt(LoopActionId.OPEN, RM.Mode.OPEN_LOOP, rh.gs(app.aaps.core.ui.R.string.openloop), "Advice only — you confirm")
-            opt(LoopActionId.DISABLE, RM.Mode.DISABLED_LOOP, rh.gs(app.aaps.core.ui.R.string.disableloop), "No automation")
+            opt(LoopActionId.CLOSED, RM.Mode.CLOSED_LOOP, rh.gs(app.aaps.core.ui.R.string.closedloop))
+            opt(LoopActionId.LGS, RM.Mode.CLOSED_LOOP_LGS, "LGS only")
+            opt(LoopActionId.OPEN, RM.Mode.OPEN_LOOP, rh.gs(app.aaps.core.ui.R.string.openloop))
+            opt(LoopActionId.DISABLE, RM.Mode.DISABLED_LOOP, rh.gs(app.aaps.core.ui.R.string.disableloop))
         }
 
         return LoopSheetState(
@@ -92,7 +94,6 @@ class LoopDialog : DaggerBottomSheetFragment() {
             statusTone = toneFor(mode),
             looping = mode == RM.Mode.CLOSED_LOOP || mode == RM.Mode.CLOSED_LOOP_LGS,
             algoLine = (activePlugin.activeAPS as? app.aaps.core.interfaces.plugin.PluginBase)?.name ?: "",
-            enactedLine = "",
             reasons = record.reasons ?: "",
             modes = modes,
             suspendVisible = allowed.contains(RM.Mode.SUSPENDED_BY_USER),
