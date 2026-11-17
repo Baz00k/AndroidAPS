@@ -92,16 +92,17 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
                 ChoiceRow {
                     state.presets.forEach { preset ->
                         ActionChip(
-                            label = formatNumeric(preset, state.insulinDecimals),
+                            label = formatNumeric(preset, state.insulinDecimals) + " U",
                             modifier = Modifier.weight(1f),
-                            onClick = { insulin = preset.coerceIn(0.0, state.maxInsulin) }
+                            enabled = preset <= state.maxInsulin,
+                            onClick = { insulin = preset }
                         )
                     }
                 }
         }
 
-        ToggleRow("Pump site change", siteChange, { siteChange = it }, sub = "Record cannula change")
-        ToggleRow("Insulin cartridge change", insulinChange, { insulinChange = it }, sub = "Record reservoir change")
+        ToggleRow("Pump site change", siteChange, { siteChange = it })
+        ToggleRow("Insulin cartridge change", insulinChange, { insulinChange = it })
 
         if (records) {
             EntryCard("Changed") {
