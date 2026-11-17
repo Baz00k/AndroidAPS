@@ -35,12 +35,21 @@ import com.google.common.base.Joiner
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
-/**
- * Redesigned Temp Basal dialog. UI is Compose ([TempBasalSheet]); [submit] runs the SAME constraint +
- * `OKDialog` confirmation + `commandQueue.tempBasalPercent` / `tempBasalAbsolute` path as the legacy
- * dialog. The pump decides which modes are offered (percent / absolute).
- */
+/** One confirmation's command: the constrained rate, shown and sent alike. */
+internal data class TempBasalRequest(val isPercent: Boolean, val percent: Int, val absolute: Double, val durationMin: Int, val constrained: Boolean)
+
+internal fun tempBasalRequest(inputs: TempBasalInputs, constrainPercent: (Int) -> Int, constrainAbsolute: (Double) -> Double): TempBasalRequest =
+    if (inputs.isPercent) {
+        val requested = inputs.value.roundToInt()
+        val percent = constrainPercent(requested)
+        TempBasalRequest(isPercent = true, percent = percent, absolute = 0.0, durationMin = inputs.durationMin, constrained = percent != requested)
+    } else {
+        val absolute = constrainAbsolute(inputs.value)
+        TempBasalRequest(isPercent = false, percent = 0, absolute = absolute, durationMin = inputs.durationMin, constrained = abs(absolute - inputs.value) > 0.01)
+    }
+
 class TempBasalDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
@@ -87,26 +96,21 @@ class TempBasalDialog : DaggerBottomSheetFragment() {
     }
 
     private fun submit(inputs: TempBasalInputs) {
-        var percent = 0
-        var absolute = 0.0
-        val durationInMinutes = inputs.durationMin
-        val profile = profileFunction.getProfile() ?: return
-        val isPercentPump = inputs.isPercent
+        // The sheet latches on submit; close it rather than leave a dead sheet behind.
+        val profile = profileFunction.getProfile() ?: return dismiss()
+        val (isPercentPump, percent, absolute, durationInMinutes, constrained) = tempBasalRequest(
+            inputs,
+            constrainPercent = { constraintChecker.applyBasalPercentConstraints(ConstraintObject(it, aapsLogger), profile).value() },
+            constrainAbsolute = { constraintChecker.applyBasalConstraints(ConstraintObject(it, aapsLogger), profile).value() }
+        )
         val actions: LinkedList<String> = LinkedList()
-        if (isPercentPump) {
-            val basalPercentInput = inputs.value.toInt()
-            percent = constraintChecker.applyBasalPercentConstraints(ConstraintObject(basalPercentInput, aapsLogger), profile).value()
-            actions.add(rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": $percent%")
-            actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
-            if (percent != basalPercentInput) actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied))
-        } else {
-            val basalAbsoluteInput = inputs.value
-            absolute = constraintChecker.applyBasalConstraints(ConstraintObject(basalAbsoluteInput, aapsLogger), profile).value()
-            actions.add(rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": " + rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, absolute))
-            actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
-            if (abs(absolute - basalAbsoluteInput) > 0.01)
-                actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
-        }
+        actions.add(
+            rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": " +
+                if (isPercentPump) "$percent%" else rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, absolute)
+        )
+        actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
+        if (constrained)
+            actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         activity?.let { activity ->
             OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.tempbasal_label), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
                 val callback: Callback = object : Callback() {
