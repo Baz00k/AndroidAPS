@@ -61,13 +61,11 @@ class InsulinCommitter @Inject constructor(
         InsulinEntryPolicy.deliveryUnavailable(config.AAPSCLIENT, loop.runningMode.isPumpSuspended(), activePlugin.activePump.isInitialized())
 
     fun review(inputs: InsulinInputs): InsulinReview {
-        val valid = inputs.amount.isFinite() && inputs.amount >= 0.0
-        val insulin = if (valid && inputs.amount > 0.0) constraintChecker.applyBolusConstraints(ConstraintObject(inputs.amount, aapsLogger)).value() else 0.0
+        val insulin = if (inputs.amount > 0.0) constraintChecker.applyBolusConstraints(ConstraintObject(inputs.amount, aapsLogger)).value() else 0.0
         return InsulinReview(
-            requested = if (valid) inputs.amount else 0.0,
             insulin = insulin,
             intent = inputs.intent,
-            target = if (valid) targetPresets.resolve(inputs.target) else null
+            target = targetPresets.resolve(inputs.target)
         )
     }
 

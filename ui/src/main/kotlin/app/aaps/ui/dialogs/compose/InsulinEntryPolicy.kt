@@ -1,7 +1,6 @@
 package app.aaps.ui.dialogs.compose
 
 import app.aaps.ui.dialogs.TargetPresets
-import kotlin.math.abs
 
 /** Whether an insulin entry asks the pump for a bolus or records one given some other way. */
 enum class InsulinIntent { DELIVER, LOG }
@@ -43,7 +42,6 @@ object InsulinEntryPolicy {
  * the two are equal.
  */
 data class InsulinReview(
-    val requested: Double,
     val insulin: Double,
     val intent: InsulinIntent,
     val target: TargetPresets.Resolved?
@@ -58,7 +56,4 @@ data class InsulinReview(
             target != null                                   -> Commit.TARGET
             else                                             -> Commit.NONE
         }
-
-    /** The constraints changed the amount asked for. */
-    val limited: Boolean get() = abs(requested - insulin) > 1e-6
 }

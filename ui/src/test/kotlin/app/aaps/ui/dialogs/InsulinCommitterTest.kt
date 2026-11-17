@@ -134,7 +134,7 @@ class InsulinCommitterTest {
     }
 
     @Test
-    fun `a dose limited after review is not sent and Review gets the limited amount`() {
+    fun `a dose limited after review is not sent and Review gets the new amount`() {
         val entry = inputs(8.0)
         val reviewed = committer.review(entry)
         maxBolus = 6.0
@@ -143,7 +143,6 @@ class InsulinCommitterTest {
 
         val changed = results.single() as Result.Changed
         assertThat(changed.review.insulin).isEqualTo(6.0)
-        assertThat(changed.review.limited).isTrue()
         assertThat(gateRuns).isEqualTo(0)
         verifyNoInteractions(commandQueue, uel)
 

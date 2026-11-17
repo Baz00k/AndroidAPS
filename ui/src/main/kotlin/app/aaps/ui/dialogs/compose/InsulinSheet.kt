@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.style.TextAlign
 import android.text.format.DateFormat
 import java.util.Date
 import androidx.compose.ui.unit.dp
@@ -82,7 +81,6 @@ fun InsulinSheet(
     var target by rememberSaveable { mutableStateOf(TargetPreset.NONE) }
     var notes by rememberSaveable { mutableStateOf("") }
     // Inputs survive recreation; Review does not, so a restored screen always needs a fresh review.
-    var opened by remember { mutableStateOf<InsulinReview?>(null) }
     var reviewed by remember { mutableStateOf<InsulinReview?>(null) }
 
     fun fmt(v: Double) = formatNumeric(v, state.decimals)
@@ -91,7 +89,7 @@ fun InsulinSheet(
     ReviewStepSheet(
         title = "Insulin",
         reviewing = reviewed != null,
-        onBack = { reviewed = null; opened = null },
+        onBack = { reviewed = null },
         onClose = onClose,
         footer = {
             val r = reviewed
@@ -100,7 +98,7 @@ fun InsulinSheet(
                     label = "Review",
                     enabled = amountValid && (amount > 0.0 || target != TargetPreset.NONE),
                     onClick = {
-                        if (amountValid) review(inputs()).let { opened = it; reviewed = it }
+                        if (amountValid) reviewed = review(inputs())
                     }
                 )
             else {
@@ -121,7 +119,7 @@ fun InsulinSheet(
         }
     ) { onReview ->
         val r = reviewed
-        if (onReview && r != null) InsulinReviewContent(r, opened ?: r, if (at == null) "Now" else "${clockTime(at!!)} · ${EntryTime.relative(offset)}", inputs().notes)
+        if (onReview && r != null) InsulinReviewContent(r, if (at == null) "Now" else "${clockTime(at!!)} · ${EntryTime.relative(offset)}", inputs().notes)
         else {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SegmentedControl(
@@ -159,15 +157,8 @@ fun InsulinSheet(
 
 /** Exactly what the commit does: the dose after constraints, and what goes with it. */
 @Composable
-private fun InsulinReviewContent(review: InsulinReview, opened: InsulinReview, given: String, notes: String) {
-    if (review.requested > 0.0)
-        ReviewAmount(units(review.insulin), previous = units(opened.insulin).takeIf { opened.insulin != review.insulin }) {
-            if (review.limited)
-                Text(
-                    "Requested ${units(review.requested)}; limited to ${units(review.insulin)}",
-                    style = AapsTheme.type.body, color = AapsTheme.colors.high, textAlign = TextAlign.Center
-                )
-        }
+private fun InsulinReviewContent(review: InsulinReview, given: String, notes: String) {
+    if (review.insulin > 0.0) ReviewAmount(units(review.insulin), previous = null)
     val logs = review.commit == InsulinReview.Commit.LOG
     if (logs || review.target != null || notes.isNotEmpty())
         ListCard {
