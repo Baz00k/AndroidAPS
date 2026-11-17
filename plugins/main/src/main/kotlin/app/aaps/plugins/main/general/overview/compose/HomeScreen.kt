@@ -468,21 +468,19 @@ private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, acti
     if (open) ModalSheet(onDismissed = { open = false }) { close ->
         fun run(action: () -> Unit) = close { action() }
         SheetSurface(title = "More actions", onClose = { close {} }, scrollContent = true) {
-            items.partition { it is HomeMenuItem.Shortcut }.toList().filter { it.isNotEmpty() }.forEach { group ->
-                ListCard {
-                    group.forEach { item ->
-                        when (item) {
-                            is HomeMenuItem.Shortcut      -> MenuRow(
-                                shortcutLabel(item.shortcut), shortcutIcon(item.shortcut),
-                                enabled = item.shortcut != HomeShortcut.CALCULATOR || calculatorEnabled
-                            ) { run { actions.onShortcut(item.shortcut) } }
-                            is HomeMenuItem.TempTarget    -> MenuRow("Temporary target", AapsIcons.GpsFixed, status = item.status) { run(actions.onTempTarget) }
-                            is HomeMenuItem.ExtendedBolus -> MenuRow("Extended bolus", AapsIcons.Timelapse, status = item.status, enabled = item.enabled) {
-                                run(if (item.status != null) actions.onCancelExtendedBolus else actions.onExtendedBolus)
-                            }
-                            HomeMenuItem.Calibration      -> MenuRow("Calibrate CGM", AapsIcons.Bloodtype) { run(actions.onCalibration) }
-                        }
+            items.forEachIndexed { i, item ->
+                if (i > 0 && items[i - 1] is HomeMenuItem.Shortcut && item !is HomeMenuItem.Shortcut)
+                    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(AapsTheme.colors.divider))
+                when (item) {
+                    is HomeMenuItem.Shortcut      -> MenuRow(
+                        shortcutLabel(item.shortcut), shortcutIcon(item.shortcut),
+                        enabled = item.shortcut != HomeShortcut.CALCULATOR || calculatorEnabled
+                    ) { run { actions.onShortcut(item.shortcut) } }
+                    is HomeMenuItem.TempTarget    -> MenuRow("Temporary target", AapsIcons.GpsFixed, status = item.status) { run(actions.onTempTarget) }
+                    is HomeMenuItem.ExtendedBolus -> MenuRow("Extended bolus", AapsIcons.Timelapse, status = item.status, enabled = item.enabled) {
+                        run(if (item.status != null) actions.onCancelExtendedBolus else actions.onExtendedBolus)
                     }
+                    HomeMenuItem.Calibration      -> MenuRow("Calibrate CGM", AapsIcons.Bloodtype) { run(actions.onCalibration) }
                 }
             }
         }
@@ -493,6 +491,6 @@ private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, acti
 @Composable
 private fun MenuRow(label: String, icon: ImageVector, status: String? = null, enabled: Boolean = true, onClick: () -> Unit) =
     ListRow(
-        label, sub = status, enabled = enabled, onClick = onClick,
+        label, Modifier.fillMaxWidth(), sub = status, enabled = enabled, onClick = onClick,
         leading = { Icon(icon, contentDescription = null, tint = AapsTheme.colors.textSecondary, modifier = Modifier.size(24.dp)) }
     )
