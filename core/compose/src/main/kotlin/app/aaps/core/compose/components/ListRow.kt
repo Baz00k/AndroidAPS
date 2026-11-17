@@ -30,12 +30,14 @@ fun ListRow(
     sub: String? = null,
     leading: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
     trailing: (@Composable RowScope.() -> Unit)? = null
 ) {
     val colors = AapsTheme.colors
     val frame = LocalListRowFrame.current
     Row(
-        modifier = (if (onClick != null) modifier.heightIn(min = AapsSpacing.minTap).clickable(role = Role.Button, onClick = onClick) else modifier)
+        modifier = (if (onClick != null) modifier.heightIn(min = AapsSpacing.minTap).clickable(enabled = enabled, role = Role.Button, onClick = onClick) else modifier)
+            .disabledAlpha(enabled)
             .then(if (frame != null) Modifier.fillMaxWidth().heightIn(min = frame.minHeight) else Modifier)
             .padding(horizontal = frame?.inset ?: 0.dp, vertical = frame?.vertical ?: 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -48,5 +50,15 @@ fun ListRow(
             if (!sub.isNullOrBlank()) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         trailing?.invoke(this)
+    }
+}
+
+@ComponentPreviews
+@Composable
+private fun ListRowPreview() = PreviewSurface {
+    ListCard {
+        ListRow("Temporary target", sub = "5.5–7.0 mmol/L · 40 min", onClick = {})
+        ListRow("Extended bolus", onClick = {}, enabled = false)
+        ListRow("Scheduled basal") { Text("0.85 U/h", style = AapsTheme.type.listTitle, color = AapsTheme.colors.textPrimary) }
     }
 }
