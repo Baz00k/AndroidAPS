@@ -129,7 +129,7 @@ open class OpenAPSSMBPlugin @Inject constructor(
             val variableSens = it.variableSens ?: return@forEach
             val timestamp = it.date
             val key = timestamp - timestamp % T.mins(30).msecs() + glucose.toLong()
-            if (variableSens > 0) dynIsfCache.put(key, variableSens)
+            if (hardLimits.isInRange(variableSens, HardLimits.MIN_ISF, HardLimits.MAX_ISF)) dynIsfCache.put(key, variableSens)
             count++
         }
         aapsLogger.debug(LTag.APS, "Loaded $count variable sensitivity values from database")
@@ -218,9 +218,10 @@ open class OpenAPSSMBPlugin @Inject constructor(
         if (!preferences.get(BooleanKey.ApsUseDynamicSensitivity)) return Pair("OFF", null)
 
         val result = persistenceLayer.getApsResultCloseTo(timestamp)
-        if (result?.variableSens != null && result.variableSens != 0.0) {
-            //aapsLogger.debug("calculateVariableIsf $caller DB  ${dateUtil.dateAndTimeAndSecondsString(timestamp)} ${result.variableSens}")
-            return Pair("DB", result.variableSens)
+        val storedSensitivity = result?.variableSens
+        if (storedSensitivity != null && storedSensitivity != 0.0 && hardLimits.isInRange(storedSensitivity, HardLimits.MIN_ISF, HardLimits.MAX_ISF)) {
+            //aapsLogger.debug("calculateVariableIsf $caller DB  ${dateUtil.dateAndTimeAndSecondsString(timestamp)} $storedSensitivity")
+            return Pair("DB", storedSensitivity)
         }
 
         val glucose = glucoseStatusProvider.glucoseStatusData?.glucose ?: return Pair("GLUC", null)
@@ -235,11 +236,12 @@ open class OpenAPSSMBPlugin @Inject constructor(
 
         val dynIsfResult = calculateRawDynIsf(multiplier)
         if (!dynIsfResult.tddPartsCalculated()) return Pair("TDD miss", null)
+        val variableSensitivity = dynIsfResult.variableSensitivity ?: return Pair("LIMIT", null)
         // no cached result found, let's calculate the value
-        //aapsLogger.debug("calculateVariableIsf $caller CAL ${dateUtil.dateAndTimeAndSecondsString(timestamp)} $sensitivity")
-        dynIsfCache.put(key, dynIsfResult.variableSensitivity)
+        //aapsLogger.debug("calculateVariableIsf $caller CAL ${dateUtil.dateAndTimeAndSecondsString(timestamp)} $variableSensitivity")
+        dynIsfCache.put(key, variableSensitivity)
         if (dynIsfCache.size() > 1000) dynIsfCache.clear()
-        return Pair("CALC", dynIsfResult.variableSensitivity)
+        return Pair("CALC", variableSensitivity)
     }
 
     internal class DynIsfResult {
@@ -294,7 +296,10 @@ open class OpenAPSSMBPlugin @Inject constructor(
             val tddStatus = TddStatus(dynIsfResult.tdd1D!!, dynIsfResult.tdd7D!!, dynIsfResult.tddLast24H!!, dynIsfResult.tddLast4H!!, dynIsfResult.tddLast8to4H!!)
             val tddWeightedFromLast8H = ((1.4 * tddStatus.tddLast4H) + (0.6 * tddStatus.tddLast8to4H)) * 3
             dynIsfResult.tdd = ((tddWeightedFromLast8H * 0.33) + (tddStatus.tdd7D * 0.34) + (tddStatus.tdd1D * 0.33)) * preferences.get(IntKey.ApsDynIsfAdjustmentFactor) / 100.0 * multiplier
-            dynIsfResult.variableSensitivity = Round.roundTo(1800 / (dynIsfResult.tdd!! * (ln((glucoseStatus.glucose / dynIsfResult.insulinDivisor) + 1))), 0.1)
+            val sensitivity = 1800 / (dynIsfResult.tdd!! * (ln((glucoseStatus.glucose / dynIsfResult.insulinDivisor) + 1)))
+            dynIsfResult.variableSensitivity = if (sensitivity.isFinite()) {
+                Round.roundTo(sensitivity, 0.1).takeIf { hardLimits.isInRange(it, HardLimits.MIN_ISF, HardLimits.MAX_ISF) }
+            } else null
             aapsLogger.debug(LTag.APS, "multiplier=$multiplier dynIsfResult=${dynIsfResult.log()} glucoseStatus=${glucoseStatus.glucose} insulinDivisor=${dynIsfResult.insulinDivisor}")
         }
         return dynIsfResult
@@ -371,6 +376,7 @@ open class OpenAPSSMBPlugin @Inject constructor(
         // var tdd = 0.0
         // var insulinDivisor = 0
         val dynIsfResult = calculateRawDynIsf((profile as ProfileSealed.EPS).value.originalPercentage / 100.0)
+        val dynIsfUsable = dynIsfMode && dynIsfResult.tddPartsCalculated() && dynIsfResult.variableSensitivity != null
         if (dynIsfMode && !dynIsfResult.tddPartsCalculated()) {
             uiInteraction.addNotificationValidTo(
                 Notification.SMB_FALLBACK, dateUtil.now(),
@@ -387,7 +393,18 @@ open class OpenAPSSMBPlugin @Inject constructor(
                 }
             )
         }
-        if (dynIsfMode && dynIsfResult.tddPartsCalculated()) {
+        if (dynIsfMode && dynIsfResult.tddPartsCalculated() && !dynIsfUsable) {
+            uiInteraction.addNotificationValidTo(
+                Notification.SMB_FALLBACK, dateUtil.now(),
+                rh.gs(R.string.fallback_smb_isf_out_of_range), Notification.INFO, dateUtil.now() + T.mins(1).msecs()
+            )
+            inputConstraints.copyReasons(
+                ConstraintObject(false, aapsLogger).also {
+                    it.set(false, rh.gs(R.string.fallback_smb_isf_out_of_range), this)
+                }
+            )
+        }
+        if (dynIsfUsable) {
             uiInteraction.dismissNotification(Notification.SMB_FALLBACK)
             // Compare insulin consumption of last 24h with last 7 days average
             val tddRatio = if (preferences.get(BooleanKey.ApsDynIsfAdjustSensitivity)) dynIsfResult.tddLast24H!! / dynIsfResult.tdd7D!! else 1.0
@@ -461,7 +478,7 @@ open class OpenAPSSMBPlugin @Inject constructor(
             temptargetSet = isTempTarget,
             autosens_max = preferences.get(DoubleKey.AutosensMax),
             out_units = if (profileFunction.getUnits() == GlucoseUnit.MMOL) "mmol/L" else "mg/dl",
-            variable_sens = if (dynIsfMode) dynIsfResult.variableSensitivity ?: 0.0 else 0.0,
+            variable_sens = if (dynIsfUsable) dynIsfResult.variableSensitivity ?: 0.0 else 0.0,
             insulinDivisor = dynIsfResult.insulinDivisor,
             TDD = dynIsfResult.tdd ?: 0.0
         )
@@ -489,7 +506,7 @@ open class OpenAPSSMBPlugin @Inject constructor(
             microBolusAllowed = microBolusAllowed,
             currentTime = now,
             flatBGsDetected = flatBGsDetected,
-            dynIsfMode = dynIsfMode && dynIsfResult.tddPartsCalculated()
+            dynIsfMode = dynIsfUsable
         ).also {
             val determineBasalResult = apsResultProvider.get().with(it)
             // Preserve input data
