@@ -156,7 +156,7 @@ open class OpenAPSAutoISFPlugin @Inject constructor(
             val variableSens = it.variableSens ?: return@forEach
             val timestamp = it.date
             val key = timestamp - timestamp % T.mins(minutesClass).msecs() + glucose.toLong()
-            if (variableSens > 0) autoIsfCache.put(key, variableSens)
+            if (variableSens.isFinite() && variableSens > 0) autoIsfCache.put(key, variableSens)
             count++
         }
         aapsLogger.debug(LTag.APS, "Loaded $count variable sensitivity values from database")
@@ -235,7 +235,8 @@ open class OpenAPSAutoISFPlugin @Inject constructor(
         // Add BG to key as it affects calculation
         val key = timestamp - timestamp % T.mins(minutesClass).msecs() + glucose.toLong()
         val sensitivity = autoISF(profile)
-        if (sensitivity > 0) {
+        // a non-finite sensitivity is rejected by the algorithm, and must not reach the average ISF
+        if (sensitivity.isFinite() && sensitivity > 0) {
             // can default to 0, e.g. for the first 2-3 loops in a virgin setup
             aapsLogger.debug("calculateVariableIsf CALC ${dateUtil.dateAndTimeAndSecondsString(timestamp)} $sensitivity")
             autoIsfCache.put(key, sensitivity)
@@ -540,8 +541,9 @@ open class OpenAPSAutoISFPlugin @Inject constructor(
 
     // Rounds value to 'digits' decimal places
     // different for negative numbers fun round(value: Double, digits: Int): Double = BigDecimal(value).setScale(digits, RoundingMode.HALF_EVEN).toDouble()
+    // Pass ±Infinity through too: Math.round would turn it into a large finite ISF the algorithm cannot reject.
     fun round(value: Double, digits: Int): Double {
-        if (value.isNaN()) return Double.NaN
+        if (!value.isFinite()) return value
         val scale = 10.0.pow(digits.toDouble())
         return Math.round(value * scale) / scale
     }
