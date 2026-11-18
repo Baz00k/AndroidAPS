@@ -1,0 +1,171 @@
+{
+  "revision": "21bfeeae8431b229361db8836ccdc57c62880de5",
+  "scope": "Integration source baseline. Recheck contracts when these files change.",
+  "sources": [
+    {
+      "id": "SRC-AAPS-REVIEW-001",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/aps/DetermineBasalResult.kt",
+      "sha256": "493eb72bb8bcbd015e7da504a36f548d22bfadbe82a85329ded838f783e78e8d"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-004",
+      "path": "plugins/aps/src/main/kotlin/app/aaps/plugins/aps/loop/LoopPlugin.kt",
+      "sha256": "a4d7fd4be6d57341117569be5d68e4e171a02f9d581e528a7915b87c02d73d8e"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-005",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/di/ImplementationModule.kt",
+      "sha256": "283bd583f2574bc30000280de12cac716a579355bbbd2913a6e00eed80406f4c"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-006",
+      "path": "database/persistence/src/main/kotlin/app/aaps/database/persistence/converters/APSResultExtension.kt",
+      "sha256": "3421a84fadc09da52bb879eb06b35bc630691c0bc1e1c820fb87383ca584b27b"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-007",
+      "path": "database/persistence/src/main/kotlin/app/aaps/database/persistence/PersistenceLayerImpl.kt",
+      "sha256": "4d09f4775cc2f4f80497d62d800e9c5cc770299dde765866410356e984d5706b"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-009",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/db/ProcessedTbrEbDataImpl.kt",
+      "sha256": "4599ccb52ba39915d59f50fd3952f8be4df13665dfd70a13a25507c17532209d"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-010",
+      "path": "plugins/constraints/src/main/kotlin/app/aaps/plugins/constraints/ConstraintsCheckerImpl.kt",
+      "sha256": "471d7a3735f2360097f7f6e1f84461e82d6fb0d358a5813149993acb20c6d69b"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-011",
+      "path": "plugins/constraints/src/main/kotlin/app/aaps/plugins/constraints/safety/SafetyPlugin.kt",
+      "sha256": "9fd0f63a5f6da0fa2acc00b712542d69f67d82aacfe26e6beafb1e5b7b116b70"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-012",
+      "path": "plugins/constraints/src/main/kotlin/app/aaps/plugins/constraints/bgQualityCheck/BgQualityCheckPlugin.kt",
+      "sha256": "2023ba56625a9d58a9511ea69bb32e998ed23aa702eb2341e6ae10274fc6a49e"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-013",
+      "path": "plugins/constraints/src/main/kotlin/app/aaps/plugins/constraints/objectives/ObjectivesPlugin.kt",
+      "sha256": "46469c4f1003550ac7a66eba3b0c79e40da1599b262f83dc1018617466a73a74"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-014",
+      "path": "plugins/constraints/src/main/kotlin/app/aaps/plugins/constraints/versionChecker/VersionCheckerPlugin.kt",
+      "sha256": "aca5679b2b38f7a17958164cd697739ba03e1bae223ebcc2dc690c5f01497952"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-020",
+      "path": "pump/danar/src/main/kotlin/app/aaps/pump/danar/AbstractDanaRPlugin.kt",
+      "sha256": "54236662d49fe2aaf61eda280eb656355df6bec695054ba8ffd6b665d93653bd"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-021",
+      "path": "core/interfaces/src/main/kotlin/app/aaps/core/interfaces/plugin/PluginBase.kt",
+      "sha256": "7a7aafcf4610e3b83ab89c0c18c821ac51accae0ba1d338c77fa1d2ea82c48b1"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-022",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/plugin/PluginStore.kt",
+      "sha256": "1efdc2ea116df3bcd59f2df3a7c55950812b176987971df8aba0107a254f654e"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-025",
+      "path": "plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSSMB/OpenAPSSMBPlugin.kt",
+      "sha256": "36cea62355772709270cdc15a59257974bc10e4b890ba89ffc0ce34f595e586d"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-026",
+      "path": "plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSSMB/DetermineBasalSMB.kt",
+      "sha256": "839df267653aed6afa67b3c40abe2a7f684f057c790504791876dbf1092a017a"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-027",
+      "path": "plugins/main/src/main/kotlin/app/aaps/plugins/main/iob/iobCobCalculator/IobCobCalculatorPlugin.kt",
+      "sha256": "b6662efb3e661f8e12fb782858d789d88913e020866d51888aedbb8042fed120"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-028",
+      "path": "core/objects/src/main/kotlin/app/aaps/core/objects/extensions/TemporaryBasalExtension.kt",
+      "sha256": "1ee25fc7c79d76d2ab6f5e011523abf0dcfabda3da9db1f2ae98e952adc174c1"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-029",
+      "path": "core/objects/src/main/kotlin/app/aaps/core/objects/extensions/BolusExtension.kt",
+      "sha256": "326d0e061a0b2c8329f30992265a30c9c21095fb5167798a5117c00d67093736"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-030",
+      "path": "core/objects/src/main/kotlin/app/aaps/core/objects/extensions/IobTotalExtension.kt",
+      "sha256": "33cfe4601aeaf2145b25b50b9c304bf167002639e3cf55dbbb5bc5b7e8bb480b"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-031",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/daos/BolusDao.kt",
+      "sha256": "baafa168ae9a04de17469454fd6937b80009be96ac9295a91f0e0d91f4f3cb3d"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-032",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/daos/TemporaryBasalDao.kt",
+      "sha256": "837d3d1fe6270db139b12cad0b6d928b2292a730611bbc88f8488bf339001b59"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-034",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/transactions/SyncBolusWithTempIdTransaction.kt",
+      "sha256": "4e2f8e5b09a3e874bc18b9784357ac7f365275b1c9c9a95a1d91aaf9f8fbff5c"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-035",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/transactions/SyncPumpBolusTransaction.kt",
+      "sha256": "50cc94e08cddae46a95269e7f6c5aca7345f0bf0f89408f2ac280dc7aaa98ddf"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-036",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/transactions/InsertBolusWithTempIdTransaction.kt",
+      "sha256": "7a68a7f4fd1c4d6b59dad0c9e21edf29a7bfc89200c21eb560e80edf2f28e354"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-037",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/pump/PumpSyncImplementation.kt",
+      "sha256": "65c49f70da9156fe19e6321a3edc3287dbbeb11c0ba11e023a434d43de8206f6"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-038",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/queue/CommandQueueImplementation.kt",
+      "sha256": "a56d9330511435543755a2aff885201f2699fb18cecabcf9adf3d644bee3832a"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-044",
+      "path": "core/interfaces/src/main/kotlin/app/aaps/core/interfaces/pump/PumpEnactResult.kt",
+      "sha256": "8616dad0644b1c6e528f5e6ab27f38cfece751f8be6f647e9375bcccab50f53c"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-045",
+      "path": "plugins/aps/src/main/kotlin/app/aaps/plugins/aps/loop/LoopFragment.kt",
+      "sha256": "ee80932948bebf6d0fad968bc00c84a19883b30bc1d6da714fe57c1a78e2c98c"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-047",
+      "path": "gradle/libs.versions.toml",
+      "sha256": "5d1659063b60fe30608eb2210f7cfea76d159a7b7486c9fe8d644cd8b6d007ae"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-049",
+      "path": "plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSSMB/GlucoseStatusCalculatorSMB.kt",
+      "sha256": "2ba94050e6b3b7f8d2149af40f62e9a2d0fd680d2bf3c011a56937c42740c638"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-054",
+      "path": "implementation/src/main/kotlin/app/aaps/implementation/queue/commands/CommandSMBBolus.kt",
+      "sha256": "8ccc59b4336ddf86775e24a3391f17bcb93bd5da64da6dee2b5ab6e39445bee5"
+    },
+    {
+      "id": "SRC-AAPS-REVIEW-055",
+      "path": "database/impl/src/main/kotlin/app/aaps/database/daos/APSResultDao.kt",
+      "sha256": "44f5a65f88538d6eedc8bf7327ab311bd3435ce7e61d74e9bcf45e8805dd734e"
+    }
+  ]
+}
