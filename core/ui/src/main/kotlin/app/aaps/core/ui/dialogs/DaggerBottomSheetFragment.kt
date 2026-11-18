@@ -55,8 +55,8 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
         super.onAttach(context)
     }
 
-    /** Where the sheet's header was last laid out; a drag may start only there. */
-    private var dragHandle: LayoutCoordinates? = null
+    /** Where the sheet's drag regions were last laid out; a drag may start only there. */
+    private val dragHandles = mutableMapOf<String, LayoutCoordinates>()
 
     override fun getTheme(): Int = R.style.ThemeOverlay_Aaps_BottomSheetDialog
 
@@ -66,7 +66,7 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
                 // Decided as the gesture starts, before the sheet's behaviour sees it: a drag that
                 // begins anywhere but the header is the content's to handle.
                 if (ev.actionMasked == MotionEvent.ACTION_DOWN)
-                    behavior.isDraggable = isCancelable && dragHandle?.takeIf { it.isAttached }?.boundsInWindow()?.contains(Offset(ev.x, ev.y)) == true
+                    behavior.isDraggable = isCancelable && dragHandles.values.any { it.isAttached && it.boundsInWindow().contains(Offset(ev.x, ev.y)) }
                 return super.dispatchTouchEvent(ev)
             }
         }.apply {
@@ -93,7 +93,7 @@ abstract class DaggerBottomSheetFragment : BottomSheetDialogFragment(), HasAndro
             AapsTheme {
                 CompositionLocalProvider(
                     LocalSheetDraggable provides isCancelable,
-                    LocalSheetDragHandle provides { dragHandle = it }
+                    LocalSheetDragHandle provides { region, coordinates -> dragHandles[region] = coordinates }
                 ) {
                     // The sheet surface reaches the screen edge; its controls stay above the gesture area and
                     // the keyboard, which Material's own padding (switched off in the theme) used to clear.

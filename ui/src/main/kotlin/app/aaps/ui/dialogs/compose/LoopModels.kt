@@ -15,7 +15,6 @@ enum class LoopActionId {
 data class LoopModeOption(
     val id: LoopActionId,
     val title: String,
-    val sub: String,
     val enabled: Boolean,
     val selected: Boolean
 )
@@ -27,7 +26,6 @@ data class LoopSheetState(
     val statusTone: AapsTone? = null,
     val looping: Boolean = false,
     val algoLine: String = "",
-    val enactedLine: String = "",
     val reasons: String = "",
     val modes: List<LoopModeOption> = emptyList(),
     val suspendVisible: Boolean = false,
@@ -37,3 +35,15 @@ data class LoopSheetState(
     val disconnect15m: Boolean = false,
     val disconnect30m: Boolean = false
 )
+
+/** Lets one loop action through per sheet: a second tap before the sheet closes must not ask or act again. */
+internal class LoopActionGate(private val act: (LoopActionId) -> Unit) {
+
+    private var used = false
+
+    fun offer(id: LoopActionId) {
+        if (used) return
+        used = true
+        act(id)
+    }
+}

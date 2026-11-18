@@ -1,13 +1,8 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,20 +49,17 @@ import app.aaps.core.compose.components.SectionLabel
 import app.aaps.core.compose.components.ActionChip
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.AmountStepper
-import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.aapsSwitchColors
 import app.aaps.core.compose.components.ChoiceRow
 import app.aaps.core.compose.components.EntryCard
 import app.aaps.core.compose.components.EntryTime
 import app.aaps.core.compose.components.TimeStepper
 import app.aaps.core.compose.components.ToggleRow
-import app.aaps.core.compose.components.HoldToConfirmButton
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.formatNumeric
 import app.aaps.core.compose.icons.AapsIcons
 import app.aaps.core.compose.theme.AapsColors
-import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -124,15 +116,15 @@ fun WizardScreen(
     }
     // What Review was opened on; the live result is compared against it.
     var reviewed by remember { mutableStateOf<WizardResult?>(null) }
-    BackHandler(enabled = reviewing) { reviewing = false }
     fun onInputs(changed: WizardInputs) {
         inputs = changed.copy(carbs = carbControls.clamp(changed.carbs))
     }
 
-    SheetSurface(
-        title = if (reviewing) "Review" else "Calculator",
+    ReviewStepSheet(
+        title = "Calculator",
+        reviewing = reviewing,
+        onBack = { reviewing = false },
         onClose = onCancel,
-        onBack = if (reviewing) ({ reviewing = false }) else null,
         footer = {
             if (!reviewing) InputFooter(result, colors, draftsValid) {
                 if (draftsValid) {
@@ -152,19 +144,11 @@ fun WizardScreen(
                 }
             }
         }
-    ) {
-        AnimatedContent(
-            targetState = reviewing,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
-            label = "calculator-step"
-        ) { onReview ->
-            Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
-                if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
-                                         { if (!mealDetailsExpanded || inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
-                                         { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it })
-                else ReviewContent(inputs, result, reviewed ?: result, colors)
-            }
-        }
+    ) { onReview ->
+        if (!onReview) InputCards(inputs, result, carbControls, colors, mealDetailsExpanded,
+                                 { if (!mealDetailsExpanded || inputs.eatLater || absorptionValid) mealDetailsExpanded = !mealDetailsExpanded }, ::onInputs,
+                                 { carbsValid = it }, { glucoseValid = it }, { absorptionValid = it }, { adjustmentValid = it })
+        else ReviewContent(inputs, result, reviewed ?: result, colors)
     }
 }
 
@@ -474,13 +458,10 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
     val changed = baseline.outcome.insulin != outcome.insulin || baseline.outcome.carbs != outcome.carbs
     val delivers = outcome.commit == CalculatorOutcome.Commit.DELIVER
     val showsInsulin = delivers || outcome.commit == CalculatorOutcome.Commit.NONE
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (changed)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Struck(if (showsInsulin) units(baseline.outcome.insulin) else "${baseline.outcome.carbs} g", colors)
-                Tag("Updated", tint = colors.accent)
-            }
-        Text(if (showsInsulin) units(outcome.insulin) else "${outcome.carbs} g", style = AapsTheme.type.hero, color = colors.textPrimary)
+    ReviewAmount(
+        value = if (showsInsulin) units(outcome.insulin) else "${outcome.carbs} g",
+        previous = if (!changed) null else if (showsInsulin) units(baseline.outcome.insulin) else "${baseline.outcome.carbs} g"
+    ) {
         outcome.uncappedInsulin?.let { uncapped ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Struck(units(uncapped), colors)
@@ -542,19 +523,13 @@ private fun ReviewContent(inputs: WizardInputs, result: WizardResult, baseline: 
 @Composable
 private fun ReviewFooter(inputs: WizardInputs, outcome: CalculatorOutcome, onCommit: () -> Unit) {
     when (outcome.commit) {
-        CalculatorOutcome.Commit.DELIVER   -> HoldToConfirmButton(label = "Deliver ${units(outcome.insulin)}", onConfirm = onCommit, confirms = outcome to inputs.eatLater)
-        CalculatorOutcome.Commit.LOG_CARBS -> PrimaryButton(label = "Log ${outcome.carbs} g", onClick = onCommit)
+        CalculatorOutcome.Commit.DELIVER   -> ReviewCommitButton("Deliver ${units(outcome.insulin)}", delivers = true, confirms = outcome to inputs.eatLater, onCommit = onCommit)
+        CalculatorOutcome.Commit.LOG_CARBS -> ReviewCommitButton("Log ${outcome.carbs} g", delivers = false, confirms = null, onCommit = onCommit)
         CalculatorOutcome.Commit.NONE      -> PrimaryButton(label = "Nothing to confirm", onClick = {}, enabled = false)
     }
 }
 
-private fun units(v: Double) = "${formatNumeric(v, 2)} U"
-
 private fun signedUnits(v: Double, decimals: Int) = (if (v > 0) "+" else "") + formatNumeric(v, decimals) + " U"
-
-@Composable
-private fun Struck(text: String, colors: AapsColors) =
-    Text(text, style = AapsTheme.type.body.copy(textDecoration = TextDecoration.LineThrough), color = colors.textTertiary)
 
 @Composable
 private fun IconLine(icon: ImageVector, text: String, tint: Color) =

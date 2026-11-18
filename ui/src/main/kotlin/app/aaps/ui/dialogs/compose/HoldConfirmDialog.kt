@@ -16,7 +16,7 @@ import app.aaps.core.ui.dialogs.ComposeDialogHost
  * Deliberately a drop-in for `OKDialog.showConfirmation(activity, title, message, ok, cancel)`: same
  * host, frame and itemised summary (including the constraint warnings the callers build), but the
  * positive action is a press-and-hold rather than a tap. The Calculator gates delivery behind a hold; this is
- * what lets every OTHER delivery route — manual bolus, insulin, extended bolus, prime/fill — use the
+ * what lets the delivery routes without a Review step (extended bolus, prime/fill) use the
  * same gesture, so "how do I commit insulin" has exactly one answer in this app.
  *
  * Callers should keep using plain `OKDialog` when nothing is delivered (carbs-only, record-only), so

@@ -12,7 +12,6 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.RM
-import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
@@ -20,13 +19,11 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.db.ProcessedTbrEbData
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
-import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.pump.actions.CustomAction
-import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -89,11 +86,11 @@ class ActionsFragment : DaggerFragment() {
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var config: Config
     @Inject lateinit var protectionCheck: ProtectionCheck
-    @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var loop: Loop
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var extendedBolusActions: ExtendedBolusActions
+    @Inject lateinit var tempBasalActions: TempBasalActions
 
     private var disposable: CompositeDisposable = CompositeDisposable()
 
@@ -103,6 +100,7 @@ class ActionsFragment : DaggerFragment() {
     // ---- Redesigned Actions (Compose overlay) ----
     private val actionsState = mutableStateOf(ActionsUiState())
     private val extendedBolusCancelGuard = ExtendedBolusActions.CancelGuard()
+    private val tempBasalCancelGuard = TempBasalActions.CancelGuard()
 
     private var _binding: ActionsFragmentBinding? = null
 
@@ -146,16 +144,7 @@ class ActionsFragment : DaggerFragment() {
             }
         }
         binding.cancelTempBasal.setOnClickListener {
-            if (processedTbrEbData.getTempBasalIncludingConvertedExtended(dateUtil.now()) != null) {
-                uel.log(Action.CANCEL_TEMP_BASAL, Sources.Actions)
-                commandQueue.cancelTempBasal(enforceNew = true, callback = object : Callback() {
-                    override fun run() {
-                        if (!result.success) {
-                            uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.temp_basal_delivery_error), app.aaps.core.ui.R.raw.boluserror)
-                        }
-                    }
-                })
-            }
+            confirmTempBasalCancellation()
         }
         binding.fill.setOnClickListener {
             activity?.let { activity ->
@@ -281,12 +270,7 @@ class ActionsFragment : DaggerFragment() {
         when (id) {
             ActionId.TEMP_TARGET   -> bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) }
             ActionId.TEMP_BASAL    -> bolusProtected { uiInteraction.runTempBasalDialog(childFragmentManager) }
-            ActionId.TEMP_BASAL_CANCEL -> if (processedTbrEbData.getTempBasalIncludingConvertedExtended(dateUtil.now()) != null) {
-                uel.log(Action.CANCEL_TEMP_BASAL, Sources.Actions)
-                commandQueue.cancelTempBasal(enforceNew = true, callback = object : Callback() {
-                    override fun run() { if (!result.success) uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.temp_basal_delivery_error), app.aaps.core.ui.R.raw.boluserror) }
-                })
-            }
+            ActionId.TEMP_BASAL_CANCEL -> confirmTempBasalCancellation()
 
             ActionId.EXTENDED_BOLUS -> extendedBolusActions.start(activity, childFragmentManager)
 
@@ -307,6 +291,11 @@ class ActionsFragment : DaggerFragment() {
             ActionId.QUESTION      -> care(UiInteraction.EventType.QUESTION, app.aaps.core.ui.R.string.careportal_question)
             ActionId.HISTORY       -> startActivity(Intent(context, uiInteraction.historyActivity))
         }
+    }
+
+    private fun confirmTempBasalCancellation() {
+        val activity = activity ?: return
+        tempBasalActions.confirmCancel(activity, Sources.Actions, tempBasalCancelGuard)
     }
 
     private fun confirmExtendedBolusCancellation() {

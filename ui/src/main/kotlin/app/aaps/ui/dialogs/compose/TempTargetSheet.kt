@@ -1,121 +1,90 @@
 package app.aaps.ui.dialogs.compose
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.components.SectionLabel
-import app.aaps.core.compose.components.AapsCard
+import app.aaps.core.compose.components.AmountStepper
+import app.aaps.core.compose.components.Choice
+import app.aaps.core.compose.components.ChoiceRow
+import app.aaps.core.compose.components.DangerButton
+import app.aaps.core.compose.components.EntryCard
+import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.components.Stepper
-import app.aaps.core.compose.theme.AapsTheme
-import java.util.Locale
 
-/**
- * Redesigned Temp target sheet (handoff Section 3): "pick an intent" preset cards + Target/Duration
- * steppers. [onStart] runs the SAME confirmation + persistence path as the legacy dialog.
- */
+/** [onStart] gets only a validated request; the host confirms it before anything is recorded. */
 @Composable
 fun TempTargetSheet(
     state: TempTargetSheetState,
-    onStart: (target: Double, durationMin: Int, reason: TtReason) -> Unit,
+    onStart: (TempTargetRequest) -> Unit,
     onCancelActive: () -> Unit,
     onClose: () -> Unit
 ) {
-    val colors = AapsTheme.colors
-    var target by remember { mutableStateOf(state.initialTarget) }
-    var duration by remember { mutableStateOf(state.initialDuration) }
-    var reason by remember { mutableStateOf(TtReason.CUSTOM) }
+    var target by rememberSaveable { mutableStateOf(state.initial.target) }
+    var duration by rememberSaveable { mutableStateOf(state.initial.durationMin.toDouble()) }
+    var reason by rememberSaveable { mutableStateOf(state.initial.reason) }
+    var targetValid by remember { mutableStateOf(false) }
+    var durationValid by remember { mutableStateOf(false) }
+    var submitted by rememberSaveable { mutableStateOf(false) }
 
-    fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${state.decimals}f", v)
+    val request = TempTargetRequest(target, duration.toInt(), reason, state.units)
 
-    SheetSurface(title = "Temporary target", onClose = onClose) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            SectionLabel("Pick an intent")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.presets.forEach { p ->
-                    val selected = reason == p.reason
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .clip(AapsTheme.shape.card)
-                            .background(if (selected) colors.accentTintStrong else colors.surface2)
-                            .clickable {
-                                target = p.target; duration = p.durationMin; reason = p.reason
-                            }
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(p.label, style = AapsTheme.type.listTitle, color = if (selected) colors.accentOnLight else colors.textPrimary)
-                        Text(p.targetText, style = AapsTheme.type.caption, color = colors.textSecondary)
-                        Text(p.durationText, style = AapsTheme.type.caption, color = colors.textTertiary)
-                    }
-                }
+    // Read state when invoked: a same-frame second tap must still see the latch.
+    fun canStart() = targetValid && durationValid && request.isValid && !submitted
+
+    fun start() {
+        if (!canStart()) return
+        submitted = true
+        onStart(request)
+    }
+
+    fun cancelActive() {
+        if (submitted) return
+        submitted = true
+        onCancelActive()
+    }
+
+    SheetSurface(
+        title = "Temporary target",
+        onClose = onClose,
+        footer = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.hasActive) DangerButton("Cancel temporary target", ::cancelActive, enabled = !submitted)
+                PrimaryButton("Start temporary target", ::start, enabled = canStart())
             }
-
-            SectionLabel("Adjust")
-            AapsCard(Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Stepper(
-                        value = "${fmt(target)} ${state.unitLabel}",
-                        caption = "target",
-                        onMinus = { target = (target - state.unitStep).coerceAtLeast(state.targetMin); reason = TtReason.CUSTOM },
-                        onPlus = { target = (target + state.unitStep).coerceAtMost(state.targetMax); reason = TtReason.CUSTOM }
-                    )
-                    Stepper(
-                        value = "$duration min",
-                        caption = "duration",
-                        onMinus = { duration = (duration - state.durationStep).coerceAtLeast(0) },
-                        onPlus = { duration += state.durationStep }
-                    )
-                }
+        }
+    ) {
+        ChoiceRow {
+            state.presets.forEach { preset ->
+                Choice(preset.reason.label, selected = reason == preset.reason, modifier = Modifier.weight(1f), onClick = {
+                    target = preset.target
+                    duration = preset.durationMin.toDouble()
+                    reason = preset.reason
+                })
             }
-
-            val enabled = target > 0.0 && duration > 0
-            Text(
-                "Start temporary target",
-                style = AapsTheme.type.title,
-                color = if (enabled) colors.onAccent else colors.textTertiary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(AapsTheme.shape.button)
-                    .background(if (enabled) colors.accent else colors.controlFill)
-                    .then(if (enabled) Modifier.clickable { onStart(target, duration, reason) } else Modifier)
-                    .padding(vertical = 14.dp)
+            Choice(TtReason.CUSTOM.label, selected = reason == TtReason.CUSTOM, modifier = Modifier.weight(1f), onClick = { reason = TtReason.CUSTOM })
+        }
+        EntryCard("Target") {
+            AmountStepper(
+                value = target, onValue = { if (it != target) reason = TtReason.CUSTOM; target = it },
+                step = state.targetStep, min = state.targetMin, max = state.targetMax,
+                decimals = state.decimals, unit = state.unitLabel, name = "of target",
+                onValidityChange = { targetValid = it }
             )
-            if (state.hasActive)
-                Text(
-                    "Cancel current temporary target",
-                    style = AapsTheme.type.body,
-                    color = colors.low,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AapsTheme.shape.pill)
-                        .clickable(onClick = onCancelActive)
-                        .padding(vertical = 10.dp)
-                )
+        }
+        EntryCard("Duration") {
+            AmountStepper(
+                value = duration, onValue = { duration = it },
+                step = TempTargetLimits.DURATION_STEP.toDouble(), min = TempTargetLimits.MIN_DURATION.toDouble(), max = TempTargetLimits.MAX_DURATION.toDouble(),
+                decimals = 0, unit = "min", name = "of duration", integerOnly = true,
+                onValidityChange = { durationValid = it }
+            )
         }
     }
 }

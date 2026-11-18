@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.fragment.app.FragmentManager
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -49,7 +48,7 @@ import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
+class FillDialog : DaggerBottomSheetFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -101,11 +100,12 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
         val eventTime = fillRecordTime(dateUtil.now(), inputs.changedAt)
 
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
+        val dose = decimalFormatter.toPumpSupportedBolusWithUnits(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
         if (insulinAfterConstraints > 0) {
             actions.add(rh.gs(R.string.fill_warning))
             actions.add("")
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
+                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + dose
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.insulinButtonColor)
             )
             if (abs(insulinAfterConstraints - insulin) > 0.01)
@@ -132,7 +132,7 @@ class FillDialog(val fm: FragmentManager) : DaggerBottomSheetFragment() {
             activity?.let { activity ->
                 // Only a prime needs a delivery-ready pump; a record-only change is allowed without one.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (insulinAfterConstraints > 0) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
+                    if (insulinAfterConstraints > 0) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r, action = "Prime $dose") } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 confirm(rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (insulinAfterConstraints > 0) {

@@ -38,7 +38,6 @@ interface OverviewData {
      */
 
     fun temporaryBasalText(): String
-    fun temporaryBasalDialogText(): String
     @DrawableRes fun temporaryBasalIcon(): Int
     @AttrRes fun temporaryBasalColor(context: Context?): Int
 

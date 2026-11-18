@@ -1,5 +1,6 @@
 package app.aaps.ui.dialogs.compose
 
+import app.aaps.ui.dialogs.TargetPresets
 
 /** Whether an insulin entry asks the pump for a bolus or records one given some other way. */
 enum class InsulinIntent { DELIVER, LOG }
@@ -33,4 +34,26 @@ object InsulinEntryPolicy {
         InsulinIntent.DELIVER -> now
         InsulinIntent.LOG     -> givenAt?.coerceIn(now - MAX_LOG_AGE_MIN * 60_000L, now) ?: now
     }
+}
+
+/**
+ * What confirming the Insulin sheet will do, built from current data: the dose after constraints and
+ * the target with its values fixed. Review shows it; the commit rebuilds it and sends nothing unless
+ * the two are equal.
+ */
+data class InsulinReview(
+    val insulin: Double,
+    val intent: InsulinIntent,
+    val target: TargetPresets.Resolved?
+) {
+
+    enum class Commit { DELIVER, LOG, TARGET, NONE }
+
+    val commit: Commit
+        get() = when {
+            insulin > 0.0 && intent == InsulinIntent.DELIVER -> Commit.DELIVER
+            insulin > 0.0                                    -> Commit.LOG
+            target != null                                   -> Commit.TARGET
+            else                                             -> Commit.NONE
+        }
 }

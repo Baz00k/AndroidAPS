@@ -18,6 +18,7 @@ import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.db.ProcessedTbrEbData
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.UserEntryLogger
@@ -113,6 +114,7 @@ import app.aaps.plugins.main.general.overview.compose.HomeChartData
 import app.aaps.plugins.main.general.overview.compose.GlucosePoint
 import app.aaps.plugins.main.general.overview.compose.ChartTreatment
 import app.aaps.plugins.main.general.overview.compose.BasalStep
+import app.aaps.plugins.main.general.overview.compose.basalDetail
 import app.aaps.core.data.model.BS
 import app.aaps.plugins.main.general.overview.compose.HomeUiState
 import app.aaps.core.objects.ui.SensorGlucose
@@ -143,6 +145,7 @@ class OverviewFragment : DaggerFragment(), DrawsToBottomEdge {
     @Inject lateinit var loop: Loop
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var iobCobCalculator: IobCobCalculator
+    @Inject lateinit var processedTbrEbData: ProcessedTbrEbData
     @Inject lateinit var xDripSource: XDripSource
     @Inject lateinit var notificationStore: NotificationStore
     @Inject lateinit var config: Config
@@ -383,7 +386,6 @@ class OverviewFragment : DaggerFragment(), DrawsToBottomEdge {
             onCancelExtendedBolus = { activity?.let { extendedBolusActions.confirmCancel(it, Sources.Overview, extendedBolusCancelGuard) { scheduleUpdateGUI() } } },
             onCalibration = { bolusProtected { uiInteraction.runCalibrationDialog(childFragmentManager) } },
             onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
-            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
             onDeleteCarb = { entry -> bolusProtected { removeCarbEntry(entry) } },
             onDeleteInsulin = { entry -> bolusProtected { removeInsulinEntry(entry) } },
             // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
@@ -664,6 +666,11 @@ class OverviewFragment : DaggerFragment(), DrawsToBottomEdge {
             cobSub = cob.unavailableReason,
             basal = therapy.basal.rate,
             basalSub = therapy.basal.detail,
+            basalDetail = basalDetail(
+                now, profile?.getBasal(now), processedTbrEbData.getTempBasalIncludingConvertedExtended(now),
+                if (pump.isFakingTempsByExtendedBoluses) null else persistenceLayer.getExtendedBolusActiveAt(now),
+                dateUtil::timeString
+            ) { rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, it) },
             supplies = supplies,
             recentCarbs = recentCarbs,
             recentInsulin = recentInsulin,

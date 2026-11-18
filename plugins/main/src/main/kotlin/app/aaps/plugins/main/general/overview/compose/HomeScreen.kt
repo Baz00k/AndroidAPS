@@ -14,14 +14,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import app.aaps.core.compose.components.bottomControls
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,15 +27,6 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.rememberCoroutineScope
-import app.aaps.core.compose.components.disabledAlpha
-import app.aaps.core.compose.components.LocalSheetDraggable
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +53,11 @@ import app.aaps.core.compose.components.FittedText
 import app.aaps.core.compose.components.MeasurementText
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
+import app.aaps.core.compose.components.ListCard
+import app.aaps.core.compose.components.ListRow
+import app.aaps.core.compose.components.ModalSheet
+import app.aaps.core.compose.components.SectionLabel
+import androidx.compose.ui.graphics.vector.ImageVector
 import app.aaps.core.compose.components.StatusPill
 import androidx.compose.foundation.layout.PaddingValues
 import app.aaps.core.compose.theme.AapsSpacing
@@ -86,6 +79,7 @@ fun HomeScreen(
     var showCarbs by remember { mutableStateOf(false) }
     var showInsulin by remember { mutableStateOf(false) }
     var showAlerts by remember { mutableStateOf(false) }
+    var showBasal by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -101,7 +95,7 @@ fun HomeScreen(
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
-                HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true }, onAlertsClick = { showAlerts = true })
+                HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true }, onBasalClick = { showBasal = true }, onAlertsClick = { showAlerts = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
                 additionalGraphs()
@@ -109,15 +103,16 @@ fun HomeScreen(
             }
             ActionBar(state.actions, state.calculatorEnabled, actions)
         }
-        if (showCarbs) CarbsUndoSheet(state, actions.onDeleteCarb, onClose = { showCarbs = false })
-        if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
+        if (showCarbs) CarbsUndoSheet(state, actions.onDeleteCarb, onDismissed = { showCarbs = false })
+        if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onDismissed = { showInsulin = false })
+        if (showBasal) BasalSheet(state.basalDetail, onDismissed = { showBasal = false })
         if (showAlerts) AlertsSheet(state.notifications, actions.onDismissAlert, onDismissed = { showAlerts = false })
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit, onAlertsClick: () -> Unit) {
+private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit, onBasalClick: () -> Unit, onAlertsClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = if (state.bgStale) colors.textSecondary else colors.textPrimary
     val stateTextColor = if (state.bgStale) colors.textSecondary else state.bgTone?.color() ?: colors.textPrimary
@@ -221,7 +216,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             Row(Modifier.fillMaxWidth().padding(top = 4.dp).offset(x = -HeroStatInset)) {
                 HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = onIobClick)
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
-                HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
+                HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = onBasalClick)
             }
             val unavailableReasons = listOf(state.iobSub, state.cobSub).filter { it.isNotBlank() }.distinct()
             unavailableReasons.forEach { reason ->
@@ -343,117 +338,80 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
 private fun CarbsUndoSheet(
     state: HomeUiState,
     onDelete: (HomeUiState.CarbEntry) -> Unit,
-    onClose: () -> Unit
-) {
-    val colors = AapsTheme.colors
-    HomeSheet(onClose) { close ->
-        SheetSurface(title = "Recent carbs", onClose = { close {} }) {
-            DetailRow("Carbs on board", state.cob.ifBlank { "--" })
-            val carbs = state.recentCarbs
-            if (carbs.isEmpty()) {
-                Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
-            } else {
-                Text("Remove a mistaken or duplicate entry.", style = AapsTheme.type.caption, color = colors.textTertiary)
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column {
-                        carbs.forEachIndexed { i, c ->
-                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(c.grams, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                    Text(c.time, style = AapsTheme.type.caption, color = colors.textTertiary)
-                                }
-                                RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) }, tone = IconButtonTone.Danger)
-                            }
-                        }
-                    }
+    onDismissed: () -> Unit
+) = ModalSheet(onDismissed) { close ->
+    SheetSurface(title = "Carbs on board", onClose = { close {} }, scrollContent = true) {
+        ListCard { ValueRow("Total", state.cob.ifBlank { "--" }) }
+        SectionLabel("Recent carbs")
+        if (state.recentCarbs.isEmpty())
+            Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = AapsTheme.colors.textSecondary)
+        else ListCard {
+            state.recentCarbs.forEach { c ->
+                ListRow(c.grams, sub = c.time) {
+                    RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) }, tone = IconButtonTone.Danger)
                 }
             }
-            Box(Modifier.height(8.dp))
         }
     }
 }
 
 /**
- * IOB detail + undo. Tapping IOB used to open a plain text dialog; it now also lists the boluses
- * behind that number so a dose the pump never actually delivered can be taken back out. That is the
- * only way to repair IOB from inside the app — the redesigned History is read-only — and it matters
- * because an unconfirmed bolus is deliberately recorded as delivered (over-stating IOB is the safe
- * side of that guess, but it still has to be correctable when the pump turns out to have been empty).
+ * IOB detail + undo: the boluses behind the number, so a dose the pump never delivered can be taken
+ * back out. An unconfirmed bolus is deliberately recorded as delivered, which has to stay correctable.
  */
 @Composable
 private fun InsulinUndoSheet(
     state: HomeUiState,
     onDelete: (HomeUiState.InsulinEntry) -> Unit,
-    onClose: () -> Unit
-) {
-    val colors = AapsTheme.colors
-    HomeSheet(onClose) { close ->
-        SheetSurface(title = "Insulin on board", onClose = { close {} }) {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
-            ) {
-                AapsCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DetailRow("Total", state.iob.ifBlank { "--" })
-                        DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
-                        DetailRow("From basal", state.iobBasal.ifBlank { "--" })
-                    }
+    onDismissed: () -> Unit
+) = ModalSheet(onDismissed) { close ->
+    SheetSurface(title = "Insulin on board", onClose = { close {} }, scrollContent = true) {
+        ListCard {
+            ValueRow("Total", state.iob.ifBlank { "--" })
+            ValueRow("From boluses", state.iobBolus.ifBlank { "--" })
+            ValueRow("From basal", state.iobBasal.ifBlank { "--" })
+        }
+        SectionLabel("Recent insulin")
+        if (state.recentInsulin.isEmpty())
+            Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = AapsTheme.colors.textSecondary)
+        else ListCard {
+            state.recentInsulin.forEach { e ->
+                ListRow(e.units, sub = if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}") {
+                    if (e.removable)
+                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) }, tone = IconButtonTone.Danger)
+                    else
+                        Text("Cancel first", style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
                 }
-                if (state.recentInsulin.isEmpty()) {
-                    Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
-                } else {
-                    Text(
-                        "Remove a dose the pump did not actually deliver.",
-                        style = AapsTheme.type.caption, color = colors.textTertiary
-                    )
-                    AapsCard(Modifier.fillMaxWidth()) {
-                        Column {
-                            state.recentInsulin.forEachIndexed { i, e ->
-                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-                                        Text(
-                                            if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
-                                            style = AapsTheme.type.caption, color = colors.textTertiary
-                                        )
-                                    }
-                                    if (e.removable)
-                                        RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) }, tone = IconButtonTone.Danger)
-                                    else
-                                        Text(
-                                            "Cancel first", style = AapsTheme.type.caption, color = colors.textTertiary,
-                                            modifier = Modifier.widthIn(max = 72.dp)
-                                        )
-                                }
-                            }
-                        }
-                    }
-                }
-                Box(Modifier.height(8.dp))
             }
         }
     }
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
-    val colors = AapsTheme.colors
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-        Text(value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+private fun BasalSheet(detail: BasalDetail, onDismissed: () -> Unit) = ModalSheet(onDismissed) { close ->
+    SheetSurface(title = "Basal", onClose = { close {} }, scrollContent = true) {
+        ListCard {
+            ValueRow("Scheduled", detail.scheduled ?: "--")
+            if (detail.tempBasal == null) ValueRow("Temporary basal", "None")
+        }
+        detail.tempBasal?.let { RunningCard("Temporary basal", it) }
+        detail.extendedBolus?.let { RunningCard("Extended bolus", it) }
     }
 }
+
+@Composable
+private fun RunningCard(label: String, running: BasalDetail.Running) {
+    SectionLabel(label)
+    ListCard {
+        ValueRow("Rate", running.rate)
+        ValueRow("Started", running.started)
+        ValueRow("Remaining", running.remaining)
+    }
+}
+
+@Composable
+private fun ValueRow(label: String, value: String) =
+    ListRow(label) { Text(value, style = AapsTheme.type.listTitle, color = AapsTheme.colors.textPrimary) }
 
 /**
  * The treatment bar: the primary actions the user keeps on Home, with the Calculator as the widest,
@@ -499,17 +457,17 @@ private fun shortcutIcon(shortcut: HomeShortcut) = when (shortcut) {
 }
 
 /**
- * "+": the treatment actions that are not on the bar, as a native modal bottom sheet. A hidden
- * primary shortcut comes first, separated from the secondary actions below it.
+ * "+": the treatment actions that are not on the bar. A hidden primary shortcut comes first, in its
+ * own group above the secondary actions.
  */
 @Composable
 private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, actions: HomeActions) {
     var open by remember { mutableStateOf(false) }
     // As tall as the action bar it ends.
     RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { open = true }, size = 58.dp)
-    if (open) HomeSheet(onClose = { open = false }) { close ->
+    if (open) ModalSheet(onDismissed = { open = false }) { close ->
         fun run(action: () -> Unit) = close { action() }
-        MenuSurface {
+        SheetSurface(title = "More actions", onClose = { close {} }, scrollContent = true) {
             items.forEachIndexed { i, item ->
                 if (i > 0 && items[i - 1] is HomeMenuItem.Shortcut && item !is HomeMenuItem.Shortcut)
                     Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(AapsTheme.colors.divider))
@@ -529,77 +487,10 @@ private fun MoreMenu(items: List<HomeMenuItem>, calculatorEnabled: Boolean, acti
     }
 }
 
-/** A list sheet: the grabber and rows, no title — the rows are the content. */
-@Composable
-private fun MenuSurface(content: @Composable () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(AapsTheme.shape.sheet)
-            .background(AapsTheme.colors.surface3)
-            .padding(bottom = 12.dp)
-    ) {
-        Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(width = 40.dp, height = 4.dp).clip(AapsTheme.shape.pill).background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.22f)))
-        }
-        content()
-    }
-}
-
 /** A menu entry; [status] is the live state of a running action (a target, an extended bolus). */
 @Composable
-private fun MenuRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, status: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
-    val colors = AapsTheme.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .disabledAlpha(enabled)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(horizontal = AapsSpacing.screenH, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Icon(icon, contentDescription = null, tint = colors.textSecondary, modifier = Modifier.size(24.dp))
-        Column(Modifier.weight(1f)) {
-            Text(label, style = AapsTheme.type.listTitle, color = colors.textPrimary)
-            if (status != null) Text(status, style = AapsTheme.type.caption, color = colors.accent)
-        }
-    }
-}
-
-/**
- * The Home screen's sheets, as Material modal bottom sheets: they slide up, follow a drag and are
- * dismissed by dragging down, the scrim or Back. [content] receives `close`, which slides the sheet
- * away before running what comes next (so an action's own dialog does not open under a closing sheet).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HomeSheet(onClose: () -> Unit, content: @Composable (close: (after: () -> Unit) -> Unit) -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
-    var closing by remember { mutableStateOf(false) }
-    // One close per sheet. The action runs only after the sheet is really gone; if the close is
-    // cancelled (the screen left), so is the action.
-    val close: (() -> Unit) -> Unit = { after ->
-        if (!closing) {
-            closing = true
-            scope.launch {
-                sheetState.hide()
-                onClose()
-                after()
-            }
-        }
-    }
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetState = sheetState,
-        containerColor = AapsTheme.colors.surface3,
-        shape = AapsTheme.shape.sheet,
-        scrimColor = AapsTheme.colors.scrim,
-        dragHandle = null,
-        contentWindowInsets = { WindowInsets.navigationBars.union(WindowInsets.bottomControls) }
-    ) {
-        CompositionLocalProvider(LocalSheetDraggable provides true) { content(close) }
-    }
-}
+private fun MenuRow(label: String, icon: ImageVector, status: String? = null, enabled: Boolean = true, onClick: () -> Unit) =
+    ListRow(
+        label, Modifier.fillMaxWidth(), sub = status, enabled = enabled, onClick = onClick,
+        leading = { Icon(icon, contentDescription = null, tint = AapsTheme.colors.textSecondary, modifier = Modifier.size(24.dp)) }
+    )

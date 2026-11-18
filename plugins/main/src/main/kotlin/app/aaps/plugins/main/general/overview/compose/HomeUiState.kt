@@ -45,6 +45,7 @@ data class HomeUiState(
     val cobSub: String = "",
     val basal: String = "",
     val basalSub: String = "",
+    val basalDetail: BasalDetail = BasalDetail(),
 
     // Supplies strip
     val supplies: List<Supply> = emptyList(),
